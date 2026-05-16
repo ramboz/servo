@@ -23,7 +23,7 @@ Servo is **not** for users who haven't yet adopted spec-driven dev. The risk pro
 
 ## Core problem
 
-Each of M7–M10 (oracle, Ralph, hook meta-judge, worktree race) is documented as a generic pattern. Adopting them on a real project means:
+Each of the four unattended-agent patterns (oracle scoring, headless iteration, meta-judge hooks, worktree races) is well-documented in the abstract. Adopting them on a real project means:
 
 1. Writing a project-specific `oracle.sh` that composes the right signals (which signals does this project even *have*?)
 2. Tuning weights and thresholds by hand
@@ -53,7 +53,7 @@ Spec 001 (`/servo:scaffold-init`) only. Drops `oracle.sh` into target with signa
 ## Future scope
 
 - Runtime skills (2–5 above)
-- A short architecture-doc section "Why no crew skill" + post-mortem template (curriculum is skeptical of M12 crews)
+- A short architecture-doc section "Why no crew skill" + post-mortem template (multi-agent crew coordination doesn't yet generalize enough to ship as a skill)
 - Pull-hint integration with jig's `slice-land prepare`
 
 ## Design principles

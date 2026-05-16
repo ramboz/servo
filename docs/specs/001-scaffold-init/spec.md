@@ -10,7 +10,7 @@ last_verified:
 
 ## Why this spec
 
-Servo's whole value proposition is **per-project artifacts that reflect the project's actual signals**. A generic `oracle.sh` stub the dev has to rewrite is no better than the curriculum's existing examples. The scaffolder is the first piece of servo's surface that *can't* be replaced by docs — it has to read filesystem state and produce tailored output.
+Servo's whole value proposition is **per-project artifacts that reflect the project's actual signals**. A generic `oracle.sh` stub the dev has to rewrite is no better than the docs-only examples that exist elsewhere. The scaffolder is the first piece of servo's surface that *can't* be replaced by docs — it has to read filesystem state and produce tailored output.
 
 It is also the foundation every other servo spec presupposes:
 

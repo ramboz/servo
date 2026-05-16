@@ -36,7 +36,7 @@ servo/
 
 ## Skill split
 
-Servo is **scaffolder-first, runtime second**. The runtime skills (M7–M10) all presuppose artifacts the scaffolder dropped into the target.
+Servo is **scaffolder-first, runtime second**. The four runtime skills all presuppose artifacts the scaffolder dropped into the target.
 
 | Skill | Role | Spec |
 |---|---|---|
@@ -138,22 +138,26 @@ These are deferred until the spec slice that forces them.
 - **Scaffold-init interaction with jig-scaffolded projects** — likely fine (no path collisions) but worth an explicit slice-level test in 001-03 or 001-05.
 - **Agent-loop driver: shell vs Python.** Leaning shell for Tier 1 (zero deps), Python only if Tier 2 needs the richer state (checkpoint/resume).
 
-## Why no crew skill (M12)
+## Why no crew skill
 
-The agentic-learning-path curriculum at `/Users/ramboz/Projects/misc/agentic-learning-path` is itself skeptical that "crews" (multi-agent coordination with hand-off / voting / leader-follower shapes) generalize. Servo agrees: it ships a one-page [post-mortem template](../templates/crew-postmortem.md) for capturing ad-hoc crew experiments, but no `/servo:crew` skill. If the post-mortems start showing a consistent pattern, that's a future spec; today it would be premature.
+Multi-agent crews (hand-off / voting / leader-follower coordination) don't yet generalize enough to scaffold. Servo ships a one-page [post-mortem template](../templates/crew-postmortem.md) for capturing ad-hoc crew experiments, but no `/servo:crew` skill. If post-mortems start showing a consistent pattern, that's a future spec; today it would be premature.
 
-## Curriculum mapping
+## Internal scoping reference
 
-Each runtime skill maps to a module from the agentic-learning-path curriculum:
+> Internal-only — kept here to anchor scope decisions during spec
+> authoring. Not a public framing of servo; should not leak into
+> user-facing docs (README, product-vision, templates).
 
-| Spec | Skill | Curriculum module |
+Each runtime skill traces back to a specific pattern in private learning notes:
+
+| Spec | Skill | Source pattern |
 |---|---|---|
-| 001 | `/servo:scaffold-init` | (spans M7–M10 setup) |
-| 002 | `/servo:quality-gate` | M7 oracle |
-| 003 | `/servo:agent-loop` | M8 ralph |
-| 004 | `/servo:oracle-hook` | M9 meta-judge |
-| 005 | `/servo:variant-race` | M10 worktree race |
-| n/a | (M11 teams already covered) | by jig's `agents/` |
-| n/a | (M12 crews intentionally skipped) | post-mortem template only |
+| 001 | `/servo:scaffold-init` | (spans the four runtime patterns' setup) |
+| 002 | `/servo:quality-gate` | oracle scoring |
+| 003 | `/servo:agent-loop` | headless iteration ("Ralph") |
+| 004 | `/servo:oracle-hook` | meta-judge hook |
+| 005 | `/servo:variant-race` | worktree race |
+| n/a | (teams pattern covered) | by jig's `agents/` |
+| n/a | (crews pattern skipped) | post-mortem template only |
 
 Decisions land in [docs/decisions/](decisions/) as ADRs once they're hard to reverse.

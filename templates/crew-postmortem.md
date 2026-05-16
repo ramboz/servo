@@ -1,6 +1,6 @@
 # Crew run — post-mortem
 
-> Use this template when you've actually run a multi-agent "crew" coordination experiment (M12-style) — a configuration where multiple agents communicate, hand off work, or vote on outcomes. Servo deliberately ships no `/servo:crew` skill (the curriculum itself is skeptical of crews as a generalizable pattern), but if you've run one ad-hoc, capture the learnings here.
+> Use this template when you've actually run a multi-agent **crew** coordination experiment — a configuration where multiple agents communicate, hand off work, or vote on outcomes. Servo deliberately ships no `/servo:crew` skill (the pattern doesn't yet generalize enough to scaffold), but if you've run one ad-hoc, capture the learnings here.
 
 ## Run summary
 
@@ -28,6 +28,6 @@ _(Coordination overhead, redundant work, conflicting decisions, cost blow-ups, a
 
 _(Yes / no / only-under-these-conditions. If yes, what's the minimal crew shape that would have worked?)_
 
-## Curriculum-level update
+## Pattern-level update
 
-_(Does this run change your view on M12-style crews? If yes, summarize in 1–2 sentences and consider whether the finding belongs in servo's `docs/architecture.md` "Why no crew skill" section.)_
+_(Does this run change your view on multi-agent crews as a pattern worth scaffolding? If yes, summarize in 1–2 sentences and consider whether the finding belongs in servo's `docs/architecture.md` "Why no crew skill" section.)_

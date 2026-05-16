@@ -6,7 +6,7 @@
 
 ## Why servo exists
 
-[jig](https://github.com/ramboz/jig) handles **supervised** spec-driven development — the M1–M6 territory of the agentic learning path. Past that boundary, the curriculum stops talking about specs and starts talking about **unattended agent loops**: oracle scoring (M7), headless iteration (M8), hook-as-meta-judge (M9), worktree race (M10).
+[jig](https://github.com/ramboz/jig) handles **supervised** spec-driven development: a human reviews each slice before the next one starts. Past that boundary lies a different practice — **unattended agent loops** scored against an oracle, hooks that grade every `Stop`, and worktree races that pick the best of N parallel attempts.
 
 Those patterns share a different risk profile, maturity, and audience from jig's surface — they spawn N parallel agents, install hooks that fire every `Stop`, race worktrees that cost real money. Bundling them into jig would silently expand jig's scope. Servo is the **autonomous sibling** that keeps the contract explicit: installing servo means crossing the line into unattended operation.
 
@@ -14,13 +14,13 @@ Those patterns share a different risk profile, maturity, and audience from jig's
 
 Servo's primary entry point is a **scaffolder**, not a runtime. It probes the target project's signals (tests, lint, CI, language, project size) and drops a tailored set of artifacts — `oracle.sh`, agent-loop driver, hook installer, race driver — that reflect what the project actually has, instead of a generic stub the dev has to rewrite.
 
-| Curriculum | Servo skill | Status |
+| Skill | Role | Status |
 |---|---|---|
-| (scaffold) | `/servo:scaffold-init` | Spec 001 — DRAFT |
-| M7 oracle | `/servo:quality-gate` | Future spec |
-| M8 Ralph loop | `/servo:agent-loop` | Future spec |
-| M9 meta-judge hook | `/servo:oracle-hook` | Future spec |
-| M10 worktree race | `/servo:variant-race` | Future spec |
+| `/servo:scaffold-init` | Probe target signals; drop tailored oracle (+ optional tier-1/2 artifacts) | Spec 001 — DRAFT |
+| `/servo:quality-gate` | Run the scaffolded oracle; normalized exit codes | Future spec |
+| `/servo:agent-loop` | Headless iteration driver with iteration cap, cost ceiling, checkpoint/resume | Future spec |
+| `/servo:oracle-hook` | Claude Code hook installer (idempotent install / uninstall / status) | Future spec |
+| `/servo:variant-race` | N-worktree parallel race with oracle scoring and winner selection | Future spec |
 
 ## Relationship to jig
 
