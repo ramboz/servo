@@ -1,0 +1,13 @@
+# SEED:start pytest
+score_pytest() {
+  if ! command -v pytest >/dev/null 2>&1; then
+    echo "missing: pytest" >&2
+    return 2
+  fi
+  if pytest -q >/dev/null 2>&1; then
+    echo "1.0"
+  else
+    echo "0.0"
+  fi
+}
+# SEED:end pytest

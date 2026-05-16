@@ -6,7 +6,7 @@ Status board for servo's spec-driven development. Each spec lives in `NNN-<name>
 
 | Spec | Status | Description |
 |---|---|---|
-| [001-scaffold-init](001-scaffold-init/spec.md) | DRAFT | Probe target signals, run Q&A, drop tailored `oracle.sh` (+ optional Tier-1/2 stubs) into target |
+| [001-scaffold-init](001-scaffold-init/spec.md) | **DONE** | Probe target signals, run Q&A, drop tailored `oracle.sh` (+ optional Tier-1/2 stubs) into target |
 
 ## Planned specs
 

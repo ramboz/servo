@@ -1,0 +1,13 @@
+# SEED:start cargo
+score_cargo() {
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "missing: cargo" >&2
+    return 2
+  fi
+  if cargo test --quiet >/dev/null 2>&1; then
+    echo "1.0"
+  else
+    echo "0.0"
+  fi
+}
+# SEED:end cargo

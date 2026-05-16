@@ -16,7 +16,7 @@ Servo's primary entry point is a **scaffolder**, not a runtime. It probes the ta
 
 | Skill | Role | Status |
 |---|---|---|
-| `/servo:scaffold-init` | Probe target signals; drop tailored oracle (+ optional tier-1/2 artifacts) | Spec 001 — DRAFT |
+| `/servo:scaffold-init` | Probe target signals; drop tailored oracle (+ optional tier-1/2 artifacts) | Spec 001 — **DONE** |
 | `/servo:quality-gate` | Run the scaffolded oracle; normalized exit codes | Future spec |
 | `/servo:agent-loop` | Headless iteration driver with iteration cap, cost ceiling, checkpoint/resume | Future spec |
 | `/servo:oracle-hook` | Claude Code hook installer (idempotent install / uninstall / status) | Future spec |
@@ -29,6 +29,47 @@ Servo is a **sibling plugin**, not a dependency. They coexist in `${CLAUDE_PLUGI
 - Install servo without jig (oracle/headless only) or jig without servo (current default, supervised only).
 - Servo reuses jig's `tdd.py detect` (via subprocess) when jig is installed; falls back to its own minimal test-runner detection otherwise.
 - Jig's `slice-land prepare` emits soft pull-hints for servo artifacts when servo-style infrastructure is missing — that's the entirety of the coupling.
+
+## The scaffolded `oracle.sh`
+
+`oracle.sh` is a thin bash driver around a list of **components**. Each component is a function that scores its slice of project quality in `[0.0, 1.0]`; the driver computes a weighted average and gates it against `THRESHOLD`.
+
+### Adding a component
+
+Add a `# SEED:start <name>` / `# SEED:end <name>` block containing a `score_<name>` function, and register it in `COMPONENTS`:
+
+```bash
+COMPONENTS=(
+  "placeholder:1.0"
+  "pytest:2.0"        # new — weighted 2× as heavy
+)
+
+# SEED:start pytest
+score_pytest() {
+  if ! command -v pytest >/dev/null 2>&1; then
+    echo "missing: pytest" >&2
+    return 2          # exit 2 = environment error
+  fi
+  if pytest -q >/dev/null 2>&1; then
+    echo "1.0"
+  else
+    echo "0.0"
+  fi
+}
+# SEED:end pytest
+```
+
+The `# SEED:` markers are how servo locates blocks on re-scaffold — keep them on their own lines, exact spelling, even after edits.
+
+### Exit codes (servo contract)
+
+| Code | Meaning |
+|---|---|
+| 0 | composite ≥ `THRESHOLD` |
+| 1 | composite < `THRESHOLD` |
+| 2 | environment error (missing tool, no components, function returned other non-zero) |
+
+These codes are stable across servo's runtime skills — `/servo:quality-gate`, `/servo:agent-loop`, and `/servo:variant-race` all depend on this contract.
 
 ## Design philosophy
 

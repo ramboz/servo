@@ -70,17 +70,20 @@ Mirrors jig's tier-based scaffolding:
 
 ## Signal detection
 
+**Status:** implemented in slice 001-03 (`scaffold.py:detect_signals`).
+
 Probe the target for:
 
-- Test framework (pytest / vitest / jest / cargo test / go test / unknown) — reuse jig's `tdd.py detect` via subprocess if jig is present, otherwise fall back to a built-in detector
-- Lint configs (`.eslintrc*`, `pyproject.toml` ruff/flake8/mypy sections, etc.)
-- CI (`.github/workflows/`, `.gitlab-ci.yml`, …)
-- Language (file-extension census)
-- Coverage tool presence
-- `oracle.sh` already at target root → refuse install without `--force`
-- `.servo/install.json` (servo's own manifest, like jig's `scaffold.json`)
+- **Test framework** (pytest / vitest / jest / cargo / go) — prefer jig's `tdd.py detect` via subprocess if `${CLAUDE_PLUGIN_ROOT}/jig/skills/tdd-loop/tdd.py` exists, fall back to built-in detectors otherwise. Decision recorded in [ADR-0001](decisions/ADR-0001-reuse-jig-test-detector.md).
+- **Lint configs** — eslint (`.eslintrc*`, `eslint.config.{js,mjs}`, `package.json#eslintConfig`); ruff (`[tool.ruff]` in `pyproject.toml`, `ruff.toml`, `.ruff.toml`).
+- **CI** — `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/config.yml`.
+- **Language** — coarse heuristic from highest-signal file (`pyproject.toml`/`*.py` → python, `package.json`/`*.ts`/`*.js` → javascript, `Cargo.toml` → rust, `go.mod` → go).
+- **`oracle.sh` already at target root** → refuse install without `--force` (slice 001-01).
+- **`.servo/install.json`** (servo's own manifest, like jig's `scaffold.json`).
 
-Detection results drive **which components are included in the composite** in the generated `oracle.sh`. If lint isn't configured, the generated script doesn't reference lint.
+Detected components drive which `score_<name>` fragments are spliced into the generated `oracle.sh`. Fragments live under `templates/components/<name>.sh.fragment`. A no-signal target gets a comment-only oracle that exits 2 with `no signals detected — populate # SEED: blocks manually`.
+
+**Audit subcommand:** `scaffold.py detect <target>` prints the full detection payload as JSON (signals + components + per-component weights + which detector ran) without writing anything to disk. Useful for debugging or wizard-mode previews.
 
 ## Install manifest
 
@@ -121,19 +124,20 @@ Future runtime skills (specs 003–005) will produce these at the *target* proje
 
 These paths are reserved now (in `.gitignore`) so later specs don't have to renegotiate them.
 
-## Decisions pending (ADR candidates)
+## Decisions
 
-Three decisions are likely to crystallize into ADRs during spec 001:
+| ADR | Status | Captures |
+|---|---|---|
+| [ADR-0001](decisions/ADR-0001-reuse-jig-test-detector.md) | Accepted | Reuse jig's `tdd.py detect` via subprocess when co-installed; fall back to built-in detectors otherwise. The first concrete instance of the filesystem-only coupling. |
 
-1. **ADR-0001 — Why filesystem-only coupling with jig.** Servo reads jig's filesystem artifacts and invokes jig helpers via subprocess; neither plugin imports the other. Driving factors: independent install/uninstall, version skew tolerance, no shared Python dependency surface.
-2. **ADR-0002 — Why a fresh subagent roster, not reused from jig.** See "Subagents" section above. The risk is duplicated prompt maintenance; the win is prompts that match the operating context.
-3. **ADR-0003 — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly.
+### Pending (ADR candidates)
 
-These are deferred until the spec slice that forces them.
+- **ADR-0002 — Why a fresh subagent roster, not reused from jig.** See "Subagents" section above. The risk is duplicated prompt maintenance; the win is prompts that match the operating context. Crystallizes once any of `runner` / `judge` / `architect` actually ships beyond placeholder.
+- **ADR-0003 — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
 
 ## Open questions (not yet ADR-worthy)
 
-- **Composite weighting heuristic** when multiple signals are present (equal weights? signal-strength-weighted? user-tuned via Q&A?)
+- **Composite weighting heuristic** — **resolved (slice 001-02):** weighted *average* (`sum(weight*score) / sum(weight)`), with `"name:weight"` registered in a `COMPONENTS` bash array. Equal weights are the scaffold default; tuning is deferred to the user (and surfaced as a `Weights` decision in 001-04's `refinement-todo.md`). Picked weighted average over weighted sum so any threshold in `[0, 1]` is meaningful regardless of how many components are present.
 - **`.servo/install.json` checked in vs ignored** — currently `.gitignore`d; revisit when team-shared servo installs become a use case.
 - **Scaffold-init interaction with jig-scaffolded projects** — likely fine (no path collisions) but worth an explicit slice-level test in 001-03 or 001-05.
 - **Agent-loop driver: shell vs Python.** Leaning shell for Tier 1 (zero deps), Python only if Tier 2 needs the richer state (checkpoint/resume).
