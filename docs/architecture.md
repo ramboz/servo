@@ -134,6 +134,7 @@ These paths are reserved now (in `.gitignore`) so later specs don't have to rene
 
 - **ADR-0002 — Why a fresh subagent roster, not reused from jig.** See "Subagents" section above. The risk is duplicated prompt maintenance; the win is prompts that match the operating context. Crystallizes once any of `runner` / `judge` / `architect` actually ships beyond placeholder.
 - **ADR-0003 — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
+- **ADR-0004 — Session-state file format on disk.** Spec 003's checkpoint/resume needs a canonical on-disk shape (likely `<target>/.servo/runs/<run-id>/state.json` carrying current-iteration / last-N-actions / hypotheses / cost-burned-so-far / oracle-score-history). This format becomes a cross-plugin soft contract — jig's `slice-land` may want to read it to emit "found a paused servo run — resume?" hints. Same shape as ADR-0001's filesystem-only coupling: no shared imports, just a documented path + JSON schema. Crystallizes when spec 003 reaches READY_FOR_REVIEW.
 
 ## Open questions (not yet ADR-worthy)
 
