@@ -83,3 +83,47 @@ Each entry: heading, Deferred reason, Resolution trigger.
 **Resolution trigger:** Same as above. Extract a `_section(text, heading)` helper that scopes substring checks to the named section, then refactor the three body tests to use it.
 
 **Surfaced by:** slice 001-05 reviewer pass.
+
+---
+
+## `test_signal_killed_remapped_to_two` assertion is platform-loose
+
+**Deferred:** `UnexpectedExitTests.test_signal_killed_remapped_to_two` asserts `"unexpected code"` in stderr but doesn't pin the exact code (143 on Linux/macOS via `128 + signo`, but could be negative on platforms where Python reports `-signo` for signal-killed children). The reliance on the substring match is defensible — the gate's contract is "rc=2 with some unexpected-code message" — but two parallel assertions (one for positive `128 + signo`, one tolerating negative returncode) would be a stricter cross-platform guarantee.
+
+**Resolution trigger:** First CI run on a platform where Python reports a negative returncode for signal-killed children, OR the next time the test is touched for any reason.
+
+**Surfaced by:** slice 002-01 reviewer pass (`jig:reviewer`, PASS verdict).
+
+---
+
+## `gate.py` does not guard against non-regular-file `oracle.sh`
+
+**Deferred:** `gate.py` checks `oracle.exists()` and `os.access(oracle, os.X_OK)` but does not verify the path is a regular file. A target with `oracle.sh` as a directory, FIFO, device file, or dangling symlink would pass the existence check, fail at subprocess.run, and surface an OSError message (caught by the generic `_refuse` handler — so rc=2 with `"failed to invoke oracle.sh: ..."`).
+
+End-state behavior is still rc=2, which is the contract — but the error message is less actionable than the dedicated chmod-hint refusal. Adding `oracle.is_file()` would surface a clearer "oracle.sh is not a regular file" message.
+
+**Resolution trigger:** First report of a confused user staring at "failed to invoke oracle.sh: ..." stderr because their `oracle.sh` is somehow a directory. Cheap fix when it lands.
+
+**Surfaced by:** slice 002-01 reviewer pass (`jig:reviewer`, PASS verdict).
+
+---
+
+## Quality-gate surface tests inherit loose-substring pattern from scaffold-init
+
+**Deferred:** `skills/quality-gate/test_skill_surface.py` uses the same loose-substring assertions as `skills/scaffold-init/test_skill_surface.py` (`test_recovery_pointers_present` asserts `"longer"` for the timeout recovery hint; positive triggers checked as substrings; etc.). A future docs reword could break the test without changing behavior. Also: surface tests only assert 6 of the 11 `reason` codes (`manifest_missing`, `oracle_missing`, `oracle_not_executable`, `timeout`, `unparseable_oracle_output`, `unexpected_exit`) — the remaining 5 (`target_missing`, `target_not_directory`, `manifest_malformed`, `manifest_invalid_key`, `invocation_failed`) are documented in SKILL.md but not test-asserted.
+
+**Resolution trigger:** Same family as the pre-existing 001-05 entries above ("SKILL.md anti-greediness tests have soft negative-trigger checks" + "SKILL.md body tests check substrings globally"). Bundle the fix: extract a `_section(text, heading)` helper and a tighter trigger-assertion pattern, then update both `scaffold-init/test_skill_surface.py` and `quality-gate/test_skill_surface.py` together. Broader reason-code coverage is a separate one-line addition to `test_reason_field_documented`'s tuple.
+
+**Surfaced by:** slice 002-05 reviewer pass (`jig:reviewer`, PASS verdict).
+
+---
+
+## `gate.py audit` parses component weights from `oracle.sh` (soft template coupling)
+
+**Deferred:** The manifest written by `scaffold.py` carries component names but not weights (the per-component weight lives only in the scaffolded `oracle.sh`'s `COMPONENTS=( "name:weight" )` array). `gate.py audit` enriches the text-mode component listing with weights by parsing oracle.sh via `_ORACLE_COMPONENT_ENTRY_RE`. This is a best-effort coupling — if `templates/oracle.sh.template` ever changes its COMPONENTS array shape, audit will silently fall back to no-weight rendering (the function returns `{}` on any parse failure).
+
+The clean fix is to extend the manifest schema to carry weights directly (`{"components": [{"name": "pytest", "weight": 1.0}, ...]}`). That requires touching spec 001 (the manifest contract was frozen at 001-03) and probably warrants an ADR ("Quality-gate extends manifest schema to include component weights"). Deferred until the coupling actually breaks or a future spec wants weights for another reason (e.g., spec 003 agent-loop wanting to log per-component scores per iteration).
+
+**Resolution trigger:** Either (a) a future template-shape change exposes the coupling, or (b) spec 003+ requires manifest-readable weights. When triggered, write the ADR and amend `_install_manifest()` in `scaffold.py` to emit the richer shape; the gate's `_parse_component_weights` becomes dead code and can be deleted.
+
+**Surfaced by:** slice 002-03 reviewer pass (`jig:reviewer`, PASS verdict). Implementer also flagged the coupling in `_parse_component_weights` docstring.

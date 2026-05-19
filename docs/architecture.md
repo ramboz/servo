@@ -74,7 +74,7 @@ Mirrors jig's tier-based scaffolding:
 
 Probe the target for:
 
-- **Test framework** (pytest / vitest / jest / cargo / go) — prefer jig's `tdd.py detect` via subprocess if `${CLAUDE_PLUGIN_ROOT}/jig/skills/tdd-loop/tdd.py` exists, fall back to built-in detectors otherwise. Decision recorded in [ADR-0001](decisions/ADR-0001-reuse-jig-test-detector.md).
+- **Test framework** (pytest / vitest / jest / cargo / go) — prefer jig's `tdd.py detect` via subprocess if `${CLAUDE_PLUGIN_ROOT}/jig/skills/tdd-loop/tdd.py` exists, fall back to built-in detectors otherwise. Decision recorded in [ADR-0001](decisions/adr-0001-reuse-jig-test-detector.md).
 - **Lint configs** — eslint (`.eslintrc*`, `eslint.config.{js,mjs}`, `package.json#eslintConfig`); ruff (`[tool.ruff]` in `pyproject.toml`, `ruff.toml`, `.ruff.toml`).
 - **CI** — `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/config.yml`.
 - **Language** — coarse heuristic from highest-signal file (`pyproject.toml`/`*.py` → python, `package.json`/`*.ts`/`*.js` → javascript, `Cargo.toml` → rust, `go.mod` → go).
@@ -124,17 +124,65 @@ Future runtime skills (specs 003–005) will produce these at the *target* proje
 
 These paths are reserved now (in `.gitignore`) so later specs don't have to renegotiate them.
 
+## Quality-gate JSON contract
+
+Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/oracle.sh` that specs 003 / 004 / 005 will all consume. The contract callers can rely on:
+
+**Exit codes** — closed `{0, 1, 2}` set per [ADR-0002](decisions/adr-0002-gate-caller-contract.md). Unexpected oracle exits (signal kill, bash 126/127, app bug returning 99) remap to gate exit 2 with `reason=unexpected_exit code=<N>`.
+
+**Default JSON payload** (`gate.py <target> --json`) — one line, keys always present unless noted:
+
+```json
+{
+  "schema_version": 1,
+  "exit_code": 0,
+  "status": "pass" | "below_threshold" | "env_error",
+  "composite": 0.95 | null,
+  "threshold": 0.5 | null,
+  "missing": [],
+  "reason": "..." (optional, only on env_error),
+  "code": 99 (optional, only on reason=unexpected_exit),
+  "timeout_seconds": 1.0 (optional, only on reason=timeout),
+  "raw": {"stdout": "...", "stderr": "..."} (optional, only with --verbose)
+}
+```
+
+**Closed `reason` taxonomy** (all 11 codes; surfaced when `status="env_error"`):
+
+| `reason` | When |
+|---|---|
+| `target_missing` | Target path doesn't exist |
+| `target_not_directory` | Target exists but isn't a directory |
+| `manifest_missing` | `<target>/.servo/install.json` absent |
+| `manifest_malformed` | Manifest exists but isn't valid JSON |
+| `manifest_invalid_key` | Manifest valid JSON but missing required key (`installed_tier` or `components`) |
+| `oracle_missing` | `<target>/oracle.sh` absent (but manifest is present) |
+| `oracle_not_executable` | `oracle.sh` exists but lacks the executable bit |
+| `invocation_failed` | OS-level error invoking the oracle (rare) |
+| `timeout` | Oracle exceeded `--timeout` (or env-var / 300s default) |
+| `unexpected_exit` | Oracle exited with a code outside `{0, 1, 2}` |
+| `unparseable_oracle_output` | Oracle exited 0 but produced no `composite=X threshold=Y` line |
+
+**Audit JSON** (`gate.py audit <target> --json`) — emits the install manifest verbatim (no `schema_version` field; the manifest has its own schema versioning via `servo_version`). One-line JSON for shape consistency with the invocation `--json`.
+
+**Timeout machinery** — default 300s (5 min), overridable via `--timeout <seconds>` flag or `SERVO_GATE_TIMEOUT` env var. Flag wins on conflict. `--timeout 0` disables the bound. Kill sequence: `SIGTERM` → 5s grace → `SIGKILL`, applied to the oracle's process group (`os.killpg`) so any backgrounded subprocesses are killed too.
+
+**Stateless** — the gate writes nothing to disk. Per-iteration / per-variant persistence is the caller's responsibility (specs 003 / 005).
+
 ## Decisions
 
 | ADR | Status | Captures |
 |---|---|---|
-| [ADR-0001](decisions/ADR-0001-reuse-jig-test-detector.md) | Accepted | Reuse jig's `tdd.py detect` via subprocess when co-installed; fall back to built-in detectors otherwise. The first concrete instance of the filesystem-only coupling. |
+| [ADR-0001](decisions/adr-0001-reuse-jig-test-detector.md) | Accepted | Reuse jig's `tdd.py detect` via subprocess when co-installed; fall back to built-in detectors otherwise. The first concrete instance of the filesystem-only coupling. |
+| [ADR-0002](decisions/adr-0002-gate-caller-contract.md) | Accepted | Quality-gate caller contract: `gate.py` exits only 0/1/2 (unexpected oracle exits remap to 2); `--json` output carries `schema_version` from day one. The contract specs 003/004/005 will consume. |
 
 ### Pending (ADR candidates)
 
-- **ADR-0002 — Why a fresh subagent roster, not reused from jig.** See "Subagents" section above. The risk is duplicated prompt maintenance; the win is prompts that match the operating context. Crystallizes once any of `runner` / `judge` / `architect` actually ships beyond placeholder.
-- **ADR-0003 — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
-- **ADR-0004 — Session-state file format on disk.** Spec 003's checkpoint/resume needs a canonical on-disk shape (likely `<target>/.servo/runs/<run-id>/state.json` carrying current-iteration / last-N-actions / hypotheses / cost-burned-so-far / oracle-score-history). This format becomes a cross-plugin soft contract — jig's `slice-land` may want to read it to emit "found a paused servo run — resume?" hints. Same shape as ADR-0001's filesystem-only coupling: no shared imports, just a documented path + JSON schema. Crystallizes when spec 003 reaches READY_FOR_REVIEW.
+Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims `0003` regardless of which candidate fires first.
+
+- **ADR-0003 — Why a fresh subagent roster, not reused from jig.** See "Subagents" section above. The risk is duplicated prompt maintenance; the win is prompts that match the operating context. Crystallizes once any of `runner` / `judge` / `architect` actually ships beyond placeholder.
+- **ADR-0004 — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
+- **ADR-0005 — Session-state file format on disk.** Spec 003's checkpoint/resume needs a canonical on-disk shape (likely `<target>/.servo/runs/<run-id>/state.json` carrying current-iteration / last-N-actions / hypotheses / cost-burned-so-far / oracle-score-history). This format becomes a cross-plugin soft contract — jig's `slice-land` may want to read it to emit "found a paused servo run — resume?" hints. Same shape as ADR-0001's filesystem-only coupling: no shared imports, just a documented path + JSON schema. Crystallizes when spec 003 reaches READY_FOR_REVIEW.
 
 ## Open questions (not yet ADR-worthy)
 

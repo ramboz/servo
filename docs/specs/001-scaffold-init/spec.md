@@ -184,7 +184,7 @@ Deviations from spec text:
 
 ### Close-out (post-DONE)
 
-- [x] ADR-0001 recorded. _`docs/decisions/ADR-0001-reuse-jig-test-detector.md` — Accepted. `docs/decisions/README.md` index seeded._
+- [x] ADR-0001 recorded. _`docs/decisions/adr-0001-reuse-jig-test-detector.md` — Accepted. `docs/decisions/README.md` index seeded._
 - [x] `docs/architecture.md` "Signal detection" section status updated. _Rewritten to reference implementation, ADR-0001, fragment composition, and the `detect` subcommand. "Decisions pending" reshaped into a Decisions table with ADR-0001 promoted out of the candidates list._
 
 **Anti-horizontal-phasing check:** After this slice, a real project's first run produces a tailored oracle that matches what's actually in the repo — the headline servo promise.
@@ -319,7 +319,7 @@ Deviations from spec text:
 - [x] End-to-end dogfood: scaffold servo's own repo (recursively — `python3 skills/scaffold-init/scaffold.py .`). Verify `oracle.sh` lands, scores servo's pytest tests, exits 0. _Verified 2026-05-15: scaffold detected pytest (servo's own `pyproject.toml` added during dogfood close-out), produced `oracle.sh` with `score_pytest`, manifest with `components: ["pytest"]`, refinement-todo with only `Threshold` (single-component case). With pytest on PATH (via venv), oracle ran composite=1.0000 threshold=0.5 → exit 0._
 - [x] [README.md](../../../README.md) skills table: `scaffold-init` row reads `DONE`.
 - [x] `docs/architecture.md` "Open questions" section reduced to genuinely-open items only. _Composite weighting heuristic resolved in 001-02; ADR-0001 promoted out of pending in 001-03. Remaining items (`.servo/install.json` checked-in vs ignored, scaffold-init vs jig-scaffolded interaction, agent-loop driver shell vs Python) are all genuinely-open future-spec items._
-- [x] At least one ADR recorded. _[ADR-0001](../../decisions/ADR-0001-reuse-jig-test-detector.md) Accepted in 001-03 — reuse jig's `tdd.py detect` when co-installed; fall back to built-in detectors otherwise._
+- [x] At least one ADR recorded. _[ADR-0001](../../decisions/adr-0001-reuse-jig-test-detector.md) Accepted in 001-03 — reuse jig's `tdd.py detect` when co-installed; fall back to built-in detectors otherwise._
 - [x] [docs/specs/README.md](../README.md) status board reflects DONE.
 
 ## Critical files (when implementation starts)

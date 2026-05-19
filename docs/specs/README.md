@@ -7,6 +7,7 @@ Status board for servo's spec-driven development. Each spec lives in `NNN-<name>
 | Spec | Status | Description |
 |---|---|---|
 | [001-scaffold-init](001-scaffold-init/spec.md) | **DONE** | Probe target signals, run Q&A, drop tailored `oracle.sh` (+ optional Tier-1/2 stubs) into target |
+| [002-quality-gate](002-quality-gate/spec.md) | **DONE** | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes (0 = ≥threshold, 1 = <threshold, 2 = env error). The truth-source every other servo runtime skill depends on. |
 
 ## Planned specs
 
@@ -16,7 +17,6 @@ spec authoring.
 
 | Spec | Description |
 |---|---|
-| 002-quality-gate | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes (0 = ≥threshold, 1 = <threshold, 2 = env error). The truth-source every other servo runtime skill depends on. |
 | 003-agent-loop | Headless iteration driver. Hard guardrails: **iteration cap**, **cost / token ceiling**, **context-fill refusal gate** (refuses next iteration once context window exceeds N% — the hard-gate cousin of jig's soft `jig-context-check.sh` warning), **checkpoint/resume** across invocations, **stuck-loop detection** (no oracle-score improvement over M iterations → halt). Owns the subagent-handoff state machine across iterations: what context each spawn receives, what it returns, what survives. |
 | 004-oracle-hook | Claude Code hook installer (idempotent install/uninstall/status). Installs a **meta-judge `Stop` hook** that grades every assistant turn against the scaffolded oracle and emits retry hints as `additionalContext` — the structured replacement for ad-hoc transcript-regex scans. |
 | 005-variant-race | N-worktree parallel race with quality-gate scoring and winner selection. Owns worktree-race coordination, variant-lease management, and winner promotion (the unattended cousin of jig's parallel-spec-number reservation). |
