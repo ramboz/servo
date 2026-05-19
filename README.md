@@ -18,7 +18,7 @@ Servo's primary entry point is a **scaffolder**, not a runtime. It probes the ta
 |---|---|---|
 | `/servo:scaffold-init` | Probe target signals; drop tailored oracle (+ optional tier-1/2 artifacts) | Spec 001 — **DONE** |
 | `/servo:quality-gate` | Run the scaffolded oracle; normalized exit codes | Spec 002 — **DONE** |
-| `/servo:agent-loop` | Headless iteration driver with iteration cap, cost ceiling, checkpoint/resume | Future spec |
+| `/servo:agent-loop` | Headless iteration driver with iteration cap, cost ceiling, checkpoint/resume | Spec 003 — **IN PROGRESS** (slice 003-01 DONE) |
 | `/servo:oracle-hook` | Claude Code hook installer (idempotent install / uninstall / status) | Future spec |
 | `/servo:variant-race` | N-worktree parallel race with oracle scoring and winner selection | Future spec |
 

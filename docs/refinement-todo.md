@@ -118,6 +118,40 @@ End-state behavior is still rc=2, which is the contract — but the error messag
 
 ---
 
+## `DEFAULT_CLAUDE_TIMEOUT_SECONDS = 1800` is a guess
+
+**Deferred:** `loop.py`'s per-invocation `claude -p` timeout defaults to 1800s (30 min). The value was picked without real-world iteration data — it's a generous upper bound chosen to be "long enough for substantial agentic turns with tool use, short enough that an unattended loop won't hang for days if claude wedges." A real-world loop running on a complex target may regularly take 5–20 minutes per iteration (compile cycles, test runs, large code edits); a simple target may finish in seconds. Without data, 1800s could be 10x too generous (wasteful when claude wedges in CI) or 5x too tight (false-positive timeouts on heavy iterations).
+
+The `SERVO_CLAUDE_TIMEOUT` env var is the user's escape hatch today; `0` disables the bound entirely. But the default ships in the slice 003-01 contract and downstream slices (003-02 cost ceiling, 003-04 state file) inherit it.
+
+**Resolution trigger:** First real-world iteration data — either (a) a user reports that 1800s isn't enough for their workflow, or (b) servo's own dogfood (slice 003-05 + spec-level end-to-end) shows a different right-sized default. When triggered, either lower the default to a tighter value (and document the tradeoff in `docs/architecture.md` "Project vs servo-core split") OR introduce a `--claude-timeout` CLI flag if env-var-only proves insufficient.
+
+**Surfaced by:** PR-review pass on slice 003-01 (multi-perspective `pr-review` skill, 2026-05-19). The reviewer flagged "no timeout on `claude -p` subprocess" as a Should-Fix reliability gap; slice 003-01 closed the gap by landing the timeout, but the picked default needs tuning data.
+
+---
+
+## `SERVO_VERSION` constant is dead code in `gate.py`
+
+**Deferred:** `skills/quality-gate/gate.py:37` declares `SERVO_VERSION = "0.1.0"` but never references it. `skills/scaffold-init/scaffold.py:32` declares the same constant and DOES use it (writes it to the manifest). `skills/agent-loop/loop.py` previously also had the dead constant but it was removed during slice 003-01 PR-review follow-on. gate.py's version is the remaining inconsistency — either remove it or use it somewhere (e.g., include in the `--json` payload).
+
+**Resolution trigger:** Next time gate.py gets touched for any other reason (slice 003-02 doesn't currently plan to). Cheap one-line removal.
+
+**Surfaced by:** PR-review pass on slice 003-01 (multi-perspective `pr-review` skill, 2026-05-19). The reviewer flagged `loop.py`'s `SERVO_VERSION` as unused; cleanup landed in slice 003-01 for loop.py, but gate.py has the same pattern and is out of scope here.
+
+---
+
+## ADR-0004 run-id precision: prose says "millisecond" but example uses seconds
+
+**Deferred:** ADR-0004's "Decision" section opens with *"`run-id` is a millisecond-precision timestamp prefix + short random suffix, e.g. `20260519T143205-a3f1`"* — but the example `20260519T143205` is seconds-precision (15 chars: `YYYYMMDDTHHMMSS`), not milliseconds. Slice 003-01 implemented seconds-precision via `datetime.now(...).strftime("%Y%m%dT%H%M%S")` to match the example and the test regex `^\d{8}T\d{6}-[0-9a-f]{4}$`. The collision-retry framing later in the ADR ("the same millisecond getting hit three times is treated as pathological") only makes sense at millisecond precision, so the inconsistency cuts in two directions: tighten the prose to seconds, or tighten the example + implementation to milliseconds.
+
+The collision-retry trade-off depends on which way the inconsistency is reconciled: seconds-precision gives ~16-bit entropy (4 hex chars) per second window — fine for serial loops, slim under spec 005 parallel races where N variants may fire within the same second. Millisecond-precision moves the collision window from 1s → 1ms, which 4 hex chars covers comfortably even under spec 005 fan-out.
+
+**Resolution trigger:** Slice 003-04 implementation. It needs the run-id format frozen (state file path is keyed by run-id; collision-retry policy operates on it). Two paths: (a) keep seconds-precision in the implementation and amend ADR-0004's prose to match (small ADR edit); (b) bump to millisecond-precision in the implementation, update the ADR's example to match the prose, and update slice 003-01's test regex to `^\d{8}T\d{9}-[0-9a-f]{4}$`. Either is a small change; pick at 003-04 DoR.
+
+**Surfaced by:** slice 003-01 reviewer pass (`jig:reviewer`, PASS verdict, 2026-05-19).
+
+---
+
 ## `gate.py audit` parses component weights from `oracle.sh` (soft template coupling)
 
 **Deferred:** The manifest written by `scaffold.py` carries component names but not weights (the per-component weight lives only in the scaffolded `oracle.sh`'s `COMPONENTS=( "name:weight" )` array). `gate.py audit` enriches the text-mode component listing with weights by parsing oracle.sh via `_ORACLE_COMPONENT_ENTRY_RE`. This is a best-effort coupling — if `templates/oracle.sh.template` ever changes its COMPONENTS array shape, audit will silently fall back to no-weight rendering (the function returns `{}` on any parse failure).

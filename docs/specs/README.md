@@ -8,7 +8,7 @@ Status board for servo's spec-driven development. Each spec lives in `NNN-<name>
 |---|---|---|
 | [001-scaffold-init](001-scaffold-init/spec.md) | **DONE** | Probe target signals, run Q&A, drop tailored `oracle.sh` (+ optional Tier-1/2 stubs) into target |
 | [002-quality-gate](002-quality-gate/spec.md) | **DONE** | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes (0 = ≥threshold, 1 = <threshold, 2 = env error). The truth-source every other servo runtime skill depends on. |
-| [003-agent-loop](003-agent-loop/spec.md) | **DRAFT** | Headless iteration driver. Hard guardrails: **iteration cap**, **cumulative cost ceiling**, **context-fill refusal gate** (the hard-gate cousin of jig's soft `jig-context-check.sh` warning), **checkpoint/resume** across invocations, **stuck-loop detection** (oracle-score plateau halt). Owns the subagent-handoff state machine across iterations. Pre-spec [spike](003-agent-loop/spike.md) verified all five guardrails map cleanly to today's `claude -p --output-format json` surface. |
+| [003-agent-loop](003-agent-loop/spec.md) | **IN_PROGRESS** (slice 003-01 DONE) | Headless iteration driver. Hard guardrails: **iteration cap**, **cumulative cost ceiling**, **context-fill refusal gate** (the hard-gate cousin of jig's soft `jig-context-check.sh` warning), **checkpoint/resume** across invocations, **stuck-loop detection** (oracle-score plateau halt). Owns the subagent-handoff state machine across iterations. Pre-spec [spike](003-agent-loop/spike.md) verified all five guardrails map cleanly to today's `claude -p --output-format json` surface. |
 
 ## Planned specs
 
