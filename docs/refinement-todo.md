@@ -118,6 +118,18 @@ End-state behavior is still rc=2, which is the contract — but the error messag
 
 ---
 
+## `DEFAULT_PER_ITER_BUDGET_USD = 1.00` is a guess
+
+**Deferred:** `loop.py`'s per-invocation `--max-budget-usd` fallback when `--cost-ceiling 0` disables cumulative tracking defaults to $1.00. The value is a "sane upper bound for one agentic turn" picked without real-world data — analogous to the `DEFAULT_CLAUDE_TIMEOUT_SECONDS = 1800` guess below. A simple iteration may burn $0.05; a complex one with heavy tool use may approach $1.00 or beyond. Without empirical data, $1.00 could be 10x too generous (one runaway turn still burns $1) or 2x too tight (false-positive `budget_exceeded` on legitimate heavy iterations).
+
+The flag is the user's escape hatch (`--cost-ceiling N` with N > 0 then sets the per-iter cap to remaining budget). But the `--cost-ceiling 0` mode is where the fallback ships and downstream slices/callers will inherit it.
+
+**Resolution trigger:** First real-world iteration cost data — either (a) a user reports that $1/iter isn't enough for their workflow, or (b) servo's own dogfood (slice 003-05 + spec-level end-to-end) shows a different right-sized default. When triggered, either tune the default (and document in `docs/architecture.md` "Project vs servo-core split") OR introduce a `--per-iter-budget` CLI flag if a single fixed default proves insufficient.
+
+**Surfaced by:** Independent reviewer pass on slice 003-02 (`jig:reviewer` subagent, 2026-05-19). The reviewer flagged it as a non-blocking caveat alongside the existing `DEFAULT_CLAUDE_TIMEOUT_SECONDS` entry — both are "best guess" defaults waiting on tuning data.
+
+---
+
 ## `DEFAULT_CLAUDE_TIMEOUT_SECONDS = 1800` is a guess
 
 **Deferred:** `loop.py`'s per-invocation `claude -p` timeout defaults to 1800s (30 min). The value was picked without real-world iteration data — it's a generous upper bound chosen to be "long enough for substantial agentic turns with tool use, short enough that an unattended loop won't hang for days if claude wedges." A real-world loop running on a complex target may regularly take 5–20 minutes per iteration (compile cycles, test runs, large code edits); a simple target may finish in seconds. Without data, 1800s could be 10x too generous (wasteful when claude wedges in CI) or 5x too tight (false-positive timeouts on heavy iterations).

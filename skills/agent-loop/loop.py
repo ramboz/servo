@@ -1,23 +1,24 @@
 """
-servo agent-loop — slice 003-01
+servo agent-loop — slices 003-01, 003-02
 
 Headless iteration driver. Subprocesses `claude -p --output-format json`
 against a target N times under guardrails, and uses `gate.py --json`
 (spec 002) as the truth-source after each iteration. Halts on (a) oracle
-pass (composite ≥ threshold), or (b) iteration cap reached.
+pass (composite ≥ threshold), (b) iteration cap reached, or (c) cumulative
+cost ceiling exceeded (slice 003-02).
 
 Usage:
     python3 loop.py <target> --prompt "<text>"
     python3 loop.py <target> --prompt "<text>" --max-iterations 3
+    python3 loop.py <target> --prompt "<text>" --cost-ceiling 1.50
 
 Per-iteration JSON: one line per completed iteration on stdout.
 Summary line: one JSON line on stdout after the last iteration (or refusal).
 
-Spike-shape slice. Cost ceiling, context-fill gate, checkpoint/resume,
-and stuck-loop detection land in 003-02..05 — this slice validates the
-loop-driver-subprocesses-claude-code assumption end-to-end.
+Context-fill gate, checkpoint/resume, and stuck-loop detection land in
+003-03..05.
 
-Reads/writes nothing to disk in 003-01. The `<target>/.servo/runs/<run-id>/`
+Reads/writes nothing to disk in 003-01/02. The `<target>/.servo/runs/<run-id>/`
 directory is reserved (per ADR-0004) and the run-id appears in the summary
 line, but the state file lands in slice 003-04.
 """
@@ -51,6 +52,25 @@ EXIT_ENV_ERROR = 2
 # Default iteration cap (per docs/architecture.md "Project vs servo-core split").
 DEFAULT_MAX_ITERATIONS = 5
 
+# Slice 003-02 cost-ceiling defaults (per docs/architecture.md "Project vs
+# servo-core split" table: max-iterations=5, cost-ceiling=$2). The ceiling
+# is cumulative across iterations and enforced by loop.py; `--max-budget-usd`
+# is the per-invocation defense-in-depth (so one runaway agentic turn can't
+# blow past the cumulative cap by more than its own burn rate).
+DEFAULT_COST_CEILING_USD = 2.0
+
+# Minimum `--max-budget-usd` value the loop will ever pass to claude. Below
+# this, the loop halts pre-iteration rather than invoking claude with an
+# effectively-zero budget. Set just above zero so we never invoke a
+# free-tier-only run by accident.
+MIN_BUDGET_FLOOR_USD = 0.01
+
+# `--max-budget-usd` value used when the cumulative cost-ceiling is disabled
+# (`--cost-ceiling 0`). Provides a per-invocation brake so a runaway agentic
+# turn still has an upper bound, even when the caller is enforcing a budget
+# out-of-band.
+DEFAULT_PER_ITER_BUDGET_USD = 1.0
+
 # Default per-invocation wall-clock cap for `claude -p`. 30 minutes is a
 # generous upper bound — long enough for substantial agentic turns with
 # tool use, short enough that an unattended loop won't hang for days if
@@ -70,13 +90,14 @@ STATUS_PASS = "pass"
 STATUS_BELOW_THRESHOLD = "below_threshold"
 STATUS_ENV_ERROR = "env_error"
 
-# Terminal-reason taxonomy emitted by 003-01. Slices 003-02..05 will extend
-# this set (cost_ceiling_reached, context_full, oracle_plateau, interrupted,
-# state_schema_mismatch, claude_version_mismatch, run_id_collision,
-# verdict_schema_mismatch). Keep the strings stable — they are part of the
-# loop's structured-output contract.
+# Terminal-reason taxonomy. Slices 003-03..05 will extend this set
+# (context_full, oracle_plateau, interrupted, state_schema_mismatch,
+# claude_version_mismatch, run_id_collision, verdict_schema_mismatch).
+# Keep the strings stable — they are part of the loop's structured-output
+# contract.
 REASON_ORACLE_PASSED = "oracle_passed"
 REASON_MAX_ITERATIONS_REACHED = "max_iterations_reached"
+REASON_COST_CEILING_REACHED = "cost_ceiling_reached"
 REASON_CLAUDE_INVOCATION_FAILED = "claude_invocation_failed"
 REASON_GATE_INVOCATION_FAILED = "gate_invocation_failed"
 REASON_TARGET_MISSING = "target_missing"
@@ -140,26 +161,30 @@ def _resolve_claude_timeout() -> Optional[float]:
     return None if parsed == 0 else parsed
 
 
-def _refuse_preflight(*, run_id: str, reason: str, message: str) -> int:
+def _refuse_preflight(
+    *, run_id: str, reason: str, message: str, cost_ceiling: float,
+) -> int:
     """Emit a stderr breadcrumb + a summary JSON line; return rc=2.
 
     No per-iteration line is emitted because preflight refusal happens
     before iteration 1 runs. The summary line still carries `run_id` so a
     caller can correlate the refusal with whatever orchestration context
-    invoked the loop.
+    invoked the loop. `cost_ceiling_usd` is included even on preflight so
+    consumers see the configured bound regardless of how the run ended.
     """
     sys.stderr.write(f"loop: {message}\n")
     _emit_json({
         "terminal_reason": reason,
         "iterations_completed": 0,
         "cumulative_cost_usd": 0.0,
+        "cost_ceiling_usd": cost_ceiling,
         "final_oracle_status": STATUS_ENV_ERROR,
         "run_id": run_id,
     })
     return EXIT_ENV_ERROR
 
 
-def _preflight(target: Path, run_id: str) -> Optional[int]:
+def _preflight(target: Path, run_id: str, *, cost_ceiling: float) -> Optional[int]:
     """Validate target / manifest / oracle exist. Return rc on refusal, None on pass.
 
     Reason strings mirror gate.py's taxonomy (`target_missing`,
@@ -176,12 +201,14 @@ def _preflight(target: Path, run_id: str) -> Optional[int]:
             run_id=run_id,
             reason=REASON_TARGET_MISSING,
             message=f"target does not exist: {target}",
+            cost_ceiling=cost_ceiling,
         )
     if not target.is_dir():
         return _refuse_preflight(
             run_id=run_id,
             reason=REASON_TARGET_NOT_DIRECTORY,
             message=f"target is not a directory: {target}",
+            cost_ceiling=cost_ceiling,
         )
     manifest_path = target / ".servo" / "install.json"
     if not manifest_path.exists():
@@ -192,6 +219,7 @@ def _preflight(target: Path, run_id: str) -> Optional[int]:
                 f".servo/install.json not found at {manifest_path}; "
                 f"run /servo:scaffold-init first"
             ),
+            cost_ceiling=cost_ceiling,
         )
     oracle_path = target / "oracle.sh"
     if not oracle_path.exists():
@@ -202,26 +230,69 @@ def _preflight(target: Path, run_id: str) -> Optional[int]:
                 f"oracle.sh not found at {oracle_path}; "
                 f"run /servo:scaffold-init first"
             ),
+            cost_ceiling=cost_ceiling,
         )
     return None
 
 
-def _invoke_claude(
-    prompt: str, target: Path, *, timeout_seconds: Optional[float] = None,
-) -> tuple[Optional[dict], Optional[str]]:
-    """Invoke `claude -p --output-format json "<prompt>"` in the target cwd.
+def _compute_per_iter_budget(cost_ceiling: float, cumulative: float) -> float:
+    """Per-iteration `--max-budget-usd` value to pass to `claude -p`.
 
-    Returns `(parsed_json, None)` on success or `(None, breadcrumb)` on any
-    failure (AC9). The breadcrumb string is the stderr-friendly cause that
-    `loop:` will prefix; tests assert against the literal text.
+    When cost_ceiling > 0: remaining = cost_ceiling - cumulative, floored at
+    MIN_BUDGET_FLOOR_USD. The caller is expected to have already gated on
+    `_budget_floor_hit` before reaching here, so the `max(..., floor)` clamp
+    is belt-and-suspenders.
+
+    When cost_ceiling <= 0 (disabled): DEFAULT_PER_ITER_BUDGET_USD so a
+    runaway agentic turn still has a brake even when the caller is
+    enforcing a budget out-of-band.
+    """
+    if cost_ceiling <= 0:
+        return DEFAULT_PER_ITER_BUDGET_USD
+    return max(cost_ceiling - cumulative, MIN_BUDGET_FLOOR_USD)
+
+
+def _budget_floor_hit(cost_ceiling: float, cumulative: float) -> bool:
+    """True iff cumulative is within MIN_BUDGET_FLOOR_USD of the ceiling.
+
+    Used as a pre-iteration gate so the loop never invokes claude with an
+    effectively-zero budget. Returns False when the ceiling is disabled
+    (cost_ceiling <= 0).
+    """
+    if cost_ceiling <= 0:
+        return False
+    return (cost_ceiling - cumulative) < MIN_BUDGET_FLOOR_USD
+
+
+def _invoke_claude(
+    prompt: str, target: Path, *,
+    max_budget_usd: float,
+    timeout_seconds: Optional[float] = None,
+) -> tuple[Optional[dict], Optional[str]]:
+    """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
+
+    Returns `(parsed_json, None)` on success or `(None, breadcrumb)` on
+    failure (AC9). Success includes the budget-exceeded path: when claude
+    honors `--max-budget-usd` it may exit non-zero with a parseable JSON
+    body — that JSON is the iteration's result, not an invocation failure.
+    Per AC9's literal wording ("exit non-zero WITHOUT parseable JSON output"
+    = failure), the split is:
+
+      - exit 0 + parseable JSON dict        → success
+      - exit non-zero + parseable JSON dict → success (budget_exceeded path)
+      - exit 0 + unparseable/non-dict       → failure ("JSON parse error")
+      - exit non-zero + unparseable/non-dict → failure ("without JSON output")
+      - timeout / FileNotFoundError / OSError → failure (specific breadcrumb)
 
     `timeout_seconds=None` means unbounded (used by tests that lower the
     bound to 1s via SERVO_CLAUDE_TIMEOUT to avoid 30-minute waits). On
-    `subprocess.TimeoutExpired`, Python sends SIGKILL to claude. Grandchildren
-    (tool-use subprocesses) may leak; spike-shape acceptable, deferred to
-    slice 003-04+ if it surfaces in practice.
+    `subprocess.TimeoutExpired`, Python sends SIGKILL to claude.
     """
-    cmd = ["claude", "-p", "--output-format", "json", prompt]
+    cmd = [
+        "claude", "-p", "--output-format", "json",
+        "--max-budget-usd", f"{max_budget_usd:.6f}",
+        prompt,
+    ]
     try:
         proc = subprocess.run(
             cmd,
@@ -242,26 +313,30 @@ def _invoke_claude(
     except OSError as exc:
         return None, f"OS error invoking claude: {exc}"
 
-    if proc.returncode != 0:
-        # AC9 breadcrumb. Non-zero exit is treated uniformly as failure —
-        # 003-01 doesn't pass `--max-budget-usd`, so claude shouldn't be
-        # exiting non-zero except in genuine failure modes (auth, network,
-        # crash). The breadcrumb keeps AC9's literal "without JSON output"
-        # wording even when stdout was non-empty-but-unparseable; the
-        # simplification is documented in the deviation log. Slice 003-02
-        # will need to revisit when `--max-budget-usd` gets added and
-        # budget-exceeded paths might surface a non-zero exit with JSON.
-        return None, f"claude -p exited {proc.returncode} without JSON output"
-
+    parse_error: Optional[str] = None
     try:
         data = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        return None, f"claude JSON parse error: {exc.msg} (line {exc.lineno})"
+        parse_error = f"claude JSON parse error: {exc.msg} (line {exc.lineno})"
+        data = None
+    else:
+        if not isinstance(data, dict):
+            parse_error = "claude JSON parse error: output is not a JSON object"
+            data = None
 
-    if not isinstance(data, dict):
-        return None, "claude JSON parse error: output is not a JSON object"
+    if data is not None:
+        # Treat as success regardless of exit code — `--max-budget-usd` halt
+        # can produce non-zero + parseable JSON, and that's the iteration's
+        # result not an invocation failure.
+        return data, None
 
-    return data, None
+    if proc.returncode != 0:
+        # Non-zero exit + unparseable/non-dict body = real invocation failure.
+        # Keep the AC9 wording stable for downstream consumers.
+        return None, f"claude -p exited {proc.returncode} without JSON output"
+
+    # Exit 0 with unparseable / non-dict output → AC9 "JSON parse error" path.
+    return None, parse_error
 
 
 def _invoke_gate(target: Path) -> Optional[dict]:
@@ -287,10 +362,12 @@ def _invoke_gate(target: Path) -> Optional[dict]:
         return None
 
 
-def run_loop(target: Path, *, prompt: str, max_iterations: int) -> int:
+def run_loop(
+    target: Path, *, prompt: str, max_iterations: int, cost_ceiling: float,
+) -> int:
     run_id = _generate_run_id()
 
-    rc = _preflight(target, run_id)
+    rc = _preflight(target, run_id, cost_ceiling=cost_ceiling)
     if rc is not None:
         return rc
 
@@ -302,9 +379,24 @@ def run_loop(target: Path, *, prompt: str, max_iterations: int) -> int:
     terminal_reason = REASON_MAX_ITERATIONS_REACHED
 
     halted_on_pass = False
+    halted_on_cost = False
     for iteration in range(1, max_iterations + 1):
+        # Pre-iteration cost-ceiling floor check. If the remaining budget
+        # under the cumulative ceiling would put us below MIN_BUDGET_FLOOR_USD,
+        # halt without invoking claude (no point spending an iteration on a
+        # near-zero budget). Skipped when --cost-ceiling 0 disables tracking.
+        if _budget_floor_hit(cost_ceiling, cumulative_cost_usd):
+            terminal_reason = REASON_COST_CEILING_REACHED
+            halted_on_cost = True
+            break
+
+        per_iter_budget = _compute_per_iter_budget(
+            cost_ceiling, cumulative_cost_usd,
+        )
         claude_data, error = _invoke_claude(
-            prompt, target, timeout_seconds=claude_timeout_seconds,
+            prompt, target,
+            max_budget_usd=per_iter_budget,
+            timeout_seconds=claude_timeout_seconds,
         )
         if claude_data is None:
             sys.stderr.write(f"loop: {error}\n")
@@ -312,6 +404,7 @@ def run_loop(target: Path, *, prompt: str, max_iterations: int) -> int:
                 "terminal_reason": REASON_CLAUDE_INVOCATION_FAILED,
                 "iterations_completed": iterations_completed,
                 "cumulative_cost_usd": cumulative_cost_usd,
+                "cost_ceiling_usd": cost_ceiling,
                 "final_oracle_status": final_oracle_status,
                 "run_id": run_id,
             })
@@ -337,6 +430,7 @@ def run_loop(target: Path, *, prompt: str, max_iterations: int) -> int:
                 "terminal_reason": REASON_GATE_INVOCATION_FAILED,
                 "iterations_completed": iterations_completed,
                 "cumulative_cost_usd": cumulative_cost_usd,
+                "cost_ceiling_usd": cost_ceiling,
                 "final_oracle_status": STATUS_ENV_ERROR,
                 "run_id": run_id,
             })
@@ -368,13 +462,24 @@ def run_loop(target: Path, *, prompt: str, max_iterations: int) -> int:
             halted_on_pass = True
             break
 
-    if not halted_on_pass:
+        # Post-iteration cost-ceiling check. The iteration completed and got
+        # scored — its cost is recorded in cumulative_cost_usd and the
+        # per-iter line. Now check whether we've crossed the ceiling. The
+        # iteration that *first* exceeds the ceiling is the last one to run;
+        # AC1 shows this with cost=$0.75/iter halting after iter-3 at $2.25.
+        if cost_ceiling > 0 and cumulative_cost_usd > cost_ceiling:
+            terminal_reason = REASON_COST_CEILING_REACHED
+            halted_on_cost = True
+            break
+
+    if not halted_on_pass and not halted_on_cost:
         terminal_reason = REASON_MAX_ITERATIONS_REACHED
 
     _emit_json({
         "terminal_reason": terminal_reason,
         "iterations_completed": iterations_completed,
         "cumulative_cost_usd": cumulative_cost_usd,
+        "cost_ceiling_usd": cost_ceiling,
         "final_oracle_status": final_oracle_status,
         "run_id": run_id,
     })
@@ -388,9 +493,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         prog="loop.py",
         description=(
             "Headless iteration driver. Subprocesses `claude -p "
-            "--output-format json` against a target, scores via `gate.py "
-            "--json` after each iteration, halts on oracle pass or "
-            "iteration cap. Per-invocation claude timeout defaults to "
+            "--output-format json --max-budget-usd <remaining>` against a "
+            "target, scores via `gate.py --json` after each iteration, "
+            "halts on oracle pass, iteration cap, or cumulative cost "
+            "ceiling. Per-invocation claude timeout defaults to "
             f"{DEFAULT_CLAUDE_TIMEOUT_SECONDS}s; override via "
             f"${_CLAUDE_TIMEOUT_ENV_VAR} env var (0 disables)."
         ),
@@ -414,13 +520,28 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"Default {DEFAULT_MAX_ITERATIONS}."
         ),
     )
+    parser.add_argument(
+        "--cost-ceiling",
+        type=float,
+        default=DEFAULT_COST_CEILING_USD,
+        help=(
+            f"Cumulative cost ceiling in USD; loop halts when "
+            f"`sum(total_cost_usd)` exceeds this value. Default "
+            f"${DEFAULT_COST_CEILING_USD:.2f}. Pass 0 to disable; the "
+            f"per-iteration `--max-budget-usd` then defaults to "
+            f"${DEFAULT_PER_ITER_BUDGET_USD:.2f} as a runaway brake."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.max_iterations < 1:
         parser.error("--max-iterations must be >= 1")
+    if args.cost_ceiling < 0:
+        parser.error("--cost-ceiling must be >= 0")
     return run_loop(
         args.target.resolve(),
         prompt=args.prompt,
         max_iterations=args.max_iterations,
+        cost_ceiling=args.cost_ceiling,
     )
 
 

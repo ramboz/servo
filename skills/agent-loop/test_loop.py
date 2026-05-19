@@ -1038,5 +1038,643 @@ class ClaudeTimeoutTests(unittest.TestCase):
         self.assertIn("using default 1800s", result.stderr)
 
 
+# ============================================================================
+# Slice 003-02 — cost-ceiling: shared fixture helpers
+# ============================================================================
+
+
+def _mock_claude_with_args_log(
+    bindir: Path, json_payload: str, counter_file: Path, args_log: Path,
+) -> Path:
+    """Constant-payload mock that also appends each invocation's argv to args_log.
+
+    `$*` joins positional args with single spaces; one invocation = one line in
+    the log. Lets a test verify the `--max-budget-usd <remaining>` arg that AC3
+    requires the loop to pass through to claude.
+    """
+    body = textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        counter_file='{counter_file}'
+        args_log='{args_log}'
+        if [ -f "$counter_file" ]; then
+            n=$(cat "$counter_file")
+        else
+            n=0
+        fi
+        n=$((n + 1))
+        echo "$n" > "$counter_file"
+        echo "$*" >> "$args_log"
+        cat <<'__JSON_EOF__'
+        {json_payload}
+        __JSON_EOF__
+    """)
+    return _make_mock_claude(bindir, body)
+
+
+def _mock_claude_costs_per_iter(
+    bindir: Path, costs: list, counter_file: Path,
+    args_log: Optional[Path] = None,
+) -> Path:
+    """Mock that emits cost[n-1] (USD) as `total_cost_usd` on its n-th invocation.
+
+    `costs` is a list of floats; iteration N reads the N-th line of
+    `costs.txt`. Lets a test engineer a specific cumulative trajectory (e.g.,
+    "cumulative must land within $0.005 of the ceiling after iter-1").
+    """
+    costs_file = bindir / "costs.txt"
+    costs_file.parent.mkdir(parents=True, exist_ok=True)
+    costs_file.write_text("\n".join(str(c) for c in costs) + "\n")
+    args_log_cmd = f'echo "$*" >> \'{args_log}\'\n' if args_log else ""
+    # Bash heredoc must be UNQUOTED for $n / $cost substitution; literal
+    # `{` / `}` in the JSON must be doubled in this Python f-string.
+    body = (
+        f"#!/usr/bin/env bash\n"
+        f"counter_file='{counter_file}'\n"
+        f"costs_file='{costs_file}'\n"
+        f'if [ -f "$counter_file" ]; then\n'
+        f'    n=$(cat "$counter_file")\n'
+        f"else\n"
+        f"    n=0\n"
+        f"fi\n"
+        f"n=$((n + 1))\n"
+        f'echo "$n" > "$counter_file"\n'
+        f"{args_log_cmd}"
+        f'cost=$(sed -n "${{n}}p" "$costs_file")\n'
+        f"cat <<JSON_EOF\n"
+        f'{{"type":"result","subtype":"success","is_error":false,'
+        f'"session_id":"mock-session-$n","total_cost_usd":$cost,'
+        f'"terminal_reason":"completed","stop_reason":"end_turn",'
+        f'"num_turns":1,"result":"ok",'
+        f'"usage":{{"input_tokens":100,"cache_read_input_tokens":0,'
+        f'"cache_creation_input_tokens":0,"output_tokens":10}},'
+        f'"modelUsage":{{"claude-sonnet-4-6":{{"inputTokens":100,'
+        f'"outputTokens":10,"contextWindow":200000}}}}}}\n'
+        f"JSON_EOF\n"
+    )
+    return _make_mock_claude(bindir, body)
+
+
+def _read_args_log(args_log: Path) -> list:
+    """Parse the args log into a list of argv lists (one per invocation)."""
+    if not args_log.exists():
+        return []
+    return [
+        line.split() for line in args_log.read_text().splitlines() if line.strip()
+    ]
+
+
+def _find_flag_value(argv: list, flag: str) -> Optional[str]:
+    """Return the value following `flag` in argv, or None if absent."""
+    for i, token in enumerate(argv):
+        if token == flag and i + 1 < len(argv):
+            return argv[i + 1]
+    return None
+
+
+# ============================================================================
+# Slice 003-02 — AC #1: Default cost-ceiling halts at cumulative > $2.00
+# ============================================================================
+
+
+class CostCeilingDefaultTests(unittest.TestCase):
+    """AC #1 — with no flag, loop halts when cumulative `total_cost_usd` > $2.00.
+
+    Mock emits $0.75 / iter. After iter-3 cumulative = $2.25 (first exceeds).
+    Loop halts after iter-3 completes (gate scored, per-iter line emitted),
+    summary carries `terminal_reason=cost_ceiling_reached cumulative_cost_usd=2.25`.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac1-cost-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        # Constant $0.75 per iteration. Use the costs-per-iter helper with 10
+        # entries so we don't run out before the loop halts.
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.75] * 10, self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_halts_after_iter_three(self):
+        # Default --max-iterations=5, default --cost-ceiling=$2.00. Cumulative
+        # reaches 0.75 → 1.50 → 2.25 across iters 1..3; iter-3 puts it over,
+        # post-iter check halts before iter-4.
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 3)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "cost_ceiling_reached")
+        self.assertEqual(summary["iterations_completed"], 3)
+        self.assertAlmostEqual(summary["cumulative_cost_usd"], 2.25, places=6)
+
+    def test_default_ceiling_is_two_dollars(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            mock_bindir=self.bindir,
+        )
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 2.0, places=6)
+
+
+# ============================================================================
+# Slice 003-02 — AC #2: --cost-ceiling override
+# ============================================================================
+
+
+class CostCeilingOverrideTests(unittest.TestCase):
+    """AC #2 — `--cost-ceiling 0.50` halts on first iteration emitting > $0.50."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac2-cost-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        # $0.75 per iter exceeds $0.50 immediately.
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.75] * 10, self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_override_halts_at_iter_one(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--cost-ceiling", "0.50",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "cost_ceiling_reached")
+        self.assertEqual(summary["iterations_completed"], 1)
+        self.assertAlmostEqual(summary["cumulative_cost_usd"], 0.75, places=6)
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 0.50, places=6)
+
+
+# ============================================================================
+# Slice 003-02 — AC #3: Per-iteration --max-budget-usd passthrough
+# ============================================================================
+
+
+class PerIterationBudgetCapTests(unittest.TestCase):
+    """AC #3 — each `claude -p` invocation receives `--max-budget-usd <remaining>`."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac3-cost-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_max_budget_usd_arg_passed_each_iteration(self):
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.10] * 5, self.counter, args_log=self.args_log,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            "--cost-ceiling", "2.00",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        invocations = _read_args_log(self.args_log)
+        self.assertEqual(len(invocations), 3)
+        for argv in invocations:
+            self.assertIn("--max-budget-usd", argv)
+
+    def test_max_budget_usd_decreases_as_budget_burns(self):
+        # Each iter costs $0.50; ceiling = $2.00. Remaining budget at the
+        # START of each iter: 2.00, 1.50, 1.00, 0.50. (iter-4 would have
+        # remaining = 0.50, but after iter-4 cumulative = 2.00 == ceiling
+        # → still under; iter-5 would have remaining = 0 < floor → halt.)
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.50] * 5, self.counter, args_log=self.args_log,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "4",
+            "--cost-ceiling", "2.00",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        invocations = _read_args_log(self.args_log)
+        self.assertEqual(len(invocations), 4)
+        budgets = [
+            float(_find_flag_value(argv, "--max-budget-usd"))
+            for argv in invocations
+        ]
+        # Strictly monotonic decreasing.
+        for prev, curr in zip(budgets, budgets[1:]):
+            self.assertGreater(prev, curr, f"budgets={budgets}")
+        # First iter sees the full ceiling.
+        self.assertAlmostEqual(budgets[0], 2.00, places=6)
+        # Subsequent iters reflect remaining = ceiling - cumulative_before.
+        self.assertAlmostEqual(budgets[1], 1.50, places=6)
+        self.assertAlmostEqual(budgets[2], 1.00, places=6)
+        self.assertAlmostEqual(budgets[3], 0.50, places=6)
+
+
+# ============================================================================
+# Slice 003-02 — AC #4: Per-iteration budget floor
+# ============================================================================
+
+
+class PerIterationBudgetFloorTests(unittest.TestCase):
+    """AC #4 — `--max-budget-usd` floor at MIN_BUDGET_FLOOR_USD = 0.01.
+
+    Two scenarios:
+      - Mid-loop: cumulative is within $0.01 of ceiling → halt without
+        invoking the next iteration. Guarantees we never call claude with
+        `--max-budget-usd 0` or anything sub-cent.
+      - First-iter: ceiling itself is below the floor → halt before iter-1.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac4-cost-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_remaining_below_floor_halts_without_next_invocation(self):
+        # iter-1 cost = $0.495; ceiling = $0.50 → remaining = $0.005 < floor.
+        # iter-2 must NOT fire.
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.495, 0.495, 0.495], self.counter,
+            args_log=self.args_log,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--cost-ceiling", "0.50",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "cost_ceiling_reached")
+        self.assertEqual(summary["iterations_completed"], 1)
+
+    def test_ceiling_below_floor_halts_before_any_iteration(self):
+        # ceiling = $0.005 < floor = $0.01 → iter-1 never fires.
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.10] * 5, self.counter, args_log=self.args_log,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--cost-ceiling", "0.005",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertFalse(
+            self.counter.exists(),
+            "claude should not have been invoked at all",
+        )
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "cost_ceiling_reached")
+        self.assertEqual(summary["iterations_completed"], 0)
+        self.assertAlmostEqual(summary["cumulative_cost_usd"], 0.0, places=6)
+
+    def test_floor_does_not_fire_when_remaining_well_above(self):
+        # Remaining well above floor → loop proceeds normally to max_iterations.
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.05] * 3, self.counter, args_log=self.args_log,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            "--cost-ceiling", "2.00",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 3)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+
+    def test_passed_budget_never_below_floor(self):
+        # Even when cumulative approaches the ceiling, the --max-budget-usd
+        # value we pass to claude is at least MIN_BUDGET_FLOOR_USD. (We never
+        # send claude an effectively-zero budget.)
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.49, 0.49, 0.49], self.counter,
+            args_log=self.args_log,
+        )
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            "--cost-ceiling", "1.00",
+            mock_bindir=self.bindir,
+        )
+        invocations = _read_args_log(self.args_log)
+        for argv in invocations:
+            budget = float(_find_flag_value(argv, "--max-budget-usd"))
+            self.assertGreaterEqual(budget, 0.01)
+
+
+# ============================================================================
+# Slice 003-02 — AC #5: Summary line carries cost-ceiling fields
+# ============================================================================
+
+
+class CostCeilingSummaryTests(unittest.TestCase):
+    """AC #5 — when cost-ceiling halts the loop, summary carries the documented fields."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac5-cost-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_summary_has_required_cost_fields_on_ceiling_halt(self):
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.40, 0.40, 0.40, 0.40, 0.40], self.counter,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "10",
+            "--cost-ceiling", "1.00",
+            mock_bindir=self.bindir,
+        )
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "cost_ceiling_reached")
+        self.assertIn("cumulative_cost_usd", summary)
+        self.assertIn("cost_ceiling_usd", summary)
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 1.00, places=6)
+        self.assertGreater(summary["cumulative_cost_usd"], 1.00)
+
+    def test_cost_ceiling_usd_present_on_non_ceiling_halt(self):
+        # Even when the loop ends for other reasons (oracle pass or iter cap),
+        # the summary should still expose the configured ceiling so consumers
+        # can correlate the bound that was in effect.
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.05] * 3, self.counter,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            "--cost-ceiling", "5.00",
+            mock_bindir=self.bindir,
+        )
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 5.00, places=6)
+
+
+# ============================================================================
+# Slice 003-02 — AC #6: Cumulative cost in per-iteration JSON
+# ============================================================================
+
+
+class CumulativeCostPerIterationTests(unittest.TestCase):
+    """AC #6 — each per-iteration line carries both `cost_usd` and `cumulative_cost_usd`."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac6-cost-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_cumulative_cost_matches_running_sum(self):
+        # Varying per-iter costs let us verify the running sum is correct.
+        costs = [0.10, 0.20, 0.30]
+        _mock_claude_costs_per_iter(self.bindir, costs, self.counter)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            "--cost-ceiling", "10.00",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual(len(per_iter), 3)
+        running = 0.0
+        for line, expected_cost in zip(per_iter, costs):
+            running += expected_cost
+            self.assertIn("cost_usd", line)
+            self.assertIn("cumulative_cost_usd", line)
+            self.assertAlmostEqual(line["cost_usd"], expected_cost, places=6)
+            self.assertAlmostEqual(
+                line["cumulative_cost_usd"], running, places=6,
+            )
+
+
+# ============================================================================
+# Slice 003-02 — AC #7: --cost-ceiling 0 disables the cumulative ceiling
+# ============================================================================
+
+
+class CostCeilingDisabledTests(unittest.TestCase):
+    """AC #7 — `--cost-ceiling 0` disables cumulative ceiling; per-iter cap defaults."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac7-cost-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_ceiling_zero_does_not_halt_on_cost(self):
+        # Cumulative would be 5 * $5.00 = $25 — far above default ceiling, but
+        # with --cost-ceiling 0, cumulative-tracking is disabled and the loop
+        # runs to its iter cap.
+        _mock_claude_costs_per_iter(
+            self.bindir, [5.00] * 5, self.counter, args_log=self.args_log,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            "--cost-ceiling", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 3)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 0.0, places=6)
+
+    def test_ceiling_zero_uses_default_per_iter_budget(self):
+        # With cumulative disabled, the per-iter cap defaults to
+        # DEFAULT_PER_ITER_BUDGET_USD = $1.00 so a runaway agentic turn still
+        # has a brake. Every invocation must carry --max-budget-usd 1.0.
+        _mock_claude_costs_per_iter(
+            self.bindir, [0.05] * 3, self.counter, args_log=self.args_log,
+        )
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            "--cost-ceiling", "0",
+            mock_bindir=self.bindir,
+        )
+        invocations = _read_args_log(self.args_log)
+        self.assertEqual(len(invocations), 2)
+        for argv in invocations:
+            self.assertIn("--max-budget-usd", argv)
+            self.assertAlmostEqual(
+                float(_find_flag_value(argv, "--max-budget-usd")),
+                1.00, places=6,
+            )
+
+
+# ============================================================================
+# Slice 003-02 — CLI validation: negative --cost-ceiling rejected
+# ============================================================================
+
+
+class CostCeilingValidationTests(unittest.TestCase):
+    """`--cost-ceiling` validation — negatives are meaningless; argparse rejects them.
+
+    Mirrors the `--max-iterations < 1` rejection pattern (closed {0, 2} exit
+    contract, with the helpful stderr breadcrumb).
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-validation-cost-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_negative_cost_ceiling_rejected(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--cost-ceiling", "-1.5",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--cost-ceiling must be >= 0", result.stderr)
+        self.assertFalse(self.counter.exists())
+
+
+# ============================================================================
+# Slice 003-02 — non-zero claude exit WITH parseable JSON treated as completion
+# ============================================================================
+
+
+class ClaudeNonzeroWithParseableJsonTests(unittest.TestCase):
+    """When `--max-budget-usd` is honored, claude can exit non-zero with a
+    parseable JSON body (budget_exceeded). Per AC9's literal wording ("exit
+    non-zero WITHOUT parseable JSON output"), that path is NOT a claude
+    invocation failure — the loop accepts the JSON, records the cost, and
+    lets its own cumulative tracking decide whether to halt.
+
+    This closes the 003-01 deviation-log forward reference: "Slice 003-02 will
+    need to revisit when budget-exceeded paths surface a non-zero exit with
+    parseable JSON — at that point the breadcrumb will split into 'without
+    JSON output' vs 'with unparseable output' sub-cases."
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-nonzero-json-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_nonzero_exit_with_parseable_json_records_iteration(self):
+        # Mock that exits 1 but with a clean JSON body — simulates claude's
+        # `--max-budget-usd` halt path. The loop should treat this as a
+        # successful iteration completion (cost recorded), then halt via its
+        # own cumulative-cost check.
+        payload = _claude_json_payload(
+            session_id="budget-hit-sess", cost=1.50,
+            terminal_reason="budget_exceeded",
+        )
+        body = textwrap.dedent(f"""\
+            #!/usr/bin/env bash
+            cat <<'__JSON_EOF__'
+            {payload}
+            __JSON_EOF__
+            exit 1
+        """)
+        _make_mock_claude(self.bindir, body)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--cost-ceiling", "1.00",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        # First iter recorded; cumulative ($1.50) > ceiling ($1.00) → halt.
+        self.assertEqual(len(per_iter), 1)
+        self.assertEqual(per_iter[0]["session_id"], "budget-hit-sess")
+        self.assertAlmostEqual(per_iter[0]["cost_usd"], 1.50, places=6)
+        self.assertEqual(per_iter[0]["terminal_reason"], "budget_exceeded")
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "cost_ceiling_reached")
+
+    def test_nonzero_exit_with_unparseable_stdout_still_fails(self):
+        # Non-zero exit + non-JSON stdout = real failure (AC9 path).
+        body = textwrap.dedent("""\
+            #!/usr/bin/env bash
+            echo 'definitely not json'
+            exit 1
+        """)
+        _make_mock_claude(self.bindir, body)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
+
+
 if __name__ == "__main__":
     unittest.main()
