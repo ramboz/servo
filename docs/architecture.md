@@ -104,15 +104,15 @@ This is the analog of jig's `scaffold.json` and is what later runtime skills con
 
 ## Subagents
 
-Servo ships its own `agents/` roster (`runner.md`, `judge.md`, `architect.md`) rather than reusing jig's `implementer.md` / `reviewer.md` / `architect.md`. Reason: jig's subagent prompts assume **supervised** TDD — they narrate, ask clarifying questions, defer ambiguous calls back to the user. Servo's loops are **unattended** — every iteration costs money, no human is watching, and the loop driver needs machine-parseable signals to decide whether to iterate again. The prompts diverge enough that copy-and-rewrite is cleaner than parameterize-and-share. Documented as a future ADR ("Why a fresh subagent roster").
+Servo ships two fresh agents — `runner.md` and `judge.md` — rather than reusing jig's `implementer.md` / `reviewer.md`. Reason: jig's subagent prompts assume **supervised** TDD (narration, clarifying questions, deferring ambiguous calls to the user). Servo's loops are **unattended** (every iteration costs money, no human watching, loop driver needs machine-parseable signals to decide whether to iterate again). The prompts diverge enough at the output-schema level that copy-and-rewrite is cleaner than parameterize-and-share. Architectural calls are *not* fresh — they reuse `jig:architect` directly per the filesystem-only-coupling pattern from ADR-0001, since ADRs are human-read documents in both projects and any format wrapping is post-hoc. Documented in [ADR-0003](decisions/adr-0003-fresh-subagent-roster.md).
 
 | Servo agent | Jig analog | Why different |
 |---|---|---|
 | `runner` | `implementer` | Terse, no soliloquy, exit-non-zero on blocker |
 | `judge` | `reviewer` | Machine-parseable verdict (PASS/FAIL/INCONCLUSIVE + score) |
-| `architect` | `architect` | Same shape, reworded for unattended-context tradeoffs |
+| _(delegated)_ | `architect` | Reused via `claude --agent jig:architect`; output post-processed into servo's ADR shape |
 
-Current state: all three are **placeholders**. Full prompts are authored alongside the specs that need them (spec 003 needs `runner` + `judge`; spec 005 reuses `judge`).
+Current state: both runner and judge are **placeholders**. Full prompts are authored alongside the specs that need them (spec 003 needs `runner` + `judge`; spec 005 reuses `judge`).
 
 ## Runtime artifacts (when later specs land)
 
@@ -175,14 +175,14 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 |---|---|---|
 | [ADR-0001](decisions/adr-0001-reuse-jig-test-detector.md) | Accepted | Reuse jig's `tdd.py detect` via subprocess when co-installed; fall back to built-in detectors otherwise. The first concrete instance of the filesystem-only coupling. |
 | [ADR-0002](decisions/adr-0002-gate-caller-contract.md) | Accepted | Quality-gate caller contract: `gate.py` exits only 0/1/2 (unexpected oracle exits remap to 2); `--json` output carries `schema_version` from day one. The contract specs 003/004/005 will consume. |
+| [ADR-0003](decisions/adr-0003-fresh-subagent-roster.md) | Accepted | Servo ships two fresh agents (`runner`, `judge`) rather than reusing jig's `implementer` / `reviewer` — the runtime output schemas diverge (machine-parseable verdict block vs narrative). Architect calls are delegated to `jig:architect` directly; the wrapping format is post-processed into servo's ADR shape. |
+| [ADR-0004](decisions/adr-0004-session-state-file-format.md) | Accepted | Servo's per-run state at `<target>/.servo/runs/<run-id>/state.json`. References Claude Code's session by `session_id`, doesn't copy the transcript. Versioned via `state_schema_version`; filesystem-only coupling with Claude Code per ADR-0001 framing. |
 
 ### Pending (ADR candidates)
 
-Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims `0003` regardless of which candidate fires first.
+Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims `0005` regardless of which candidate fires first.
 
-- **ADR-0003 — Why a fresh subagent roster, not reused from jig.** See "Subagents" section above. The risk is duplicated prompt maintenance; the win is prompts that match the operating context. Crystallizes once any of `runner` / `judge` / `architect` actually ships beyond placeholder.
-- **ADR-0004 — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
-- **ADR-0005 — Session-state file format on disk.** Spec 003's checkpoint/resume needs a canonical on-disk shape (likely `<target>/.servo/runs/<run-id>/state.json` carrying current-iteration / last-N-actions / hypotheses / cost-burned-so-far / oracle-score-history). This format becomes a cross-plugin soft contract — jig's `slice-land` may want to read it to emit "found a paused servo run — resume?" hints. Same shape as ADR-0001's filesystem-only coupling: no shared imports, just a documented path + JSON schema. Crystallizes when spec 003 reaches READY_FOR_REVIEW.
+- **ADR-0005 — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
 
 ## Open questions (not yet ADR-worthy)
 
