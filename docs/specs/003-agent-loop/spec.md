@@ -63,6 +63,8 @@ Five slices, sized to match the spec 001 / 002 cadence. The vertical-value rule 
 
 ## Slice 003-01 — invoke-loop
 
+**STATUS: DONE**
+
 **Goal:** A `loop.py` helper that, invoked against a target with a scaffolded oracle, runs `claude -p --output-format json --max-budget-usd <budget>` in a counted loop (default 5 iterations). After each iteration, it invokes `gate.py <target> --json` to score the result. The loop halts on (a) oracle pass (composite ≥ threshold), or (b) iteration cap reached. Each iteration's JSON is emitted on stdout; the loop ends with a single summary JSON line. End-to-end value: any servo-scaffolded target can be put on a counted loop in one command — and the loop genuinely stops, on its own, with parseable output.
 
 **DoR:**
@@ -139,6 +141,8 @@ PR-review follow-on additions (2026-05-19, after first reviewer caveats surfaced
 ---
 
 ## Slice 003-02 — cost-ceiling
+
+**STATUS: DONE**
 
 **Goal:** Add cumulative cost tracking from each iteration's `total_cost_usd`. Halt the loop when cumulative cost exceeds `--cost-ceiling` (default $2.00 per `docs/architecture.md`). Each `claude -p` invocation also receives `--max-budget-usd <remaining-budget>` for defense-in-depth (so a single runaway agentic turn within an iteration can't blow past the cumulative ceiling). End-to-end value: an unattended loop is now safe to fire-and-forget — the cost won't exceed the cumulative cap by more than one iteration's burn rate.
 
