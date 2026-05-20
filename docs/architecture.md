@@ -56,7 +56,7 @@ This is the load-bearing distinction. Servo ships **templates and orchestration*
 | Custom signal functions | `# SEED:` annotation convention |
 | Domain-specific lint configs | Normalized exit codes |
 | Prompt templates for loops | Loop driver, guardrail defaults |
-| Cap + ceiling overrides | Defaults (max-iterations=5, cost-ceiling=$2) |
+| Cap + ceiling overrides | Defaults (max-iterations=5, cost-ceiling=$2, context-fill-threshold=0.75) |
 | Hook event choice, retry phrasing | Hook script template, settings.json mutation + backup |
 | Variation strategy, variant count | Worktree management, subagent spawning, scoring |
 
@@ -168,6 +168,23 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 **Timeout machinery** — default 300s (5 min), overridable via `--timeout <seconds>` flag or `SERVO_GATE_TIMEOUT` env var. Flag wins on conflict. `--timeout 0` disables the bound. Kill sequence: `SIGTERM` → 5s grace → `SIGKILL`, applied to the oracle's process group (`os.killpg`) so any backgrounded subprocesses are killed too.
 
 **Stateless** — the gate writes nothing to disk. Per-iteration / per-variant persistence is the caller's responsibility (specs 003 / 005).
+
+## Agent-loop guardrails
+
+Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own.
+
+| Guardrail | Mechanism | Default | Disable | Terminal reason |
+|---|---|---|---|---|
+| Iteration cap | Counted `for` loop | 5 | (no disable) | `max_iterations_reached` |
+| Cumulative cost ceiling | Sum of `total_cost_usd` per iteration | $2.00 | `--cost-ceiling 0` | `cost_ceiling_reached` |
+| Per-iteration budget | `claude -p --max-budget-usd <remaining>` | derived from ceiling | n/a | `cost_ceiling_reached` |
+| Context-fill refusal | `(usage.input + cache_read + cache_create) / modelUsage.<model>.contextWindow` ≥ threshold | 0.75 | `--context-fill-threshold 0` | `context_full` |
+| Oracle pass | `gate.py --json` exit 0 | always | n/a | `oracle_passed` |
+| Stuck-loop / plateau (spec 003-05) | No improvement over M iterations | M=3 | `--plateau-window 0` | `oracle_plateau` |
+
+The **context-fill refusal gate** is the **hard cousin** of jig's soft `jig-context-check.sh` warning. Jig's heuristic counts MCP-server entries to estimate tool-description overhead; servo's gate reads the actual per-iteration `usage` + `modelUsage.<model>.contextWindow` and refuses iteration N+1 when the prior iteration's context-fill ratio is at-or-above the threshold. Failures to compute the ratio (missing `usage`, malformed `modelUsage`, missing `contextWindow`) fail-open for *this specific gate* — the iteration cap and cost ceiling still apply.
+
+Each iteration emits one JSON line to stdout (carrying `iteration`, `session_id`, `cost_usd`, `cumulative_cost_usd`, `context_fill_ratio`, `oracle_exit_code`, `oracle_status`, `oracle_composite`); a final summary line carries `terminal_reason`, `iterations_completed`, `cumulative_cost_usd`, `cost_ceiling_usd`, `context_fill_threshold`, `context_fill_ratio`, `final_oracle_status`, `run_id`. The `schema_version: 1` first key on every line mirrors gate.py's ADR-0002 contract.
 
 ## Decisions
 

@@ -118,6 +118,18 @@ End-state behavior is still rc=2, which is the contract — but the error messag
 
 ---
 
+## `DEFAULT_CONTEXT_FILL_THRESHOLD = 0.75` is a guess
+
+**Deferred:** `loop.py`'s context-fill refusal threshold defaults to 0.75 (75%) — picked as the midpoint of the spike's observed 60–75% range across mixed iteration loads, with no real-world tuning data. A loop running short, focused turns may reasonably tolerate fills above 0.75 before output degrades; a loop with heavy tool use that produces long agent responses may degrade well below 0.75. Without empirical data, 0.75 could be 20 percentage points too generous (false-negatives: garbage output sneaks through) or too tight (false-positives: legitimate iterations refused).
+
+The `--context-fill-threshold` flag is the user's escape hatch (`0` disables; any value in [0.0, 1.0] tunes). But the default ships in the slice 003-03 contract and downstream slices/callers inherit it.
+
+**Resolution trigger:** First real-world iteration data — either (a) a user reports that 0.75 produced degraded output on the iteration before the gate fired, or (b) servo's own dogfood (slice 003-05 + spec-level end-to-end) shows a different right-sized default. When triggered, either tune the default (and document in `docs/architecture.md` "Project vs servo-core split") OR add the threshold to the `<target>/.servo/refinement-todo.md` deferred-decision set so each scaffolded install gets a chance to override based on the target's workload shape.
+
+**Surfaced by:** Slice 003-03 implementation (`/jig:spec-workflow`, 2026-05-19). DoR's "Decision: threshold default 0.75. **Flagged in `docs/refinement-todo.md` for tuning** once real-world iteration data accumulates." pre-committed to landing this entry alongside the slice.
+
+---
+
 ## `DEFAULT_PER_ITER_BUDGET_USD = 1.00` is a guess
 
 **Deferred:** `loop.py`'s per-invocation `--max-budget-usd` fallback when `--cost-ceiling 0` disables cumulative tracking defaults to $1.00. The value is a "sane upper bound for one agentic turn" picked without real-world data — analogous to the `DEFAULT_CLAUDE_TIMEOUT_SECONDS = 1800` guess below. A simple iteration may burn $0.05; a complex one with heavy tool use may approach $1.00 or beyond. Without empirical data, $1.00 could be 10x too generous (one runaway turn still burns $1) or 2x too tight (false-positive `budget_exceeded` on legitimate heavy iterations).

@@ -1676,5 +1676,739 @@ class ClaudeNonzeroWithParseableJsonTests(unittest.TestCase):
         self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
 
 
+# ============================================================================
+# Slice 003-03 — context-fill-gate: shared fixture helper
+# ============================================================================
+
+
+def _mock_claude_input_tokens_per_iter(
+    bindir: Path,
+    *,
+    input_tokens_per_iter: list,
+    counter_file: Path,
+    context_window: Optional[int] = 200000,
+    cache_read_tokens: int = 0,
+    cache_create_tokens: int = 0,
+    cost: float = 0.05,
+) -> Path:
+    """Mock that emits input_tokens[n-1] on its n-th invocation.
+
+    Lets a test engineer a specific context-fill ratio trajectory. The
+    ratio is computed as `(input_tokens + cache_read + cache_create) /
+    contextWindow`. With the default `contextWindow=200000` and
+    `cache_*=0`, setting `input_tokens_per_iter=[160000, ...]` produces
+    a 0.80 ratio on iter 1.
+
+    `context_window=None` omits the `modelUsage.<model>.contextWindow`
+    field entirely — used by the AC8 fail-open test to verify the loop
+    keeps iterating without the gate when the field is absent.
+
+    `cost` is kept small (default $0.05) so context-fill tests don't
+    accidentally trip the cost ceiling.
+    """
+    tokens_file = bindir / "tokens.txt"
+    bindir.mkdir(parents=True, exist_ok=True)
+    tokens_file.write_text(
+        "\n".join(str(t) for t in input_tokens_per_iter) + "\n"
+    )
+    if context_window is None:
+        model_entry = '"inputTokens":100,"outputTokens":10'
+    else:
+        model_entry = (
+            f'"inputTokens":100,"outputTokens":10,'
+            f'"contextWindow":{context_window}'
+        )
+    body = (
+        f"#!/usr/bin/env bash\n"
+        f"counter_file='{counter_file}'\n"
+        f"tokens_file='{tokens_file}'\n"
+        f'if [ -f "$counter_file" ]; then\n'
+        f'    n=$(cat "$counter_file")\n'
+        f"else\n"
+        f"    n=0\n"
+        f"fi\n"
+        f"n=$((n + 1))\n"
+        f'echo "$n" > "$counter_file"\n'
+        f'tokens=$(sed -n "${{n}}p" "$tokens_file")\n'
+        f"cat <<JSON_EOF\n"
+        f'{{"type":"result","subtype":"success","is_error":false,'
+        f'"session_id":"mock-session-$n","total_cost_usd":{cost},'
+        f'"terminal_reason":"completed","stop_reason":"end_turn",'
+        f'"num_turns":1,"result":"ok",'
+        f'"usage":{{"input_tokens":$tokens,'
+        f'"cache_read_input_tokens":{cache_read_tokens},'
+        f'"cache_creation_input_tokens":{cache_create_tokens},'
+        f'"output_tokens":10}},'
+        f'"modelUsage":{{"claude-sonnet-4-6":{{{model_entry}}}}}}}\n'
+        f"JSON_EOF\n"
+    )
+    return _make_mock_claude(bindir, body)
+
+
+# ============================================================================
+# Slice 003-03 — AC #1: Default threshold (0.75) gates iter N+1
+# ============================================================================
+
+
+class ContextFillThresholdDefaultTests(unittest.TestCase):
+    """AC #1 — with no flag, ratio 0.80 (input=160000/cw=200000) halts iter 2.
+
+    Iter 1 runs (no prior ratio), produces context_fill_ratio=0.80.
+    Pre-iter-2 gate: 0.80 ≥ 0.75 → halt. Summary carries
+    `terminal_reason=context_full`, `context_fill_ratio=0.80`,
+    `context_fill_threshold=0.75`.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac1-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_input_tokens_per_iter(
+            self.bindir,
+            input_tokens_per_iter=[160000] * 5,
+            counter_file=self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_halts_at_iter_two_on_default_threshold(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # Iter 1 ran; pre-iter-2 gate caught the 0.80 ratio.
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "context_full")
+        self.assertEqual(summary["iterations_completed"], 1)
+        self.assertAlmostEqual(summary["context_fill_ratio"], 0.80, places=6)
+        self.assertAlmostEqual(summary["context_fill_threshold"], 0.75, places=6)
+
+    def test_default_threshold_is_three_quarters(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            mock_bindir=self.bindir,
+        )
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertAlmostEqual(summary["context_fill_threshold"], 0.75, places=6)
+
+
+# ============================================================================
+# Slice 003-03 — AC #2: --context-fill-threshold override
+# ============================================================================
+
+
+class ContextFillThresholdOverrideTests(unittest.TestCase):
+    """AC #2 — `--context-fill-threshold 0.50` refuses at ≥ 50%."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac2-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        # 120000 / 200000 = 0.60 (above 0.50 override).
+        _mock_claude_input_tokens_per_iter(
+            self.bindir,
+            input_tokens_per_iter=[120000] * 5,
+            counter_file=self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_override_halts_at_iter_two(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--context-fill-threshold", "0.50",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "context_full")
+        self.assertAlmostEqual(summary["context_fill_ratio"], 0.60, places=6)
+        self.assertAlmostEqual(summary["context_fill_threshold"], 0.50, places=6)
+
+    def test_override_with_higher_threshold_does_not_gate_low_ratio(self):
+        # Override to 0.90 — the 0.60 ratio does NOT trigger. Loop runs to
+        # the default --max-iterations cap.
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--context-fill-threshold", "0.90",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 5)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertAlmostEqual(summary["context_fill_threshold"], 0.90, places=6)
+
+
+# ============================================================================
+# Slice 003-03 — AC #3: Below-threshold iterations continue; ratio logged
+# ============================================================================
+
+
+class ContextFillBelowThresholdTests(unittest.TestCase):
+    """AC #3 — iterations with ratio below threshold continue; ratio is logged.
+
+    Ratio 0.40 (80000 / 200000) is well below default 0.75; loop runs to
+    the iteration cap. Each per-iter JSON line carries `context_fill_ratio`.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac3-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_input_tokens_per_iter(
+            self.bindir,
+            input_tokens_per_iter=[80000] * 5,
+            counter_file=self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_below_threshold_runs_to_max_iterations(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 5)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+
+    def test_per_iteration_json_carries_context_fill_ratio(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual(len(per_iter), 3)
+        for line in per_iter:
+            self.assertIn("context_fill_ratio", line)
+            self.assertAlmostEqual(line["context_fill_ratio"], 0.40, places=6)
+
+    def test_summary_carries_last_observed_ratio(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertAlmostEqual(summary["context_fill_ratio"], 0.40, places=6)
+        self.assertAlmostEqual(summary["context_fill_threshold"], 0.75, places=6)
+
+
+# ============================================================================
+# Slice 003-03 — AC #4: Equality triggers refusal (≥, not strict >)
+# ============================================================================
+
+
+class ContextFillEqualThresholdTests(unittest.TestCase):
+    """AC #4 — exact-equal ratio (0.75 with default threshold) triggers refusal.
+
+    150000 / 200000 = 0.75 exactly. The comparison is `≥`, so iter 2 is
+    refused. Off-by-one in the comparison direction is a classic bug; this
+    test pins the choice explicitly.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac4-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_input_tokens_per_iter(
+            self.bindir,
+            input_tokens_per_iter=[150000] * 5,
+            counter_file=self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_exact_equal_ratio_triggers_refusal(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "context_full")
+        self.assertAlmostEqual(summary["context_fill_ratio"], 0.75, places=6)
+
+
+# ============================================================================
+# Slice 003-03 — AC #5: Iteration 1 always proceeds (no prior to gate on)
+# ============================================================================
+
+
+class ContextFillIterationOneTests(unittest.TestCase):
+    """AC #5 — iter 1 is unconditional regardless of threshold setting.
+
+    A very low threshold (0.05) would gate every reasonable iteration's
+    output — but iter 1 has no prior to read context from, so it always
+    runs. Two complementary tests:
+      (a) `--max-iterations 1 --context-fill-threshold 0.05` runs iter 1,
+          ends on max_iterations_reached (no iter 2 to gate).
+      (b) Same threshold with `--max-iterations 5` lets iter 1 run, then
+          the pre-iter-2 gate fires (proving iter 1 wasn't blocked by the
+          gate, only iter 2 was).
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac5-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        # 180000 / 200000 = 0.90 — would gate iter 2 against any threshold
+        # below 0.90, but iter 1 still runs.
+        _mock_claude_input_tokens_per_iter(
+            self.bindir,
+            input_tokens_per_iter=[180000] * 5,
+            counter_file=self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_iteration_one_runs_with_very_low_threshold(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--max-iterations", "1",
+            "--context-fill-threshold", "0.05",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertEqual(summary["iterations_completed"], 1)
+
+    def test_iter_one_runs_then_iter_two_gated(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--max-iterations", "5",
+            "--context-fill-threshold", "0.05",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # Counter=1 proves iter 1 ran AND iter 2 was gated. Either iter 1
+        # being blocked OR iter 2 being uncatched would fail this.
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "context_full")
+        self.assertEqual(summary["iterations_completed"], 1)
+
+
+# ============================================================================
+# Slice 003-03 — AC #6: Refusal happens before claude -p invocation
+# ============================================================================
+
+
+class ContextFillRefusalBeforeClaudeTests(unittest.TestCase):
+    """AC #6 — pre-iter-2 gate refuses BEFORE invoking claude.
+
+    Verified by counting mock-claude invocations: with iter 1 producing a
+    ratio of 0.80 (above default 0.75), iter 2's claude must never be
+    invoked. Counter must be exactly 1; per-iter JSON lines must be exactly
+    one (iter 1 only).
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac6-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_input_tokens_per_iter(
+            self.bindir,
+            input_tokens_per_iter=[160000] * 5,
+            counter_file=self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_claude_invoked_only_for_iter_one(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual(len(per_iter), 1)
+        self.assertEqual(per_iter[0]["iteration"], 1)
+
+
+# ============================================================================
+# Slice 003-03 — AC #7: --context-fill-threshold 0 disables the gate
+# ============================================================================
+
+
+class ContextFillDisabledTests(unittest.TestCase):
+    """AC #7 — `--context-fill-threshold 0` disables the gate entirely.
+
+    With a near-full context (199000 / 200000 = 0.995) and the gate disabled,
+    the loop runs to the iteration cap. The iteration cap and cost ceiling
+    still apply — only the context-fill brake is off.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac7-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_input_tokens_per_iter(
+            self.bindir,
+            input_tokens_per_iter=[199000] * 5,
+            counter_file=self.counter,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_disabled_gate_runs_all_iterations(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--max-iterations", "3",
+            "--context-fill-threshold", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 3)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertEqual(summary["iterations_completed"], 3)
+        self.assertEqual(summary["context_fill_threshold"], 0)
+
+    def test_disabled_gate_still_logs_ratio_per_iteration(self):
+        # Disable the gate but per-iter JSON still carries the ratio for
+        # observability. (Useful for callers enforcing the limit out-of-band.)
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--max-iterations", "2",
+            "--context-fill-threshold", "0",
+            mock_bindir=self.bindir,
+        )
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual(len(per_iter), 2)
+        for line in per_iter:
+            self.assertAlmostEqual(line["context_fill_ratio"], 0.995, places=4)
+
+
+# ============================================================================
+# Slice 003-03 — AC #8: Missing contextWindow field → fail-open
+# ============================================================================
+
+
+class ContextFillMissingContextWindowTests(unittest.TestCase):
+    """AC #8 — missing `modelUsage.<model>.contextWindow` → fail-open.
+
+    The gate refuses to enforce when the field is absent; the loop logs a
+    stderr breadcrumb and continues. Iteration cap and cost ceiling still
+    apply, so the loop terminates on max_iterations_reached. Per-iter JSON's
+    `context_fill_ratio` is null.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac8-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        # Omit the contextWindow field; ratio cannot be computed.
+        _mock_claude_input_tokens_per_iter(
+            self.bindir,
+            input_tokens_per_iter=[160000] * 5,
+            counter_file=self.counter,
+            context_window=None,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_missing_context_window_does_not_halt(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 3)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+
+    def test_stderr_breadcrumb_emitted(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        self.assertIn("context-fill gate", result.stderr)
+        self.assertIn("contextWindow", result.stderr)
+
+    def test_per_iter_ratio_is_null_when_unparseable(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual(len(per_iter), 2)
+        for line in per_iter:
+            self.assertIsNone(line["context_fill_ratio"])
+
+    def test_summary_ratio_is_null_when_unparseable(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertIsNone(summary["context_fill_ratio"])
+        # Threshold is still emitted even when ratio can't be computed.
+        self.assertAlmostEqual(summary["context_fill_threshold"], 0.75, places=6)
+
+
+# ============================================================================
+# Slice 003-03 — unit tests for _extract_context_fill_ratio failure paths
+# ============================================================================
+
+
+class ExtractContextFillRatioUnitTests(unittest.TestCase):
+    """Direct unit tests for `_extract_context_fill_ratio` failure modes.
+
+    The end-to-end tests above exercise the success path and one fail-open
+    path (missing contextWindow). The helper has more internal branches:
+    missing/non-dict `usage`, non-numeric tokens, missing/empty `modelUsage`,
+    non-dict model entries, bool-as-int contextWindow, non-positive
+    contextWindow. Each branch is fail-open with its own breadcrumb; these
+    direct tests pin them all.
+    """
+
+    def setUp(self):
+        # Import the helper from loop.py without spawning a subprocess.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("loop", LOOP)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.extract = module._extract_context_fill_ratio
+
+    def _good_payload(self) -> dict:
+        return {
+            "usage": {
+                "input_tokens": 100,
+                "cache_read_input_tokens": 50,
+                "cache_creation_input_tokens": 25,
+                "output_tokens": 10,
+            },
+            "modelUsage": {
+                "claude-sonnet-4-6": {
+                    "inputTokens": 100, "outputTokens": 10,
+                    "contextWindow": 200000,
+                },
+            },
+        }
+
+    def test_happy_path_returns_ratio(self):
+        ratio, err = self.extract(self._good_payload())
+        # (100 + 50 + 25) / 200000 = 0.000875
+        self.assertAlmostEqual(ratio, 175 / 200000, places=9)
+        self.assertIsNone(err)
+
+    def test_missing_usage_block(self):
+        payload = self._good_payload()
+        del payload["usage"]
+        ratio, err = self.extract(payload)
+        self.assertIsNone(ratio)
+        self.assertIn("missing `usage` block", err)
+
+    def test_non_dict_usage_block(self):
+        payload = self._good_payload()
+        payload["usage"] = "not-a-dict"
+        ratio, err = self.extract(payload)
+        self.assertIsNone(ratio)
+        self.assertIn("missing `usage` block", err)
+
+    def test_non_numeric_tokens(self):
+        payload = self._good_payload()
+        payload["usage"]["input_tokens"] = "lots"
+        ratio, err = self.extract(payload)
+        self.assertIsNone(ratio)
+        self.assertIn("non-numeric", err)
+
+    def test_missing_model_usage(self):
+        payload = self._good_payload()
+        del payload["modelUsage"]
+        ratio, err = self.extract(payload)
+        self.assertIsNone(ratio)
+        self.assertIn("missing `modelUsage` block", err)
+
+    def test_empty_model_usage(self):
+        payload = self._good_payload()
+        payload["modelUsage"] = {}
+        ratio, err = self.extract(payload)
+        self.assertIsNone(ratio)
+        self.assertIn("missing `modelUsage` block", err)
+
+    def test_non_dict_model_entry_skipped(self):
+        # First entry is garbage; second entry has the contextWindow. The
+        # helper should skip the garbage entry and find the good one.
+        payload = self._good_payload()
+        payload["modelUsage"] = {
+            "garbage": "not-a-dict",
+            "claude-sonnet-4-6": {"contextWindow": 200000},
+        }
+        ratio, err = self.extract(payload)
+        self.assertIsNotNone(ratio)
+        self.assertIsNone(err)
+
+    def test_bool_context_window_excluded(self):
+        # `True` is an instance of `int` in Python — without the explicit
+        # bool exclusion at loop.py:_extract_context_fill_ratio, this would
+        # be accepted as contextWindow=1 and the ratio would explode. The
+        # exclusion routes to fail-open.
+        payload = self._good_payload()
+        payload["modelUsage"]["claude-sonnet-4-6"]["contextWindow"] = True
+        ratio, err = self.extract(payload)
+        self.assertIsNone(ratio)
+        self.assertIn("contextWindow", err)
+
+    def test_zero_context_window_excluded(self):
+        payload = self._good_payload()
+        payload["modelUsage"]["claude-sonnet-4-6"]["contextWindow"] = 0
+        ratio, err = self.extract(payload)
+        self.assertIsNone(ratio)
+        self.assertIn("contextWindow", err)
+
+    def test_negative_context_window_excluded(self):
+        payload = self._good_payload()
+        payload["modelUsage"]["claude-sonnet-4-6"]["contextWindow"] = -100
+        ratio, err = self.extract(payload)
+        self.assertIsNone(ratio)
+        self.assertIn("contextWindow", err)
+
+    def test_zero_input_tokens_yields_zero_ratio(self):
+        # Pathological corner: usage with all zeros. Ratio = 0.0, gate
+        # never fires. Documented and tested so a future refactor doesn't
+        # accidentally treat this as fail-open.
+        payload = self._good_payload()
+        payload["usage"] = {
+            "input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "output_tokens": 0,
+        }
+        ratio, err = self.extract(payload)
+        self.assertEqual(ratio, 0.0)
+        self.assertIsNone(err)
+
+    def test_none_tokens_treated_as_zero(self):
+        # The implementation's `or 0` idiom maps None to 0. Tested to pin
+        # the choice: a future Claude Code release that emits `"input_tokens": null`
+        # is treated as zero rather than fail-open.
+        payload = self._good_payload()
+        payload["usage"]["input_tokens"] = None
+        ratio, err = self.extract(payload)
+        # 0 + 50 + 25 = 75 → 75 / 200000
+        self.assertAlmostEqual(ratio, 75 / 200000, places=9)
+        self.assertIsNone(err)
+
+
+# ============================================================================
+# Slice 003-03 — CLI validation: --context-fill-threshold bounds [0.0, 1.0]
+# ============================================================================
+
+
+class ContextFillValidationTests(unittest.TestCase):
+    """`--context-fill-threshold` must be in [0.0, 1.0]; argparse rejects others.
+
+    A ratio is by construction in [0, 1]; thresholds outside that range are
+    either always-fire (negative) or never-fire (> 1.0). Both shapes are
+    user-error; reject upstream with rc=2 + a parser.error breadcrumb.
+    Mirrors the `--max-iterations < 1` and `--cost-ceiling < 0` rejection
+    patterns from earlier slices.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-validation-ctx-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_negative_threshold_rejected(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--context-fill-threshold", "-0.1",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--context-fill-threshold must be in [0.0, 1.0]", result.stderr,
+        )
+        self.assertFalse(self.counter.exists())
+
+    def test_greater_than_one_threshold_rejected(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--context-fill-threshold", "1.5",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn(
+            "--context-fill-threshold must be in [0.0, 1.0]", result.stderr,
+        )
+        self.assertFalse(self.counter.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,7 +25,7 @@
 | [002-quality-gate](002-quality-gate/spec.md) | 002-05 — qa-wizard | **DONE** | 146 tests across four files; SKILL.md documents all 11 `reason` codes; spec 002 complete |
 | [003-agent-loop](003-agent-loop/spec.md) | 003-01 — invoke-loop | **DONE** | 35 tests; mock-claude harness via PATH-injection; `schema_version: 1`; `claude -p` timeout via `SERVO_CLAUDE_TIMEOUT` |
 | [003-agent-loop](003-agent-loop/spec.md) | 003-02 — cost-ceiling | **DONE** | 52 tests total; cumulative `total_cost_usd` halt + per-iter `--max-budget-usd` floor; 003-01 forward-reference closed |
-| [003-agent-loop](003-agent-loop/spec.md) | 003-03 — context-fill-gate | DRAFT | Hard refusal gate — cousin of jig's soft `jig-context-check.sh` |
+| [003-agent-loop](003-agent-loop/spec.md) | 003-03 — context-fill-gate | **DONE** | 83 tests total; pre-iter fail-closed refusal at ratio ≥ threshold; helper fail-opens on six malformed-JSON paths; ADR-0001-style filesystem-only coupling stays intact |
 | [003-agent-loop](003-agent-loop/spec.md) | 003-04 — checkpoint-resume | DRAFT | Per-run state at `<target>/.servo/runs/<run-id>/state.json`; ADR-0004 already Accepted (pre-implementation framing) |
 | [003-agent-loop](003-agent-loop/spec.md) | 003-05 — stuck-loop-and-handoff | DRAFT | Oracle-score plateau halt + real `runner.md` / `judge.md` prompts; ADR-0003 already Accepted (pre-implementation framing) |
 
