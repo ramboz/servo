@@ -142,25 +142,15 @@ The `SERVO_CLAUDE_TIMEOUT` env var is the user's escape hatch today; `0` disable
 
 ---
 
-## `SERVO_VERSION` constant is dead code in `gate.py`
+## ~~`SERVO_VERSION` constant is dead code in `gate.py`~~ — RESOLVED 2026-05-19
 
-**Deferred:** `skills/quality-gate/gate.py:37` declares `SERVO_VERSION = "0.1.0"` but never references it. `skills/scaffold-init/scaffold.py:32` declares the same constant and DOES use it (writes it to the manifest). `skills/agent-loop/loop.py` previously also had the dead constant but it was removed during slice 003-01 PR-review follow-on. gate.py's version is the remaining inconsistency — either remove it or use it somewhere (e.g., include in the `--json` payload).
-
-**Resolution trigger:** Next time gate.py gets touched for any other reason (slice 003-02 doesn't currently plan to). Cheap one-line removal.
-
-**Surfaced by:** PR-review pass on slice 003-01 (multi-perspective `pr-review` skill, 2026-05-19). The reviewer flagged `loop.py`'s `SERVO_VERSION` as unused; cleanup landed in slice 003-01 for loop.py, but gate.py has the same pattern and is out of scope here.
+**Resolution:** Removed in the pre-003-03 cleanup pass. `skills/quality-gate/gate.py` no longer declares `SERVO_VERSION`; the constant lives only in `skills/scaffold-init/scaffold.py` where it's actually used (manifest write). 75/75 `test_gate.py` still green post-removal.
 
 ---
 
-## ADR-0004 run-id precision: prose says "millisecond" but example uses seconds
+## ~~ADR-0004 run-id precision: prose says "millisecond" but example uses seconds~~ — RESOLVED 2026-05-19
 
-**Deferred:** ADR-0004's "Decision" section opens with *"`run-id` is a millisecond-precision timestamp prefix + short random suffix, e.g. `20260519T143205-a3f1`"* — but the example `20260519T143205` is seconds-precision (15 chars: `YYYYMMDDTHHMMSS`), not milliseconds. Slice 003-01 implemented seconds-precision via `datetime.now(...).strftime("%Y%m%dT%H%M%S")` to match the example and the test regex `^\d{8}T\d{6}-[0-9a-f]{4}$`. The collision-retry framing later in the ADR ("the same millisecond getting hit three times is treated as pathological") only makes sense at millisecond precision, so the inconsistency cuts in two directions: tighten the prose to seconds, or tighten the example + implementation to milliseconds.
-
-The collision-retry trade-off depends on which way the inconsistency is reconciled: seconds-precision gives ~16-bit entropy (4 hex chars) per second window — fine for serial loops, slim under spec 005 parallel races where N variants may fire within the same second. Millisecond-precision moves the collision window from 1s → 1ms, which 4 hex chars covers comfortably even under spec 005 fan-out.
-
-**Resolution trigger:** Slice 003-04 implementation. It needs the run-id format frozen (state file path is keyed by run-id; collision-retry policy operates on it). Two paths: (a) keep seconds-precision in the implementation and amend ADR-0004's prose to match (small ADR edit); (b) bump to millisecond-precision in the implementation, update the ADR's example to match the prose, and update slice 003-01's test regex to `^\d{8}T\d{9}-[0-9a-f]{4}$`. Either is a small change; pick at 003-04 DoR.
-
-**Surfaced by:** slice 003-01 reviewer pass (`jig:reviewer`, PASS verdict, 2026-05-19).
+**Resolution:** Picked path (a) from the original entry — keep seconds-precision in the implementation (matches the example and the test regex) and amend ADR-0004's prose to match. Three spots in `docs/decisions/adr-0004-session-state-file-format.md` were updated: the "Run-id format" sentence, the collision-policy paragraph, and the Neutral consequence bullet. A new sentence at the end of the collision-policy paragraph names millisecond precision as the documented escape hatch if spec 005's parallel-variant fan-out ever surfaces a real collision rate the seconds window can't absorb — so future bumps don't need a new ADR. Slice 003-04 inherits the frozen seconds-precision format with no further reconciliation work.
 
 ---
 

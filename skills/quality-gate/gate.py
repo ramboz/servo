@@ -34,8 +34,6 @@ from pathlib import Path
 from typing import Optional
 
 
-SERVO_VERSION = "0.1.0"
-
 # JSON output schema version per ADR-0002. Bump on any field rename, type
 # change, or semantic shift; pure additive changes MAY keep version=1.
 SCHEMA_VERSION = 1
