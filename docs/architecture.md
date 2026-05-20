@@ -206,7 +206,7 @@ Numbers below are *hints* of the next likely allocation order, not reservations 
 - **Composite weighting heuristic** — **resolved (slice 001-02):** weighted *average* (`sum(weight*score) / sum(weight)`), with `"name:weight"` registered in a `COMPONENTS` bash array. Equal weights are the scaffold default; tuning is deferred to the user (and surfaced as a `Weights` decision in 001-04's `refinement-todo.md`). Picked weighted average over weighted sum so any threshold in `[0, 1]` is meaningful regardless of how many components are present.
 - **`.servo/install.json` checked in vs ignored** — currently `.gitignore`d; revisit when team-shared servo installs become a use case.
 - **Scaffold-init interaction with jig-scaffolded projects** — likely fine (no path collisions) but worth an explicit slice-level test in 001-03 or 001-05.
-- **Agent-loop driver: shell vs Python.** Leaning shell for Tier 1 (zero deps), Python only if Tier 2 needs the richer state (checkpoint/resume).
+- **Agent-loop driver: shell vs Python.** **Resolved (slice 003-01 DoR):** Python, same shape as `scaffold.py` / `gate.py`. JSON parsing + state-file management in 003-04 was materially easier in Python than bash.
 
 ## Why no crew skill
 

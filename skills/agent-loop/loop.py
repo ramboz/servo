@@ -1,12 +1,26 @@
 """
-servo agent-loop — slices 003-01, 003-02, 003-03, 003-04
+servo agent-loop — full spec 003 (slices 003-01 through 003-05)
 
-Headless iteration driver. Subprocesses `claude -p --output-format json`
-against a target N times under guardrails, and uses `gate.py --json`
-(spec 002) as the truth-source after each iteration. Halts on (a) oracle
-pass (composite ≥ threshold), (b) iteration cap reached, (c) cumulative
-cost ceiling exceeded (slice 003-02), (d) context-fill ratio at-or-above
-the gate threshold (slice 003-03), or (e) SIGINT/SIGTERM (slice 003-04).
+Headless iteration driver. Subprocesses `claude -p --output-format json
+--agent <runner|judge>` against a target N times under guardrails, and
+uses `gate.py --json` (spec 002) as the truth-source after each iteration.
+Halts on (a) oracle pass (composite ≥ threshold), (b) iteration cap
+reached, (c) cumulative cost ceiling exceeded (slice 003-02), (d)
+context-fill ratio at-or-above the gate threshold (slice 003-03),
+(e) SIGINT/SIGTERM (slice 003-04), (f) oracle-score plateau over the last
+M iterations (slice 003-05), (g) verdict-block schema mismatch
+(slice 003-05, ADR-0003).
+
+Subagent dispatch (slice 003-05, ADR-0003): each iteration alternates
+between `runner` (odd iters; CHANGES_MADE/NO_CHANGES/BLOCKED verdicts)
+and `judge` (even iters; PASS/FAIL/INCONCLUSIVE + score). Each agent
+ends its output with a fenced ```` ```verdict ``` ```` block carrying
+`schema_version: 1` as its first field; `loop.py` parses the block and
+refuses the run on schema mismatch.
+
+Per-iteration prompt assembly: seed prompt + last `gate.py --json` output
++ last verdict block, concatenated into a structured prompt sent to the
+next agent.
 
 Checkpoint/resume: per-iteration state is atomically written to
 `<target>/.servo/runs/<run-id>/state.json` (slice 003-04, ADR-0004). A
@@ -17,18 +31,18 @@ Usage:
     python3 loop.py <target> --prompt "<text>" --max-iterations 3
     python3 loop.py <target> --prompt "<text>" --cost-ceiling 1.50
     python3 loop.py <target> --prompt "<text>" --context-fill-threshold 0.50
+    python3 loop.py <target> --prompt "<text>" --plateau-window 5
     python3 loop.py <target> --resume <run-id>
     python3 loop.py <target> --resume <run-id> --max-iterations 20
 
 Per-iteration JSON: one line per completed iteration on stdout.
 Summary line: one JSON line on stdout after the last iteration (or refusal).
-
-Stuck-loop detection + subagent dispatch land in 003-05.
 """
 
 import argparse
 import json
 import os
+import re
 import secrets
 import signal
 import subprocess
@@ -82,6 +96,34 @@ DEFAULT_PER_ITER_BUDGET_USD = 1.0
 # iteration cap and cost ceiling still apply.
 DEFAULT_CONTEXT_FILL_THRESHOLD = 0.75
 
+# Slice 003-05 plateau-detection window. After M consecutive iterations
+# with no improvement over the highest score seen earlier, halt with
+# `terminal_reason=oracle_plateau`. "No improvement" = strict less-than-or-
+# equal-to the prior max. M=3 is a heuristic — short enough to catch a
+# clearly-stuck loop, long enough to tolerate a few non-improving iters
+# while the agent gathers context. Flagged in `docs/refinement-todo.md`
+# for tuning once real-world plateau data accumulates. Pass 0 to disable.
+DEFAULT_PLATEAU_WINDOW = 3
+
+# Slice 003-05 subagent dispatch (ADR-0003). The loop alternates
+# runner → judge → runner → judge → ... starting with runner on iter 1.
+# Each agent's prompt is in `agents/<name>.md`; Claude Code resolves
+# `--agent <name>` against the plugin's `agents/` directory.
+AGENT_RUNNER = "runner"
+AGENT_JUDGE = "judge"
+
+# Slice 003-05 verdict-block schema version (ADR-0003). Mirrors gate.py's
+# `schema_version` mechanism: refuse loudly on mismatch rather than
+# silently mis-decoding. Spec 005's variant-race will reuse the judge
+# verdict shape via the same version gate.
+VERDICT_SCHEMA_VERSION = 1
+
+# Regex for extracting a fenced ```verdict ... ``` block from agent output.
+# DOTALL so the body can span lines; non-greedy so multiple blocks in a
+# single response don't merge. Slice 003-05 uses the LAST match (the agent
+# should end with the verdict block per `runner.md` / `judge.md`).
+_VERDICT_BLOCK_RE = re.compile(r"```verdict\s*\n(.*?)\n```", re.DOTALL)
+
 # Default per-invocation wall-clock cap for `claude -p`. 30 minutes is a
 # generous upper bound — long enough for substantial agentic turns with
 # tool use, short enough that an unattended loop won't hang for days if
@@ -101,14 +143,16 @@ STATUS_PASS = "pass"
 STATUS_BELOW_THRESHOLD = "below_threshold"
 STATUS_ENV_ERROR = "env_error"
 
-# Terminal-reason taxonomy. Slice 003-05 will extend with `oracle_plateau`
-# and `verdict_schema_mismatch`. Keep the strings stable — they are part of
-# the loop's structured-output contract.
+# Terminal-reason taxonomy. Slice 003-05 closes the set with
+# `oracle_plateau` and `verdict_schema_mismatch`. Keep the strings stable —
+# they are part of the loop's structured-output contract.
 REASON_ORACLE_PASSED = "oracle_passed"
 REASON_MAX_ITERATIONS_REACHED = "max_iterations_reached"
 REASON_COST_CEILING_REACHED = "cost_ceiling_reached"
 REASON_CONTEXT_FULL = "context_full"
 REASON_INTERRUPTED = "interrupted"
+REASON_ORACLE_PLATEAU = "oracle_plateau"
+REASON_VERDICT_SCHEMA_MISMATCH = "verdict_schema_mismatch"
 REASON_CLAUDE_INVOCATION_FAILED = "claude_invocation_failed"
 REASON_GATE_INVOCATION_FAILED = "gate_invocation_failed"
 REASON_TARGET_MISSING = "target_missing"
@@ -200,6 +244,155 @@ def _install_signal_handlers() -> None:
 
 def _was_interrupted() -> bool:
     return _interrupt_count > 0
+
+
+def _agent_for_iteration(iteration: int) -> str:
+    """Pick the agent for iteration N (1-indexed).
+
+    Odd iters → runner; even iters → judge. Hardcoded alternation per
+    slice 003-05 DoR; ADR-0003 commits to this two-agent roster. A future
+    `--agent-pattern` flag could let callers override this, but today the
+    alternation is the contract.
+    """
+    return AGENT_RUNNER if iteration % 2 == 1 else AGENT_JUDGE
+
+
+def _parse_verdict_block(
+    agent_text: str,
+) -> tuple[Optional[dict], Optional[str]]:
+    """Extract the last fenced ```verdict``` block and validate AC10.
+
+    Returns `(fields, None)` on success, where `fields` is a dict of
+    key→string-value pairs parsed from the block. Returns `(None, breadcrumb)`
+    on AC10 refusal paths: (a) the block is present but `schema_version`
+    field is absent (or not the first non-empty line); (b) `schema_version`
+    is present but ≠ 1; (c) `schema_version` is present but is a quoted
+    string (`schema_version: "1"`) or otherwise non-integer.
+
+    A SEPARATE return shape — `(None, None)` — signals "no verdict block
+    found in the output at all." Per the slice 003-05 design, that's
+    informational, not a refusal: agents *should* emit a block, but the
+    loop continues if they don't (the next iteration's prompt just won't
+    include a "last verdict" section). AC10's three refusal paths assume
+    a block exists; "no block" is a fourth, looser case.
+    """
+    matches = list(_VERDICT_BLOCK_RE.finditer(agent_text))
+    if not matches:
+        return None, None  # no block — informational, not a refusal
+    block_body = matches[-1].group(1)
+    lines = [l for l in block_body.splitlines() if l.strip()]
+    if not lines:
+        return None, "verdict block is empty"
+    first_line = lines[0].strip()
+    if not first_line.startswith("schema_version:"):
+        return None, (
+            f"verdict block first key is not schema_version "
+            f"(got {first_line[:60]!r}); expected version 1"
+        )
+    raw_sv = first_line.split(":", 1)[1].strip()
+    # Reject quoted-string values explicitly: AC10c case `schema_version: "1"`.
+    if raw_sv.startswith(("\"", "'")):
+        return None, (
+            f"verdict block schema_version is a string ({raw_sv!r}); "
+            f"expected unquoted integer {VERDICT_SCHEMA_VERSION}"
+        )
+    try:
+        sv = int(raw_sv)
+    except ValueError:
+        return None, (
+            f"verdict block schema_version is non-integer ({raw_sv!r}); "
+            f"expected {VERDICT_SCHEMA_VERSION}"
+        )
+    if sv != VERDICT_SCHEMA_VERSION:
+        return None, (
+            f"verdict block schema_version is {sv}; "
+            f"expected {VERDICT_SCHEMA_VERSION}"
+        )
+
+    fields: dict = {"schema_version": sv}
+    for line in lines[1:]:
+        line = line.strip()
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        fields[key.strip()] = val.strip()
+    return fields, None
+
+
+def _assemble_iteration_prompt(
+    seed: str, last_oracle: Optional[dict], last_verdict: Optional[dict],
+) -> str:
+    """Build the per-iteration prompt block sent to claude (AC8).
+
+    Iter 1 (no priors): the seed prompt verbatim.
+    Iter 2+: seed + a clearly-delimited block carrying the last oracle JSON
+    and the last verdict block, so the next agent (runner OR judge) can
+    branch on what happened the previous turn.
+
+    Format is documented in `agents/runner.md` and `agents/judge.md` so
+    agents know how to read the prompt.
+    """
+    if last_oracle is None and last_verdict is None:
+        return seed
+    parts = [seed.rstrip(), "", "---", "Context from prior iteration:"]
+    if last_oracle is not None:
+        parts.extend([
+            "",
+            "Last oracle output (`gate.py --json`):",
+            "```json",
+            json.dumps(last_oracle, indent=2),
+            "```",
+        ])
+    if last_verdict is not None:
+        # Render the verdict back as a fenced block so the agent reads the
+        # same shape it's expected to emit on its own turn.
+        verdict_lines = ["```verdict"]
+        # schema_version first (parser invariant), then everything else in
+        # insertion order.
+        verdict_lines.append(
+            f"schema_version: {last_verdict.get('schema_version', VERDICT_SCHEMA_VERSION)}"
+        )
+        for key, val in last_verdict.items():
+            if key == "schema_version":
+                continue
+            verdict_lines.append(f"{key}: {val}")
+        verdict_lines.append("```")
+        parts.extend([
+            "",
+            "Last agent verdict:",
+            *verdict_lines,
+        ])
+    parts.append("---")
+    return "\n".join(parts) + "\n"
+
+
+def _check_plateau(history: list, window: int) -> bool:
+    """True iff the last `window` iterations are all non-improving.
+
+    "Non-improving" = composite ≤ max(prior composites). For window=M,
+    requires at least M+1 entries in `history` (one baseline + M
+    non-improving). Equivalent formulation: the global max of all
+    composites equals the max of composites excluding the last M
+    iterations. AC3 pins the `≤` direction (equality counts as
+    non-improving).
+
+    `window <= 0` disables the gate (AC4). Entries missing a numeric
+    `composite` are ignored (defensive — env-error iterations carry
+    composite=None in the history; they don't contribute to the plateau
+    judgement).
+    """
+    if window <= 0:
+        return False
+    composites = [
+        e.get("composite") for e in history
+        if isinstance(e.get("composite"), (int, float))
+        and not isinstance(e.get("composite"), bool)
+    ]
+    if len(composites) < window + 1:
+        return False
+    earlier_max = max(composites[:-window])
+    overall_max = max(composites)
+    return overall_max <= earlier_max
 
 
 # Test hook: when set, `_generate_run_id` returns comma-separated values
@@ -368,13 +561,22 @@ def _get_claude_version() -> Optional[str]:
 def _build_initial_state(
     *, run_id: str, target: Path, prompt: str,
     max_iterations: int, cost_ceiling: float,
-    context_fill_threshold: float, claude_version: Optional[str],
+    context_fill_threshold: float, plateau_window: int,
+    claude_version: Optional[str],
 ) -> dict:
     """Construct the canonical fresh-run state dict (ADR-0004 schema).
 
-    `prompt` is persisted alongside the ADR-0004-named fields as an additive
-    field so `--resume` can replay the original seed prompt without forcing
-    the user to remember it. Documented in the slice 003-04 deviation log.
+    Additive fields beyond ADR-0004's canonical list:
+    - `prompt` (slice 003-04): persists the seed prompt so `--resume` can
+      replay it without forcing the user to remember it.
+    - `plateau_window` (slice 003-05): persists the plateau-detection cap
+      so `--resume` preserves the original brake.
+    - `last_verdict` / `last_oracle_json` (slice 003-05): persist the
+      prior iteration's verdict block + gate JSON for prompt assembly on
+      resumed runs.
+
+    All four are documented in the slice deviation logs. ADR-0004's
+    "pure additive changes MAY keep version at 1" clause covers them.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
     return {
@@ -393,9 +595,12 @@ def _build_initial_state(
         "cumulative_output_tokens": 0,
         "context_fill_threshold": context_fill_threshold,
         "last_context_fill_ratio": None,
+        "plateau_window": plateau_window,
         "oracle_score_history": [],
         "last_terminal_reason": None,
         "claude_version": claude_version,
+        "last_verdict": None,
+        "last_oracle_json": None,
     }
 
 
@@ -614,6 +819,7 @@ def _invoke_claude(
     max_budget_usd: float,
     timeout_seconds: Optional[float] = None,
     session_id: Optional[str] = None,
+    agent_name: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
 
@@ -648,6 +854,8 @@ def _invoke_claude(
     global _active_subprocess
     cmd: list[str] = ["claude", "-p", "--output-format", "json"]
     cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    if agent_name:
+        cmd.extend(["--agent", agent_name])
     if session_id:
         cmd.extend(["--resume", session_id])
     cmd.append(prompt)
@@ -752,6 +960,8 @@ def _summary_payload(state: dict, *, terminal_reason: str, final_oracle_status: 
         "cost_ceiling_usd": state["cost_ceiling_usd"],
         "context_fill_threshold": state["context_fill_threshold"],
         "context_fill_ratio": state.get("last_context_fill_ratio"),
+        "plateau_window": state.get("plateau_window", DEFAULT_PLATEAU_WINDOW),
+        "oracle_score_history": state.get("oracle_score_history", []),
         "final_oracle_status": final_oracle_status,
         "run_id": state["run_id"],
     }
@@ -784,6 +994,7 @@ def run_loop(
     max_iterations: Optional[int],
     cost_ceiling: Optional[float],
     context_fill_threshold: Optional[float],
+    plateau_window: Optional[int] = None,
     resume_run_id: Optional[str] = None,
     resume_anyway: bool = False,
 ) -> int:
@@ -895,6 +1106,14 @@ def run_loop(
             state["cost_ceiling_usd"] = cost_ceiling
         if context_fill_threshold is not None:
             state["context_fill_threshold"] = context_fill_threshold
+        if plateau_window is not None:
+            state["plateau_window"] = plateau_window
+        # Backfill defaults for state files written before slice 003-05.
+        # Same state_schema_version=1; additive fields per ADR-0004's
+        # "pure additive changes MAY keep version at 1" clause.
+        state.setdefault("plateau_window", DEFAULT_PLATEAU_WINDOW)
+        state.setdefault("last_verdict", None)
+        state.setdefault("last_oracle_json", None)
 
         run_id = state["run_id"]
         # Synchronise last_context_fill_ratio across the read so the
@@ -914,6 +1133,8 @@ def run_loop(
             cost_ceiling = DEFAULT_COST_CEILING_USD
         if context_fill_threshold is None:
             context_fill_threshold = DEFAULT_CONTEXT_FILL_THRESHOLD
+        if plateau_window is None:
+            plateau_window = DEFAULT_PLATEAU_WINDOW
         rc = _preflight(
             target, _generate_preflight_run_id(),
             cost_ceiling=cost_ceiling,
@@ -954,6 +1175,7 @@ def run_loop(
             run_id=run_id, target=target, prompt=prompt,
             max_iterations=max_iterations, cost_ceiling=cost_ceiling,
             context_fill_threshold=context_fill_threshold,
+            plateau_window=plateau_window,
             claude_version=current_claude_version,
         )
         state_path = _state_path_for(target, run_id)
@@ -973,6 +1195,7 @@ def run_loop(
     halted_on_pass = False
     halted_on_cost = False
     halted_on_context = False
+    halted_on_plateau = False
     for iteration in range(starting_iteration, state["max_iterations"] + 1):
         # Pre-iteration interrupt check (AC9). If the signal arrived between
         # iterations (or before iter 1), we never invoke claude / gate.
@@ -1018,11 +1241,22 @@ def run_loop(
         # Pass --resume <session_id> when we have one (slice 003-04). For
         # fresh-run iter 1 the session id is empty → no --resume.
         session_id_arg = state.get("current_session_id") or None
+        # Slice 003-05: pick agent (runner/judge alternation) and assemble
+        # the per-iteration prompt from the seed + last oracle JSON + last
+        # verdict block. Iter 1 of a fresh run sends just the seed; iter 2+
+        # / resumed runs send the structured assembly.
+        agent_name = _agent_for_iteration(iteration)
+        iteration_prompt = _assemble_iteration_prompt(
+            state["prompt"],
+            state.get("last_oracle_json"),
+            state.get("last_verdict"),
+        )
         claude_data, error = _invoke_claude(
-            state["prompt"], target,
+            iteration_prompt, target,
             max_budget_usd=per_iter_budget,
             timeout_seconds=claude_timeout_seconds,
             session_id=session_id_arg,
+            agent_name=agent_name,
         )
 
         # Interrupt-during-claude (AC9): the iteration is treated as
@@ -1081,6 +1315,28 @@ def run_loop(
             sys.stderr.write(f"loop: {ratio_error}\n")
         state["last_context_fill_ratio"] = context_fill_ratio
 
+        # Slice 003-05 AC10: parse the agent's verdict block. The agent's
+        # textual output is in claude_data["result"]. The parser returns
+        # (None, None) if no verdict block is present (informational — the
+        # agent malfunctioned but the loop continues), (None, breadcrumb)
+        # on AC10 refusal paths (block present but malformed), or
+        # (fields, None) on success.
+        agent_text = str(claude_data.get("result", "") or "")
+        verdict_fields, verdict_error = _parse_verdict_block(agent_text)
+        if verdict_error is not None:
+            # AC10: refuse the run on a malformed verdict block.
+            sys.stderr.write(f"loop: {verdict_error}\n")
+            state["iteration_count"] = iteration
+            _finalize_state_and_summary(
+                state, state_path,
+                terminal_reason=REASON_VERDICT_SCHEMA_MISMATCH,
+                final_oracle_status=final_oracle_status,
+            )
+            return EXIT_ENV_ERROR
+        # `verdict_fields` may be None (no block found); that's fine — the
+        # next iteration's prompt assembly will just omit the verdict section.
+        state["last_verdict"] = verdict_fields
+
         gate_data = _invoke_gate(target)
 
         # Interrupt-during-gate (AC9): same posture as interrupt-during-claude.
@@ -1120,14 +1376,20 @@ def run_loop(
             "status": oracle_status,
         })
         state["last_terminal_reason"] = claude_terminal_reason
+        state["last_oracle_json"] = gate_data
         _atomic_write_state(state, state_path)
 
+        # Slice 003-05: per-iter JSON includes the active agent and the
+        # parsed verdict fields (or null). Agents alternate runner → judge,
+        # so a downstream consumer can group per-iter lines by role.
         _emit_json({
             "iteration": iteration,
+            "agent": agent_name,
             "session_id": session_id,
             "cost_usd": cost_usd,
             "cumulative_cost_usd": state["cumulative_cost_usd"],
             "context_fill_ratio": context_fill_ratio,
+            "verdict": verdict_fields,
             "terminal_reason": claude_terminal_reason,
             "oracle_exit_code": oracle_exit_code,
             "oracle_status": oracle_status,
@@ -1153,7 +1415,20 @@ def run_loop(
             halted_on_cost = True
             break
 
-    if not halted_on_pass and not halted_on_cost and not halted_on_context:
+        # Slice 003-05 plateau check (AC1/AC2/AC3): after gate scoring, if
+        # the last `plateau_window` iterations failed to improve over the
+        # max-prior-composite, halt. AC4 disables when window==0.
+        if _check_plateau(
+            state["oracle_score_history"], state["plateau_window"],
+        ):
+            terminal_reason = REASON_ORACLE_PLATEAU
+            halted_on_plateau = True
+            break
+
+    if (
+        not halted_on_pass and not halted_on_cost
+        and not halted_on_context and not halted_on_plateau
+    ):
         terminal_reason = REASON_MAX_ITERATIONS_REACHED
 
     _finalize_state_and_summary(
@@ -1234,6 +1509,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--plateau-window",
+        type=int,
+        default=None,
+        help=(
+            f"Halt the loop when the oracle composite has not improved "
+            f"over the last M iterations (strict greater-than counts as "
+            f"improvement; equality is non-improving). Requires at least "
+            f"M+1 iterations of history before firing. Default "
+            f"{DEFAULT_PLATEAU_WINDOW}. Pass 0 to disable plateau "
+            f"detection entirely."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         dest="resume",
         default=None,
@@ -1271,12 +1559,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.context_fill_threshold < 0 or args.context_fill_threshold > 1
     ):
         parser.error("--context-fill-threshold must be in [0.0, 1.0]")
+    if args.plateau_window is not None and args.plateau_window < 0:
+        parser.error("--plateau-window must be >= 0")
     return run_loop(
         args.target.resolve(),
         prompt=args.prompt,
         max_iterations=args.max_iterations,
         cost_ceiling=args.cost_ceiling,
         context_fill_threshold=args.context_fill_threshold,
+        plateau_window=args.plateau_window,
         resume_run_id=args.resume,
         resume_anyway=args.resume_anyway,
     )

@@ -250,7 +250,16 @@ def _run_loop(
     explicitly (e.g., AC9 binary-not-on-PATH test). `extra_env` adds
     arbitrary env vars (e.g., SERVO_CLAUDE_TIMEOUT) on top of the sandboxed
     PATH.
+
+    Slice 003-05: plateau detection is disabled by default in tests
+    (`--plateau-window 0` is prepended unless the caller explicitly passes
+    `--plateau-window`). Slice-003-01..04 tests use constant-composite
+    mocks that would otherwise trip the default plateau brake at iter 4
+    instead of running to the test's expected iteration count. Plateau-
+    specific tests opt back in by passing their own `--plateau-window N`.
     """
+    if "--plateau-window" not in extra_args:
+        extra_args = ("--plateau-window", "0", *extra_args)
     if path_override is not None:
         path = path_override
     elif mock_bindir is not None:
@@ -1072,9 +1081,14 @@ def _mock_claude_with_args_log(
 ) -> Path:
     """Constant-payload mock that also appends each invocation's argv to args_log.
 
-    `$*` joins positional args with single spaces; one invocation = one line in
-    the log. Lets a test verify the `--max-budget-usd <remaining>` arg that AC3
-    requires the loop to pass through to claude.
+    Slice 003-05 made the per-iteration prompt multi-line (embedded gate
+    JSON + verdict block), so `$*` newline-joins are no longer safe to
+    parse line-by-line. Each invocation is written as a single line with
+    args separated by the U+001F (Unit Separator) byte, and lines are
+    terminated with U+001E (Record Separator) so embedded newlines in
+    args don't fragment the log. `_read_args_log` parses on these
+    delimiters; the legacy `len(invocations) == N` and
+    `--max-budget-usd <val>` assertions still hold.
     """
     body = textwrap.dedent(f"""\
         #!/usr/bin/env bash
@@ -1087,7 +1101,10 @@ def _mock_claude_with_args_log(
         fi
         n=$((n + 1))
         echo "$n" > "$counter_file"
-        echo "$*" >> "$args_log"
+        for arg in "$@"; do
+            printf '%s\\037' "$arg" >> "$args_log"
+        done
+        printf '\\036' >> "$args_log"
         cat <<'__JSON_EOF__'
         {json_payload}
         __JSON_EOF__
@@ -1108,7 +1125,12 @@ def _mock_claude_costs_per_iter(
     costs_file = bindir / "costs.txt"
     costs_file.parent.mkdir(parents=True, exist_ok=True)
     costs_file.write_text("\n".join(str(c) for c in costs) + "\n")
-    args_log_cmd = f'echo "$*" >> \'{args_log}\'\n' if args_log else ""
+    # Args log uses U+001F / U+001E delimiters (see _mock_claude_with_args_log
+    # docstring) so embedded newlines in the iteration prompt don't fragment.
+    args_log_cmd = (
+        f'for arg in "$@"; do printf "%s\\037" "$arg" >> \'{args_log}\'; done\n'
+        f'printf "\\036" >> \'{args_log}\'\n'
+    ) if args_log else ""
     # Bash heredoc must be UNQUOTED for $n / $cost substitution; literal
     # `{` / `}` in the JSON must be doubled in this Python f-string.
     body = (
@@ -1139,12 +1161,27 @@ def _mock_claude_costs_per_iter(
 
 
 def _read_args_log(args_log: Path) -> list:
-    """Parse the args log into a list of argv lists (one per invocation)."""
+    """Parse the args log into a list of argv lists (one per invocation).
+
+    Slice 003-05: args are separated by U+001F and invocations by U+001E
+    (matches the mock-helper write format). Each U+001F-separated arg
+    keeps its embedded whitespace / newlines intact, which is what the
+    multi-line iteration-prompt assembly needs.
+    """
     if not args_log.exists():
         return []
-    return [
-        line.split() for line in args_log.read_text().splitlines() if line.strip()
-    ]
+    raw = args_log.read_text()
+    invocations: list = []
+    for record in raw.split("\x1e"):
+        if not record:
+            continue
+        args = record.split("\x1f")
+        # Trailing U+001F after the last arg leaves an empty trailing element.
+        if args and args[-1] == "":
+            args.pop()
+        if args:
+            invocations.append(args)
+    return invocations
 
 
 def _find_flag_value(argv: list, flag: str) -> Optional[str]:
@@ -3479,6 +3516,800 @@ class RunIdCollisionTests(unittest.TestCase):
         self.assertEqual(summary["terminal_reason"], "run_id_collision")
         # Claude was not invoked.
         self.assertFalse(self.counter.exists())
+
+
+# ============================================================================
+# Slice 003-05 — stuck-loop-and-handoff: shared fixture helpers
+# ============================================================================
+
+
+# Triple-backtick fences inside a bash heredoc would trigger command
+# substitution. Encode them as ``` Unicode escapes inside the JSON
+# string — `json.loads` in loop.py decodes them back to literal backticks
+# before the verdict parser sees the block.
+_BTICK = "\\u0060\\u0060\\u0060"  # JSON-encoded triple backtick (18 chars)
+
+
+def _runner_verdict_block(
+    *, verdict: str = "CHANGES_MADE",
+    files_changed: Optional[str] = None,
+    reasoning: str = "mock runner",
+) -> str:
+    """JSON-encoded runner-shaped verdict block for embedding in `result`."""
+    lines = [
+        f"{_BTICK}verdict",
+        "schema_version: 1",
+        f"verdict: {verdict}",
+    ]
+    if files_changed:
+        lines.append(f"files_changed: {files_changed}")
+    lines.append(f"reasoning: {reasoning}")
+    lines.append(_BTICK)
+    return "\\n" + "\\n".join(lines) + "\\n"
+
+
+def _judge_verdict_block(
+    *, verdict: str = "PASS", score: float = 0.5,
+    reasoning: str = "mock judge",
+) -> str:
+    """JSON-encoded judge-shaped verdict block for embedding in `result`."""
+    lines = [
+        f"{_BTICK}verdict",
+        "schema_version: 1",
+        f"verdict: {verdict}",
+        f"score: {score:.2f}",
+        f"reasoning: {reasoning}",
+        _BTICK,
+    ]
+    return "\\n" + "\\n".join(lines) + "\\n"
+
+
+def _mock_claude_with_verdict(
+    bindir: Path, counter_file: Path, *,
+    runner_block: Optional[str] = None,
+    judge_block: Optional[str] = None,
+    cost: float = 0.05,
+    args_log: Optional[Path] = None,
+) -> Path:
+    """Mock that alternates runner / judge verdict blocks per invocation.
+
+    Default: emits runner-shape block on odd invocations and judge-shape on
+    even (matches the loop's `_agent_for_iteration` alternation). The
+    `--agent <name>` arg the loop passes is not consulted by the mock; the
+    alternation is keyed off the invocation counter so the mock's block
+    shape matches what the loop expects to see.
+
+    Optional `args_log` records each invocation's args using the U+001F /
+    U+001E delimiter scheme (see `_mock_claude_with_args_log`).
+    """
+    runner_block = runner_block or _runner_verdict_block()
+    judge_block = judge_block or _judge_verdict_block()
+    args_log_cmd = (
+        f'for arg in "$@"; do printf "%s\\037" "$arg" >> \'{args_log}\'; done\n'
+        f'printf "\\036" >> \'{args_log}\'\n'
+    ) if args_log else ""
+    body = (
+        f"#!/usr/bin/env bash\n"
+        f"counter_file='{counter_file}'\n"
+        f'if [ -f "$counter_file" ]; then\n'
+        f'    n=$(cat "$counter_file")\n'
+        f"else\n"
+        f"    n=0\n"
+        f"fi\n"
+        f"n=$((n + 1))\n"
+        f'echo "$n" > "$counter_file"\n'
+        f"{args_log_cmd}"
+        f'if [ $((n % 2)) -eq 1 ]; then\n'
+        f'    block=\'{runner_block}\'\n'
+        f"else\n"
+        f'    block=\'{judge_block}\'\n'
+        f"fi\n"
+        f"cat <<JSON_EOF\n"
+        f'{{"type":"result","subtype":"success","is_error":false,'
+        f'"session_id":"mock-session-$n","total_cost_usd":{cost},'
+        f'"terminal_reason":"completed","stop_reason":"end_turn",'
+        f'"num_turns":1,'
+        f'"result":"agent text$block",'
+        f'"usage":{{"input_tokens":100,"cache_read_input_tokens":0,'
+        f'"cache_creation_input_tokens":0,"output_tokens":10}},'
+        f'"modelUsage":{{"claude-sonnet-4-6":{{"inputTokens":100,'
+        f'"outputTokens":10,"contextWindow":200000}}}}}}\n'
+        f"JSON_EOF\n"
+    )
+    return _make_mock_claude(bindir, body)
+
+
+def _mock_claude_with_raw_result(
+    bindir: Path, counter_file: Path, *,
+    result_text: str, cost: float = 0.05,
+) -> Path:
+    """Mock with a literal `result` field — for malformed-block AC10 tests.
+
+    `result_text` is JSON-encoded as-is. Test harnesses building this
+    string must include the JSON-encoded backticks (use `_BTICK`).
+    """
+    body = (
+        f"#!/usr/bin/env bash\n"
+        f"counter_file='{counter_file}'\n"
+        f'if [ -f "$counter_file" ]; then\n'
+        f'    n=$(cat "$counter_file")\n'
+        f"else\n"
+        f"    n=0\n"
+        f"fi\n"
+        f"n=$((n + 1))\n"
+        f'echo "$n" > "$counter_file"\n'
+        f"cat <<JSON_EOF\n"
+        f'{{"type":"result","subtype":"success","is_error":false,'
+        f'"session_id":"mock-session-$n","total_cost_usd":{cost},'
+        f'"terminal_reason":"completed","stop_reason":"end_turn",'
+        f'"num_turns":1,"result":"{result_text}",'
+        f'"usage":{{"input_tokens":100,"cache_read_input_tokens":0,'
+        f'"cache_creation_input_tokens":0,"output_tokens":10}},'
+        f'"modelUsage":{{"claude-sonnet-4-6":{{"inputTokens":100,'
+        f'"outputTokens":10,"contextWindow":200000}}}}}}\n'
+        f"JSON_EOF\n"
+    )
+    return _make_mock_claude(bindir, body)
+
+
+def _composite_progression_oracle(composites: list) -> str:
+    """Oracle that emits a different composite per invocation (1-indexed).
+
+    Uses a counter file at `<target>/.oracle-counter` to step through the
+    list. Lets a test engineer a specific composite trajectory for plateau
+    detection (e.g., [0.2, 0.3, 0.4, 0.5, 0.5, 0.5] → plateau at iter 6).
+    Each invocation always exits 1 (below_threshold) unless the last
+    composite is >= 0.5.
+    """
+    composites_csv = ",".join(str(c) for c in composites)
+    return textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        counter='.oracle-counter'
+        if [ -f "$counter" ]; then
+            n=$(cat "$counter")
+        else
+            n=0
+        fi
+        n=$((n + 1))
+        echo "$n" > "$counter"
+        IFS=',' read -r -a comps <<< '{composites_csv}'
+        idx=$((n - 1))
+        if [ $idx -ge ${{#comps[@]}} ]; then
+            idx=$((${{#comps[@]}} - 1))
+        fi
+        comp=${{comps[$idx]}}
+        echo "oracle: composite=$comp threshold=0.5"
+        # Pass iff composite >= 0.5
+        if awk "BEGIN {{ exit !($comp >= 0.5) }}"; then
+            exit 0
+        else
+            exit 1
+        fi
+    """)
+
+
+# ============================================================================
+# Slice 003-05 — AC #1: Plateau detection (default window=3)
+# ============================================================================
+
+
+class PlateauDetectionDefaultTests(unittest.TestCase):
+    """AC #1 — three consecutive non-improving iters halt with `oracle_plateau`.
+
+    Uses constant composites (0.3) with default `--plateau-window 3`.
+    History fills to 4 entries; max-prior (excluding last 3) = max([0.3]) = 0.3;
+    overall max = 0.3; 0.3 ≤ 0.3 → plateau. Halt at iter 4.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac1-plateau-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        # Constant composite 0.3 (below threshold 0.5) for plateau testing.
+        _make_oracle(self.target, _below_threshold_oracle(composite=0.3))
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_with_verdict(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_default_plateau_halts_at_iter_four(self):
+        # Default --plateau-window 3 with constant composite → halt at iter 4.
+        # Override the test default of --plateau-window 0 by passing the
+        # default explicitly (3).
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "10",
+            "--plateau-window", "3",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 4)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+        self.assertEqual(summary["iterations_completed"], 4)
+        self.assertEqual(summary["plateau_window"], 3)
+        # History should be in the summary.
+        self.assertEqual(len(summary["oracle_score_history"]), 4)
+
+
+# ============================================================================
+# Slice 003-05 — AC #2: --plateau-window override
+# ============================================================================
+
+
+class PlateauWindowOverrideTests(unittest.TestCase):
+    """AC #2 — `--plateau-window 5` requires 5 non-improving iterations."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac2-plateau-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle(composite=0.3))
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_with_verdict(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_window_five_halts_at_iter_six(self):
+        # window=5 requires 6 iters (1 baseline + 5 non-improving) for plateau.
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "10",
+            "--plateau-window", "5",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 6)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+        self.assertEqual(summary["plateau_window"], 5)
+
+    def test_window_two_halts_at_iter_three(self):
+        # window=2: needs 3 iters (1 baseline + 2 non-improving).
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "10",
+            "--plateau-window", "2",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 3)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+
+
+# ============================================================================
+# Slice 003-05 — AC #3: Plateau semantics (≤ vs >)
+# ============================================================================
+
+
+class PlateauThresholdSemanticsTests(unittest.TestCase):
+    """AC #3 — equality counts as non-improving; strict GT is improvement."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac3-plateau-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_equality_counts_as_non_improving(self):
+        # Composites: 0.4, 0.4, 0.4, 0.4. All equal. Plateau fires.
+        _make_oracle(
+            self.target,
+            _composite_progression_oracle([0.4, 0.4, 0.4, 0.4, 0.4, 0.4]),
+        )
+        _mock_claude_with_verdict(self.bindir, self.counter)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "10",
+            "--plateau-window", "3",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+
+    def test_strict_improvement_resets_plateau_counter(self):
+        # Composites: 0.3, 0.3, 0.3, 0.4 (improvement on iter 4), 0.4, 0.4, 0.4.
+        # Plateau is computed over the WHOLE history vs the last 3:
+        #   - After iter 4 (history=[0.3,0.3,0.3,0.4]): max-overall=0.4,
+        #     max-prior-3=max([0.3])=0.3. 0.4 > 0.3 → NOT plateaued.
+        #   - After iter 5 (history=[0.3,0.3,0.3,0.4,0.4]): max-overall=0.4,
+        #     max-prior-3=max([0.3,0.3])=0.3. 0.4 > 0.3 → NOT plateaued.
+        #   - After iter 6 (history=[..,0.4]): max-overall=0.4,
+        #     max-prior-3=max([0.3,0.3,0.3])=0.3. 0.4 > 0.3 → NOT plateaued.
+        #   - After iter 7 (history=[..,0.4,0.4]): max-overall=0.4,
+        #     max-prior-3=max([0.3,0.3,0.3,0.4])=0.4. 0.4 ≤ 0.4 → plateau! Halt.
+        _make_oracle(
+            self.target,
+            _composite_progression_oracle([0.3, 0.3, 0.3, 0.4, 0.4, 0.4, 0.4]),
+        )
+        _mock_claude_with_verdict(self.bindir, self.counter)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "10",
+            "--plateau-window", "3",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 7)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+
+
+# ============================================================================
+# Slice 003-05 — AC #4: --plateau-window 0 disables
+# ============================================================================
+
+
+class PlateauDisabledTests(unittest.TestCase):
+    """AC #4 — `--plateau-window 0` disables plateau detection entirely."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac4-plateau-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle(composite=0.3))
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_with_verdict(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_window_zero_runs_to_max_iterations(self):
+        # Constant composite normally trips plateau at iter 4. With
+        # --plateau-window 0, the loop runs to the iteration cap.
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 5)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertEqual(summary["plateau_window"], 0)
+
+
+# ============================================================================
+# Slice 003-05 — AC #5: runner.md ships, runner verdict parses
+# ============================================================================
+
+
+class RunnerVerdictBlockTests(unittest.TestCase):
+    """AC #5 — `agents/runner.md` is real; runner verdict block parses + surfaces."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac5-runner-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_runner_md_is_not_placeholder(self):
+        runner_md = REPO_ROOT / "agents" / "runner.md"
+        text = runner_md.read_text()
+        self.assertNotIn("Status: placeholder", text)
+        # Verdict block schema documented in the prompt.
+        self.assertIn("schema_version: 1", text)
+        self.assertIn("CHANGES_MADE", text)
+        self.assertIn("NO_CHANGES", text)
+        self.assertIn("BLOCKED", text)
+
+    def test_runner_verdict_block_surfaces_in_per_iter_json(self):
+        # Iter 1 is runner; emit a CHANGES_MADE verdict and verify it
+        # appears in the per-iter JSON line.
+        block = _runner_verdict_block(
+            verdict="CHANGES_MADE", files_changed="a.py, b.py",
+            reasoning="Added null-check",
+        )
+        _mock_claude_with_verdict(
+            self.bindir, self.counter,
+            runner_block=block,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual(len(per_iter), 1)
+        v = per_iter[0]["verdict"]
+        self.assertEqual(v["schema_version"], 1)
+        self.assertEqual(v["verdict"], "CHANGES_MADE")
+        self.assertEqual(v["files_changed"], "a.py, b.py")
+        self.assertEqual(v["reasoning"], "Added null-check")
+
+
+# ============================================================================
+# Slice 003-05 — AC #6: judge.md ships, judge verdict parses
+# ============================================================================
+
+
+class JudgeVerdictBlockTests(unittest.TestCase):
+    """AC #6 — `agents/judge.md` is real; judge verdict block parses + surfaces."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac6-judge-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_judge_md_is_not_placeholder(self):
+        judge_md = REPO_ROOT / "agents" / "judge.md"
+        text = judge_md.read_text()
+        self.assertNotIn("Status: placeholder", text)
+        # Verdict block schema documented in the prompt.
+        self.assertIn("schema_version: 1", text)
+        self.assertIn("PASS", text)
+        self.assertIn("FAIL", text)
+        self.assertIn("INCONCLUSIVE", text)
+
+    def test_judge_verdict_block_surfaces_in_per_iter_json(self):
+        # Iter 2 is judge; emit a PASS verdict and verify it appears in
+        # the per-iter JSON line for iter 2.
+        judge_block = _judge_verdict_block(
+            verdict="PASS", score=0.85,
+            reasoning="Change correctly addresses failing component",
+        )
+        _mock_claude_with_verdict(
+            self.bindir, self.counter,
+            judge_block=judge_block,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual(len(per_iter), 2)
+        v = per_iter[1]["verdict"]  # iter 2 is judge
+        self.assertEqual(v["schema_version"], 1)
+        self.assertEqual(v["verdict"], "PASS")
+        self.assertEqual(v["score"], "0.85")
+        self.assertEqual(v["reasoning"], "Change correctly addresses failing component")
+
+
+# ============================================================================
+# Slice 003-05 — AC #7: Agent alternation via `claude --agent <name>`
+# ============================================================================
+
+
+class AgentAlternationDispatchTests(unittest.TestCase):
+    """AC #7 — each iteration invokes `claude --agent <runner|judge>` alternating."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac7-agent-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+        _mock_claude_with_verdict(
+            self.bindir, self.counter, args_log=self.args_log,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_alternation_in_argv(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "4",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        invocations = _read_args_log(self.args_log)
+        self.assertEqual(len(invocations), 4)
+        agents = [_find_flag_value(argv, "--agent") for argv in invocations]
+        self.assertEqual(agents, ["runner", "judge", "runner", "judge"])
+
+    def test_per_iter_json_carries_agent_field(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "4",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual(len(per_iter), 4)
+        self.assertEqual(
+            [l["agent"] for l in per_iter],
+            ["runner", "judge", "runner", "judge"],
+        )
+
+
+# ============================================================================
+# Slice 003-05 — AC #8: Per-iteration prompt assembly
+# ============================================================================
+
+
+class PromptAssemblyTests(unittest.TestCase):
+    """AC #8 — iter 2+ prompt = seed + last oracle output + last verdict block."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac8-prompt-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle(composite=0.42))
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+        _mock_claude_with_verdict(
+            self.bindir, self.counter, args_log=self.args_log,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_iter_one_prompt_is_seed_only(self):
+        result = _run_loop(
+            self.target, "--prompt", "my-seed-prompt",
+            "--max-iterations", "1", "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        invocations = _read_args_log(self.args_log)
+        self.assertEqual(len(invocations), 1)
+        # Last arg in each invocation is the assembled prompt.
+        prompt_arg = invocations[0][-1]
+        # Iter 1 has no prior oracle / verdict — prompt is the seed verbatim.
+        self.assertEqual(prompt_arg, "my-seed-prompt")
+
+    def test_iter_two_prompt_includes_oracle_and_verdict(self):
+        result = _run_loop(
+            self.target, "--prompt", "my-seed-prompt",
+            "--max-iterations", "2", "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        invocations = _read_args_log(self.args_log)
+        self.assertEqual(len(invocations), 2)
+        iter2_prompt = invocations[1][-1]
+        # Seed is the first chunk.
+        self.assertTrue(iter2_prompt.startswith("my-seed-prompt"))
+        # Last oracle output (JSON-encoded) is embedded.
+        self.assertIn("Last oracle output", iter2_prompt)
+        self.assertIn("composite", iter2_prompt)
+        self.assertIn("0.42", iter2_prompt)
+        # Last verdict block is embedded.
+        self.assertIn("Last agent verdict", iter2_prompt)
+        self.assertIn("schema_version: 1", iter2_prompt)
+        self.assertIn("CHANGES_MADE", iter2_prompt)
+
+
+# ============================================================================
+# Slice 003-05 — AC #10: verdict_schema_mismatch refusal (three paths)
+# ============================================================================
+
+
+class VerdictSchemaMismatchTests(unittest.TestCase):
+    """AC #10 — three refusal paths: (a) field absent, (b) ≠ 1, (c) wrong type."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac10-verdict-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _make_mock_with_block_text(self, block_body_lines: list) -> None:
+        """Build a mock that emits a verdict block with the supplied lines."""
+        block_text = "\\n" + f"{_BTICK}verdict\\n" + "\\n".join(block_body_lines) + f"\\n{_BTICK}\\n"
+        _mock_claude_with_raw_result(
+            self.bindir, self.counter,
+            result_text=f"agent text{block_text}",
+        )
+
+    def test_a_schema_version_absent_within_block(self):
+        # Block exists but lacks schema_version (some other field is first).
+        self._make_mock_with_block_text([
+            "verdict: CHANGES_MADE",
+            "reasoning: missing schema_version",
+        ])
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("schema_version", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "verdict_schema_mismatch")
+
+    def test_b_schema_version_wrong_value(self):
+        # Block has schema_version: 2 (expected 1).
+        self._make_mock_with_block_text([
+            "schema_version: 2",
+            "verdict: CHANGES_MADE",
+            "reasoning: wrong version",
+        ])
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("schema_version", result.stderr)
+        self.assertIn("2", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "verdict_schema_mismatch")
+
+    def test_c_schema_version_string_type(self):
+        # Block has schema_version: "1" (string instead of int).
+        self._make_mock_with_block_text([
+            'schema_version: \\"1\\"',
+            "verdict: CHANGES_MADE",
+            "reasoning: string-typed schema_version",
+        ])
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("schema_version", result.stderr)
+        self.assertIn("string", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "verdict_schema_mismatch")
+
+    def test_d_schema_version_non_integer(self):
+        # Block has schema_version: abc (non-integer literal).
+        self._make_mock_with_block_text([
+            "schema_version: abc",
+            "verdict: CHANGES_MADE",
+        ])
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("non-integer", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "verdict_schema_mismatch")
+
+    def test_no_block_at_all_is_not_a_refusal(self):
+        # AC10 enumerates three refusal paths within a block; "no block" is
+        # informational, not a refusal. Loop continues with last_verdict=None.
+        # Mock emits a `result` with no verdict block.
+        _mock_claude_with_raw_result(
+            self.bindir, self.counter,
+            result_text="agent text without a verdict block",
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # Iters ran normally.
+        self.assertEqual(int(self.counter.read_text().strip()), 2)
+        # Per-iter JSON carries `verdict: null`.
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        for line in per_iter:
+            self.assertIsNone(line["verdict"])
+
+
+# ============================================================================
+# Slice 003-05 — Unit tests for _parse_verdict_block helper
+# ============================================================================
+
+
+class ParseVerdictBlockUnitTests(unittest.TestCase):
+    """Direct unit tests for the verdict block parser.
+
+    Covers shapes that are tedious to exercise end-to-end (multiple blocks
+    in one response → last wins; empty blocks; extra whitespace).
+    """
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("loop", LOOP)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.parse = module._parse_verdict_block
+
+    def test_happy_path(self):
+        text = (
+            "intro\n\n"
+            "```verdict\n"
+            "schema_version: 1\n"
+            "verdict: PASS\n"
+            "score: 0.9\n"
+            "reasoning: looks good\n"
+            "```\n"
+        )
+        fields, err = self.parse(text)
+        self.assertIsNone(err)
+        self.assertEqual(fields["schema_version"], 1)
+        self.assertEqual(fields["verdict"], "PASS")
+        self.assertEqual(fields["score"], "0.9")
+        self.assertEqual(fields["reasoning"], "looks good")
+
+    def test_no_block_returns_none_none(self):
+        fields, err = self.parse("no block here at all")
+        self.assertIsNone(fields)
+        self.assertIsNone(err)
+
+    def test_multiple_blocks_last_wins(self):
+        text = (
+            "```verdict\nschema_version: 1\nverdict: PASS\n```\n"
+            "intermediate text\n"
+            "```verdict\nschema_version: 1\nverdict: FAIL\n```\n"
+        )
+        fields, err = self.parse(text)
+        self.assertIsNone(err)
+        self.assertEqual(fields["verdict"], "FAIL")
+
+    def test_empty_block_is_an_error(self):
+        text = "```verdict\n\n```\n"
+        fields, err = self.parse(text)
+        self.assertIsNone(fields)
+        self.assertIn("empty", err)
+
+    def test_schema_version_not_first_key(self):
+        # Field order matters per AC10.
+        text = (
+            "```verdict\n"
+            "verdict: PASS\n"
+            "schema_version: 1\n"  # not the first non-empty line
+            "```\n"
+        )
+        fields, err = self.parse(text)
+        self.assertIsNone(fields)
+        self.assertIn("first key", err)
+
+    def test_schema_version_quoted_string_single_quotes(self):
+        text = "```verdict\nschema_version: '1'\nverdict: PASS\n```\n"
+        fields, err = self.parse(text)
+        self.assertIsNone(fields)
+        self.assertIn("string", err)
 
 
 if __name__ == "__main__":

@@ -118,6 +118,23 @@ End-state behavior is still rc=2, which is the contract — but the error messag
 
 ---
 
+## Spec 003 spike open questions (Q1, Q2, Q5, Q6) await live-claude verification
+
+**Deferred:** The pre-spec research [spike](specs/003-agent-loop/spike.md) flagged six open questions; Q3 and Q4 were resolved in the spec body. Q1, Q2, Q5, Q6 were tagged "await empirical verification at their respective slices" — but every slice 003-01..05 test uses a mock-claude harness via PATH injection (the AC8 contract), so no slice has actually exercised a live `claude -p` invocation against the spike's predictions.
+
+The four still-open questions:
+
+- **Q1: `terminal_reason` taxonomy from `claude -p` JSON output.** Spike captured `terminal_reason="completed"`. Other plausible values: `budget_exceeded`, `error`, `interrupted`, `timeout`. Slice 003-02's cost-ceiling logic assumes the mock harness's `"completed"`; an unexpected real-world value falls into the loop's "claude-terminal-reason-pass-through" branch (per-iter JSON emits whatever claude says) but doesn't drive halt logic — the cumulative tracking is the brake.
+- **Q2: `stop_reason` taxonomy.** Spike captured `stop_reason="end_turn"`. Other Anthropic-API-named values: `max_tokens`, `tool_use`, `stop_sequence`, `pause_turn`. Less load-bearing than Q1; the loop doesn't branch on `stop_reason` today.
+- **Q5: `--max-budget-usd` halt granularity.** Does `claude -p --max-budget-usd X` clean-halt before the next API call would exceed budget, or partway through with a partial response? Slice 003-02's cumulative tracking handles either case (the per-iter cost is summed regardless), but the per-iter `--max-budget-usd` defense-in-depth floor (`MIN_BUDGET_FLOOR_USD=0.01`) was picked conservatively without empirical data.
+- **Q6: `--agent <name>` + permissions inheritance.** When `loop.py` invokes `claude --agent runner -p "..."`, does the agent's own `tools:` frontmatter authoritatively narrow the toolset, or does the parent invocation's `--allowedTools` / `--disallowedTools` (if any) intersect with the frontmatter? Slice 003-05's `runner.md` and `judge.md` declare their own `tools:` frontmatter and the loop does NOT pass parent-level `--allowedTools`; the assumption is "frontmatter authoritative." Untested against live `claude -p`.
+
+**Resolution trigger:** First live `claude -p` invocation against a real servo target — either (a) a user runs `/servo:agent-loop` and reports an unexpected behavior, or (b) dogfooding for spec 004 / 005 surfaces a difference. When triggered, update the relevant slice's deviation log and either keep the spike's assumption documented or amend `loop.py` to match observed reality. **A note:** the spec text at `docs/specs/003-agent-loop/spec.md` mentions "all five open questions from spike.md 'Open questions' are either resolved..." — the count is six (Q1–Q6); Q3 / Q4 resolved in spec; Q1, Q2, Q5, Q6 deferred here.
+
+**Surfaced by:** Slice 003-05 reconciliation review (`jig:reviewer`, 2026-05-20). The reviewer flagged that no slice empirically verified the spike's spike-shape predictions, despite the spike's "verification at the slice" promise. Deferring rather than blocking close-out because the entire spec was built on the mock-harness assumption and the spike's central question ("loop driver subprocesses claude, parses JSON, decides") was validated in vitro across 5 slices.
+
+---
+
 ## Scaffold-init does not write `<target>/.gitignore`
 
 **Deferred:** Slice 003-04 (checkpoint-resume) ships per-run state at `<target>/.servo/runs/<run-id>/state.json`. The spec's close-out item asks: "`.gitignore` updated to ensure `<target>/.servo/runs/` is ignored on the target — confirm spec 001's scaffold already adds this; if not, file a refinement-todo." `skills/scaffold-init/scaffold.py` does not currently touch `<target>/.gitignore`, so a target that runs `/servo:scaffold-init` followed by `/servo:agent-loop` will start checking in `<target>/.servo/runs/*/state.json` (and any future race / hook artifacts) unless the user manually adds the line.
