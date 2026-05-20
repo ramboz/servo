@@ -1,27 +1,48 @@
-# Specs
+# Spec Status Board
 
-Status board for servo's spec-driven development. Each spec lives in `NNN-<name>/spec.md` with vertical slices and a state lifecycle: `DRAFT → READY_FOR_REVIEW → READY_FOR_IMPLEMENTATION → IN_PROGRESS → REVIEWED → RECONCILED → DONE`.
+> Current state of all servo specs. Each spec lives in `NNN-<slug>/spec.md`
+> with vertical slices and the lifecycle: `DRAFT → READY_FOR_REVIEW →
+> READY_FOR_IMPLEMENTATION → IN_PROGRESS → REVIEWED → RECONCILED → DONE`.
+> A `DEFERRED` slice is parked with a `**Resolution trigger:**` line and
+> re-opens by transitioning back to `DRAFT`.
+>
+> The Notes column captures load-bearing per-slice invariants (test
+> counts, follow-on links, scope of the close-out) — curate it freely.
 
 ## Active specs
 
-| Spec | Status | Description |
-|---|---|---|
-| [001-scaffold-init](001-scaffold-init/spec.md) | **DONE** | Probe target signals, run Q&A, drop tailored `oracle.sh` (+ optional Tier-1/2 stubs) into target |
-| [002-quality-gate](002-quality-gate/spec.md) | **DONE** | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes (0 = ≥threshold, 1 = <threshold, 2 = env error). The truth-source every other servo runtime skill depends on. |
-| [003-agent-loop](003-agent-loop/spec.md) | **IN_PROGRESS** (slices 003-01, 003-02 DONE) | Headless iteration driver. Hard guardrails: **iteration cap**, **cumulative cost ceiling**, **context-fill refusal gate** (the hard-gate cousin of jig's soft `jig-context-check.sh` warning), **checkpoint/resume** across invocations, **stuck-loop detection** (oracle-score plateau halt). Owns the subagent-handoff state machine across iterations. Pre-spec [spike](003-agent-loop/spike.md) verified all five guardrails map cleanly to today's `claude -p --output-format json` surface. |
+| Spec | Slice | Status | Notes |
+|------|-------|--------|-------|
+| [001-scaffold-init](001-scaffold-init/spec.md) | 001-01 — greenfield-scaffold | **DONE** | 12 tests; spike-shaped first slice — weighted-composite-oracle approach validated |
+| [001-scaffold-init](001-scaffold-init/spec.md) | 001-02 — template-content | **DONE** | 23 tests; weighted-average composite + `# SEED:` convention; threshold default 0.5 |
+| [001-scaffold-init](001-scaffold-init/spec.md) | 001-03 — signal-detection | **DONE** | 34 tests; jig-fallback + built-in detectors for pytest/vitest/jest/cargo/go; ADR-0001 |
+| [001-scaffold-init](001-scaffold-init/spec.md) | 001-04 — deferred-decisions | **DONE** | 40 tests; emits `<target>/.servo/refinement-todo.md` (Threshold + Weights + Ambiguous) |
+| [001-scaffold-init](001-scaffold-init/spec.md) | 001-05 — qa-wizard | **DONE** | 53 tests total; SKILL.md + anti-greediness surface tests; spec 001 complete |
+| [002-quality-gate](002-quality-gate/spec.md) | 002-01 — invoke-passthrough | **DONE** | 20 tests; closed 0/1/2 contract; ADR-0002 |
+| [002-quality-gate](002-quality-gate/spec.md) | 002-02 — structured-output | **DONE** | 39 tests; `--json` with `schema_version: 1`; closed `reason` taxonomy emerging |
+| [002-quality-gate](002-quality-gate/spec.md) | 002-03 — manifest-aware | **DONE** | 62 tests; `audit` subcommand; `manifest_missing` / `manifest_malformed` / `manifest_invalid_key` reasons |
+| [002-quality-gate](002-quality-gate/spec.md) | 002-04 — timeout-safety | **DONE** | 75 tests; SIGTERM → 5s grace → SIGKILL on process group; `SERVO_GATE_TIMEOUT` env var |
+| [002-quality-gate](002-quality-gate/spec.md) | 002-05 — qa-wizard | **DONE** | 146 tests across four files; SKILL.md documents all 11 `reason` codes; spec 002 complete |
+| [003-agent-loop](003-agent-loop/spec.md) | 003-01 — invoke-loop | **DONE** | 35 tests; mock-claude harness via PATH-injection; `schema_version: 1`; `claude -p` timeout via `SERVO_CLAUDE_TIMEOUT` |
+| [003-agent-loop](003-agent-loop/spec.md) | 003-02 — cost-ceiling | **DONE** | 52 tests total; cumulative `total_cost_usd` halt + per-iter `--max-budget-usd` floor; 003-01 forward-reference closed |
+| [003-agent-loop](003-agent-loop/spec.md) | 003-03 — context-fill-gate | DRAFT | Hard refusal gate — cousin of jig's soft `jig-context-check.sh` |
+| [003-agent-loop](003-agent-loop/spec.md) | 003-04 — checkpoint-resume | DRAFT | Per-run state at `<target>/.servo/runs/<run-id>/state.json`; ADR-0004 already Accepted (pre-implementation framing) |
+| [003-agent-loop](003-agent-loop/spec.md) | 003-05 — stuck-loop-and-handoff | DRAFT | Oracle-score plateau halt + real `runner.md` / `judge.md` prompts; ADR-0003 already Accepted (pre-implementation framing) |
 
 ## Planned specs
 
-Descriptions name the cross-cutting AI-native concerns each spec addresses —
-not just the skill it ships — so the gap inventory stays visible during
-spec authoring.
+Descriptions name the cross-cutting AI-native concerns each spec
+addresses — not just the skill it ships — so the gap inventory stays
+visible during spec authoring.
 
 | Spec | Description |
 |---|---|
 | 004-oracle-hook | Claude Code hook installer (idempotent install/uninstall/status). Installs a **meta-judge `Stop` hook** that grades every assistant turn against the scaffolded oracle and emits retry hints as `additionalContext` — the structured replacement for ad-hoc transcript-regex scans. |
 | 005-variant-race | N-worktree parallel race with quality-gate scoring and winner selection. Owns worktree-race coordination, variant-lease management, and winner promotion (the unattended cousin of jig's parallel-spec-number reservation). |
 
-Sequencing rationale: 001 is the foundation everything else depends on; 003 before 005 because race reuses loop primitives; 004 is parallelizable with 003 (depends only on 001).
+Sequencing rationale: 001 is the foundation everything else depends
+on; 003 before 005 because race reuses loop primitives; 004 is
+parallelizable with 003 (depends only on 001).
 
 ## How these specs close jig's long-running-session gaps
 
@@ -33,7 +54,7 @@ of jig.
 | Gap surfaced in jig review | Servo home | Notes |
 |---|---|---|
 | Context-fill hard refusal gate | 003-agent-loop | Hard refusal; jig keeps a soft warning in `jig-context-check.sh` |
-| Session checkpoint / resume across invocations | 003-agent-loop | On-disk state at `<target>/.servo/runs/<run-id>/`; format decided at 003 authoring (candidate ADR) |
+| Session checkpoint / resume across invocations | 003-agent-loop | On-disk state at `<target>/.servo/runs/<run-id>/state.json` (ADR-0004) |
 | Stuck-loop detection | 003-agent-loop | Oracle-score-plateau heuristic |
 | Token / cost ceiling enforcement | 003-agent-loop | Hard guardrail (defaults: max-iterations=5, cost-ceiling=$2 per architecture.md) |
 | Subagent handoff state across iterations | 003-agent-loop | What `runner` / `judge` receive each spawn, what survives |

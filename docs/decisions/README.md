@@ -1,12 +1,35 @@
-# Architectural Decision Records
+# Decisions
 
-Servo's ADRs. Each record captures a hard-to-reverse decision and the alternatives considered. Filenames follow `adr-NNNN-<kebab-slug>.md` (lowercase, matching jig's convention); the acronym is uppercase in prose.
+> Architectural Decision Records. Nygard convention: immutable after acceptance.
+> New decisions supersede old ones — never edit an accepted ADR.
+> Filenames follow `adr-NNNN-<kebab-slug>.md`; titles use the form
+> `# ADR-NNNN: <Title>`.
 
-| ADR | Status | Title |
-|---|---|---|
-| [ADR-0001](adr-0001-reuse-jig-test-detector.md) | Accepted | Reuse jig's `tdd.py detect` for test-framework detection when jig is co-installed |
-| [ADR-0002](adr-0002-gate-caller-contract.md) | Accepted | Quality-gate caller contract: closed exit codes and versioned JSON schema |
-| [ADR-0003](adr-0003-fresh-subagent-roster.md) | Accepted | Why a fresh subagent roster, not reused from jig |
-| [ADR-0004](adr-0004-session-state-file-format.md) | Accepted | Session-state file format on disk |
+## Index
 
-Pending decisions are listed in `docs/architecture.md` under "Decisions pending" until they crystallize.
+- [ADR-0001: Reuse jig's `tdd.py detect` for test-framework detection when jig is co-installed](adr-0001-reuse-jig-test-detector.md) — Servo prefers jig's detector via subprocess when `${CLAUDE_PLUGIN_ROOT}/jig/skills/tdd-loop/tdd.py` exists, falls back to a built-in matcher otherwise. Establishes the filesystem-only coupling pattern. (2026-05-15, Accepted)
+- [ADR-0002: Quality-gate caller contract — closed exit codes and versioned JSON schema](adr-0002-gate-caller-contract.md) — `gate.py` exits only `0/1/2` (unexpected oracle exits remap to `2`); `--json` payloads carry `schema_version: 1` from day one. The contract specs 003 / 004 / 005 consume. (2026-05-18, Accepted)
+- [ADR-0003: Why a fresh subagent roster, not reused from jig](adr-0003-fresh-subagent-roster.md) — Servo ships two fresh agents (`runner`, `judge`) because their machine-parseable verdict-block output diverges from jig's narrative `implementer` / `reviewer`. Architect calls delegate to `jig:architect` directly — no servo-side architect prompt. (2026-05-19, Accepted)
+- [ADR-0004: Session-state file format on disk](adr-0004-session-state-file-format.md) — Per-run loop scoreboard at `<target>/.servo/runs/<run-id>/state.json`, referencing Claude Code sessions by `session_id` only. Atomic-write contract, `state_schema_version`, run-id collision policy. Filesystem-only coupling with Claude Code. (2026-05-19, Accepted)
+
+## Pending
+
+ADR candidates (numbers are *hints* of the next likely allocation order,
+not reservations — the next accepted ADR claims `0005` regardless of
+which candidate fires first):
+
+- **ADR-0005 — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
+
+## Format
+
+Each ADR carries a frontmatter block (`status`, `date`, `deciders`,
+`supersedes`, `superseded-by`) plus body sections: Context, Decision,
+Consequences (positive / negative / neutral), Alternatives considered,
+Verification, References.
+
+## When to write an ADR
+
+- Hard-to-reverse decisions (file formats, contracts, public-API shapes)
+- Decisions that affect multiple modules or downstream callers
+- When a contract changes in a breaking way
+- When the architect agent (`jig:architect` per ADR-0003) produces a proposal that is accepted
