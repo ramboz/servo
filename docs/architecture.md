@@ -118,7 +118,7 @@ Current state: both runner and judge are **placeholders**. Full prompts are auth
 
 Future runtime skills (specs 003–005) will produce these at the *target* project (not in servo's plugin repo):
 
-- `<target>/.servo/runs/<run-id>/` — per-iteration logs from `/servo:agent-loop` (stdout, stderr, oracle score, checkpoint). One subdirectory per loop run.
+- `<target>/.servo/runs/<run-id>/state.json` — agent-loop per-run scoreboard (slice 003-04, [ADR-0004](decisions/adr-0004-session-state-file-format.md)). Atomically rewritten after every iteration via `.tmp + os.replace`. Schema: `state_schema_version`, `run_id`, `started_at`, `last_updated_at`, `target_path`, `prompt`, `current_session_id` (the Claude Code session id `claude -p --resume` consumes), `iteration_count`, `max_iterations`, `cost_ceiling_usd`, `cumulative_cost_usd`, `cumulative_input_tokens`, `cumulative_output_tokens`, `context_fill_threshold`, `last_context_fill_ratio`, `oracle_score_history`, `last_terminal_reason`, `claude_version`. Run-id shape: `YYYYMMDDTHHMMSS-XXXX` (15-char timestamp + 4-hex suffix); collision retry is bounded at 3 attempts.
 - `<target>/.servo/hooks/meta-judge.sh` — copied by `/servo:oracle-hook` install; user may customize, uninstall leaves on disk.
 - `<target>/.servo/races/<race-id>/` — per-variant scores and metadata from `/servo:variant-race`.
 

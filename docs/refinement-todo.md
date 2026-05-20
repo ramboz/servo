@@ -118,6 +118,20 @@ End-state behavior is still rc=2, which is the contract — but the error messag
 
 ---
 
+## Scaffold-init does not write `<target>/.gitignore`
+
+**Deferred:** Slice 003-04 (checkpoint-resume) ships per-run state at `<target>/.servo/runs/<run-id>/state.json`. The spec's close-out item asks: "`.gitignore` updated to ensure `<target>/.servo/runs/` is ignored on the target — confirm spec 001's scaffold already adds this; if not, file a refinement-todo." `skills/scaffold-init/scaffold.py` does not currently touch `<target>/.gitignore`, so a target that runs `/servo:scaffold-init` followed by `/servo:agent-loop` will start checking in `<target>/.servo/runs/*/state.json` (and any future race / hook artifacts) unless the user manually adds the line.
+
+`docs/architecture.md` "Runtime artifacts" already states the paths "are reserved (in `.gitignore`)" — that statement is aspirational, not enforced by the scaffolder.
+
+**Resolution trigger:** First user report that servo's runtime artifacts polluted their commits, OR opportunistically when the scaffolder grows another out-of-band artifact (e.g., spec 005's `.servo/races/`). The shape of the fix: extend `scaffold.py:_write_artifacts` to append a `.servo/runs/`, `.servo/races/`, `.servo/refinement-todo.md`, `.servo/install.json` block to `<target>/.gitignore` — idempotent (skip if the block already exists), no-op if `<target>/.gitignore` doesn't exist (target's choice not to track gitignore is the target's call). Add a test under `test_scaffold.py` that asserts the block lands.
+
+Target-side .gitignore is the target's concern, not servo's, but the scaffolder is the natural place to suggest the additions — same shape as jig's scaffold-init nudging `.claude/` paths.
+
+**Surfaced by:** Slice 003-04 reconciliation review (`jig:reviewer`, 2026-05-20). The spec close-out item explicitly contemplated this path.
+
+---
+
 ## `DEFAULT_CONTEXT_FILL_THRESHOLD = 0.75` is a guess
 
 **Deferred:** `loop.py`'s context-fill refusal threshold defaults to 0.75 (75%) — picked as the midpoint of the spike's observed 60–75% range across mixed iteration loads, with no real-world tuning data. A loop running short, focused turns may reasonably tolerate fills above 0.75 before output degrades; a loop with heavy tool use that produces long agent responses may degrade well below 0.75. Without empirical data, 0.75 could be 20 percentage points too generous (false-negatives: garbage output sneaks through) or too tight (false-positives: legitimate iterations refused).

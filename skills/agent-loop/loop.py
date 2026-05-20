@@ -1,33 +1,36 @@
 """
-servo agent-loop — slices 003-01, 003-02, 003-03
+servo agent-loop — slices 003-01, 003-02, 003-03, 003-04
 
 Headless iteration driver. Subprocesses `claude -p --output-format json`
 against a target N times under guardrails, and uses `gate.py --json`
 (spec 002) as the truth-source after each iteration. Halts on (a) oracle
 pass (composite ≥ threshold), (b) iteration cap reached, (c) cumulative
-cost ceiling exceeded (slice 003-02), or (d) context-fill ratio at-or-above
-the gate threshold (slice 003-03).
+cost ceiling exceeded (slice 003-02), (d) context-fill ratio at-or-above
+the gate threshold (slice 003-03), or (e) SIGINT/SIGTERM (slice 003-04).
+
+Checkpoint/resume: per-iteration state is atomically written to
+`<target>/.servo/runs/<run-id>/state.json` (slice 003-04, ADR-0004). A
+capped or interrupted run can be resumed via `loop.py --resume <run-id>`.
 
 Usage:
     python3 loop.py <target> --prompt "<text>"
     python3 loop.py <target> --prompt "<text>" --max-iterations 3
     python3 loop.py <target> --prompt "<text>" --cost-ceiling 1.50
     python3 loop.py <target> --prompt "<text>" --context-fill-threshold 0.50
+    python3 loop.py <target> --resume <run-id>
+    python3 loop.py <target> --resume <run-id> --max-iterations 20
 
 Per-iteration JSON: one line per completed iteration on stdout.
 Summary line: one JSON line on stdout after the last iteration (or refusal).
 
-Checkpoint/resume and stuck-loop detection land in 003-04..05.
-
-Reads/writes nothing to disk in 003-01..03. The `<target>/.servo/runs/<run-id>/`
-directory is reserved (per ADR-0004) and the run-id appears in the summary
-line, but the state file lands in slice 003-04.
+Stuck-loop detection + subagent dispatch land in 003-05.
 """
 
 import argparse
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -98,24 +101,114 @@ STATUS_PASS = "pass"
 STATUS_BELOW_THRESHOLD = "below_threshold"
 STATUS_ENV_ERROR = "env_error"
 
-# Terminal-reason taxonomy. Slices 003-04..05 will extend this set
-# (interrupted, state_schema_mismatch, claude_version_mismatch,
-# run_id_collision, oracle_plateau, verdict_schema_mismatch). Keep the
-# strings stable — they are part of the loop's structured-output contract.
+# Terminal-reason taxonomy. Slice 003-05 will extend with `oracle_plateau`
+# and `verdict_schema_mismatch`. Keep the strings stable — they are part of
+# the loop's structured-output contract.
 REASON_ORACLE_PASSED = "oracle_passed"
 REASON_MAX_ITERATIONS_REACHED = "max_iterations_reached"
 REASON_COST_CEILING_REACHED = "cost_ceiling_reached"
 REASON_CONTEXT_FULL = "context_full"
+REASON_INTERRUPTED = "interrupted"
 REASON_CLAUDE_INVOCATION_FAILED = "claude_invocation_failed"
 REASON_GATE_INVOCATION_FAILED = "gate_invocation_failed"
 REASON_TARGET_MISSING = "target_missing"
 REASON_TARGET_NOT_DIRECTORY = "target_not_directory"
 REASON_MANIFEST_MISSING = "manifest_missing"
 REASON_ORACLE_MISSING = "oracle_missing"
+REASON_STATE_MISSING = "state_missing"
+REASON_STATE_SCHEMA_MISMATCH = "state_schema_mismatch"
+REASON_CLAUDE_VERSION_MISMATCH = "claude_version_mismatch"
+REASON_RUN_ID_COLLISION = "run_id_collision"
+
+# Slice 003-04 state-file constants (per ADR-0004).
+STATE_SCHEMA_VERSION = 1
+STATE_FILE_NAME = "state.json"
+STATE_TMP_SUFFIX = ".tmp"  # written then os.replace'd for atomicity
+RUN_ID_MAX_ATTEMPTS = 3  # initial + 2 retries before refusing
+
+# Status for AC9's "signal arrived before scoring finished" case. Distinct
+# from STATUS_ENV_ERROR so a forensic reader can tell "loop was interrupted
+# mid-iteration" apart from "gate.py refused or oracle env-errored."
+STATUS_UNKNOWN_INTERRUPTED = "unknown_interrupted"
+
+# Per-invocation timeout for `claude --version` capture (AC2 schema field).
+# Short bound — the command should return in <1s on a healthy install.
+CLAUDE_VERSION_TIMEOUT_SECONDS = 10
+
+# Standard Unix convention for "process was interrupted by SIGINT" — AC9.
+EXIT_INTERRUPTED = 130
 
 # gate.py lives at a sibling skill path. Resolve once at import time so a
 # repeated `subprocess.run` cost stays trivial.
 GATE_PATH = Path(__file__).resolve().parent.parent / "quality-gate" / "gate.py"
+
+# Signal-handler state: incremented on each delivery of SIGINT/SIGTERM.
+# First delivery sets the flag and forwards the signal to the active
+# subprocess (so claude / gate.py exit promptly rather than running to
+# completion); the loop checks the flag at iteration boundaries and after
+# each subprocess returns. Second delivery bypasses cleanup
+# (`os._exit(130)`) — the escape hatch documented in AC9 for a hung trap.
+_interrupt_count = 0
+_interrupt_signo: Optional[int] = None
+_active_subprocess: Optional[subprocess.Popen] = None
+
+
+def _signal_handler(signum: int, frame) -> None:
+    """SIGINT/SIGTERM handler — sets a flag and forwards to active subprocess.
+
+    Single delivery: record the signal, forward it to any active subprocess
+    so the loop's `proc.communicate()` returns promptly, then let the next
+    iteration boundary do the cleanup (write state, emit summary, exit 130).
+    Forwarding mirrors real-terminal Ctrl-C behavior: in a foreground
+    process group, the shell sends SIGINT to every member of the group, so
+    the child claude would naturally die alongside the parent loop. In
+    tests (`proc.send_signal`), only the loop's PID gets the signal — the
+    forward is what makes the test scenario equivalent to the real one.
+
+    Double delivery (second Ctrl-C, or any second signal): bypass cleanup
+    via `os._exit(130)` so a hung trap handler can never wedge a
+    user-interrupt forever.
+
+    The handler itself is allocation-light — Python's documentation warns
+    that signal handlers should be small. State updates happen at the
+    iteration boundary, not here.
+    """
+    global _interrupt_count, _interrupt_signo
+    _interrupt_count += 1
+    _interrupt_signo = signum
+    if _active_subprocess is not None:
+        try:
+            _active_subprocess.send_signal(signum)
+        except (ProcessLookupError, OSError):
+            pass
+    if _interrupt_count >= 2:
+        os._exit(EXIT_INTERRUPTED)
+
+
+def _install_signal_handlers() -> None:
+    """Install SIGINT/SIGTERM handlers. Called from main(), not at import.
+
+    Installing at module import would clobber signal handlers in any
+    importer (the unit tests that import `_extract_context_fill_ratio`
+    directly, future callers that embed the module). Tests that exercise
+    signal handling spawn loop.py as a subprocess; the handlers install
+    inside that subprocess only.
+    """
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+
+def _was_interrupted() -> bool:
+    return _interrupt_count > 0
+
+
+# Test hook: when set, `_generate_run_id` returns comma-separated values
+# from this env var in order (one per call). After exhaustion, falls back
+# to normal generation. Lets `RunIdCollisionTests` deterministically seed
+# the next-generated ids so collision retry can be exercised without
+# racing the wall clock.
+_TEST_RUN_IDS_ENV = "SERVO_TEST_RUN_IDS"
+_test_run_id_idx = 0
 
 
 def _generate_run_id() -> str:
@@ -123,13 +216,187 @@ def _generate_run_id() -> str:
 
     Shape `YYYYMMDDTHHMMSS-XXXX` (15 + 1 + 4 = 20 chars). Human-readable,
     sortable across runs without parsing, collision-resistant under spec
-    005's parallel-variant scenario. Slice 003-04 lands the bounded-retry
-    collision policy on `mkdir(.../runs/<run-id>/, exist_ok=False)`; 003-01
-    doesn't create the directory yet, so collisions are not yet observable.
+    005's parallel-variant scenario. Slice 003-04 wires the bounded-retry
+    collision policy on `mkdir(.../runs/<run-id>/, exist_ok=False)` in
+    `_create_run_dir` below; this function is the per-attempt suffix
+    regenerator.
+
+    Test hook: `$SERVO_TEST_RUN_IDS` (comma-separated) overrides generation
+    for the first N calls in this process; afterwards, normal random
+    generation resumes. Used by `RunIdCollisionTests` to deterministically
+    drive the retry path.
     """
+    global _test_run_id_idx
+    test_ids_env = os.environ.get(_TEST_RUN_IDS_ENV)
+    if test_ids_env:
+        ids = [s for s in test_ids_env.split(",") if s]
+        if _test_run_id_idx < len(ids):
+            run_id = ids[_test_run_id_idx]
+            _test_run_id_idx += 1
+            return run_id
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     suffix = secrets.token_hex(2)  # 4 hex chars ≈ 16 bits ≈ 65k entropy
     return f"{ts}-{suffix}"
+
+
+def _generate_preflight_run_id() -> str:
+    """Run-id for preflight-refusal summaries (informational only).
+
+    Identical wire-shape to `_generate_run_id` but always uses the wall
+    clock + `secrets.token_hex`, bypassing the `SERVO_TEST_RUN_IDS` test
+    hook. This keeps `RunIdCollisionTests` honest: only ids consumed by
+    `_create_run_dir`'s allocation attempts count against the seeded
+    list. Without this split, the pre-allocation refusal slot would
+    silently eat one test id and make a triple-collision seed only force
+    two real collisions.
+    """
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    suffix = secrets.token_hex(2)
+    return f"{ts}-{suffix}"
+
+
+def _runs_dir(target: Path) -> Path:
+    return target / ".servo" / "runs"
+
+
+def _state_path_for(target: Path, run_id: str) -> Path:
+    return _runs_dir(target) / run_id / STATE_FILE_NAME
+
+
+def _create_run_dir(target: Path) -> tuple[Optional[Path], Optional[str], list[str]]:
+    """Create `<target>/.servo/runs/<run-id>/` with bounded collision retry.
+
+    Per ADR-0004 (and slice 003-04 AC10): on `FileExistsError`, regenerate
+    the random suffix (timestamp prefix preserved within a second) and
+    retry — up to `RUN_ID_MAX_ATTEMPTS` total. After exhaustion, return
+    `(None, None, attempted_run_ids)` so the caller can refuse with rc=2 /
+    `reason=run_id_collision` and a stderr breadcrumb naming the
+    colliding ids.
+
+    Returns `(run_dir, run_id, attempted)` on success. `attempted` is the
+    list of ids that failed before success (empty on first-try success).
+    """
+    runs_dir = _runs_dir(target)
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    attempted: list[str] = []
+    for _ in range(RUN_ID_MAX_ATTEMPTS):
+        run_id = _generate_run_id()
+        run_dir = runs_dir / run_id
+        try:
+            run_dir.mkdir(exist_ok=False)
+        except FileExistsError:
+            attempted.append(run_id)
+            continue
+        return run_dir, run_id, attempted
+    return None, None, attempted
+
+
+def _atomic_write_state(state: dict, state_path: Path) -> None:
+    """Write the full state payload atomically (ADR-0004's atomic-write contract).
+
+    Writes to `state.json.tmp`, then `os.replace`s onto `state.json`.
+    `os.replace` is atomic on POSIX and on NTFS, so a Ctrl-C / SIGTERM /
+    power loss mid-write can never leave a torn file. Stamps
+    `last_updated_at` at write time so each on-disk snapshot has a fresh
+    timestamp without callers having to remember.
+    """
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state["last_updated_at"] = datetime.now(timezone.utc).isoformat()
+    tmp = state_path.with_name(state_path.name + STATE_TMP_SUFFIX)
+    tmp.write_text(json.dumps(state, indent=2))
+    os.replace(tmp, state_path)
+
+
+def _load_state(state_path: Path) -> Optional[dict]:
+    """Read a state.json from disk. None on absent/unparseable/non-dict.
+
+    Caller distinguishes "file missing" from "file malformed" by checking
+    `state_path.exists()` first; this helper collapses the two into None
+    when called against a known-present path.
+    """
+    if not state_path.exists():
+        return None
+    try:
+        data = json.loads(state_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _get_claude_version() -> Optional[str]:
+    """Capture `claude --version` for forensic persistence (AC2).
+
+    Returns the stripped stdout on success, or None on any failure (binary
+    absent, non-zero exit, timeout, OSError, empty output). None at write
+    time means the field is null in the state file — distinguishable from a
+    missing key. AC5's `claude_version_mismatch` refusal compares None to
+    None as equal (same install state), so a fresh-run-without-claude /
+    resume-without-claude pair won't trip the version-mismatch refusal
+    spuriously.
+
+    Uses Popen + `_active_subprocess` registration so a SIGINT during the
+    version capture is forwarded to the child rather than waiting for the
+    10s timeout (consistent with the rest of the slice 003-04 subprocess
+    design).
+    """
+    global _active_subprocess
+    try:
+        proc = subprocess.Popen(
+            ["claude", "--version"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    _active_subprocess = proc
+    try:
+        try:
+            stdout, _stderr = proc.communicate(
+                timeout=CLAUDE_VERSION_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return None
+    finally:
+        _active_subprocess = None
+    if proc.returncode != 0:
+        return None
+    out = stdout.strip()
+    return out or None
+
+
+def _build_initial_state(
+    *, run_id: str, target: Path, prompt: str,
+    max_iterations: int, cost_ceiling: float,
+    context_fill_threshold: float, claude_version: Optional[str],
+) -> dict:
+    """Construct the canonical fresh-run state dict (ADR-0004 schema).
+
+    `prompt` is persisted alongside the ADR-0004-named fields as an additive
+    field so `--resume` can replay the original seed prompt without forcing
+    the user to remember it. Documented in the slice 003-04 deviation log.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
+        "run_id": run_id,
+        "started_at": now_iso,
+        "last_updated_at": now_iso,
+        "target_path": str(target),
+        "prompt": prompt,
+        "current_session_id": "",
+        "iteration_count": 0,
+        "max_iterations": max_iterations,
+        "cost_ceiling_usd": cost_ceiling,
+        "cumulative_cost_usd": 0.0,
+        "cumulative_input_tokens": 0,
+        "cumulative_output_tokens": 0,
+        "context_fill_threshold": context_fill_threshold,
+        "last_context_fill_ratio": None,
+        "oracle_score_history": [],
+        "last_terminal_reason": None,
+        "claude_version": claude_version,
+    }
 
 
 def _emit_json(payload: dict) -> None:
@@ -181,7 +448,11 @@ def _refuse_preflight(
     invoked the loop. `cost_ceiling_usd` and `context_fill_threshold` are
     included even on preflight so consumers see the configured bounds
     regardless of how the run ended. `context_fill_ratio` is null on
-    preflight (no iteration ran, so no usage observed).
+    preflight (no iteration ran, so no usage observed). Slice 003-04 reuses
+    this helper for `state_missing` / `state_schema_mismatch` /
+    `claude_version_mismatch` / `run_id_collision` resume refusals — the
+    summary shape is identical, only the `terminal_reason` and stderr
+    message differ.
     """
     sys.stderr.write(f"loop: {message}\n")
     _emit_json({
@@ -342,8 +613,15 @@ def _invoke_claude(
     prompt: str, target: Path, *,
     max_budget_usd: float,
     timeout_seconds: Optional[float] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
+
+    `session_id` (slice 003-04): when non-empty, the invocation includes
+    `--resume <session_id>` so the conversation continues across iterations
+    and across resumed `loop.py` runs. Fresh-run iter 1 passes `None` and
+    creates a new session; subsequent iterations and resumed-run iter N+1
+    carry the prior session forward.
 
     Returns `(parsed_json, None)` on success or `(None, breadcrumb)` on
     failure (AC9). Success includes the budget-exceeded path: when claude
@@ -361,25 +639,23 @@ def _invoke_claude(
     `timeout_seconds=None` means unbounded (used by tests that lower the
     bound to 1s via SERVO_CLAUDE_TIMEOUT to avoid 30-minute waits). On
     `subprocess.TimeoutExpired`, Python sends SIGKILL to claude.
+
+    Implementation note (slice 003-04): uses `subprocess.Popen` +
+    `communicate` instead of `subprocess.run` so the signal handler can
+    forward SIGINT/SIGTERM to the live subprocess via `_active_subprocess`.
+    Behavior is otherwise identical to `subprocess.run`.
     """
-    cmd = [
-        "claude", "-p", "--output-format", "json",
-        "--max-budget-usd", f"{max_budget_usd:.6f}",
-        prompt,
-    ]
+    global _active_subprocess
+    cmd: list[str] = ["claude", "-p", "--output-format", "json"]
+    cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    if session_id:
+        cmd.extend(["--resume", session_id])
+    cmd.append(prompt)
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(target),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
+        proc = subprocess.Popen(
+            cmd, cwd=str(target),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
-    except subprocess.TimeoutExpired:
-        # AC9-adjacent: timeout is a kind of OS-level failure. Reuse the
-        # uniform `claude_invocation_failed` terminal_reason (per AC9's
-        # uniformity rule) and surface the cause in the breadcrumb.
-        return None, f"claude -p timed out after {timeout_seconds}s (killed)"
     except FileNotFoundError:
         # Binary not on PATH — Python's execvp raises this before the child
         # process gets a chance to run.
@@ -387,9 +663,23 @@ def _invoke_claude(
     except OSError as exc:
         return None, f"OS error invoking claude: {exc}"
 
+    _active_subprocess = proc
+    try:
+        try:
+            stdout, _stderr = proc.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            # AC9-adjacent: timeout is a kind of OS-level failure. Kill the
+            # child and reap; reuse the uniform `claude_invocation_failed`
+            # terminal_reason per AC9's uniformity rule.
+            proc.kill()
+            proc.communicate()
+            return None, f"claude -p timed out after {timeout_seconds}s (killed)"
+    finally:
+        _active_subprocess = None
+
     parse_error: Optional[str] = None
     try:
-        data = json.loads(proc.stdout)
+        data = json.loads(stdout)
     except json.JSONDecodeError as exc:
         parse_error = f"claude JSON parse error: {exc.msg} (line {exc.lineno})"
         data = None
@@ -420,135 +710,398 @@ def _invoke_gate(target: Path) -> Optional[dict]:
     (per ADR-0002). We don't pass through gate's exit code as the loop's
     exit code — the loop's exit code is governed by the iteration outcome,
     not by gate's pass/fail/env-error signal on any single iteration.
+
+    Slice 003-04: registers the Popen as `_active_subprocess` so the signal
+    handler can forward SIGINT/SIGTERM to gate.py (so the loop's wait
+    returns promptly under interrupt).
     """
+    global _active_subprocess
     cmd = [sys.executable, str(GATE_PATH), str(target), "--json"]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    _active_subprocess = proc
     try:
-        return json.loads(proc.stdout)
+        stdout, stderr = proc.communicate()
+    finally:
+        _active_subprocess = None
+    try:
+        return json.loads(stdout)
     except json.JSONDecodeError:
         # Truncate the diagnostic dump — a misbehaving gate could otherwise
         # spam megabytes into our stderr. 500 chars each is enough to ID the
         # failure shape without flooding the log.
         sys.stderr.write(
             f"loop: gate.py emitted unparseable output (rc={proc.returncode}); "
-            f"stdout[:500]={proc.stdout[:500]!r} stderr[:500]={proc.stderr[:500]!r}\n"
+            f"stdout[:500]={stdout[:500]!r} stderr[:500]={stderr[:500]!r}\n"
         )
         return None
 
 
+def _summary_payload(state: dict, *, terminal_reason: str, final_oracle_status: str) -> dict:
+    """Build the standard summary JSON payload from the state dict.
+
+    Centralizes the shape so every halt path (normal, interrupted, refusal)
+    emits the same fields. `terminal_reason` and `final_oracle_status` are
+    callsite-specific; everything else is read from `state`.
+    """
+    return {
+        "terminal_reason": terminal_reason,
+        "iterations_completed": state["iteration_count"],
+        "cumulative_cost_usd": state["cumulative_cost_usd"],
+        "cost_ceiling_usd": state["cost_ceiling_usd"],
+        "context_fill_threshold": state["context_fill_threshold"],
+        "context_fill_ratio": state.get("last_context_fill_ratio"),
+        "final_oracle_status": final_oracle_status,
+        "run_id": state["run_id"],
+    }
+
+
+def _finalize_state_and_summary(
+    state: dict, state_path: Path, *,
+    terminal_reason: str, final_oracle_status: str,
+) -> None:
+    """Stamp the state's last_terminal_reason, write atomically, emit summary.
+
+    Used at every loop terminus (normal halt, interrupted, claude/gate
+    invocation failure within an iteration). The atomic write is the
+    foundation of AC9's signal-safety guarantee — even if SIGINT arrives
+    mid-write, `os.replace` is atomic on POSIX/NTFS, so the on-disk file
+    is either the prior content or the new content, never torn.
+    """
+    state["last_terminal_reason"] = terminal_reason
+    _atomic_write_state(state, state_path)
+    _emit_json(_summary_payload(
+        state,
+        terminal_reason=terminal_reason,
+        final_oracle_status=final_oracle_status,
+    ))
+
+
 def run_loop(
     target: Path, *,
-    prompt: str, max_iterations: int, cost_ceiling: float,
-    context_fill_threshold: float,
+    prompt: Optional[str],
+    max_iterations: Optional[int],
+    cost_ceiling: Optional[float],
+    context_fill_threshold: Optional[float],
+    resume_run_id: Optional[str] = None,
+    resume_anyway: bool = False,
 ) -> int:
-    run_id = _generate_run_id()
+    """Drive the iteration loop with state persistence + resume + signal handling.
 
-    rc = _preflight(
-        target, run_id,
-        cost_ceiling=cost_ceiling,
-        context_fill_threshold=context_fill_threshold,
-    )
-    if rc is not None:
-        return rc
+    Two entry modes:
+      - **Fresh run** (`resume_run_id is None`): preflight target/manifest/
+        oracle; create `<target>/.servo/runs/<run-id>/` (with collision
+        retry per AC10); build initial state with CLI flags applied over
+        defaults; persist; iterate.
+      - **Resume** (`resume_run_id` given): load state from
+        `<target>/.servo/runs/<run-id>/state.json`; refuse on missing /
+        schema-mismatch / claude-version-mismatch (escapable via
+        `resume_anyway`); apply CLI overrides over persisted values;
+        iterate from `iteration_count + 1`.
+
+    State is atomically rewritten after every iteration (success or
+    failure to score), so an interruption loses at most the in-flight
+    iteration's work. Signal handlers (SIGINT/SIGTERM) forward to the
+    active subprocess and set a flag the loop polls at iteration
+    boundaries.
+    """
+    _install_signal_handlers()
 
     claude_timeout_seconds = _resolve_claude_timeout()
 
-    cumulative_cost_usd = 0.0
-    iterations_completed = 0
-    final_oracle_status = STATUS_ENV_ERROR
-    terminal_reason = REASON_MAX_ITERATIONS_REACHED
-    # Slice 003-03: track the most recent iteration's context-fill ratio so
-    # the pre-iteration gate can refuse iter N+1 when the prior iteration's
-    # context window was already at-or-above the threshold. None on iter 1
-    # (AC5: iter 1 is always unconditional) and on any iteration whose
-    # claude JSON couldn't be parsed for the ratio (AC8 fail-open).
-    last_context_fill_ratio: Optional[float] = None
+    # ---- Phase 1: resolve state (fresh init or resume load) -----------------
+    if resume_run_id is not None:
+        # Resume path. Validate the state file BEFORE any preflight against
+        # the target — the user gave us a run-id, so the right failure mode
+        # is `state_missing` not `manifest_missing`.
+        state_path = _state_path_for(target, resume_run_id)
+        # Use a synthesised refusal run_id (the same one the user passed)
+        # so the summary's `run_id` matches what they invoked with.
+        # For refusal summaries, cost_ceiling/threshold come from the CLI
+        # overrides (or defaults) since we don't know the persisted values
+        # yet.
+        refusal_ceiling = (
+            cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
+        )
+        refusal_threshold = (
+            context_fill_threshold if context_fill_threshold is not None
+            else DEFAULT_CONTEXT_FILL_THRESHOLD
+        )
+        if not state_path.exists():
+            return _refuse_preflight(
+                run_id=resume_run_id,
+                reason=REASON_STATE_MISSING,
+                message=(
+                    f"state file not found at {state_path}; "
+                    f"verify <run-id> against `<target>/.servo/runs/`"
+                ),
+                cost_ceiling=refusal_ceiling,
+                context_fill_threshold=refusal_threshold,
+            )
+        state = _load_state(state_path)
+        if state is None:
+            return _refuse_preflight(
+                run_id=resume_run_id,
+                reason=REASON_STATE_MISSING,
+                message=(
+                    f"state file at {state_path} is missing or malformed; "
+                    f"--resume-anyway does not bypass parse errors"
+                ),
+                cost_ceiling=refusal_ceiling,
+                context_fill_threshold=refusal_threshold,
+            )
 
+        persisted_schema = state.get("state_schema_version")
+        if persisted_schema != STATE_SCHEMA_VERSION and not resume_anyway:
+            return _refuse_preflight(
+                run_id=resume_run_id,
+                reason=REASON_STATE_SCHEMA_MISMATCH,
+                message=(
+                    f"state_schema_version mismatch: file has "
+                    f"{persisted_schema!r}, this loop.py expects "
+                    f"{STATE_SCHEMA_VERSION}. Use --resume-anyway to bypass "
+                    f"(risky: silent mis-decoding may corrupt the run)"
+                ),
+                cost_ceiling=refusal_ceiling,
+                context_fill_threshold=refusal_threshold,
+            )
+
+        current_claude_version = _get_claude_version()
+        persisted_version = state.get("claude_version")
+        if persisted_version != current_claude_version and not resume_anyway:
+            return _refuse_preflight(
+                run_id=resume_run_id,
+                reason=REASON_CLAUDE_VERSION_MISMATCH,
+                message=(
+                    f"claude_version mismatch: state file has "
+                    f"{persisted_version!r}, current `claude --version` is "
+                    f"{current_claude_version!r}. Use --resume-anyway to "
+                    f"bypass (risky: session_id semantics or JSON shape "
+                    f"may have changed between versions)"
+                ),
+                cost_ceiling=refusal_ceiling,
+                context_fill_threshold=refusal_threshold,
+            )
+
+        # Apply CLI overrides on top of persisted values (AC4). `None` means
+        # "user didn't pass the flag; keep persisted value." A CLI-supplied
+        # value wins over persistence.
+        if prompt is not None:
+            state["prompt"] = prompt
+        if max_iterations is not None:
+            state["max_iterations"] = max_iterations
+        if cost_ceiling is not None:
+            state["cost_ceiling_usd"] = cost_ceiling
+        if context_fill_threshold is not None:
+            state["context_fill_threshold"] = context_fill_threshold
+
+        run_id = state["run_id"]
+        # Synchronise last_context_fill_ratio across the read so the
+        # pre-iter gate sees the prior iteration's ratio without an extra
+        # state read inside the loop.
+        last_context_fill_ratio = state.get("last_context_fill_ratio")
+    else:
+        # Fresh run. Standard preflight + run-id dir creation + state init.
+        # `_generate_preflight_run_id()` is used for any preflight-refusal
+        # summary line; it deliberately bypasses the test hook so that
+        # `RunIdCollisionTests` can count `_create_run_dir`'s attempts
+        # without one being consumed pre-allocation.
+        # Apply defaults for None values.
+        if max_iterations is None:
+            max_iterations = DEFAULT_MAX_ITERATIONS
+        if cost_ceiling is None:
+            cost_ceiling = DEFAULT_COST_CEILING_USD
+        if context_fill_threshold is None:
+            context_fill_threshold = DEFAULT_CONTEXT_FILL_THRESHOLD
+        rc = _preflight(
+            target, _generate_preflight_run_id(),
+            cost_ceiling=cost_ceiling,
+            context_fill_threshold=context_fill_threshold,
+        )
+        if rc is not None:
+            return rc
+
+        run_dir, run_id, attempted = _create_run_dir(target)
+        if run_dir is None or run_id is None:
+            attempt_list = ", ".join(attempted) if attempted else "(none)"
+            # The first attempted id is the natural forensic stamp — it's
+            # the run-id the user "would have gotten" if not for the
+            # collision. Falls back to a synthesized id when `attempted` is
+            # empty (shouldn't happen at RUN_ID_MAX_ATTEMPTS >= 1).
+            refusal_run_id = (
+                attempted[0] if attempted else _generate_preflight_run_id()
+            )
+            return _refuse_preflight(
+                run_id=refusal_run_id,
+                reason=REASON_RUN_ID_COLLISION,
+                message=(
+                    f"could not allocate a fresh run-id after "
+                    f"{RUN_ID_MAX_ATTEMPTS} attempts; colliding ids: "
+                    f"{attempt_list}"
+                ),
+                cost_ceiling=cost_ceiling,
+                context_fill_threshold=context_fill_threshold,
+            )
+
+        # prompt is required for fresh runs (argparse enforced); narrow type.
+        assert prompt is not None
+        # Capture `claude --version` for forensics (AC2). Done here, not
+        # before preflight, so refused-target invocations don't subprocess
+        # out to claude unnecessarily.
+        current_claude_version = _get_claude_version()
+        state = _build_initial_state(
+            run_id=run_id, target=target, prompt=prompt,
+            max_iterations=max_iterations, cost_ceiling=cost_ceiling,
+            context_fill_threshold=context_fill_threshold,
+            claude_version=current_claude_version,
+        )
+        state_path = _state_path_for(target, run_id)
+        _atomic_write_state(state, state_path)
+        last_context_fill_ratio = None
+
+    # ---- Phase 2: iteration loop --------------------------------------------
+    final_oracle_status = STATUS_ENV_ERROR
+    # Populate final_oracle_status from prior history (resume case): the
+    # most recent oracle score's status is the "last known" status; an
+    # empty history (fresh run) keeps the env_error default.
+    history = state.get("oracle_score_history") or []
+    if history:
+        final_oracle_status = history[-1].get("status", STATUS_ENV_ERROR)
+    starting_iteration = state["iteration_count"] + 1
+    terminal_reason = REASON_MAX_ITERATIONS_REACHED
     halted_on_pass = False
     halted_on_cost = False
     halted_on_context = False
-    for iteration in range(1, max_iterations + 1):
-        # Pre-iteration context-fill gate (AC1/AC2/AC4/AC6). Refuses to invoke
-        # claude for iter N+1 when the prior iteration's context-fill ratio
-        # was at-or-above the threshold (≥, not strict >, per AC4). Skipped
-        # for iter 1 (last_context_fill_ratio starts as None — AC5), when the
-        # threshold is 0 (AC7 disable), and when the prior iteration couldn't
-        # produce a ratio (AC8 fail-open).
+    for iteration in range(starting_iteration, state["max_iterations"] + 1):
+        # Pre-iteration interrupt check (AC9). If the signal arrived between
+        # iterations (or before iter 1), we never invoke claude / gate.
+        # `final_oracle_status` is `unknown_interrupted` when no iteration
+        # has yet been gate-scored (history empty / first iter); otherwise
+        # it carries the last successfully-scored iteration's status, since
+        # that scoring did complete before the interrupt arrived. The
+        # spec's literal AC9 wording only pins the during-claude and
+        # during-gate cases as `unknown_interrupted`; choosing
+        # `unknown_interrupted` for pre-iter-1 too (rather than the
+        # `env_error` default) is more accurate — the loop was interrupted,
+        # not env-errored.
+        if _was_interrupted():
+            interrupted_status = (
+                final_oracle_status if history else STATUS_UNKNOWN_INTERRUPTED
+            )
+            _finalize_state_and_summary(
+                state, state_path,
+                terminal_reason=REASON_INTERRUPTED,
+                final_oracle_status=interrupted_status,
+            )
+            return EXIT_INTERRUPTED
+
+        # Pre-iteration context-fill gate (slice 003-03 AC1/AC2/AC4/AC6).
         if (
-            context_fill_threshold > 0
+            state["context_fill_threshold"] > 0
             and last_context_fill_ratio is not None
-            and last_context_fill_ratio >= context_fill_threshold
+            and last_context_fill_ratio >= state["context_fill_threshold"]
         ):
             terminal_reason = REASON_CONTEXT_FULL
             halted_on_context = True
             break
 
-        # Pre-iteration cost-ceiling floor check. If the remaining budget
-        # under the cumulative ceiling would put us below MIN_BUDGET_FLOOR_USD,
-        # halt without invoking claude (no point spending an iteration on a
-        # near-zero budget). Skipped when --cost-ceiling 0 disables tracking.
-        if _budget_floor_hit(cost_ceiling, cumulative_cost_usd):
+        # Pre-iteration cost-ceiling floor check (slice 003-02 AC4).
+        if _budget_floor_hit(state["cost_ceiling_usd"], state["cumulative_cost_usd"]):
             terminal_reason = REASON_COST_CEILING_REACHED
             halted_on_cost = True
             break
 
         per_iter_budget = _compute_per_iter_budget(
-            cost_ceiling, cumulative_cost_usd,
+            state["cost_ceiling_usd"], state["cumulative_cost_usd"],
         )
+        # Pass --resume <session_id> when we have one (slice 003-04). For
+        # fresh-run iter 1 the session id is empty → no --resume.
+        session_id_arg = state.get("current_session_id") or None
         claude_data, error = _invoke_claude(
-            prompt, target,
+            state["prompt"], target,
             max_budget_usd=per_iter_budget,
             timeout_seconds=claude_timeout_seconds,
+            session_id=session_id_arg,
         )
+
+        # Interrupt-during-claude (AC9): the iteration is treated as
+        # "completed for state-file purposes" with `unknown_interrupted`
+        # final oracle status. Bump iteration_count, persist, emit summary.
+        if _was_interrupted():
+            state["iteration_count"] = iteration
+            _finalize_state_and_summary(
+                state, state_path,
+                terminal_reason=REASON_INTERRUPTED,
+                final_oracle_status=STATUS_UNKNOWN_INTERRUPTED,
+            )
+            return EXIT_INTERRUPTED
+
         if claude_data is None:
             sys.stderr.write(f"loop: {error}\n")
-            _emit_json({
-                "terminal_reason": REASON_CLAUDE_INVOCATION_FAILED,
-                "iterations_completed": iterations_completed,
-                "cumulative_cost_usd": cumulative_cost_usd,
-                "cost_ceiling_usd": cost_ceiling,
-                "context_fill_threshold": context_fill_threshold,
-                "context_fill_ratio": last_context_fill_ratio,
-                "final_oracle_status": final_oracle_status,
-                "run_id": run_id,
-            })
+            _finalize_state_and_summary(
+                state, state_path,
+                terminal_reason=REASON_CLAUDE_INVOCATION_FAILED,
+                final_oracle_status=final_oracle_status,
+            )
             return EXIT_ENV_ERROR
 
+        # Extract iteration data.
         session_id = str(claude_data.get("session_id", ""))
         try:
             cost_usd = float(claude_data.get("total_cost_usd", 0.0) or 0.0)
         except (TypeError, ValueError):
             cost_usd = 0.0
         claude_terminal_reason = str(claude_data.get("terminal_reason", ""))
-        cumulative_cost_usd += cost_usd
 
-        # Compute this iteration's context-fill ratio. Failure to compute is
-        # AC8 fail-open: log a one-line stderr breadcrumb, set the ratio to
-        # None, continue the loop. The pre-iter gate above won't fire on
-        # None either, so a missing-contextWindow stream-of-iterations still
-        # halts on iteration-cap / cost-ceiling / oracle-pass.
+        # Token tallies for AC2's cumulative_input_tokens / cumulative_output_tokens.
+        usage = claude_data.get("usage") or {}
+        if not isinstance(usage, dict):
+            usage = {}
+        try:
+            iter_input_tokens = (
+                int(usage.get("input_tokens", 0) or 0)
+                + int(usage.get("cache_read_input_tokens", 0) or 0)
+                + int(usage.get("cache_creation_input_tokens", 0) or 0)
+            )
+            iter_output_tokens = int(usage.get("output_tokens", 0) or 0)
+        except (TypeError, ValueError):
+            iter_input_tokens = 0
+            iter_output_tokens = 0
+
+        state["cumulative_cost_usd"] += cost_usd
+        state["cumulative_input_tokens"] += iter_input_tokens
+        state["cumulative_output_tokens"] += iter_output_tokens
+        if session_id:
+            state["current_session_id"] = session_id
+
+        # Context-fill ratio (slice 003-03).
         context_fill_ratio, ratio_error = _extract_context_fill_ratio(claude_data)
         if context_fill_ratio is None and ratio_error is not None:
             sys.stderr.write(f"loop: {ratio_error}\n")
+        state["last_context_fill_ratio"] = context_fill_ratio
 
         gate_data = _invoke_gate(target)
+
+        # Interrupt-during-gate (AC9): same posture as interrupt-during-claude.
+        # The iteration counted (claude data was extracted into state), but
+        # no oracle status is recorded — `unknown_interrupted`.
+        if _was_interrupted():
+            state["iteration_count"] = iteration
+            _finalize_state_and_summary(
+                state, state_path,
+                terminal_reason=REASON_INTERRUPTED,
+                final_oracle_status=STATUS_UNKNOWN_INTERRUPTED,
+            )
+            return EXIT_INTERRUPTED
+
         if gate_data is None:
-            # gate.py is part of servo and shouldn't emit unparseable output
-            # in practice (ADR-0002 says it always emits JSON, even on the
-            # env-error path). This branch is defensive — if it fires, the
-            # underlying gate.py is broken; surface as env error with a
-            # distinct reason so a forensic reader can tell loop vs gate
-            # vs claude apart.
-            _emit_json({
-                "terminal_reason": REASON_GATE_INVOCATION_FAILED,
-                "iterations_completed": iterations_completed,
-                "cumulative_cost_usd": cumulative_cost_usd,
-                "cost_ceiling_usd": cost_ceiling,
-                "context_fill_threshold": context_fill_threshold,
-                "context_fill_ratio": context_fill_ratio,
-                "final_oracle_status": STATUS_ENV_ERROR,
-                "run_id": run_id,
-            })
+            # Defensive branch (ADR-0002 says gate.py always emits JSON).
+            _finalize_state_and_summary(
+                state, state_path,
+                terminal_reason=REASON_GATE_INVOCATION_FAILED,
+                final_oracle_status=STATUS_ENV_ERROR,
+            )
             return EXIT_ENV_ERROR
 
         oracle_exit_code = int(gate_data.get("exit_code", 2))
@@ -556,21 +1109,33 @@ def run_loop(
         oracle_composite = gate_data.get("composite")
         oracle_threshold = gate_data.get("threshold")
 
+        # Update state with the scored iteration BEFORE emitting per-iter JSON.
+        # If the user Ctrl-Cs between the gate call and the emit, the state
+        # file already reflects this iteration's outcome.
+        state["iteration_count"] = iteration
+        state["oracle_score_history"].append({
+            "iteration": iteration,
+            "composite": oracle_composite,
+            "threshold": oracle_threshold,
+            "status": oracle_status,
+        })
+        state["last_terminal_reason"] = claude_terminal_reason
+        _atomic_write_state(state, state_path)
+
         _emit_json({
             "iteration": iteration,
             "session_id": session_id,
             "cost_usd": cost_usd,
-            "cumulative_cost_usd": cumulative_cost_usd,
+            "cumulative_cost_usd": state["cumulative_cost_usd"],
             "context_fill_ratio": context_fill_ratio,
             "terminal_reason": claude_terminal_reason,
             "oracle_exit_code": oracle_exit_code,
             "oracle_status": oracle_status,
             "oracle_composite": oracle_composite,
             "oracle_threshold": oracle_threshold,
-            "run_id": run_id,
+            "run_id": state["run_id"],
         })
 
-        iterations_completed = iteration
         final_oracle_status = oracle_status
         last_context_fill_ratio = context_fill_ratio
 
@@ -579,12 +1144,11 @@ def run_loop(
             halted_on_pass = True
             break
 
-        # Post-iteration cost-ceiling check. The iteration completed and got
-        # scored — its cost is recorded in cumulative_cost_usd and the
-        # per-iter line. Now check whether we've crossed the ceiling. The
-        # iteration that *first* exceeds the ceiling is the last one to run;
-        # AC1 shows this with cost=$0.75/iter halting after iter-3 at $2.25.
-        if cost_ceiling > 0 and cumulative_cost_usd > cost_ceiling:
+        # Post-iteration cost-ceiling check.
+        if (
+            state["cost_ceiling_usd"] > 0
+            and state["cumulative_cost_usd"] > state["cost_ceiling_usd"]
+        ):
             terminal_reason = REASON_COST_CEILING_REACHED
             halted_on_cost = True
             break
@@ -592,16 +1156,11 @@ def run_loop(
     if not halted_on_pass and not halted_on_cost and not halted_on_context:
         terminal_reason = REASON_MAX_ITERATIONS_REACHED
 
-    _emit_json({
-        "terminal_reason": terminal_reason,
-        "iterations_completed": iterations_completed,
-        "cumulative_cost_usd": cumulative_cost_usd,
-        "cost_ceiling_usd": cost_ceiling,
-        "context_fill_threshold": context_fill_threshold,
-        "context_fill_ratio": last_context_fill_ratio,
-        "final_oracle_status": final_oracle_status,
-        "run_id": run_id,
-    })
+    _finalize_state_and_summary(
+        state, state_path,
+        terminal_reason=terminal_reason,
+        final_oracle_status=final_oracle_status,
+    )
     return EXIT_OK
 
 
@@ -614,9 +1173,11 @@ def main(argv: Optional[list[str]] = None) -> int:
             "Headless iteration driver. Subprocesses `claude -p "
             "--output-format json --max-budget-usd <remaining>` against a "
             "target, scores via `gate.py --json` after each iteration, "
-            "halts on oracle pass, iteration cap, or cumulative cost "
-            "ceiling. Per-invocation claude timeout defaults to "
-            f"{DEFAULT_CLAUDE_TIMEOUT_SECONDS}s; override via "
+            "halts on oracle pass, iteration cap, cost ceiling, or "
+            "context-fill threshold. State is checkpointed atomically to "
+            "`<target>/.servo/runs/<run-id>/state.json`; resume via "
+            "`--resume <run-id>`. Per-invocation claude timeout defaults "
+            f"to {DEFAULT_CLAUDE_TIMEOUT_SECONDS}s; override via "
             f"${_CLAUDE_TIMEOUT_ENV_VAR} env var (0 disables)."
         ),
     )
@@ -627,22 +1188,30 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument(
         "--prompt",
-        required=True,
-        help="Seed prompt passed to claude -p on each iteration.",
+        default=None,
+        help=(
+            "Seed prompt passed to claude -p on each iteration. Required "
+            "for fresh runs; optional with --resume (persisted prompt is "
+            "used when omitted)."
+        ),
     )
+    # Defaults are None at the argparse layer so run_loop can distinguish
+    # "user passed the flag" from "user accepted the default" — needed for
+    # resume-time flag overrides (slice 003-04 AC4).
     parser.add_argument(
         "--max-iterations",
         type=int,
-        default=DEFAULT_MAX_ITERATIONS,
+        default=None,
         help=(
             f"Iteration cap; loop halts when reached. "
-            f"Default {DEFAULT_MAX_ITERATIONS}."
+            f"Default {DEFAULT_MAX_ITERATIONS} (fresh runs) or the "
+            f"persisted value (resumed runs; override re-applies on resume)."
         ),
     )
     parser.add_argument(
         "--cost-ceiling",
         type=float,
-        default=DEFAULT_COST_CEILING_USD,
+        default=None,
         help=(
             f"Cumulative cost ceiling in USD; loop halts when "
             f"`sum(total_cost_usd)` exceeds this value. Default "
@@ -654,7 +1223,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--context-fill-threshold",
         type=float,
-        default=DEFAULT_CONTEXT_FILL_THRESHOLD,
+        default=None,
         help=(
             f"Context-fill refusal threshold in [0.0, 1.0]; loop refuses "
             f"iter N+1 when the prior iteration's "
@@ -664,12 +1233,43 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"to disable; the iteration cap and cost ceiling still apply."
         ),
     )
+    parser.add_argument(
+        "--resume",
+        dest="resume",
+        default=None,
+        help=(
+            "Resume a prior run by its run-id (the directory name under "
+            "`<target>/.servo/runs/`). The state file is loaded; the loop "
+            "continues from `iteration_count + 1` with cumulative counters "
+            "preserved. Refuses with rc=2 on state_missing / "
+            "state_schema_mismatch / claude_version_mismatch (escape via "
+            "--resume-anyway)."
+        ),
+    )
+    parser.add_argument(
+        "--resume-anyway",
+        dest="resume_anyway",
+        action="store_true",
+        help=(
+            "When used with --resume: bypass the state-schema and "
+            "claude-version mismatch refusals. Risky — silent mis-decoding "
+            "may corrupt the run, or claude's session/JSON semantics may "
+            "have changed between the recorded version and the current one."
+        ),
+    )
     args = parser.parse_args(argv)
-    if args.max_iterations < 1:
+    # ---- Flag-shape validation ---------------------------------------------
+    if args.resume_anyway and args.resume is None:
+        parser.error("--resume-anyway requires --resume <run-id>")
+    if args.resume is None and args.prompt is None:
+        parser.error("--prompt is required unless --resume <run-id> is given")
+    if args.max_iterations is not None and args.max_iterations < 1:
         parser.error("--max-iterations must be >= 1")
-    if args.cost_ceiling < 0:
+    if args.cost_ceiling is not None and args.cost_ceiling < 0:
         parser.error("--cost-ceiling must be >= 0")
-    if args.context_fill_threshold < 0 or args.context_fill_threshold > 1:
+    if args.context_fill_threshold is not None and (
+        args.context_fill_threshold < 0 or args.context_fill_threshold > 1
+    ):
         parser.error("--context-fill-threshold must be in [0.0, 1.0]")
     return run_loop(
         args.target.resolve(),
@@ -677,6 +1277,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         max_iterations=args.max_iterations,
         cost_ceiling=args.cost_ceiling,
         context_fill_threshold=args.context_fill_threshold,
+        resume_run_id=args.resume,
+        resume_anyway=args.resume_anyway,
     )
 
 

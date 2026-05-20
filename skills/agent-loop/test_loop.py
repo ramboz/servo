@@ -152,11 +152,35 @@ def _claude_json_payload(
     return json.dumps(payload)
 
 
-def _make_mock_claude(bindir: Path, body: str) -> Path:
-    """Write an executable `claude` script into `bindir`. PATH-injected by tests."""
+MOCK_CLAUDE_VERSION = "1.0.0-mock"
+
+
+def _make_mock_claude(bindir: Path, body: str, *, version: str = MOCK_CLAUDE_VERSION) -> Path:
+    """Write an executable `claude` script into `bindir`. PATH-injected by tests.
+
+    Wraps `body` with a `--version` short-circuit so slice 003-04's
+    `_get_claude_version()` capture (which runs once per fresh-run /
+    resume) does not interfere with the body's iteration counter or args
+    log. Body's shebang is preserved; the --version branch is inserted
+    immediately after it.
+    """
+    lines = body.split("\n", 1)
+    if len(lines) == 2 and lines[0].startswith("#!"):
+        shebang, rest = lines
+    else:
+        shebang = "#!/usr/bin/env bash"
+        rest = body
+    wrapped = (
+        f"{shebang}\n"
+        f'if [ "$1" = "--version" ]; then\n'
+        f'    echo "{version}"\n'
+        f'    exit 0\n'
+        f"fi\n"
+        f"{rest}"
+    )
     bindir.mkdir(parents=True, exist_ok=True)
     claude = bindir / "claude"
-    claude.write_text(body)
+    claude.write_text(wrapped)
     _make_executable(claude)
     return claude
 
@@ -2407,6 +2431,1053 @@ class ContextFillValidationTests(unittest.TestCase):
         self.assertIn(
             "--context-fill-threshold must be in [0.0, 1.0]", result.stderr,
         )
+        self.assertFalse(self.counter.exists())
+
+
+# ============================================================================
+# Slice 003-04 — checkpoint-resume: shared fixture helpers
+# ============================================================================
+
+
+def _state_path(target: Path, run_id: str) -> Path:
+    return target / ".servo" / "runs" / run_id / "state.json"
+
+
+def _read_state(target: Path, run_id: str) -> dict:
+    return json.loads(_state_path(target, run_id).read_text())
+
+
+def _find_only_run_id(target: Path) -> str:
+    """Return the single run-id under `<target>/.servo/runs/`. Asserts exactly one exists."""
+    runs_dir = target / ".servo" / "runs"
+    children = [p for p in runs_dir.iterdir() if p.is_dir()]
+    if len(children) != 1:
+        raise AssertionError(
+            f"expected exactly one run-id under {runs_dir}, found {len(children)}: "
+            f"{[c.name for c in children]}"
+        )
+    return children[0].name
+
+
+def _mock_claude_session_per_iter(
+    bindir: Path, counter_file: Path, *,
+    cost: float = 0.05,
+    input_tokens: int = 100,
+    cache_read_tokens: int = 0,
+    cache_create_tokens: int = 0,
+    output_tokens: int = 10,
+    context_window: int = 200000,
+) -> Path:
+    """Mock that emits a fresh `session_id` per invocation.
+
+    Shape: `mock-session-1`, `mock-session-2`, etc. Lets state-file tests
+    verify that `current_session_id` updates as iterations progress.
+    """
+    body = (
+        f"#!/usr/bin/env bash\n"
+        f"counter_file='{counter_file}'\n"
+        f'if [ -f "$counter_file" ]; then\n'
+        f'    n=$(cat "$counter_file")\n'
+        f"else\n"
+        f"    n=0\n"
+        f"fi\n"
+        f"n=$((n + 1))\n"
+        f'echo "$n" > "$counter_file"\n'
+        f"cat <<JSON_EOF\n"
+        f'{{"type":"result","subtype":"success","is_error":false,'
+        f'"session_id":"mock-session-$n","total_cost_usd":{cost},'
+        f'"terminal_reason":"completed","stop_reason":"end_turn",'
+        f'"num_turns":1,"result":"ok",'
+        f'"usage":{{"input_tokens":{input_tokens},'
+        f'"cache_read_input_tokens":{cache_read_tokens},'
+        f'"cache_creation_input_tokens":{cache_create_tokens},'
+        f'"output_tokens":{output_tokens}}},'
+        f'"modelUsage":{{"claude-sonnet-4-6":{{"inputTokens":{input_tokens},'
+        f'"outputTokens":{output_tokens},"contextWindow":{context_window}}}}}}}\n'
+        f"JSON_EOF\n"
+    )
+    return _make_mock_claude(bindir, body)
+
+
+def _slow_oracle(sleep_seconds: float = 3.0) -> str:
+    """Oracle that traps SIGINT/SIGTERM and sleeps before emitting a score.
+
+    Used by `SignalHandlingTests.test_sigint_during_gate_*` to let a SIGINT
+    arrive AFTER claude has returned (mock claude is fast) but DURING
+    gate.py's invocation of oracle.sh. Trap mirrors a real oracle that
+    cleans up under signal.
+    """
+    return textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        trap 'exit 130' INT TERM
+        sleep {sleep_seconds} &
+        wait $!
+        echo 'oracle: composite=0.2000 threshold=0.5'
+        exit 1
+    """)
+
+
+def _mock_claude_sleep_then_emit(
+    bindir: Path, counter_file: Path, *,
+    sleep_seconds: float = 3.0,
+    cost: float = 0.05,
+) -> Path:
+    """Mock that sleeps before emitting JSON; traps SIGINT/SIGTERM to exit cleanly.
+
+    Used by signal-handling tests (AC9). The trap mirrors how a real
+    `claude -p` would behave under SIGINT in a foreground process group —
+    the parent loop forwards the signal to this mock, the trap fires,
+    the mock exits with 130, and the loop's `proc.communicate()` returns.
+
+    On normal completion (no signal), the mock emits the standard JSON
+    payload after sleeping.
+    """
+    body = (
+        f"#!/usr/bin/env bash\n"
+        f"trap 'exit 130' INT TERM\n"
+        f"counter_file='{counter_file}'\n"
+        f'if [ -f "$counter_file" ]; then\n'
+        f'    n=$(cat "$counter_file")\n'
+        f"else\n"
+        f"    n=0\n"
+        f"fi\n"
+        f"n=$((n + 1))\n"
+        f'echo "$n" > "$counter_file"\n'
+        f"sleep {sleep_seconds} &\n"
+        f"wait $!\n"
+        f"cat <<JSON_EOF\n"
+        f'{{"type":"result","subtype":"success","is_error":false,'
+        f'"session_id":"mock-session-$n","total_cost_usd":{cost},'
+        f'"terminal_reason":"completed","stop_reason":"end_turn",'
+        f'"num_turns":1,"result":"ok",'
+        f'"usage":{{"input_tokens":100,"cache_read_input_tokens":0,'
+        f'"cache_creation_input_tokens":0,"output_tokens":10}},'
+        f'"modelUsage":{{"claude-sonnet-4-6":{{"inputTokens":100,'
+        f'"outputTokens":10,"contextWindow":200000}}}}}}\n'
+        f"JSON_EOF\n"
+    )
+    return _make_mock_claude(bindir, body)
+
+
+# ============================================================================
+# Slice 003-04 — AC #1: State file written each iteration
+# ============================================================================
+
+
+class StateFilePersistenceTests(unittest.TestCase):
+    """AC #1 — `<target>/.servo/runs/<run-id>/state.json` is updated each iter.
+
+    After a 3-iteration normal run, the state file exists, is parseable
+    JSON, and reflects all iterations' progress: iteration_count=3,
+    cumulative_cost_usd accumulated, current_session_id is the iter-3
+    session, oracle_score_history has three entries.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac1-state-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_state_file_exists_after_run(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        self.assertTrue(_state_path(self.target, run_id).exists())
+
+    def test_state_iteration_count_matches_iterations(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["iteration_count"], 3)
+
+    def test_state_current_session_id_is_last_iter(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["current_session_id"], "mock-session-3")
+
+    def test_state_cumulative_cost_accumulates(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cumulative_cost_usd"], 0.15, places=6)
+
+    def test_state_oracle_score_history_one_entry_per_iter(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(len(state["oracle_score_history"]), 3)
+        # Each entry has the canonical shape.
+        for i, entry in enumerate(state["oracle_score_history"], start=1):
+            self.assertEqual(entry["iteration"], i)
+            self.assertIn("composite", entry)
+            self.assertIn("threshold", entry)
+            self.assertEqual(entry["status"], "below_threshold")
+
+    def test_state_last_terminal_reason_set(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        # After max_iterations halt, last_terminal_reason carries the halt
+        # cause (not the per-iter claude reason).
+        self.assertEqual(state["last_terminal_reason"], "max_iterations_reached")
+
+
+# ============================================================================
+# Slice 003-04 — AC #2: State schema fields (ADR-0004)
+# ============================================================================
+
+
+class StateFileSchemaTests(unittest.TestCase):
+    """AC #2 — state file carries every canonical ADR-0004 field with the right type."""
+
+    REQUIRED_FIELDS = {
+        "state_schema_version": int,
+        "run_id": str,
+        "started_at": str,
+        "last_updated_at": str,
+        "target_path": str,
+        "current_session_id": str,
+        "iteration_count": int,
+        "max_iterations": int,
+        "cost_ceiling_usd": float,
+        "cumulative_cost_usd": float,
+        "cumulative_input_tokens": int,
+        "cumulative_output_tokens": int,
+        "context_fill_threshold": float,
+        # last_context_fill_ratio is float-or-None (depends on JSON shape).
+        "oracle_score_history": list,
+        # last_terminal_reason is str-or-None (None on initial write, str after).
+        # claude_version is str-or-None.
+    }
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac2-state-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _run_and_read(self) -> dict:
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        return _read_state(self.target, run_id)
+
+    def test_all_required_fields_present(self):
+        state = self._run_and_read()
+        for field, expected_type in self.REQUIRED_FIELDS.items():
+            self.assertIn(field, state, f"missing field: {field}")
+            self.assertIsInstance(
+                state[field], expected_type,
+                f"field {field} is {type(state[field]).__name__}, "
+                f"expected {expected_type.__name__}",
+            )
+
+    def test_state_schema_version_is_one(self):
+        state = self._run_and_read()
+        self.assertEqual(state["state_schema_version"], 1)
+
+    def test_iso8601_timestamps(self):
+        state = self._run_and_read()
+        # Strict ISO8601 parse — fromisoformat handles the canonical shape.
+        from datetime import datetime as dt
+        dt.fromisoformat(state["started_at"])
+        dt.fromisoformat(state["last_updated_at"])
+
+    def test_target_path_is_absolute(self):
+        state = self._run_and_read()
+        self.assertTrue(Path(state["target_path"]).is_absolute())
+
+    def test_last_context_fill_ratio_field_present_nullable(self):
+        state = self._run_and_read()
+        self.assertIn("last_context_fill_ratio", state)
+        val = state["last_context_fill_ratio"]
+        self.assertTrue(val is None or isinstance(val, (int, float)))
+
+    def test_claude_version_field_present_nullable(self):
+        state = self._run_and_read()
+        self.assertIn("claude_version", state)
+        val = state["claude_version"]
+        self.assertTrue(val is None or isinstance(val, str))
+
+    def test_last_terminal_reason_field_present(self):
+        state = self._run_and_read()
+        self.assertIn("last_terminal_reason", state)
+        # After a max_iterations halt, the field is set.
+        self.assertEqual(state["last_terminal_reason"], "max_iterations_reached")
+
+
+# ============================================================================
+# Slice 003-04 — AC #3: Resume reads state, continues from iter N+1
+# ============================================================================
+
+
+class ResumeFlowTests(unittest.TestCase):
+    """AC #3 — `--resume <run-id>` picks up from iteration_count + 1."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac3-resume-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_resume_continues_from_next_iteration(self):
+        # Initial run: 2 iterations.
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        self.assertEqual(int(self.counter.read_text().strip()), 2)
+        # Resume with cap 4: should run iter 3 + iter 4.
+        result = _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "4",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # Total claude invocations: 2 (initial) + 2 (resume) = 4.
+        self.assertEqual(int(self.counter.read_text().strip()), 4)
+        # Per-iter lines on the RESUME invocation: iter 3 + iter 4 only.
+        per_iter = [
+            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+        ]
+        self.assertEqual([l["iteration"] for l in per_iter], [3, 4])
+
+    def test_resume_carries_cumulative_cost(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "4",
+            mock_bindir=self.bindir,
+        )
+        state = _read_state(self.target, run_id)
+        # 4 iters × $0.05 = $0.20
+        self.assertAlmostEqual(state["cumulative_cost_usd"], 0.20, places=6)
+        self.assertEqual(state["iteration_count"], 4)
+
+    def test_resume_carries_oracle_score_history(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "4",
+            mock_bindir=self.bindir,
+        )
+        state = _read_state(self.target, run_id)
+        self.assertEqual(len(state["oracle_score_history"]), 4)
+        self.assertEqual(
+            [e["iteration"] for e in state["oracle_score_history"]],
+            [1, 2, 3, 4],
+        )
+
+    def test_resume_omits_prompt_uses_persisted(self):
+        # Initial run with a specific prompt.
+        _run_loop(
+            self.target, "--prompt", "original-seed",
+            "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        state_before = _read_state(self.target, run_id)
+        self.assertEqual(state_before["prompt"], "original-seed")
+        # Resume without --prompt: persisted prompt should still apply.
+        result = _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        state_after = _read_state(self.target, run_id)
+        self.assertEqual(state_after["prompt"], "original-seed")
+
+    def test_resume_run_uses_same_run_id(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        result = _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        # Summary's run_id matches the resumed id (not a new one).
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["run_id"], run_id)
+        # Only one run-id directory exists; resume didn't create a new one.
+        self.assertEqual(_find_only_run_id(self.target), run_id)
+
+    def test_resume_prompt_override_replaces_persisted(self):
+        # Initial run with one prompt.
+        _run_loop(
+            self.target, "--prompt", "original-seed",
+            "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        # Resume with --prompt override: state should hold the new prompt.
+        _run_loop(
+            self.target, "--resume", run_id, "--prompt", "revised-seed",
+            "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["prompt"], "revised-seed")
+
+
+# ============================================================================
+# Slice 003-04 — AC #4: Resume preserves overrides; CLI override re-applies
+# ============================================================================
+
+
+class ResumePreservesOverridesTests(unittest.TestCase):
+    """AC #4 — flags persisted in state are re-applied on resume; CLI overrides win."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac4-resume-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_persisted_max_iterations_used_when_no_override(self):
+        # Initial run captures --max-iterations 2 and --cost-ceiling 3.50.
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            "--cost-ceiling", "3.50",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        state_before = _read_state(self.target, run_id)
+        self.assertEqual(state_before["max_iterations"], 2)
+        self.assertAlmostEqual(state_before["cost_ceiling_usd"], 3.50, places=6)
+
+        # Resume without overrides — values stay.
+        _run_loop(
+            self.target, "--resume", run_id,
+            mock_bindir=self.bindir,
+        )
+        state_after = _read_state(self.target, run_id)
+        # max-iterations is 2 from state; iter_count was already 2, so no
+        # more iters run on resume. The state's max_iterations stays at 2.
+        self.assertEqual(state_after["max_iterations"], 2)
+        self.assertAlmostEqual(state_after["cost_ceiling_usd"], 3.50, places=6)
+
+    def test_max_iterations_override_re_applied(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        # Resume with --max-iterations 5: state's max should update.
+        _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "5",
+            mock_bindir=self.bindir,
+        )
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["max_iterations"], 5)
+        # Iter count is now 5 (the resume ran iter 3-5).
+        self.assertEqual(state["iteration_count"], 5)
+
+    def test_cost_ceiling_override_re_applied(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            "--cost-ceiling", "2.00",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        _run_loop(
+            self.target, "--resume", run_id, "--cost-ceiling", "0.50",
+            "--max-iterations", "3",
+            mock_bindir=self.bindir,
+        )
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 0.50, places=6)
+
+    def test_context_fill_threshold_override_re_applied(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            "--context-fill-threshold", "0.80",
+            mock_bindir=self.bindir,
+        )
+        run_id = _find_only_run_id(self.target)
+        _run_loop(
+            self.target, "--resume", run_id,
+            "--context-fill-threshold", "0.30",
+            "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["context_fill_threshold"], 0.30, places=6)
+
+
+# ============================================================================
+# Slice 003-04 — AC #5: Refusal on schema / claude-version mismatch
+# ============================================================================
+
+
+class ResumeRefusalTests(unittest.TestCase):
+    """AC #5 — stale schema or claude-version mismatch refuses unless --resume-anyway."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac5-resume-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+        # Seed an initial run so we have a state file to mutate.
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        self.run_id = _find_only_run_id(self.target)
+        self.state_path = _state_path(self.target, self.run_id)
+        # Reset counter so post-tamper resume invocations have a clean slate.
+        self.counter.unlink(missing_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _mutate_state(self, **fields) -> None:
+        state = json.loads(self.state_path.read_text())
+        state.update(fields)
+        self.state_path.write_text(json.dumps(state))
+
+    def test_state_schema_mismatch_refuses(self):
+        self._mutate_state(state_schema_version=999)
+        result = _run_loop(
+            self.target, "--resume", self.run_id,
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("state_schema_version mismatch", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "state_schema_mismatch")
+        # Claude was not invoked.
+        self.assertFalse(self.counter.exists())
+
+    def test_resume_anyway_escapes_schema_mismatch(self):
+        self._mutate_state(state_schema_version=999)
+        result = _run_loop(
+            self.target, "--resume", self.run_id, "--resume-anyway",
+            "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # Iter 2 ran on resume.
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+
+    def test_claude_version_mismatch_refuses(self):
+        self._mutate_state(claude_version="9.9.9-stale-version")
+        result = _run_loop(
+            self.target, "--resume", self.run_id,
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("claude_version mismatch", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "claude_version_mismatch")
+        self.assertFalse(self.counter.exists())
+
+    def test_resume_anyway_escapes_claude_version_mismatch(self):
+        self._mutate_state(claude_version="9.9.9-stale-version")
+        result = _run_loop(
+            self.target, "--resume", self.run_id, "--resume-anyway",
+            "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+
+    def test_resume_anyway_without_resume_rejected(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--resume-anyway",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--resume-anyway requires --resume", result.stderr)
+
+
+# ============================================================================
+# Slice 003-04 — AC #6: Refusal on missing state
+# ============================================================================
+
+
+class ResumeMissingStateTests(unittest.TestCase):
+    """AC #6 — `--resume <bogus>` rc=2 with `state_missing`."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac6-resume-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_bogus_run_id_refuses(self):
+        result = _run_loop(
+            self.target, "--resume", "20260520T120000-deadbeef",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("state file not found", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "state_missing")
+        # Claude was not invoked.
+        self.assertFalse(self.counter.exists())
+
+    def test_state_missing_summary_carries_run_id(self):
+        bogus = "20260520T120000-cafebabe"
+        result = _run_loop(
+            self.target, "--resume", bogus,
+            mock_bindir=self.bindir,
+        )
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["run_id"], bogus)
+
+    def test_resume_with_unparseable_state_json(self):
+        # Pre-create the run dir but write garbage as state.json.
+        run_dir = self.target / ".servo" / "runs" / "20260520T120000-aaaa"
+        run_dir.mkdir(parents=True)
+        (run_dir / "state.json").write_text("definitely not json")
+        result = _run_loop(
+            self.target, "--resume", "20260520T120000-aaaa",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        # Malformed state also routes to state_missing (per the helper docstring).
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "state_missing")
+
+
+# ============================================================================
+# Slice 003-04 — AC #7: Fresh run gets fresh run-id
+# ============================================================================
+
+
+class FreshRunIdTests(unittest.TestCase):
+    """AC #7 — back-to-back fresh runs each get distinct run-ids."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac7-fresh-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_two_fresh_runs_produce_two_run_ids(self):
+        r1 = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        r2 = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        rid1 = _stdout_json_lines(r1.stdout)[-1]["run_id"]
+        rid2 = _stdout_json_lines(r2.stdout)[-1]["run_id"]
+        self.assertNotEqual(rid1, rid2)
+        # Both directories exist on disk.
+        runs_dir = self.target / ".servo" / "runs"
+        children = sorted(p.name for p in runs_dir.iterdir() if p.is_dir())
+        self.assertEqual(len(children), 2)
+        self.assertIn(rid1, children)
+        self.assertIn(rid2, children)
+
+    def test_run_id_shape_is_timestamp_plus_suffix(self):
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        run_id = _stdout_json_lines(result.stdout)[-1]["run_id"]
+        self.assertRegex(run_id, r"^\d{8}T\d{6}-[0-9a-f]{4}$")
+
+
+# ============================================================================
+# Slice 003-04 — AC #8: Runs directory auto-created
+# ============================================================================
+
+
+class RunsDirectoryAutoCreateTests(unittest.TestCase):
+    """AC #8 — `<target>/.servo/runs/` is created if absent."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac8-runs-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_runs_dir_does_not_exist_pre_run(self):
+        self.assertFalse((self.target / ".servo" / "runs").exists())
+
+    def test_runs_dir_created_on_first_run(self):
+        _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+        )
+        self.assertTrue((self.target / ".servo" / "runs").is_dir())
+        # And the run dir exists inside.
+        run_id = _find_only_run_id(self.target)
+        self.assertTrue(_state_path(self.target, run_id).exists())
+
+
+# ============================================================================
+# Slice 003-04 — AC #9: Signal handling (SIGINT / SIGTERM)
+# ============================================================================
+
+
+class SignalHandlingTests(unittest.TestCase):
+    """AC #9 — SIGINT/SIGTERM trap finalizes state and emits `interrupted` summary."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac9-signal-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        # Sleep mock so we can interrupt mid-iteration.
+        _mock_claude_sleep_then_emit(
+            self.bindir, self.counter, sleep_seconds=3.0,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _spawn(self, *extra: str) -> subprocess.Popen:
+        env = {
+            **os.environ,
+            "PATH": f"{self.bindir}:{SYSTEM_PATH}",
+        }
+        cmd = [
+            sys.executable, str(LOOP), str(self.target),
+            "--prompt", "x", "--max-iterations", "3",
+            *extra,
+        ]
+        return subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=env,
+        )
+
+    def test_sigint_during_claude_emits_interrupted_summary(self):
+        import signal as sigmod
+        import time as timemod
+        proc = self._spawn()
+        try:
+            # Give iter 1 ~0.5s to actually start claude (the mock then
+            # sleeps for 3s).
+            timemod.sleep(0.5)
+            proc.send_signal(sigmod.SIGINT)
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            self.fail("loop did not exit within 10s of SIGINT")
+        self.assertEqual(
+            proc.returncode, 130,
+            f"expected rc=130, got {proc.returncode}; stderr={stderr}",
+        )
+        # Summary is the LAST JSON line on stdout.
+        lines = _stdout_json_lines(stdout)
+        self.assertTrue(lines, f"no JSON on stdout; stderr={stderr}")
+        summary = lines[-1]
+        self.assertEqual(summary["terminal_reason"], "interrupted")
+        self.assertEqual(summary["final_oracle_status"], "unknown_interrupted")
+
+    def test_sigterm_during_claude_emits_interrupted_summary(self):
+        import signal as sigmod
+        import time as timemod
+        proc = self._spawn()
+        try:
+            timemod.sleep(0.5)
+            proc.send_signal(sigmod.SIGTERM)
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            self.fail("loop did not exit within 10s of SIGTERM")
+        self.assertEqual(proc.returncode, 130)
+        summary = _stdout_json_lines(stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "interrupted")
+
+    def test_state_file_finalized_with_interrupted_reason(self):
+        import signal as sigmod
+        import time as timemod
+        proc = self._spawn()
+        try:
+            timemod.sleep(0.5)
+            proc.send_signal(sigmod.SIGINT)
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            self.fail("loop did not exit within 10s of SIGINT")
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["last_terminal_reason"], "interrupted")
+        # Iteration was treated as completed for state-file purposes
+        # (AC9 — "iteration_count reflects the partial iteration").
+        self.assertEqual(state["iteration_count"], 1)
+
+    def test_interrupt_summary_iterations_completed_one(self):
+        import signal as sigmod
+        import time as timemod
+        proc = self._spawn()
+        try:
+            timemod.sleep(0.5)
+            proc.send_signal(sigmod.SIGINT)
+            stdout, _stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            self.fail("loop did not exit within 10s of SIGINT")
+        summary = _stdout_json_lines(stdout)[-1]
+        self.assertEqual(summary["iterations_completed"], 1)
+
+
+class SignalHandlingDuringGateTests(unittest.TestCase):
+    """AC #9 — signal arriving DURING gate.py.
+
+    Mock claude is fast (no sleep). The oracle is slow (sleeps 3s). A SIGINT
+    sent ~0.5s into the run lands while gate.py is invoking oracle.sh,
+    NOT during claude. The post-gate interrupt branch fires:
+    `iteration_count` is set to the in-flight iteration, oracle status is
+    `unknown_interrupted`, the summary emits `terminal_reason=interrupted`,
+    and the loop exits 130.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac9-gate-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        # Slow oracle: gate.py invokes this, then sleeps 3s before scoring.
+        _make_oracle(self.target, _slow_oracle(sleep_seconds=3.0))
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        # Fast mock claude — emits JSON immediately.
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _spawn(self) -> subprocess.Popen:
+        env = {
+            **os.environ,
+            "PATH": f"{self.bindir}:{SYSTEM_PATH}",
+        }
+        cmd = [
+            sys.executable, str(LOOP), str(self.target),
+            "--prompt", "x", "--max-iterations", "3",
+        ]
+        return subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=env,
+        )
+
+    def test_sigint_during_gate_emits_unknown_interrupted(self):
+        import signal as sigmod
+        import time as timemod
+        proc = self._spawn()
+        try:
+            # Claude returns instantly; gate.py invokes oracle.sh which
+            # then sleeps. ~0.5s in, gate is the active subprocess.
+            timemod.sleep(0.5)
+            proc.send_signal(sigmod.SIGINT)
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            self.fail("loop did not exit within 10s of SIGINT")
+        self.assertEqual(
+            proc.returncode, 130,
+            f"expected rc=130, got {proc.returncode}; stderr={stderr}",
+        )
+        summary = _stdout_json_lines(stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "interrupted")
+        self.assertEqual(summary["final_oracle_status"], "unknown_interrupted")
+        # Claude was invoked once (iter 1's claude completed; gate was
+        # interrupted before scoring); the counter reflects that.
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+
+    def test_state_file_after_sigint_during_gate(self):
+        import signal as sigmod
+        import time as timemod
+        proc = self._spawn()
+        try:
+            timemod.sleep(0.5)
+            proc.send_signal(sigmod.SIGINT)
+            proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            self.fail("loop did not exit within 10s of SIGINT")
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["last_terminal_reason"], "interrupted")
+        # iteration_count reflects the in-flight (interrupted-during-gate)
+        # iteration per AC9's "treated as completed for state-file purposes."
+        self.assertEqual(state["iteration_count"], 1)
+        # No oracle history entry was recorded for this iteration (the
+        # append at gate-scored time didn't run); session_id from claude
+        # DID get captured (it returned before the interrupt).
+        self.assertEqual(state["current_session_id"], "mock-session-1")
+        self.assertEqual(len(state["oracle_score_history"]), 0)
+
+
+# ============================================================================
+# Slice 003-04 — AC #10: Run-id collision retry policy
+# ============================================================================
+
+
+class RunIdCollisionTests(unittest.TestCase):
+    """AC #10 — bounded retry (3 attempts total), then refuse with run_id_collision.
+
+    Uses the `SERVO_TEST_RUN_IDS` test hook to deterministically force the
+    next-generated run-ids. Pre-creates directories that conflict with
+    those ids, then verifies retry behavior.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-ac10-collision-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_single_collision_retry_succeeds(self):
+        # Pre-create the first id; second id should succeed.
+        runs_dir = self.target / ".servo" / "runs"
+        runs_dir.mkdir(parents=True)
+        (runs_dir / "20260520T120000-aaaa").mkdir()
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+            extra_env={
+                "SERVO_TEST_RUN_IDS": (
+                    "20260520T120000-aaaa,20260520T120000-bbbb"
+                ),
+            },
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # The successful run uses the second id.
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["run_id"], "20260520T120000-bbbb")
+
+    def test_triple_collision_refuses(self):
+        runs_dir = self.target / ".servo" / "runs"
+        runs_dir.mkdir(parents=True)
+        for suffix in ("aaaa", "bbbb", "cccc"):
+            (runs_dir / f"20260520T120000-{suffix}").mkdir()
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir,
+            extra_env={
+                "SERVO_TEST_RUN_IDS": (
+                    "20260520T120000-aaaa,20260520T120000-bbbb,"
+                    "20260520T120000-cccc"
+                ),
+            },
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("could not allocate a fresh run-id", result.stderr)
+        # Stderr breadcrumb names the colliding ids.
+        for suffix in ("aaaa", "bbbb", "cccc"):
+            self.assertIn(f"20260520T120000-{suffix}", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "run_id_collision")
+        # Claude was not invoked.
         self.assertFalse(self.counter.exists())
 
 
