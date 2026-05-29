@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: [001, 002, 003]
 last_verified:
 ---
@@ -174,10 +174,13 @@ Initial shape:
       "**/.pytest_cache/**",
       "**/test_*.py",
       "**/*.pyc",
+      "**/.DS_Store",
+      "**/.gitkeep",
       ".git/**",
       "docs/**",
       "dist/**",
-      "mcp-server.log"
+      "mcp-server.log",
+      "templates/crew-postmortem.md"
     ]
   },
   "scaffold": {
@@ -392,16 +395,55 @@ trying to install or package it.
 
 **DoD:**
 
-- [ ] All ACs pass; verifier tests cover success and one failure fixture
-  per reason introduced in this slice.
-- [ ] Verifier is stdlib-only and runs under Python 3.10+.
-- [ ] `docs/specs/README.md` is updated with slice status.
-- [ ] Deviation log produced under this slice.
-- [ ] Independent review pass completed before DONE.
+- [x] All ACs pass; verifier tests cover success and one failure fixture
+  per reason introduced in this slice. _14 tests in
+  `scripts/test_verify_install.py`._
+- [x] Verifier is stdlib-only and runs under Python 3.10+.
+- [x] `docs/specs/README.md` is updated with slice status.
+- [x] Deviation log produced under this slice.
+- [x] Independent review pass completed before DONE. _Subagent review
+  (`Kuhn`), 2026-05-28: PASS, no blocker or should-fix findings._
 
 **Anti-horizontal-phasing check:** After this slice, servo still cannot
 build a zip or scaffold into a target, but it can answer the first
 install question: "is this plugin root structurally installable?"
+
+### Deviation log
+
+**Slice 007-01 - implementation started 2026-05-28.** Added
+`.claude-plugin/install-contract.json`, `scripts/verify_install.py`, and
+`scripts/test_verify_install.py`. Verification:
+
+- `python3 scripts/test_verify_install.py` -> 14/14 tests passing.
+- `python3 scripts/verify_install.py plugin . --json` -> pass with
+  `plugin_name=servo`, `version=0.1.0`.
+- Existing skill-surface smoke:
+  `python3 -m unittest skills.scaffold-init.test_skill_surface skills.quality-gate.test_skill_surface skills.agent-loop.test_skill_surface`
+  -> 57/57 tests passing.
+
+Deviations from draft spec text:
+
+- **Skill contract entries became objects, not strings.** The draft
+  sketch used `"skills": ["scaffold-init", ...]`, but AC #3 requires
+  helper files to be named by the contract. Implemented entries as
+  `{ "name": "...", "files": ["SKILL.md", "<helper>.py"] }`.
+- **Added `manifest_malformed` reason.** The suggested taxonomy had
+  `manifest_missing` and `manifest_mismatch`, but corrupt JSON is
+  neither. The verifier now reports `manifest_malformed` for plugin and
+  marketplace descriptor parse failures.
+- **Only plugin mode exists in this slice.** The top-level verifier
+  command section already names `zip` and `scaffold`; those subcommands
+  remain future work for slices 007-02 and 007-03.
+
+Independent review:
+
+- `Kuhn` subagent, 2026-05-28: **PASS**. Reviewed the tracked diff plus
+  untracked full files
+  `.claude-plugin/install-contract.json`,
+  `scripts/verify_install.py`, and `scripts/test_verify_install.py`.
+  No blocker or should-fix issues found.
+
+Slice 007-01 is DONE. Slices 007-02 through 007-05 remain DRAFT.
 
 ---
 
@@ -438,17 +480,105 @@ as a single installable archive instead of a whole development checkout.
 
 **DoD:**
 
-- [ ] Builder tests cover inventory, exclusions, determinism, version
-  mismatch, smoke extraction, and unsafe path rejection.
-- [ ] `dist/` remains ignored or otherwise untracked.
-- [ ] README documents the zip install command after this slice or in
-  007-05 if docs are intentionally deferred.
-- [ ] Deviation log produced under this slice.
-- [ ] Independent review pass completed before DONE.
+- [x] Builder tests cover inventory, exclusions, determinism, version
+  mismatch, smoke extraction, and unsafe path rejection. _23 tests in
+  `scripts/test_build_release_zip.py`; 37 total script tests with
+  `scripts/test_verify_install.py`._
+- [x] `dist/` remains ignored or otherwise untracked. _Added to
+  `.gitignore`._
+- [x] README documents the zip install command after this slice or in
+  007-05 if docs are intentionally deferred. _Deferred to 007-05 so
+  the public docs land once plugin, zip, and scaffold surfaces can be
+  described together._
+- [x] Deviation log produced under this slice.
+- [x] Independent review pass completed before DONE. _Final subagent
+  review (`Halley`), 2026-05-28: PASS, no blocker or should-fix
+  findings._
 
 **Anti-horizontal-phasing check:** After this slice, a user can build a
 release archive locally and verify that the extracted plugin is
 installable.
+
+### Deviation log
+
+**Slice 007-02 - implementation started 2026-05-28.** Added
+`scripts/build_release_zip.py`, `verify_install.py zip` mode, and
+`scripts/test_build_release_zip.py`. Verification:
+
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_build_release_zip.py`
+  -> 23/23 tests passing.
+- `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'test_*.py'`
+  -> 37/37 tests passing.
+- `PYTHONDONTWRITEBYTECODE=1 python3 scripts/build_release_zip.py --output /private/tmp/servo-v0.1.0.zip`
+  -> built a 21-entry archive and smoke-verified it through
+  `verify_install.py zip`.
+
+Deviations from draft spec text:
+
+- **`--version` is optional.** The spec says the builder reads the
+  version from `.claude-plugin/plugin.json`; implementation follows
+  that as the default and treats `--version` as an optional assertion
+  that must match the manifest.
+- **Filename version mismatch is pattern-based.** Output filenames of
+  the form `servo-v<version>.zip` are checked against the manifest
+  version. Arbitrary filenames such as `servo-test.zip` are allowed for
+  local smoke builds.
+- **Local metadata exclusion added.** The implementation adds
+  `**/.DS_Store`, `**/.gitkeep`, and
+  `templates/crew-postmortem.md` to `release_zip.exclude_globs`; these
+  are deterministic-release hygiene rules in the spirit of "caches /
+  local logs / dev files" even though the initial JSON sketch did not
+  spell them out.
+- **README install docs deferred.** 007-05 owns the public install docs
+  for plugin, zip, and scaffold together; this slice records the
+  deferral rather than adding zip-only docs early.
+
+### Review reconciliation
+
+Independent review:
+
+- `Nash` subagent, 2026-05-28: **FAIL** with two should-fix findings.
+  1. Release zip inventory included non-runtime sentinel/contributor
+     files (`hooks/.gitkeep`, `skills/.gitkeep`, and
+     `templates/crew-postmortem.md`).
+  2. Unsafe-path validation missed Windows-drive absolute paths such as
+     `C:/evil.txt`.
+
+Reconciliation:
+
+- Added `**/.gitkeep` and `templates/crew-postmortem.md` to
+  `release_zip.exclude_globs`; added
+  `test_gitkeep_and_crew_postmortem_excluded`.
+- Added Windows drive/absolute detection via `PureWindowsPath`; added
+  `test_windows_drive_absolute_entry_rejected`.
+- Re-ran focused checks: release zip tests now 21/21; script discovery
+  now 35/35; real zip build now contains 21 runtime entries.
+
+Independent follow-up review:
+
+- `Boyle` subagent, 2026-05-28: **FAIL** with one should-fix finding.
+  The builder accepted unsafe `release_zip.include` entries such as
+  `../outside.txt` when `--no-smoke` was used, allowing it to write an
+  unsafe archive before the verifier could reject it.
+
+Reconciliation:
+
+- Added release-include and final-archive path validation in
+  `scripts/build_release_zip.py`, including Windows drive detection.
+- Added `UnsafeContractTests` for parent traversal and Windows-drive
+  include paths.
+- Re-ran focused checks: release zip tests now 23/23; script discovery
+  now 37/37; real zip build still contains 21 runtime entries.
+
+Independent final review:
+
+- `Halley` subagent, 2026-05-28: **PASS**. No blocker or should-fix
+  findings. Verified that all three prior findings are fixed: forbidden
+  sentinel/contributor files are absent from the inventory, `C:/evil.txt`
+  is rejected by zip verification, and unsafe contract include paths are
+  rejected before the builder writes an archive.
+
+Slice 007-02 is DONE. Slices 007-03 through 007-05 remain DRAFT.
 
 ---
 

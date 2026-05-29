@@ -33,8 +33,8 @@
 | [006-spec-oracle](006-spec-oracle/spec.md) | 006-03 — oracle-overlay | DRAFT | Install generated checks as an ordinary `oracle.sh` component |
 | [006-spec-oracle](006-spec-oracle/spec.md) | 006-04 — freeze-and-controls | DRAFT | Approval, source-hash staleness, artifact hashes, negative controls |
 | [006-spec-oracle](006-spec-oracle/spec.md) | 006-05 — skill-and-dogfood | DRAFT | `/servo:spec-oracle` surface + jig 046/047-style worked examples |
-| [007-install-surfaces](007-install-surfaces/spec.md) | 007-01 — plugin-contract-verifier | DRAFT | Data-driven install contract + plugin-root verifier |
-| [007-install-surfaces](007-install-surfaces/spec.md) | 007-02 — release-zip | DRAFT | Deterministic plugin zip + smoke extraction verifier |
+| [007-install-surfaces](007-install-surfaces/spec.md) | 007-01 — plugin-contract-verifier | **DONE** | 14 tests; `.claude-plugin/install-contract.json` + plugin verifier; subagent review PASS |
+| [007-install-surfaces](007-install-surfaces/spec.md) | 007-02 — release-zip | **DONE** | 23 release-zip tests / 37 script tests; 21-entry deterministic zip; final subagent review PASS |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-03 — scaffold-runtime | DRAFT | Project-local `.claude/` copy of servo skills, agents, templates |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-04 — scaffold-fidelity | DRAFT | Path rewrites, generated command/link checks, version provenance |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-05 — docs-and-ci | DRAFT | Install docs + ordinary repo verification for plugin/zip/scaffold |

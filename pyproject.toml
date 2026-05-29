@@ -1,5 +1,5 @@
 [tool.pytest.ini_options]
-testpaths = ["skills"]
+testpaths = ["skills", "scripts"]
 python_files = ["test_*.py"]
 # Hyphenated package dir (skills/scaffold-init) isn't a Python package; tell
 # pytest to use rootdir-relative imports so each test file is collected on its

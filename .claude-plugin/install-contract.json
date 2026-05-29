@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "plugin_name": "servo",
+  "version_source": ".claude-plugin/plugin.json",
+  "required": {
+    "skills": [
+      {
+        "name": "scaffold-init",
+        "files": ["SKILL.md", "scaffold.py"]
+      },
+      {
+        "name": "quality-gate",
+        "files": ["SKILL.md", "gate.py"]
+      },
+      {
+        "name": "agent-loop",
+        "files": ["SKILL.md", "loop.py"]
+      }
+    ],
+    "agents": ["runner", "judge"],
+    "templates": [
+      "oracle.sh.template",
+      "components/pytest.sh.fragment",
+      "components/vitest.sh.fragment",
+      "components/jest.sh.fragment",
+      "components/cargo.sh.fragment",
+      "components/go.sh.fragment",
+      "components/eslint.sh.fragment",
+      "components/ruff.sh.fragment"
+    ],
+    "hooks": [],
+    "scripts": []
+  },
+  "release_zip": {
+    "include": [
+      ".claude-plugin/",
+      "agents/",
+      "skills/",
+      "templates/",
+      "hooks/",
+      "README.md",
+      "LICENSE"
+    ],
+    "exclude_globs": [
+      "**/__pycache__/**",
+      "**/.pytest_cache/**",
+      "**/test_*.py",
+      "**/*.pyc",
+      "**/.DS_Store",
+      "**/.gitkeep",
+      ".git/**",
+      "docs/**",
+      "dist/**",
+      "mcp-server.log",
+      "templates/crew-postmortem.md"
+    ]
+  },
+  "scaffold": {
+    "skill_prefix": "servo-",
+    "agent_prefix": "servo-",
+    "runtime_root": ".claude/servo",
+    "managed_marker": "managed-by-servo"
+  }
+}
