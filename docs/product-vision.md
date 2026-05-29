@@ -27,8 +27,9 @@ Each of the four unattended-agent patterns (oracle scoring, headless iteration, 
 
 1. Writing a project-specific `oracle.sh` that composes the right signals (which signals does this project even *have*?)
 2. Tuning weights and thresholds by hand
-3. Wiring loop drivers, hook installers, and race orchestrators
-4. Repeating all of the above on the next project
+3. Translating each spec's acceptance criteria into executable evidence instead of relying on a generic judge
+4. Wiring loop drivers, hook installers, and race orchestrators
+5. Repeating all of the above on the next project
 
 The same scars, every project. Servo encodes the scaffolding so the dev sets weights and prompts — not infrastructure.
 
@@ -40,11 +41,12 @@ The same scars, every project. Servo encodes the scaffolding so the dev sets wei
 
 ## Backlog (prioritized)
 
-1. **`/servo:scaffold-init`** — probe target signals, run Q&A, drop tailored `oracle.sh` (and optionally agent-loop / hook installer / race driver stubs) into target. *Spec 001 — DRAFT.*
-2. **`/servo:quality-gate`** — runtime invocation of the scaffolded oracle, normalized exit codes. *Future spec.*
-3. **`/servo:agent-loop`** — headless iteration driver with iteration cap, cost ceiling, checkpoint/resume. *Future spec.*
-4. **`/servo:oracle-hook`** — Claude Code hook installer (idempotent install / uninstall / status). *Future spec.*
-5. **`/servo:variant-race`** — N-worktree parallel race with quality-gate scoring and winner selection. *Future spec.*
+1. **`/servo:scaffold-init`** — probe target signals, run Q&A, drop tailored `oracle.sh` (and optionally agent-loop / hook installer / race driver stubs) into target. *Spec 001 — DONE.*
+2. **`/servo:quality-gate`** — runtime invocation of the scaffolded oracle, normalized exit codes. *Spec 002 — DONE.*
+3. **`/servo:agent-loop`** — headless iteration driver with iteration cap, cost ceiling, checkpoint/resume. *Spec 003 — DONE.*
+4. **`/servo:spec-oracle`** — compile a spec/slice into a reviewable, deterministic evidence overlay on top of the baseline oracle. *Spec 006 — DRAFT.*
+5. **`/servo:oracle-hook`** — Claude Code hook installer (idempotent install / uninstall / status). *Future spec.*
+6. **`/servo:variant-race`** — N-worktree parallel race with quality-gate scoring and winner selection. *Future spec.*
 
 ## MVP scope
 
@@ -52,7 +54,8 @@ Spec 001 (`/servo:scaffold-init`) only. Drops `oracle.sh` into target with signa
 
 ## Future scope
 
-- Runtime skills (2–5 above)
+- Runtime and spec-overlay skills (2–6 above)
+- Spec-specific evidence overlays (`/servo:spec-oracle`) that turn acceptance criteria into runnable checks before unattended loops begin
 - A short architecture-doc section "Why no crew skill" + post-mortem template (multi-agent crew coordination doesn't yet generalize enough to ship as a skill)
 - Pull-hint integration with jig's `slice-land prepare`
 

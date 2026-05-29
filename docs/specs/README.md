@@ -28,6 +28,11 @@
 | [003-agent-loop](003-agent-loop/spec.md) | 003-03 — context-fill-gate | **DONE** | 83 tests total; pre-iter fail-closed refusal at ratio ≥ threshold; helper fail-opens on six malformed-JSON paths; ADR-0001-style filesystem-only coupling stays intact |
 | [003-agent-loop](003-agent-loop/spec.md) | 003-04 — checkpoint-resume | **DONE** | 126 tests total; per-run state at `<target>/.servo/runs/<run-id>/state.json` (atomic write); `--resume <run-id>` + version gates; SIGINT/SIGTERM trap (exit 130); bounded run-id collision retry |
 | [003-agent-loop](003-agent-loop/spec.md) | 003-05 — stuck-loop-and-handoff | **DONE** | 151 tests + 26 surface tests; oracle-score plateau (default M=3); real `runner.md` / `judge.md` prompts ship with `schema_version: 1` verdict blocks; `--agent <name>` dispatch alternates runner/judge; `verdict_schema_mismatch` enforcement closes ADR-0003 |
+| [006-spec-oracle](006-spec-oracle/spec.md) | 006-01 — evidence-plan | DRAFT | Spec-to-evidence compiler: AC extraction/classification into deterministic checks + residual judgment |
+| [006-spec-oracle](006-spec-oracle/spec.md) | 006-02 — check-library | DRAFT | Stdlib check primitives + JSONL evidence output |
+| [006-spec-oracle](006-spec-oracle/spec.md) | 006-03 — oracle-overlay | DRAFT | Install generated checks as an ordinary `oracle.sh` component |
+| [006-spec-oracle](006-spec-oracle/spec.md) | 006-04 — freeze-and-controls | DRAFT | Approval, source-hash staleness, artifact hashes, negative controls |
+| [006-spec-oracle](006-spec-oracle/spec.md) | 006-05 — skill-and-dogfood | DRAFT | `/servo:spec-oracle` surface + jig 046/047-style worked examples |
 
 ## Planned specs
 
@@ -60,6 +65,7 @@ of jig.
 | Subagent handoff state across iterations | 003-agent-loop | What `runner` / `judge` receive each spawn, what survives |
 | `Stop`-hook grading (oracle-scored, structured retry hints) | 004-oracle-hook | The original meta-judge pattern; structured replacement for ad-hoc Stop-hook regex |
 | Worktree-race coordination + winner selection | 005-variant-race | Variant-lease pattern; same family as jig's spec-number reservation but for ephemeral worktrees |
+| Spec-specific judging | 006-spec-oracle | Turns acceptance criteria into deterministic evidence overlays so loops optimize against the spec, not just the baseline suite |
 
 Gaps that stay with jig (primer-doc hygiene, supervised slice-level drift
 detection, parallel-worktree spec-numbering, memory-recall, PostToolUse

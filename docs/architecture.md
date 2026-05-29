@@ -41,10 +41,11 @@ Servo is **scaffolder-first, runtime second**. The four runtime skills all presu
 | Skill | Role | Spec |
 |---|---|---|
 | `/servo:scaffold-init` | Probe → Q&A → tailored install of `oracle.sh` (+ optional agent-loop/hook/race stubs) | 001 |
-| `/servo:quality-gate` | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes | future |
-| `/servo:agent-loop` | Headless iteration driver | future |
+| `/servo:quality-gate` | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes | 002 |
+| `/servo:agent-loop` | Headless iteration driver | 003 |
 | `/servo:oracle-hook` | Claude Code hook installer | future |
 | `/servo:variant-race` | N-worktree parallel race | future |
+| `/servo:spec-oracle` | Compile a spec/slice into AC-mapped deterministic checks and an oracle overlay | 006 |
 
 ## Project vs servo-core split
 
@@ -55,6 +56,7 @@ This is the load-bearing distinction. Servo ships **templates and orchestration*
 | `oracle.sh` content, weights, threshold | Template + signal-detection logic |
 | Custom signal functions | `# SEED:` annotation convention |
 | Domain-specific lint configs | Normalized exit codes |
+| Spec-specific acceptance criteria policy, waivers, and residual judgment | AC classification helpers, check primitives, evidence schema |
 | Prompt templates for loops | Loop driver, guardrail defaults |
 | Cap + ceiling overrides | Defaults (max-iterations=5, cost-ceiling=$2, context-fill-threshold=0.75) |
 | Hook event choice, retry phrasing | Hook script template, settings.json mutation + backup |
@@ -116,11 +118,13 @@ Current state: both runner and judge are **placeholders**. Full prompts are auth
 
 ## Runtime artifacts (when later specs land)
 
-Future runtime skills (specs 003–005) will produce these at the *target* project (not in servo's plugin repo):
+Runtime and spec-overlay skills produce these at the *target* project
+(not in servo's plugin repo):
 
 - `<target>/.servo/runs/<run-id>/state.json` — agent-loop per-run scoreboard (slice 003-04, [ADR-0004](decisions/adr-0004-session-state-file-format.md)). Atomically rewritten after every iteration via `.tmp + os.replace`. Schema: `state_schema_version`, `run_id`, `started_at`, `last_updated_at`, `target_path`, `prompt`, `current_session_id` (the Claude Code session id `claude -p --resume` consumes), `iteration_count`, `max_iterations`, `cost_ceiling_usd`, `cumulative_cost_usd`, `cumulative_input_tokens`, `cumulative_output_tokens`, `context_fill_threshold`, `last_context_fill_ratio`, `oracle_score_history`, `last_terminal_reason`, `claude_version`. Run-id shape: `YYYYMMDDTHHMMSS-XXXX` (15-char timestamp + 4-hex suffix); collision retry is bounded at 3 attempts.
 - `<target>/.servo/hooks/meta-judge.sh` — copied by `/servo:oracle-hook` install; user may customize, uninstall leaves on disk.
 - `<target>/.servo/races/<race-id>/` — per-variant scores and metadata from `/servo:variant-race`.
+- `<target>/.servo/spec-oracles/<spec-id>/` — spec-specific evidence overlays from `/servo:spec-oracle`: `plan.md`, `checks.json`, generated check code/fragments, and per-run ledger JSONL. The overlay is project-owned and reviewable before `/servo:agent-loop` consumes it.
 
 These paths are reserved now (in `.gitignore`) so later specs don't have to renegotiate them.
 
@@ -227,6 +231,7 @@ Each runtime skill traces back to a specific pattern in private learning notes:
 | 003 | `/servo:agent-loop` | headless iteration ("Ralph") |
 | 004 | `/servo:oracle-hook` | meta-judge hook |
 | 005 | `/servo:variant-race` | worktree race |
+| 006 | `/servo:spec-oracle` | spec-to-evidence compiler |
 | n/a | (teams pattern covered) | by jig's `agents/` |
 | n/a | (crews pattern skipped) | post-mortem template only |
 
