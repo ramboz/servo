@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import re
 import sys
 import tempfile
 import zipfile
@@ -676,6 +677,100 @@ def _scaffold_artifact_paths(
     return artifacts, manifest_path, failures
 
 
+# Markdown link `[text](dest)`; reused to find vendored links that escape the
+# scaffold target or otherwise fail to resolve under it.
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+# Managed markdown is every vendored SKILL.md plus every vendored agent file.
+_MANAGED_MD_SUFFIXES = ("SKILL.md",)
+
+
+def _managed_markdown_paths(target: Path, contract: dict[str, Any]) -> list[Path]:
+    """Target-relative paths of vendored markdown the verifier should scan.
+
+    Scaffold-prefixed `SKILL.md` files (the skill docs) plus the prefixed agent
+    files. Templates and the `.py` helpers are excluded: helpers are dual-mode
+    by design (their `CLAUDE_PLUGIN_ROOT` docstrings are accurate), and
+    templates are shell, not docs.
+    """
+    scaffold = contract["scaffold"]
+    skill_prefix = scaffold["skill_prefix"]
+    agent_prefix = scaffold["agent_prefix"]
+    paths: list[Path] = []
+    for skill in _normalize_skill_entries(target, contract)[0]:
+        paths.append(
+            Path(".claude") / "skills" / f"{skill_prefix}{skill['name']}" / "SKILL.md"
+        )
+    agents, _ = _require_string_list(target, contract, "agents")
+    paths.extend(
+        Path(".claude") / "agents" / f"{agent_prefix}{agent}.md" for agent in agents
+    )
+    return paths
+
+
+def _stale_link_in(text: str, md_path: Path, target: Path) -> str | None:
+    """Return the first unresolved repo-relative link in `text`, else None."""
+    for match in _MD_LINK_RE.finditer(text):
+        dest = match.group(2)
+        if dest.startswith(("http://", "https://", "mailto:", "#")):
+            continue
+        path_part = dest.split("#", 1)[0]
+        if not path_part:
+            continue
+        resolved = (md_path.parent / path_part).resolve()
+        try:
+            resolved.relative_to(target)
+        except ValueError:
+            return dest
+        if not resolved.exists():
+            return dest
+    return None
+
+
+def _scaffold_stale_reference_failures(
+    target: Path,
+    contract: dict[str, Any],
+) -> list[Failure]:
+    """Flag managed markdown that points at the original servo checkout (AC6).
+
+    Two distinct stale-source signatures, both reported as
+    `stale_source_reference` (separate from `artifact_missing`):
+      - a literal `${CLAUDE_PLUGIN_ROOT}` (a plugin-checkout command that will
+        not run in scaffold mode);
+      - a relative markdown link that escapes the target or does not resolve
+        inside it (a doc reference to a source-only file).
+    Only existing managed files are scanned; a missing file is `artifact_missing`.
+    """
+    failures: list[Failure] = []
+    for rel in _managed_markdown_paths(target, contract):
+        path = target / rel
+        if not path.is_file():
+            continue
+        text = path.read_text(errors="replace")
+        if "${CLAUDE_PLUGIN_ROOT}" in text:
+            failures.append(
+                _failure(
+                    target,
+                    "stale_source_reference",
+                    path,
+                    f"{rel.as_posix()} references ${{CLAUDE_PLUGIN_ROOT}} "
+                    "(a plugin-checkout path that does not exist in scaffold mode)",
+                )
+            )
+        stale_link = _stale_link_in(text, path, target)
+        if stale_link is not None:
+            failures.append(
+                _failure(
+                    target,
+                    "stale_source_reference",
+                    path,
+                    f"{rel.as_posix()} links to {stale_link!r}, which does not "
+                    "resolve inside the scaffold target",
+                )
+            )
+    return failures
+
+
 def verify_scaffold(target: Path | str) -> VerificationResult:
     """Verify a project-local scaffold target against the servo install contract.
 
@@ -707,6 +802,9 @@ def verify_scaffold(target: Path | str) -> VerificationResult:
                     f"scaffold manifest {manifest_rel.as_posix()} is missing",
                 )
             )
+        # AC6: distinguish "artifact exists but points at the wrong source"
+        # from "artifact missing". Scans only managed markdown that is present.
+        failures.extend(_scaffold_stale_reference_failures(target_path, contract))
 
     return VerificationResult(
         mode="scaffold",

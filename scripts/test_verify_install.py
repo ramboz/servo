@@ -377,5 +377,78 @@ class ScaffoldVerifierFailureTests(unittest.TestCase):
         self.assertEqual(payload["failures"][0]["reason"], "artifact_missing")
 
 
+class ScaffoldStaleSourceReferenceTests(unittest.TestCase):
+    """007-04 AC6: the verifier flags managed files that point at the wrong source.
+
+    Distinct from `artifact_missing`: the artifact exists but references the
+    plugin checkout (`${CLAUDE_PLUGIN_ROOT}`) or a repo-relative path that
+    escapes the scaffold target.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="servo-verify-scaffold-"))
+        self.target = self.tmpdir / "project"
+        self.target.mkdir(parents=True)
+        scaffold_runtime.scaffold_runtime(self.target)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_clean_scaffold_has_no_stale_source_reference(self):
+        result = verify_install.verify_scaffold(self.target)
+        self.assertNotIn("stale_source_reference", _failure_reasons(result))
+
+    def test_plugin_root_reference_in_skill_md_is_flagged(self):
+        skill_md = (
+            self.target / ".claude" / "skills"
+            / f"{SKILL_PREFIX}scaffold-init" / "SKILL.md"
+        )
+        skill_md.write_text(
+            skill_md.read_text()
+            + '\npython3 "${CLAUDE_PLUGIN_ROOT}/skills/scaffold-init/scaffold.py" x\n'
+        )
+        result = verify_install.verify_scaffold(self.target)
+        self.assertFalse(result.ok)
+        self.assertIn("stale_source_reference", _failure_reasons(result))
+        self.assertTrue(
+            any("SKILL.md" in p for p in _failure_paths(result)),
+            _failure_paths(result),
+        )
+
+    def test_unresolved_repo_relative_link_in_agent_is_flagged(self):
+        agent = self.target / ".claude" / "agents" / f"{AGENT_PREFIX}judge.md"
+        agent.write_text(
+            agent.read_text()
+            + "\nSee [ADR](../docs/decisions/adr-0003-fresh-subagent-roster.md).\n"
+        )
+        result = verify_install.verify_scaffold(self.target)
+        self.assertFalse(result.ok)
+        self.assertIn("stale_source_reference", _failure_reasons(result))
+
+    def test_stale_reference_is_distinct_from_artifact_missing(self):
+        # Inject a stale reference AND remove an artifact: both reasons appear,
+        # so the verifier distinguishes "missing" from "wrong source".
+        skill_md = (
+            self.target / ".claude" / "skills"
+            / f"{SKILL_PREFIX}agent-loop" / "SKILL.md"
+        )
+        skill_md.write_text(skill_md.read_text() + "\n${CLAUDE_PLUGIN_ROOT}/x\n")
+        (self.target / ".claude" / "agents" / f"{AGENT_PREFIX}runner.md").unlink()
+        result = verify_install.verify_scaffold(self.target)
+        reasons = _failure_reasons(result)
+        self.assertIn("stale_source_reference", reasons)
+        self.assertIn("artifact_missing", reasons)
+
+    def test_resolving_relative_link_is_not_flagged(self):
+        # A relative link that resolves inside the target must not trip the
+        # stale-reference check.
+        skill_dir = self.target / ".claude" / "skills" / f"{SKILL_PREFIX}quality-gate"
+        (skill_dir / "EXTRA.md").write_text("extra\n")
+        skill_md = skill_dir / "SKILL.md"
+        skill_md.write_text(skill_md.read_text() + "\nSee [extra](EXTRA.md).\n")
+        result = verify_install.verify_scaffold(self.target)
+        self.assertNotIn("stale_source_reference", _failure_reasons(result))
+
+
 if __name__ == "__main__":
     unittest.main()

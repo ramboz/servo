@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -34,6 +35,11 @@ MANIFEST_SCHEMA_VERSION = 1
 CONTRACT_PATH = Path(".claude-plugin") / "install-contract.json"
 PLUGIN_MANIFEST_PATH = Path(".claude-plugin") / "plugin.json"
 MANIFEST_NAME = "scaffold-install.json"
+
+# Markdown link `[text](dest)`. Used to strip vendored links that cannot
+# resolve inside the scaffold target (e.g. `../docs/decisions/...` refs that
+# only exist in the servo source checkout).
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 
 
 def source_root() -> Path:
@@ -97,6 +103,66 @@ def _normalized_skills(contract: dict[str, Any]) -> list[dict[str, Any]]:
     return skills
 
 
+def _rewrite_skill_md_plugin_root(
+    skill_md: Path,
+    skill_names: list[str],
+    skill_prefix: str,
+) -> None:
+    """Rewrite plugin-root command paths in a vendored SKILL.md (AC1).
+
+    For every contract skill `name`, rewrite the literal
+    `${CLAUDE_PLUGIN_ROOT}/skills/<name>/` to the vendored, prefixed location
+    `.claude/skills/<prefix><name>/`. After this, no `${CLAUDE_PLUGIN_ROOT}`
+    should remain in the vendored SKILL.md — the scaffold-mode commands point
+    at files that exist under the target.
+
+    The `.py` helpers are intentionally *not* rewritten: they resolve their
+    own siblings via `_templates_root` and remain valid dual-mode code; their
+    docstring references to `CLAUDE_PLUGIN_ROOT` are accurate plugin-mode docs.
+    """
+    text = skill_md.read_text()
+    for name in skill_names:
+        text = text.replace(
+            f"${{CLAUDE_PLUGIN_ROOT}}/skills/{name}/",
+            f".claude/skills/{skill_prefix}{name}/",
+        )
+    skill_md.write_text(text)
+
+
+def _rewrite_markdown_links(md_path: Path, target_root: Path) -> None:
+    """Strip vendored markdown links that cannot resolve inside the target (AC3).
+
+    A link `[text](dest)` is kept when `dest` is a URL, a bare `#anchor`, a
+    `mailto:`, or a relative path that resolves to an existing file under the
+    scaffold target. Otherwise it is reduced to its plain `text`, dropping the
+    `](dest)`. This handles the agents' `[ADR-0003](../docs/decisions/...)`
+    refs, which only exist in the servo source checkout.
+    """
+    target_root = target_root.resolve()
+
+    def _replace(match: re.Match[str]) -> str:
+        text, dest = match.group(1), match.group(2)
+        if dest.startswith(("http://", "https://", "mailto:", "#")):
+            return match.group(0)
+        path_part = dest.split("#", 1)[0]
+        if not path_part:
+            return match.group(0)
+        resolved = (md_path.parent / path_part).resolve()
+        try:
+            resolved.relative_to(target_root)
+        except ValueError:
+            # Escapes the scaffold target — definitely stale.
+            return text
+        if resolved.exists():
+            return match.group(0)
+        return text
+
+    original = md_path.read_text()
+    rewritten = _MD_LINK_RE.sub(_replace, original)
+    if rewritten != original:
+        md_path.write_text(rewritten)
+
+
 def scaffold_runtime(target: Path | str) -> dict[str, Any]:
     """Vendor servo runtime machinery into `<target>/.claude/`.
 
@@ -123,24 +189,43 @@ def scaffold_runtime(target: Path | str) -> dict[str, Any]:
     agents_dst_root = claude_root / "agents"
     templates_dst_root = target_path / runtime_root / "templates"
 
+    skill_names = [skill["name"] for skill in _normalized_skills(contract)]
+
+    # Collect vendored markdown copies so link rewriting (AC3) runs once after
+    # every managed file is in place — link resolution depends on the full
+    # scaffold layout existing on disk.
+    vendored_markdown: list[Path] = []
+
     copied_skills: list[str] = []
     for skill in _normalized_skills(contract):
         dst_name = f"{skill_prefix}{skill['name']}"
         for file_name in skill["files"]:
             src_file = src / "skills" / skill["name"] / file_name
-            _copy_file(src_file, skills_dst_root / dst_name / file_name)
+            dst_file = skills_dst_root / dst_name / file_name
+            _copy_file(src_file, dst_file)
+            if file_name == "SKILL.md":
+                # AC1: vendored SKILL.md commands point at vendored, prefixed
+                # skill paths rather than the plugin checkout.
+                _rewrite_skill_md_plugin_root(dst_file, skill_names, skill_prefix)
+                vendored_markdown.append(dst_file)
         copied_skills.append(dst_name)
 
     copied_agents: list[str] = []
     for agent in contract["required"].get("agents", []):
         dst_name = f"{agent_prefix}{agent}"
-        _copy_file(src / "agents" / f"{agent}.md", agents_dst_root / f"{dst_name}.md")
+        dst_file = agents_dst_root / f"{dst_name}.md"
+        _copy_file(src / "agents" / f"{agent}.md", dst_file)
+        vendored_markdown.append(dst_file)
         copied_agents.append(dst_name)
 
     copied_templates: list[str] = []
     for template in contract["required"].get("templates", []):
         _copy_file(src / "templates" / template, templates_dst_root / template)
         copied_templates.append(template)
+
+    # AC3: strip vendored markdown links that cannot resolve inside the target.
+    for md_path in vendored_markdown:
+        _rewrite_markdown_links(md_path, target_path)
 
     manifest = {
         "schema_version": MANIFEST_SCHEMA_VERSION,

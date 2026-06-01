@@ -62,6 +62,27 @@ def plugin_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _templates_root() -> Path:
+    """Locate the templates directory in both plugin/source and scaffold modes.
+
+    Scaffold mode (007-03/007-04): this file is vendored to
+    `<target>/.claude/skills/servo-scaffold-init/scaffold.py`, and templates are
+    vendored alongside it at `<target>/.claude/servo/templates` (the contract's
+    `runtime_root/templates`). `parents[2]` is then `<target>/.claude`, so the
+    vendored templates live at `parents[2]/servo/templates`.
+
+    Plugin/source mode: that vendored directory does not exist, so we fall back
+    to the historical `plugin_root()/templates` location. This keeps the
+    bare-positional oracle-install behavior byte-for-byte unchanged in the
+    source checkout (where CLAUDE_PLUGIN_ROOT may be set or fall back to
+    `parents[2]`, the repo root).
+    """
+    vendored = Path(__file__).resolve().parents[2] / "servo" / "templates"
+    if vendored.is_dir():
+        return vendored
+    return plugin_root() / "templates"
+
+
 def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -290,11 +311,11 @@ def _detect_language(target: Path) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _load_template() -> str:
-    return (plugin_root() / "templates" / "oracle.sh.template").read_text()
+    return (_templates_root() / "oracle.sh.template").read_text()
 
 
 def _load_fragment(component: str) -> str:
-    path = plugin_root() / "templates" / "components" / f"{component}.sh.fragment"
+    path = _templates_root() / "components" / f"{component}.sh.fragment"
     if not path.exists():
         raise FileNotFoundError(f"missing fragment for component {component!r}: {path}")
     return path.read_text()

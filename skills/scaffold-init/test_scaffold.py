@@ -775,5 +775,44 @@ class RefinementTodoTests(unittest.TestCase):
         self.assertEqual(headings(first), headings(second))
 
 
+class TemplatesRootPluginModeTests(unittest.TestCase):
+    """007-04 AC6 regression: `_templates_root` must not change plugin/source mode.
+
+    The scaffold-aware helper added in 007-04 only diverges when a vendored
+    `<...>/servo/templates` directory exists two levels up from `scaffold.py`.
+    In the source checkout that directory does not exist, so `_templates_root`
+    must fall back to `plugin_root() / 'templates'` exactly as before.
+    """
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO_ROOT / "skills" / "scaffold-init"))
+        import scaffold as scaffold_mod  # noqa: E402
+        self.scaffold_mod = scaffold_mod
+
+    def test_templates_root_is_plugin_root_templates_in_source_mode(self):
+        os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+        expected = self.scaffold_mod.plugin_root() / "templates"
+        self.assertEqual(self.scaffold_mod._templates_root(), expected)
+
+    def test_templates_root_honors_explicit_plugin_root(self):
+        prev = os.environ.get("CLAUDE_PLUGIN_ROOT")
+        os.environ["CLAUDE_PLUGIN_ROOT"] = str(REPO_ROOT)
+        try:
+            self.assertEqual(
+                self.scaffold_mod._templates_root(),
+                REPO_ROOT / "templates",
+            )
+        finally:
+            if prev is None:
+                os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+            else:
+                os.environ["CLAUDE_PLUGIN_ROOT"] = prev
+
+    def test_load_template_still_reads_source_template(self):
+        os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
+        text = self.scaffold_mod._load_template()
+        self.assertIn("{{COMPONENTS_LIST}}", text)
+
+
 if __name__ == "__main__":
     unittest.main()

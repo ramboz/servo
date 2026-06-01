@@ -36,7 +36,7 @@
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-01 — plugin-contract-verifier | **DONE** | 14 tests; `.claude-plugin/install-contract.json` + plugin verifier; subagent review PASS |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-02 — release-zip | **DONE** | 23 release-zip tests / 37 script tests; 21-entry deterministic zip; final subagent review PASS |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-03 — scaffold-runtime | **DONE** | 23 scaffold-runtime + 9 scaffold-verifier tests; `scripts/scaffold_runtime.py` vendors servo- prefixed skills/agents/templates into `<target>/.claude/` + `scaffold-install.json`; `verify_install.py scaffold`; review PASS; 2 fidelity gaps deferred to 007-04 |
-| [007-install-surfaces](007-install-surfaces/spec.md) | 007-04 — scaffold-fidelity | DRAFT | Path rewrites, generated command/link checks, version provenance |
+| [007-install-surfaces](007-install-surfaces/spec.md) | 007-04 — scaffold-fidelity | **DONE** | 27 new tests; scaffold-aware `_templates_root` makes vendored oracle-install self-contained (closes 007-03 gap); SKILL.md `${CLAUDE_PLUGIN_ROOT}`→`.claude/skills/servo-*` rewrite; vendored-`.md` unresolved-link strip; new `stale_source_reference` verifier reason (distinct from `artifact_missing`); AC2 in-test command classification; review PASS |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-05 — docs-and-ci | DRAFT | Install docs + ordinary repo verification for plugin/zip/scaffold |
 
 ## Planned specs
