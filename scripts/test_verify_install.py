@@ -21,7 +21,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
+import scaffold_runtime  # noqa: E402
 import verify_install  # noqa: E402
+
+
+CONTRACT = json.loads((REPO_ROOT / ".claude-plugin" / "install-contract.json").read_text())
+SCAFFOLD_CFG = CONTRACT["scaffold"]
+SKILL_PREFIX = SCAFFOLD_CFG["skill_prefix"]
+AGENT_PREFIX = SCAFFOLD_CFG["agent_prefix"]
+RUNTIME_ROOT = SCAFFOLD_CFG["runtime_root"]
 
 
 def _copy_required_file(src: Path, dst: Path) -> None:
@@ -244,6 +252,129 @@ class CliTests(unittest.TestCase):
             self.assertEqual(payload["failures"][0]["path"], "agents/runner.md")
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+class ScaffoldVerifierSuccessTests(unittest.TestCase):
+    """007-03 AC #7: a valid scaffolded target passes the scaffold verifier."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="servo-verify-scaffold-"))
+        self.target = self.tmpdir / "project"
+        self.target.mkdir(parents=True)
+        scaffold_runtime.scaffold_runtime(self.target)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_valid_scaffold_passes(self):
+        result = verify_install.verify_scaffold(self.target)
+        self.assertTrue(result.ok, [failure.to_json() for failure in result.failures])
+        self.assertEqual(result.mode, "scaffold")
+
+    def test_json_output_shape(self):
+        out = io.StringIO()
+        rc = verify_install.run_scaffold(self.target, json_output=True, out=out)
+        self.assertEqual(rc, 0, out.getvalue())
+        payload = json.loads(out.getvalue())
+        self.assertEqual(payload["mode"], "scaffold")
+        self.assertEqual(payload["status"], "pass")
+        self.assertEqual(payload["failures"], [])
+
+    def test_cli_subprocess_success(self):
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "verify_install.py"),
+                "scaffold",
+                "--json",
+                str(self.target),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "pass")
+
+
+class ScaffoldVerifierFailureTests(unittest.TestCase):
+    """007-03 AC #7: missing managed artifacts fail actionably."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="servo-verify-scaffold-"))
+        self.target = self.tmpdir / "project"
+        self.target.mkdir(parents=True)
+        scaffold_runtime.scaffold_runtime(self.target)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_missing_skill_helper_reports_artifact_missing(self):
+        (self.target / ".claude" / "skills" / f"{SKILL_PREFIX}scaffold-init" / "scaffold.py").unlink()
+        result = verify_install.verify_scaffold(self.target)
+        self.assertFalse(result.ok)
+        self.assertIn("artifact_missing", _failure_reasons(result))
+        self.assertTrue(
+            any("scaffold.py" in path for path in _failure_paths(result)),
+            _failure_paths(result),
+        )
+
+    def test_missing_agent_reports_artifact_missing(self):
+        (self.target / ".claude" / "agents" / f"{AGENT_PREFIX}judge.md").unlink()
+        result = verify_install.verify_scaffold(self.target)
+        self.assertFalse(result.ok)
+        self.assertIn("artifact_missing", _failure_reasons(result))
+        self.assertTrue(
+            any(f"{AGENT_PREFIX}judge.md" in path for path in _failure_paths(result)),
+            _failure_paths(result),
+        )
+
+    def test_missing_template_reports_artifact_missing(self):
+        (self.target / RUNTIME_ROOT / "templates" / "components" / "pytest.sh.fragment").unlink()
+        result = verify_install.verify_scaffold(self.target)
+        self.assertFalse(result.ok)
+        self.assertIn("artifact_missing", _failure_reasons(result))
+        self.assertTrue(
+            any("pytest.sh.fragment" in path for path in _failure_paths(result)),
+            _failure_paths(result),
+        )
+
+    def test_missing_manifest_reports_manifest_missing(self):
+        (self.target / RUNTIME_ROOT / "scaffold-install.json").unlink()
+        result = verify_install.verify_scaffold(self.target)
+        self.assertFalse(result.ok)
+        self.assertIn("manifest_missing", _failure_reasons(result))
+        self.assertTrue(
+            any("scaffold-install.json" in path for path in _failure_paths(result)),
+            _failure_paths(result),
+        )
+
+    def test_distinct_failures_when_multiple_artifacts_missing(self):
+        (self.target / ".claude" / "agents" / f"{AGENT_PREFIX}runner.md").unlink()
+        (self.target / RUNTIME_ROOT / "templates" / "oracle.sh.template").unlink()
+        result = verify_install.verify_scaffold(self.target)
+        self.assertFalse(result.ok)
+        paths = _failure_paths(result)
+        self.assertTrue(any(f"{AGENT_PREFIX}runner.md" in p for p in paths), paths)
+        self.assertTrue(any("oracle.sh.template" in p for p in paths), paths)
+
+    def test_cli_subprocess_failure_exit(self):
+        (self.target / ".claude" / "agents" / f"{AGENT_PREFIX}runner.md").unlink()
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "verify_install.py"),
+                "scaffold",
+                "--json",
+                str(self.target),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "fail")
+        self.assertEqual(payload["failures"][0]["reason"], "artifact_missing")
 
 
 if __name__ == "__main__":

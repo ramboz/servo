@@ -2,7 +2,8 @@
 """Verify servo install surfaces.
 
 Slices 007-01 and 007-02 implement plugin-root and release-zip
-verification. Scaffold verification lands in slice 007-03.
+verification; slice 007-03 adds project-local scaffold verification
+(`verify_install.py scaffold <target>`).
 """
 
 from __future__ import annotations
@@ -599,19 +600,128 @@ def verify_zip(zip_path: Path | str) -> VerificationResult:
     )
 
 
-def _write_human(result: VerificationResult, out: TextIO) -> None:
-    if result.ok:
-        print(
-            f"PASS plugin {result.plugin_name or '<unknown>'} "
-            f"version={result.version or '<unknown>'}",
-            file=out,
+def _source_root() -> Path:
+    """Servo source checkout that owns the install contract.
+
+    `scripts/verify_install.py` sits one directory below the repo root, so the
+    contract describing required artifacts lives at `<source>/.claude-plugin/`.
+    The scaffold verifier inspects a target's vendored copy against that
+    contract; the target itself does not carry the contract file.
+    """
+    return Path(__file__).resolve().parents[1]
+
+
+def _scaffold_artifact_paths(
+    target: Path,
+    contract: dict[str, Any],
+) -> tuple[list[Path], Path, list[Failure]]:
+    """Return target-relative paths for managed scaffold artifacts.
+
+    Also returns the scaffold manifest path (separately, so the verifier can
+    distinguish a missing manifest from a missing artifact) and any contract
+    malformations encountered while reading the scaffold/required blocks.
+    """
+    failures: list[Failure] = []
+    scaffold = contract.get("scaffold")
+    if not isinstance(scaffold, dict):
+        failures.append(
+            _failure(
+                target,
+                "contract_malformed",
+                _source_root() / CONTRACT_PATH,
+                "install contract must contain a scaffold object",
+            )
         )
-        return
-    print(
-        f"FAIL plugin {result.plugin_name or '<unknown>'} "
-        f"version={result.version or '<unknown>'}",
-        file=out,
+        return [], target, failures
+    skill_prefix = scaffold.get("skill_prefix")
+    agent_prefix = scaffold.get("agent_prefix")
+    runtime_root = scaffold.get("runtime_root")
+    for key, value in (
+        ("skill_prefix", skill_prefix),
+        ("agent_prefix", agent_prefix),
+        ("runtime_root", runtime_root),
+    ):
+        if not isinstance(value, str) or not value:
+            failures.append(
+                _failure(
+                    target,
+                    "contract_malformed",
+                    _source_root() / CONTRACT_PATH,
+                    f"scaffold.{key} must be a non-empty string",
+                )
+            )
+    if failures:
+        return [], target, failures
+
+    artifacts: list[Path] = []
+    skills, skill_failures = _normalize_skill_entries(target, contract)
+    failures.extend(skill_failures)
+    for skill in skills:
+        for file_name in skill["files"]:
+            artifacts.append(
+                Path(".claude") / "skills" / f"{skill_prefix}{skill['name']}" / file_name
+            )
+
+    agents, agent_failures = _require_string_list(target, contract, "agents")
+    failures.extend(agent_failures)
+    artifacts.extend(
+        Path(".claude") / "agents" / f"{agent_prefix}{agent}.md" for agent in agents
     )
+
+    templates, template_failures = _require_string_list(target, contract, "templates")
+    failures.extend(template_failures)
+    artifacts.extend(Path(runtime_root) / "templates" / template for template in templates)
+
+    manifest_path = Path(runtime_root) / "scaffold-install.json"
+    return artifacts, manifest_path, failures
+
+
+def verify_scaffold(target: Path | str) -> VerificationResult:
+    """Verify a project-local scaffold target against the servo install contract.
+
+    The contract is read from the servo source checkout that ships this
+    verifier; the scaffolded target carries vendored, servo-prefixed copies of
+    the managed artifacts rather than the contract itself.
+    """
+    target_path = Path(target).resolve()
+    contract, contract_failures = _load_contract(_source_root())
+    if contract is None:
+        return VerificationResult(
+            mode="scaffold",
+            plugin_name=None,
+            version=None,
+            failures=tuple(contract_failures),
+        )
+
+    plugin_name = contract.get("plugin_name")
+    artifacts, manifest_rel, failures = _scaffold_artifact_paths(target_path, contract)
+    if not failures:
+        failures.extend(_check_artifact_files(target_path, artifacts))
+        manifest_path = target_path / manifest_rel
+        if not manifest_path.is_file():
+            failures.append(
+                _failure(
+                    target_path,
+                    "manifest_missing",
+                    manifest_path,
+                    f"scaffold manifest {manifest_rel.as_posix()} is missing",
+                )
+            )
+
+    return VerificationResult(
+        mode="scaffold",
+        plugin_name=plugin_name if isinstance(plugin_name, str) else None,
+        version=None,
+        failures=tuple(failures),
+    )
+
+
+def _write_human(result: VerificationResult, out: TextIO) -> None:
+    label = f"{result.mode} {result.plugin_name or '<unknown>'}"
+    if result.ok:
+        print(f"PASS {label} version={result.version or '<unknown>'}", file=out)
+        return
+    print(f"FAIL {label} version={result.version or '<unknown>'}", file=out)
     for failure in result.failures:
         print(
             f"{failure.reason}: {failure.path}: {failure.message}",
@@ -641,6 +751,17 @@ def run_zip(zip_path: Path | str, *, json_output: bool = False, out: TextIO | No
     return 0 if result.ok else 1
 
 
+def run_scaffold(target: Path | str, *, json_output: bool = False, out: TextIO | None = None) -> int:
+    if out is None:
+        out = sys.stdout
+    result = verify_scaffold(target)
+    if json_output:
+        print(json.dumps(result.to_json(), sort_keys=True), file=out)
+    else:
+        _write_human(result, out)
+    return 0 if result.ok else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Verify servo install surfaces.")
     subparsers = parser.add_subparsers(dest="mode", required=True)
@@ -653,6 +774,10 @@ def build_parser() -> argparse.ArgumentParser:
     zip_parser.add_argument("zip_path", help="path to the release zip")
     zip_parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
 
+    scaffold = subparsers.add_parser("scaffold", help="verify a project-local scaffold target")
+    scaffold.add_argument("target", help="path to the scaffolded target project")
+    scaffold.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+
     return parser
 
 
@@ -663,6 +788,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_plugin(ns.root, json_output=ns.json)
     if ns.mode == "zip":
         return run_zip(ns.zip_path, json_output=ns.json)
+    if ns.mode == "scaffold":
+        return run_scaffold(ns.target, json_output=ns.json)
     parser.error(f"unsupported mode: {ns.mode}")
     return 2
 
