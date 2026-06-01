@@ -26,6 +26,14 @@ if command -v shellcheck >/dev/null 2>&1; then
 fi
 
 if command -v docker >/dev/null 2>&1; then
+  # Docker is installed but the daemon may be down/unreachable. A failed
+  # `docker run` connect returns 125 — indistinguishable to a naive caller
+  # from a real shellcheck failure. Probe the daemon first and, if it's
+  # unreachable, exit 127 ("shellcheck unavailable") so callers skip instead.
+  if ! docker info >/dev/null 2>&1; then
+    echo "shellcheck: docker installed but daemon unreachable; treating as unavailable" >&2
+    exit 127
+  fi
   abs_file="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
   dir="$(dirname "$abs_file")"
   name="$(basename "$abs_file")"

@@ -2496,6 +2496,30 @@ def _find_only_run_id(target: Path) -> str:
     return children[0].name
 
 
+def _wait_until(predicate, *, timeout: float = 10.0, interval: float = 0.01,
+                what: str = "condition") -> None:
+    """Block until `predicate()` is truthy — a deterministic test barrier.
+
+    Signal-handling tests must deliver SIGINT/SIGTERM only after the loop has
+    reached the specific checkpoint under test. A fixed `time.sleep()` races
+    loop.py's variable startup latency (cold interpreter spawn + preflight +
+    run-dir creation + initial state write), so under load the signal can land
+    in the pre-iteration checkpoint instead of the during-claude/during-gate
+    one — recording iteration_count=0 and failing the assertion. Polling a
+    marker the subprocess writes removes the race.
+    """
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if predicate():
+                return
+        except Exception:
+            pass
+        time.sleep(interval)
+    raise AssertionError(f"timed out after {timeout}s waiting for {what}")
+
+
 def _mock_claude_session_per_iter(
     bindir: Path, counter_file: Path, *,
     cost: float = 0.05,
@@ -2536,22 +2560,29 @@ def _mock_claude_session_per_iter(
     return _make_mock_claude(bindir, body)
 
 
-def _slow_oracle(sleep_seconds: float = 3.0) -> str:
+def _slow_oracle(
+    sleep_seconds: float = 3.0, marker_file: Optional[Path] = None,
+) -> str:
     """Oracle that traps SIGINT/SIGTERM and sleeps before emitting a score.
 
-    Used by `SignalHandlingTests.test_sigint_during_gate_*` to let a SIGINT
-    arrive AFTER claude has returned (mock claude is fast) but DURING
-    gate.py's invocation of oracle.sh. Trap mirrors a real oracle that
-    cleans up under signal.
+    Used by `SignalHandlingDuringGateTests` to let a SIGINT arrive AFTER
+    claude has returned (mock claude is fast) but DURING gate.py's invocation
+    of oracle.sh. Trap mirrors a real oracle that cleans up under signal.
+
+    When `marker_file` is given, the oracle touches it immediately before
+    sleeping, so a test can poll for the marker and deliver the signal
+    deterministically inside the gate window instead of racing a fixed sleep.
     """
-    return textwrap.dedent(f"""\
-        #!/usr/bin/env bash
-        trap 'exit 130' INT TERM
-        sleep {sleep_seconds} &
-        wait $!
-        echo 'oracle: composite=0.2000 threshold=0.5'
-        exit 1
-    """)
+    lines = ["#!/usr/bin/env bash", "trap 'exit 130' INT TERM"]
+    if marker_file is not None:
+        lines.append(f"touch '{marker_file}'")
+    lines += [
+        f"sleep {sleep_seconds} &",
+        "wait $!",
+        "echo 'oracle: composite=0.2000 threshold=0.5'",
+        "exit 1",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def _mock_claude_sleep_then_emit(
@@ -3279,14 +3310,26 @@ class SignalHandlingTests(unittest.TestCase):
             text=True, env=env,
         )
 
+    def _wait_for_signal_window(self) -> None:
+        """Block until mock claude has spawned (counter written) so a SIGINT
+        lands in the during-claude checkpoint, not the pre-iteration one.
+
+        Replaces a fixed sleep that raced loop.py's startup latency.
+        """
+        _wait_until(
+            lambda: self.counter.exists()
+            and self.counter.read_text().strip().isdigit(),
+            what="mock claude to spawn (counter file written)",
+        )
+
     def test_sigint_during_claude_emits_interrupted_summary(self):
         import signal as sigmod
-        import time as timemod
         proc = self._spawn()
         try:
-            # Give iter 1 ~0.5s to actually start claude (the mock then
-            # sleeps for 3s).
-            timemod.sleep(0.5)
+            # Barrier: wait until the mock claude has spawned (it writes the
+            # counter before its 3s sleep) so the SIGINT lands while claude is
+            # in flight, not during loop startup.
+            self._wait_for_signal_window()
             proc.send_signal(sigmod.SIGINT)
             stdout, stderr = proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:
@@ -3306,10 +3349,9 @@ class SignalHandlingTests(unittest.TestCase):
 
     def test_sigterm_during_claude_emits_interrupted_summary(self):
         import signal as sigmod
-        import time as timemod
         proc = self._spawn()
         try:
-            timemod.sleep(0.5)
+            self._wait_for_signal_window()
             proc.send_signal(sigmod.SIGTERM)
             stdout, stderr = proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:
@@ -3322,10 +3364,9 @@ class SignalHandlingTests(unittest.TestCase):
 
     def test_state_file_finalized_with_interrupted_reason(self):
         import signal as sigmod
-        import time as timemod
         proc = self._spawn()
         try:
-            timemod.sleep(0.5)
+            self._wait_for_signal_window()
             proc.send_signal(sigmod.SIGINT)
             proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:
@@ -3341,10 +3382,9 @@ class SignalHandlingTests(unittest.TestCase):
 
     def test_interrupt_summary_iterations_completed_one(self):
         import signal as sigmod
-        import time as timemod
         proc = self._spawn()
         try:
-            timemod.sleep(0.5)
+            self._wait_for_signal_window()
             proc.send_signal(sigmod.SIGINT)
             stdout, _stderr = proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:
@@ -3373,7 +3413,13 @@ class SignalHandlingDuringGateTests(unittest.TestCase):
         self.target.mkdir()
         _make_manifest(self.target)
         # Slow oracle: gate.py invokes this, then sleeps 3s before scoring.
-        _make_oracle(self.target, _slow_oracle(sleep_seconds=3.0))
+        # The marker lets the test poll for "oracle is running" instead of
+        # racing a fixed sleep (see _wait_until).
+        self.oracle_started = tmp / "oracle_started"
+        _make_oracle(
+            self.target,
+            _slow_oracle(sleep_seconds=3.0, marker_file=self.oracle_started),
+        )
         self.bindir = tmp / "bin"
         self.counter = tmp / "counter.txt"
         # Fast mock claude — emits JSON immediately.
@@ -3396,14 +3442,25 @@ class SignalHandlingDuringGateTests(unittest.TestCase):
             text=True, env=env,
         )
 
+    def _wait_for_signal_window(self) -> None:
+        """Block until oracle.sh has started (marker touched) so a SIGINT
+        lands during gate.py, not during claude or loop startup.
+
+        Replaces a fixed sleep that raced loop.py's startup latency.
+        """
+        _wait_until(
+            self.oracle_started.exists,
+            what="oracle.sh to start (gate window)",
+        )
+
     def test_sigint_during_gate_emits_unknown_interrupted(self):
         import signal as sigmod
-        import time as timemod
         proc = self._spawn()
         try:
-            # Claude returns instantly; gate.py invokes oracle.sh which
-            # then sleeps. ~0.5s in, gate is the active subprocess.
-            timemod.sleep(0.5)
+            # Barrier: wait until oracle.sh has started (it touches a marker
+            # before its 3s sleep). Mock claude is instant, so once the oracle
+            # is sleeping the SIGINT deterministically lands during gate.py.
+            self._wait_for_signal_window()
             proc.send_signal(sigmod.SIGINT)
             stdout, stderr = proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:
@@ -3423,10 +3480,9 @@ class SignalHandlingDuringGateTests(unittest.TestCase):
 
     def test_state_file_after_sigint_during_gate(self):
         import signal as sigmod
-        import time as timemod
         proc = self._spawn()
         try:
-            timemod.sleep(0.5)
+            self._wait_for_signal_window()
             proc.send_signal(sigmod.SIGINT)
             proc.communicate(timeout=10)
         except subprocess.TimeoutExpired:
