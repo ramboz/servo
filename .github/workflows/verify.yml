@@ -1,0 +1,29 @@
+name: verify
+
+# Slice 007-05 (docs-and-ci). Runs the single install-surface verification
+# command on every push and pull request so contributors cannot silently
+# break plugin install, release-zip install, or project-local scaffold
+# install. ubuntu-latest ships shellcheck preinstalled, so the oracle
+# shellcheck test actually runs here (it skips on dev machines without it).
+
+"on":
+  push:
+  pull_request:
+
+jobs:
+  install-surfaces:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python3 -m pip install --upgrade pip pytest
+
+      - name: Verify install surfaces
+        run: bash scripts/verify_install_surfaces.sh

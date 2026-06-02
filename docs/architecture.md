@@ -34,6 +34,29 @@ servo/
 └── LICENSE
 ```
 
+## Install surfaces
+
+Servo has two distinct install layers; conflating them is the easiest way to
+ship a broken install:
+
+| Layer | What is installed | Destination | Owner |
+|---|---|---|---|
+| **Servo runtime install** | Skills, agents, templates, scripts, descriptors | Plugin root, release zip, or `<target>/.claude/` | Servo |
+| **Project oracle install** | `oracle.sh`, `.servo/install.json`, refinement notes | Target project root | Project |
+
+The **project oracle install** is `/servo:scaffold-init` (spec 001) and is
+covered by [Install manifest](#install-manifest) below. The **servo runtime
+install** (spec 007) has three surfaces — plugin root, release zip, and
+project-local scaffold — that are three projections of one data-driven
+contract (`.claude-plugin/install-contract.json`) checked by one verifier
+(`scripts/verify_install.py {plugin,zip,scaffold}`). `scripts/build_release_zip.py`
+packages the deterministic archive and `scripts/scaffold_runtime.py` vendors
+the `servo-`prefixed runtime into a target's `.claude/`. The single repo
+verification command `scripts/verify_install_surfaces.sh` runs the plugin
+verifier plus the install-surface test suites and is wired into CI on push and
+pull request. See the README's "Installing servo" section for the
+user-facing chooser.
+
 ## Skill split
 
 Servo is **scaffolder-first, runtime second**. The four runtime skills all presuppose artifacts the scaffolder dropped into the target.

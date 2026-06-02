@@ -61,6 +61,7 @@ Spec 001 (`/servo:scaffold-init`) only. Drops `oracle.sh` into target with signa
 
 ## Design principles
 
+- **Two install layers, named explicitly.** *Servo runtime install* (getting servo's own skills/agents/templates onto a machine — via plugin root, release zip, or a project-local `.claude/` scaffold) is a different thing from *project oracle install* (`/servo:scaffold-init` dropping a tailored `oracle.sh` + `.servo/install.json` into a target repo). All three runtime surfaces share one contract and one verifier (`scripts/verify_install.py`); see [architecture.md](architecture.md) and the README for the chooser. *Spec 007 — DONE.*
 - **Per-project artifacts beat plugin-owned runtime.** The dev's `oracle.sh` is theirs; servo only scaffolds it.
 - **Refuse-on-missing-prerequisite.** If servo's runtime skills can't find `oracle.sh`, they exit non-zero. No silent degradation.
 - **Reversibility.** Hooks install and uninstall cleanly. Race worktrees clean up by default.

@@ -37,7 +37,7 @@
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-02 — release-zip | **DONE** | 23 release-zip tests / 37 script tests; 21-entry deterministic zip; final subagent review PASS |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-03 — scaffold-runtime | **DONE** | 23 scaffold-runtime + 9 scaffold-verifier tests; `scripts/scaffold_runtime.py` vendors servo- prefixed skills/agents/templates into `<target>/.claude/` + `scaffold-install.json`; `verify_install.py scaffold`; review PASS; 2 fidelity gaps deferred to 007-04 |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-04 — scaffold-fidelity | **DONE** | 27 new tests; scaffold-aware `_templates_root` makes vendored oracle-install self-contained (closes 007-03 gap); SKILL.md `${CLAUDE_PLUGIN_ROOT}`→`.claude/skills/servo-*` rewrite; vendored-`.md` unresolved-link strip; new `stale_source_reference` verifier reason (distinct from `artifact_missing`); AC2 in-test command classification; review PASS |
-| [007-install-surfaces](007-install-surfaces/spec.md) | 007-05 — docs-and-ci | DRAFT | Install docs + ordinary repo verification for plugin/zip/scaffold |
+| [007-install-surfaces](007-install-surfaces/spec.md) | 007-05 — docs-and-ci | **DONE** | 9 doc-guard tests; README "Installing servo" (3 surfaces + release recipe); two-layer model in vision/architecture/specs; `scripts/verify_install_surfaces.sh` (one command) wired to CI via `.github/workflows/verify.yml`; review PASS — **spec 007 complete** |
 
 ## Planned specs
 
@@ -71,7 +71,7 @@ of jig.
 | `Stop`-hook grading (oracle-scored, structured retry hints) | 004-oracle-hook | The original meta-judge pattern; structured replacement for ad-hoc Stop-hook regex |
 | Worktree-race coordination + winner selection | 005-variant-race | Variant-lease pattern; same family as jig's spec-number reservation but for ephemeral worktrees |
 | Spec-specific judging | 006-spec-oracle | Turns acceptance criteria into deterministic evidence overlays so loops optimize against the spec, not just the baseline suite |
-| Install surface drift | 007-install-surfaces | Plugin manifests, release zip, and project-local scaffold all share one data-driven contract and verifier |
+| Install surface drift | 007-install-surfaces | Two install layers kept distinct — *servo runtime install* (plugin root / release zip / project-local `.claude/` scaffold) vs *project oracle install* (`/servo:scaffold-init` → `oracle.sh` + `.servo/install.json`). All three runtime surfaces share one data-driven contract (`.claude-plugin/install-contract.json`) and one verifier (`scripts/verify_install.py`); `scripts/verify_install_surfaces.sh` runs them in CI |
 
 Gaps that stay with jig (primer-doc hygiene, supervised slice-level drift
 detection, parallel-worktree spec-numbering, memory-recall, PostToolUse

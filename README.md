@@ -31,6 +31,110 @@ Servo is a **sibling plugin**, not a dependency. They coexist in `${CLAUDE_PLUGI
 - Servo reuses jig's `tdd.py detect` (via subprocess) when jig is installed; falls back to its own minimal test-runner detection otherwise.
 - Jig's `slice-land prepare` emits soft pull-hints for servo artifacts when servo-style infrastructure is missing — that's the entirety of the coupling.
 
+## Installing servo
+
+Servo has **two different things called "install"** — keep them separate:
+
+- **Servo runtime install** — getting servo's own skills, agents, templates,
+  and descriptors onto your machine so the `/servo:*` commands exist. This
+  section.
+- **Project oracle install** — running `/servo:scaffold-init` *inside a target
+  project* to drop a tailored `oracle.sh` + `.servo/install.json` into that
+  repo. That is the [scaffolded `oracle.sh`](#the-scaffolded-oraclesh) below,
+  not a way to install servo itself.
+
+The runtime install has **three surfaces**, all validated by one data-driven
+contract (`.claude-plugin/install-contract.json`) and one verifier
+(`scripts/verify_install.py`). Pick by how much you want servo coupled to a
+shared checkout:
+
+| Surface | Use when | Coupled to source checkout? |
+|---|---|---|
+| **Plugin install** | You develop/dogfood servo, or installed it as a plugin | Yes (`${CLAUDE_PLUGIN_ROOT}`) |
+| **Release zip** | You want a single installable archive for Claude Desktop / `--plugin-dir` | No (self-contained archive) |
+| **Project-local scaffold** | A project should carry the exact servo surface it was built with | No (vendored into the project) |
+
+### Plugin install
+
+A checked-out servo repo (or an installed plugin directory) is already a
+plugin root: it has `.claude-plugin/` metadata, and its skill/agent commands
+reference helpers via `${CLAUDE_PLUGIN_ROOT}`. Verify a plugin root is
+structurally installable before trusting it:
+
+```bash
+python3 scripts/verify_install.py plugin .
+```
+
+### Release zip install
+
+Build a deterministic, runtime-only archive (no tests, docs, caches, or
+`.git/`) and install it via `claude --plugin-dir <extracted-dir>` or Claude
+Desktop's plugin import:
+
+```bash
+# Build → dist/servo-v<version>.zip (version read from .claude-plugin/plugin.json)
+python3 scripts/build_release_zip.py
+
+# Verify an already-built archive
+python3 scripts/verify_install.py zip dist/servo-v0.1.0.zip
+```
+
+The builder smoke-tests the archive by default: it extracts the zip into a
+temp dir and runs the plugin verifier against the extracted root, so a built
+zip is a verified zip.
+
+### Project-local scaffold install
+
+Vendor servo's runtime machinery into a target repo's `.claude/` tree. The
+copied skills and agents are `servo-` prefixed (so they never collide with
+project-local or `jig-*` assets) and are **self-contained** — their commands
+do not reference `${CLAUDE_PLUGIN_ROOT}` and do not reach back into the source
+checkout:
+
+```bash
+# Vendors servo-prefixed skills/agents + templates into <target>/.claude/
+python3 scripts/scaffold_runtime.py <target>
+
+# Verify the scaffolded copy
+python3 scripts/verify_install.py scaffold <target>
+```
+
+This is distinct from `/servo:scaffold-init` (the [project oracle
+install](#the-scaffolded-oraclesh)): scaffold *runtime* copies servo itself
+into `<target>/.claude/`; scaffold *init* writes a project's own `oracle.sh`
+and `.servo/install.json`.
+
+### Release recipe
+
+The release flow is manual (no marketplace submission or asset automation in
+this version):
+
+1. Build the archive — it lands at `dist/servo-v<version>.zip`, where
+   `<version>` comes from `.claude-plugin/plugin.json`:
+
+   ```bash
+   python3 scripts/build_release_zip.py
+   ```
+
+2. Verify the produced archive:
+
+   ```bash
+   python3 scripts/verify_install.py zip dist/servo-v0.1.0.zip
+   ```
+
+`dist/` is git-ignored; the archive is a build artifact, not a tracked file.
+
+### Verifying all surfaces at once
+
+One command runs the plugin verifier against the live checkout and the full
+install-surface test suite (plugin verifier, zip builder, scaffold
+verifier/runtime, and the docs stale-path guard). This is what CI runs on
+every push and pull request:
+
+```bash
+bash scripts/verify_install_surfaces.sh
+```
+
 ## The scaffolded `oracle.sh`
 
 `oracle.sh` is a thin bash driver around a list of **components**. Each component is a function that scores its slice of project quality in `[0.0, 1.0]`; the driver computes a weighted average and gates it against `THRESHOLD`.
