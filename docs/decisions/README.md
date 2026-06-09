@@ -11,14 +11,16 @@
 - [ADR-0002: Quality-gate caller contract — closed exit codes and versioned JSON schema](adr-0002-gate-caller-contract.md) — `gate.py` exits only `0/1/2` (unexpected oracle exits remap to `2`); `--json` payloads carry `schema_version: 1` from day one. The contract specs 003 / 004 / 005 consume. (2026-05-18, Accepted)
 - [ADR-0003: Why a fresh subagent roster, not reused from jig](adr-0003-fresh-subagent-roster.md) — Servo ships two fresh agents (`runner`, `judge`) because their machine-parseable verdict-block output diverges from jig's narrative `implementer` / `reviewer`. Architect calls delegate to `jig:architect` directly — no servo-side architect prompt. (2026-05-19, Accepted)
 - [ADR-0004: Session-state file format on disk](adr-0004-session-state-file-format.md) — Per-run loop scoreboard at `<target>/.servo/runs/<run-id>/state.json`, referencing Claude Code sessions by `session_id` only. Atomic-write contract, `state_schema_version`, run-id collision policy. Filesystem-only coupling with Claude Code. (2026-05-19, Accepted)
+- [ADR-0005: Eval as a frozen oracle component](adr-0005-eval-oracle-component.md) — A non-deterministic eval enters the composite only as a *frozen* `score_<name>`: its definition (rubric + dataset + judge model + `n` + `δ`) is hashed and approved, it reports a confidence lower bound rather than a raw judge score, and `loop.py` gains a plateau noise floor. The reciprocal servo-side ADR to jig's ADR-0022. (2026-06-09, Proposed)
 
 ## Pending
 
 ADR candidates (numbers are *hints* of the next likely allocation order,
-not reservations — the next accepted ADR claims `0005` regardless of
-which candidate fires first):
+not reservations — the next accepted ADR claims the next free number
+regardless of which candidate fires first). `0005` is now reserved
+(Proposed) by the eval-oracle-component ADR above:
 
-- **ADR-0005 — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
+- **ADR-0006 — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 
 ## Format
 
