@@ -19,6 +19,7 @@ is built with `scaffold.install(...)` and driven through the stock `gate.py`
 for the end-to-end pass/fail/env-error paths (the DoD's integration check).
 """
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -95,6 +96,11 @@ class FragmentTests(unittest.TestCase):
         self.assertIn("--score-only", frag)
         self.assertIn(".servo/spec-oracles/099-demo/checks.py", frag)
         self.assertIn(".servo/spec-oracles/099-demo/checks.json", frag)
+
+    def test_fragment_enforces_freeze(self):
+        # The installed component runs the engine with the freeze gate on, so
+        # the loop can only score an approved, unmodified overlay (006-04).
+        self.assertIn("--enforce-freeze", ov.render_fragment("099-demo"))
 
     def test_fragment_guards_missing_python(self):
         # A missing python3 is an environment error (rc=2), not a crash.
@@ -261,6 +267,84 @@ class UninstallTests(unittest.TestCase):
 
 
 # ===========================================================================
+# AC1/AC2/AC3/AC4 — approve: negative controls + source/artifact hashes
+# ===========================================================================
+
+
+class ApproveTests(unittest.TestCase):
+    """`approve` records the freeze state: it verifies the source spec is
+    unchanged, runs each check's negative control and refuses if a check
+    cannot be made to fail (AC4), then records artifact hashes and flips
+    `approval_status` to approved (AC1)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self.tmp.name)
+        # A real servo-scaffolded target (oracle.sh + install.json) so the
+        # approved-overlay gate run has the manifest it requires.
+        scaffold.install(self.target, force=True)
+        (self.target / "present.txt").write_text("x")
+        # A falsifiable check: its negative control points at an absent path,
+        # which must turn the passing file_presence check into a failure.
+        _write_plan(self.target, "099-demo", [
+            {"id": "AC-1", "family": "file_presence", "path": "present.txt",
+             "negative_control": {"path": "definitely-absent.txt"}},
+        ])
+        ov.install(self.target, "099-demo")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _plan(self) -> dict:
+        return json.loads(
+            (self.target / ".servo" / "spec-oracles" / "099-demo"
+             / "checks.json").read_text())
+
+    def test_approve_sets_status_and_records_hashes(self):
+        ov.approve(self.target, "099-demo")
+        plan = self._plan()
+        self.assertEqual(plan["approval_status"], "approved")
+        self.assertIn("checks.py", plan["approved_artifacts"])
+        self.assertIn("oracle.sh.fragment", plan["approved_artifacts"])
+        self.assertTrue(plan["approved_artifacts"]["checks.py"].startswith("sha256:"))
+        # The approved checks are tripwire-pinned too (review hardening).
+        self.assertIn("approved_content_hash", plan)
+
+    def test_approve_refuses_non_falsifiable_negative_control(self):
+        # Negative control that does NOT flip the check to failing → the check
+        # is not falsifiable → approval refused (AC4).
+        _write_plan(self.target, "099-demo", [
+            {"id": "AC-1", "family": "file_presence", "path": "present.txt",
+             "negative_control": {"path": "present.txt"}},  # still present → passes
+        ])
+        with self.assertRaises(ValueError):
+            ov.approve(self.target, "099-demo")
+        self.assertNotEqual(self._plan().get("approval_status"), "approved")
+
+    def test_approve_refuses_changed_source(self):
+        spec = self.target / "spec.md"
+        spec.write_text("# spec\n")
+        digest = "sha256:" + hashlib.sha256(spec.read_bytes()).hexdigest()
+        d = self.target / ".servo" / "spec-oracles" / "099-demo"
+        plan = json.loads((d / "checks.json").read_text())
+        plan["source_spec_path"] = "spec.md"
+        plan["source_hash"] = digest
+        (d / "checks.json").write_text(json.dumps(plan))
+        spec.write_text("# spec CHANGED\n")  # diverge from the recorded hash
+        with self.assertRaises(ValueError):
+            ov.approve(self.target, "099-demo")
+
+    def test_approved_overlay_scores_through_gate(self):
+        # The freeze gate is satisfied after approval, so the frozen component
+        # scores normally.
+        ov.approve(self.target, "099-demo")
+        res = subprocess.run(
+            [sys.executable, str(GATE_PY), str(self.target), "--json"],
+            capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+
+# ===========================================================================
 # AC3 / AC4 / AC5 — end-to-end through a scaffolded target + stock gate.py
 # ===========================================================================
 
@@ -292,6 +376,7 @@ class GateIntegrationTests(unittest.TestCase):
                     [{"id": "AC-1", "family": "file_presence",
                       "path": "present.txt"}])
         ov.install(self.target, "099-demo")
+        ov.approve(self.target, "099-demo")  # freeze gate must pass to score
         res = self._gate()
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
 
@@ -300,6 +385,7 @@ class GateIntegrationTests(unittest.TestCase):
                     [{"id": "AC-1", "family": "file_presence",
                       "path": "absent.txt"}])
         ov.install(self.target, "099-demo")
+        ov.approve(self.target, "099-demo")  # freeze gate must pass to score
         res = self._gate()
         self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
 
@@ -308,6 +394,7 @@ class GateIntegrationTests(unittest.TestCase):
         _write_plan(self.target, "099-demo",
                     [{"id": "AC-1", "family": "command"}])  # missing command
         ov.install(self.target, "099-demo")
+        ov.approve(self.target, "099-demo")  # freeze gate must pass to score
         res = self._gate()
         self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
 
@@ -317,6 +404,7 @@ class GateIntegrationTests(unittest.TestCase):
                     [{"id": "AC-1", "family": "file_presence",
                       "path": "present.txt"}])
         ov.install(self.target, "099-demo")
+        ov.approve(self.target, "099-demo")
         self._gate()
         ledger = (self.target / ".servo" / "spec-oracles" / "099-demo"
                   / "ledger.jsonl")
@@ -331,6 +419,7 @@ class GateIntegrationTests(unittest.TestCase):
                     [{"id": "AC-1", "family": "file_presence",
                       "path": "present.txt"}])
         ov.install(self.target, "099-demo")
+        ov.approve(self.target, "099-demo")  # freeze gate must pass to score
         res = self._gate()
         payload = json.loads(res.stdout)
         # gate.py saw the overlay as an ordinary component and scored it; its
@@ -367,6 +456,15 @@ class CliTests(unittest.TestCase):
         oracle_dir = self.target / ".servo" / "spec-oracles" / "099-demo"
         self.assertTrue((oracle_dir / "oracle.sh.fragment").is_file())
         self.assertTrue((oracle_dir / "checks.py").is_file())
+
+    def test_approve_via_cli(self):
+        self._run("install", self.target, "099-demo")
+        res = self._run("approve", self.target, "099-demo")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        plan = json.loads(
+            (self.target / ".servo" / "spec-oracles" / "099-demo"
+             / "checks.json").read_text())
+        self.assertEqual(plan["approval_status"], "approved")
 
     def test_install_then_uninstall_via_cli(self):
         res = self._run("install", self.target, "099-demo")

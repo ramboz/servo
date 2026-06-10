@@ -35,9 +35,12 @@ scaffold-init code, keeping the overlay self-contained. Python stdlib only.
 """
 
 import argparse
+import hashlib
+import json
 import re
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -65,6 +68,7 @@ __FN__() {
     ".servo/spec-oracles/__SPEC_ID__/checks.json" \\
     --base-dir . \\
     --ledger ".servo/spec-oracles/__SPEC_ID__/ledger.jsonl" \\
+    --enforce-freeze \\
     --score-only
 }
 # SEED:end __NAME__"""
@@ -214,6 +218,92 @@ def uninstall(target: Path, spec_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Approval / freeze (slice 006-04)
+# ---------------------------------------------------------------------------
+
+def _sha256_file(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _load_engine():
+    """Import the sibling check engine for the negative-control runner."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / "checks.py"
+    spec = importlib.util.spec_from_file_location("checks_engine", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def approve(target: Path, spec_id: str) -> dict:
+    """Freeze the overlay: verify source fidelity, prove every negative control
+    can fail, record artifact hashes, and set ``approval_status: approved``.
+
+    Refuses (``ValueError``) if the source spec changed since planning (AC2 —
+    re-plan, don't approve) or if any check's negative control does not actually
+    fail (AC4 — the check is not falsifiable, so it could pass vacuously and let
+    the loop self-grade). The generated `checks.py` / `oracle.sh.fragment` are
+    hashed into ``approved_artifacts`` (AC3); the runtime freeze gate
+    (`checks.py --enforce-freeze`) compares against these on every score.
+    """
+    _validate_spec_id(spec_id)
+    oracle_dir = _oracle_dir(target, spec_id)
+    checks_json = oracle_dir / "checks.json"
+    if not checks_json.is_file():
+        raise FileNotFoundError(f"no plan to approve: {checks_json}")
+    plan = json.loads(checks_json.read_text())
+
+    # 1. Source spec must still hash to what the planner recorded (AC2).
+    source_path = plan.get("source_spec_path")
+    source_hash = plan.get("source_hash")
+    if source_path and source_hash:
+        src = target / source_path
+        if not src.is_file():
+            raise ValueError(f"source spec missing: {source_path}; re-plan first")
+        if _sha256_file(src) != source_hash:
+            raise ValueError(
+                f"source spec changed since planning ({source_path}); "
+                f"re-plan before approving")
+
+    # 2. Every negative control must flip its check to failing (AC4). The
+    #    control is a spec-override applied in isolation — non-destructive.
+    engine = _load_engine()
+    for check in plan.get("checks", []):
+        control = check.get("negative_control")
+        if isinstance(control, dict):
+            mutated = {**check, **control}
+            mutated.pop("negative_control", None)
+            evidence = engine.run_check(mutated, target)
+            if evidence.get("status") != "fail":
+                raise ValueError(
+                    f"negative control for {check.get('id')!r} did not fail "
+                    f"(status={evidence.get('status')!r}); the check is not "
+                    f"falsifiable — fix the control before approving")
+
+    # 3. Record approved-artifact hashes (AC3); generate/install must run first.
+    artifacts = {}
+    for name in ("checks.py", "oracle.sh.fragment"):
+        artifact = oracle_dir / name
+        if not artifact.is_file():
+            raise FileNotFoundError(
+                f"missing generated artifact {name}; run install/generate first")
+        artifacts[name] = _sha256_file(artifact)
+
+    plan["approved_artifacts"] = artifacts
+    # Tripwire-pin the approved checks themselves (review hardening): the freeze
+    # gate refuses if checks.json's checks are relaxed after approval.
+    plan["approved_content_hash"] = engine.plan_content_hash(plan)
+    plan["approval_status"] = "approved"
+    plan["approved_at"] = _iso_now()
+    checks_json.write_text(json.dumps(plan, indent=2) + "\n")
+    return plan
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -223,7 +313,7 @@ def main(argv: Optional[list] = None) -> int:
         description="Install a spec-oracle as an oracle.sh component.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for cmd in ("generate", "install", "uninstall"):
+    for cmd in ("generate", "install", "uninstall", "approve"):
         sp = sub.add_parser(cmd)
         sp.add_argument("target")
         sp.add_argument("spec_id")
@@ -245,6 +335,10 @@ def main(argv: Optional[list] = None) -> int:
             uninstall(target, args.spec_id)
             print(f"servo: removed component {component_name(args.spec_id)} "
                   f"from {target / 'oracle.sh'} (artifacts kept)")
+        elif args.cmd == "approve":
+            approve(target, args.spec_id)
+            print(f"servo: approved spec-oracle {args.spec_id} "
+                  f"(frozen — re-plan to change)")
     except (FileNotFoundError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

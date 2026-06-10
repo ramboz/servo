@@ -73,6 +73,7 @@ Python stdlib only (AC5).
 
 import argparse
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -807,6 +808,85 @@ def exit_code_for(summary: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Freeze controls (slice 006-04). Optional, enabled by --enforce-freeze — the
+# generated oracle component runs with it on, so an unattended loop can only
+# score an overlay that is approved, source-faithful, and unmodified.
+# ---------------------------------------------------------------------------
+
+def _sha256_file(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def plan_content_hash(plan: dict) -> str:
+    """Hash the *evidence content* of a plan — its ``checks`` and
+    ``residual_judgment`` — excluding the mutable approval/provenance fields.
+
+    A tripwire: relaxing, weakening, or deleting a check after approval changes
+    this hash, so the freeze gate refuses. It is NOT adversary-proof — a runner
+    that deliberately rewrites both the checks and this recorded hash would not
+    be caught (any in-file integrity value is forgeable by a writer of that
+    file). The defenses against a deliberately self-rewriting runner are the
+    runner.md constraint (AC5) and the human approval flow, per ADR-0001's
+    filesystem-only trust model. This catches honest drift, like the other
+    freeze hashes."""
+    payload = json.dumps(
+        {"checks": plan.get("checks", []),
+         "residual_judgment": plan.get("residual_judgment", [])},
+        sort_keys=True, separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def freeze_violation(plan: dict, checks_json_path: Path,
+                     base_dir: Path) -> Optional[tuple]:
+    """Return ``(reason, message)`` if the overlay must be refused, else None.
+
+    Checks, in order: approval state (AC1), source-spec hash (AC2), then
+    generated-artifact hashes (AC3). All violations map to env error (exit 2)
+    — the loud "refuse to score" signal — with a distinct ``reason``.
+    """
+    status = plan.get("approval_status", "draft")
+    if status == "stale":
+        return ("spec_oracle_stale",
+                "spec-oracle marked stale; re-plan and re-approve")
+    if status != "approved":
+        return ("spec_oracle_unapproved",
+                f"spec-oracle not approved (status={status!r}); "
+                f"approve it before unattended use")
+
+    # AC2 — source spec must hash to what was recorded at plan time.
+    source_path = plan.get("source_spec_path")
+    source_hash = plan.get("source_hash")
+    if source_path and source_hash:
+        src = base_dir / source_path
+        if not src.is_file():
+            return ("spec_oracle_stale",
+                    f"source spec missing: {source_path}; re-plan")
+        if _sha256_file(src) != source_hash:
+            return ("spec_oracle_stale",
+                    f"source spec changed since approval ({source_path}); "
+                    f"re-plan and re-approve")
+
+    # AC3 — approved generated artifacts must be byte-identical.
+    for name, expected in (plan.get("approved_artifacts") or {}).items():
+        artifact = checks_json_path.parent / name
+        if not artifact.is_file():
+            return ("spec_oracle_artifact_modified",
+                    f"approved artifact missing: {name}")
+        if _sha256_file(artifact) != expected:
+            return ("spec_oracle_artifact_modified",
+                    f"approved artifact modified: {name}; re-approve after review")
+
+    # The approved checks themselves are tripwire-pinned (slice 006-04 review):
+    # relaxing/removing a check after approval changes the content hash.
+    approved_content = plan.get("approved_content_hash")
+    if approved_content and plan_content_hash(plan) != approved_content:
+        return ("spec_oracle_plan_modified",
+                "checks.json checks modified since approval; re-approve after review")
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -840,6 +920,11 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument("--score-only", dest="score_only", action="store_true",
                         help="print only the composite score (for an oracle.sh "
                              "component): exit 2 iff any check env-errored, else 0")
+    parser.add_argument("--enforce-freeze", dest="enforce_freeze",
+                        action="store_true",
+                        help="refuse (exit 2) unless the overlay is approved, its "
+                             "source spec is unchanged, and its generated "
+                             "artifacts are unmodified (slice 006-04)")
     args = parser.parse_args(argv)
 
     checks_path = Path(args.checks_json)
@@ -856,6 +941,16 @@ def main(argv: Optional[list] = None) -> int:
         base_dir = Path(args.base_dir)
     else:
         base_dir = _derive_base_dir(checks_path)
+
+    # Freeze gate (006-04): an unapproved / stale / tampered overlay is refused
+    # before any check runs, so the loop can never satisfy a self-invented or
+    # quietly-modified oracle.
+    if args.enforce_freeze:
+        violation = freeze_violation(plan, checks_path, base_dir)
+        if violation is not None:
+            reason, message = violation
+            print(f"spec-oracle refused: {message} [{reason}]", file=sys.stderr)
+            return 2
 
     result = run_checks(plan, base_dir)
     evidence = result["evidence"]

@@ -246,3 +246,32 @@ a broken reference-style local link.
 
 **Surfaced by:** slice 006-02 `jig:reviewer` pass (PASS verdict; flagged as a
 disclosed known-limitation, non-blocking).
+
+---
+
+## spec-oracle approval does not require a negative control per check
+
+**Deferred:** Slice 006-04's `approve` (in `oracle_overlay.py`) runs a check's
+negative control only when the check carries a `negative_control` **dict**; a
+check with no control, or with `negative_control: "not_applicable"`, is approved
+without a falsifiability proof. The parent spec's guardrail is stronger — "the
+first version can mark `negative_control: not_applicable` for command checks that
+already invoke an existing suite, but **new generated invariants need controls**"
+— so a new `text_invariant` / `file_presence` / `json_contract` invariant with no
+control can currently be frozen `approved` while being vacuously un-failable.
+Two coupled gaps: (a) the planner (006-01) does not yet auto-generate negative
+controls, so controls are hand-authored or absent; (b) `approve` does not
+distinguish "command wrapping an existing suite" (legitimately `not_applicable`)
+from "new invariant with no control" (should be blocked).
+
+**Resolution trigger:** When 006-05 dogfoods real jig 046/047 plans and an
+un-falsifiable invariant slips through, OR when the planner gains a
+control-generation pass. Fix: teach `approve` to require a `negative_control`
+(dict) for non-`command` families, allowing explicit `not_applicable` only with a
+recorded reason; and/or have the planner emit candidate controls. Add fixtures
+for "new invariant missing control → approval refused".
+
+**Surfaced by:** slice 006-04 `jig:reviewer` pass (needs-changes → resolved):
+the `checks.json`-integrity gap was hardened in-slice with an
+`approved_content_hash` tripwire; this negative-control leniency was dispositioned
+as spec-sanctioned v1 behaviour and deferred here.

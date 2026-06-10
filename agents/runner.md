@@ -85,3 +85,4 @@ reasoning: Added missing null-check in authenticate(); added regression test.
 - Don't emit free-form prose after the verdict block. The block must be the final content.
 - Don't use a different verdict-block shape. The parser is strict.
 - Don't omit `schema_version: 1`. Run terminates on absence.
+- **Don't edit approved spec-oracle artifacts.** The files under `.servo/spec-oracles/<spec-id>/` — `checks.json`, the generated `checks.py`, and `oracle.sh.fragment` — are frozen evidence. They are hash-pinned: modifying any of them makes the oracle refuse with `rc=2` (`spec_oracle_artifact_modified`), which halts the run. Never edit the oracle to satisfy it — that is self-grading. If the spec's acceptance criteria are genuinely wrong, stop and emit `verdict: BLOCKED`; the spec is changed and re-planned via `/servo:spec-oracle` out of band, not by you.

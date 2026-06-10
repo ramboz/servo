@@ -3970,6 +3970,16 @@ class RunnerVerdictBlockTests(unittest.TestCase):
         self.assertIn("NO_CHANGES", text)
         self.assertIn("BLOCKED", text)
 
+    def test_runner_md_forbids_editing_approved_spec_oracle(self):
+        # Spec 006-04 AC5 — loop protection: the runner prompt must tell the
+        # runner not to edit frozen spec-oracle artifacts (no self-grading).
+        text = (REPO_ROOT / "agents" / "runner.md").read_text().lower()
+        self.assertIn(".servo/spec-oracles", text)
+        self.assertTrue(
+            "don't edit" in text or "do not edit" in text or "frozen" in text,
+            "runner.md must forbid editing the frozen spec-oracle artifacts")
+        self.assertIn("self-grading", text)
+
     def test_runner_verdict_block_surfaces_in_per_iter_json(self):
         # Iter 1 is runner; emit a CHANGES_MADE verdict and verify it
         # appears in the per-iter JSON line.

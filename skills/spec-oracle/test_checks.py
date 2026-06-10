@@ -23,6 +23,7 @@ No check primitive requires the network (006-02 DoR); the engine is stdlib
 only (AC5).
 """
 
+import hashlib
 import importlib.util
 import io
 import json
@@ -1004,6 +1005,115 @@ class LedgerTimestampTests(_TmpBase):
         for r in rows:
             self.assertIn("ts", r)
             self.assertTrue(r["ts"])
+
+
+# ===========================================================================
+# --enforce-freeze (slice 006-04 — freeze + approval controls)
+# ===========================================================================
+
+
+class FreezeEnforcementTests(_TmpBase):
+    """`--enforce-freeze` refuses (exit 2) unless the overlay is approved, its
+    source spec is unchanged, and its generated artifacts are unmodified. The
+    default (no flag) path is unaffected — backward compatible with 006-02/03."""
+
+    def _sha(self, p: Path) -> str:
+        return "sha256:" + hashlib.sha256(p.read_bytes()).hexdigest()
+
+    def _setup_overlay(self, *, approval="approved", with_source=True) -> Path:
+        d = self.base / ".servo" / "spec-oracles" / "demo"
+        d.mkdir(parents=True, exist_ok=True)
+        (self.base / "present.txt").write_text("x")
+        checks_py = d / "checks.py"
+        checks_py.write_text("# generated engine copy\n")
+        frag = d / "oracle.sh.fragment"
+        frag.write_text("# SEED:start spec_oracle_demo\n# SEED:end spec_oracle_demo\n")
+        plan = {
+            "schema_version": 1, "spec_id": "demo",
+            "checks": [{"id": "AC-1", "family": "file_presence",
+                        "path": "present.txt"}],
+            "residual_judgment": [],
+            "approval_status": approval,
+            "approved_artifacts": {"checks.py": self._sha(checks_py),
+                                   "oracle.sh.fragment": self._sha(frag)},
+        }
+        if with_source:
+            src = self.base / "spec.md"
+            src.write_text("# spec\n")
+            plan["source_spec_path"] = "spec.md"
+            plan["source_hash"] = self._sha(src)
+        plan["approved_content_hash"] = ck.plan_content_hash(plan)
+        cj = d / "checks.json"
+        cj.write_text(json.dumps(plan))
+        return cj
+
+    def _run(self, cj: Path, *extra) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(CHECKS_PY), str(cj), "--base-dir",
+             str(self.base), "--enforce-freeze", *extra],
+            capture_output=True, text=True)
+
+    def test_approved_unchanged_scores(self):
+        cj = self._setup_overlay(approval="approved")
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "1.0")
+
+    def test_draft_refused(self):
+        cj = self._setup_overlay(approval="draft")
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 2)
+
+    def test_missing_approval_defaults_draft_refused(self):
+        d = self.base / ".servo" / "spec-oracles" / "demo"
+        d.mkdir(parents=True, exist_ok=True)
+        (self.base / "present.txt").write_text("x")
+        cj = d / "checks.json"
+        cj.write_text(json.dumps(
+            {"schema_version": 1, "spec_id": "demo",
+             "checks": [{"id": "AC-1", "family": "file_presence",
+                         "path": "present.txt"}],
+             "residual_judgment": []}))
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 2)
+
+    def test_source_changed_is_stale(self):
+        cj = self._setup_overlay(approval="approved", with_source=True)
+        (self.base / "spec.md").write_text("# spec CHANGED\n")
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("stale", (res.stderr + res.stdout).lower())
+
+    def test_artifact_modified_refused(self):
+        cj = self._setup_overlay(approval="approved")
+        (self.base / ".servo" / "spec-oracles" / "demo" / "checks.py").write_text(
+            "# tampered to always pass\n")
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("checks.py", res.stderr + res.stdout)
+
+    def test_relaxed_checks_refused(self):
+        # Tripwire: relaxing a check after approval (without updating the
+        # recorded content hash) is refused, even if the altered check passes.
+        cj = self._setup_overlay(approval="approved")
+        (self.base / "other.txt").write_text("x")
+        plan = json.loads(cj.read_text())
+        plan["checks"][0]["path"] = "other.txt"  # altered → content hash stale
+        cj.write_text(json.dumps(plan))
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("modified", (res.stderr + res.stdout).lower())
+
+    def test_no_enforce_flag_ignores_approval(self):
+        # Backward compatibility: without --enforce-freeze a draft plan still
+        # scores normally (006-02/03 behaviour unchanged).
+        cj = self._setup_overlay(approval="draft")
+        res = subprocess.run(
+            [sys.executable, str(CHECKS_PY), str(cj), "--base-dir",
+             str(self.base), "--score-only"],
+            capture_output=True, text=True)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "1.0")
 
 
 if __name__ == "__main__":
