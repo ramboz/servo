@@ -1,0 +1,85 @@
+---
+status: DONE
+dependencies: []
+last_verified:
+---
+
+## Slice 003-01 — invoke-loop
+
+**STATUS: DONE**
+
+**Goal:** A `loop.py` helper that, invoked against a target with a scaffolded oracle, runs `claude -p --output-format json --max-budget-usd <budget>` in a counted loop (default 5 iterations). After each iteration, it invokes `gate.py <target> --json` to score the result. The loop halts on (a) oracle pass (composite ≥ threshold), or (b) iteration cap reached. Each iteration's JSON is emitted on stdout; the loop ends with a single summary JSON line. End-to-end value: any servo-scaffolded target can be put on a counted loop in one command — and the loop genuinely stops, on its own, with parseable output.
+
+**DoR:**
+- ✅ Spec 002 DONE (gate.py shipped with `--json` mode + closed exit codes per ADR-0002)
+- ✅ Spike: `claude -p --output-format json` schema captured empirically (see [spike.md](spike.md))
+- ✅ Decision: helper is a Python script (same shape as `scaffold.py` / `gate.py`), no shell wrapper. Resolves the `docs/architecture.md` open question "shell vs Python" in favor of Python — JSON parsing + state-file management in slice 003-04 is materially easier in Python than bash.
+- ✅ Architecture default `max-iterations=5` (per `docs/architecture.md` "Project vs servo-core split")
+- ✅ Decision: each iteration invokes `claude -p` as a **fresh subprocess**, not a long-lived process. The session is carried across iterations by `session_id` only (slice 003-04 wires resume; 003-01 forks a fresh session every iteration).
+
+**Acceptance Criteria:**
+
+1. **Iteration cap (default).** Against a target with a `composite < threshold` oracle and a prompt that does **not** make it pass, `loop.py <target> --prompt "<text>"` runs exactly 5 iterations, then exits 0 with a summary line carrying `terminal_reason=max_iterations_reached`.
+2. **Iteration cap (override).** `loop.py <target> --prompt "<text>" --max-iterations 3` runs exactly 3 iterations.
+3. **Early halt on oracle pass.** When the gate exits 0 at iteration K (1 ≤ K ≤ N), the loop stops at K and emits `terminal_reason=oracle_passed`. Iterations K+1..N are not invoked. (Tested with a fixture oracle that flips from below-threshold to pass after one iteration.)
+4. **Refusal on missing target / oracle / manifest.** `loop.py` defers to `gate.py`'s refusal taxonomy on the first iteration's pre-flight: missing target → rc=2 / `target_missing`; missing manifest → rc=2 / `manifest_missing`; missing oracle → rc=2 / `oracle_missing`. The loop never enters iteration 1 in any of these cases.
+5. **Per-iteration JSON.** Each completed iteration writes a single JSON object to stdout with at minimum: `iteration` (int, 1-indexed), `session_id` (string), `cost_usd` (float, from `total_cost_usd`), `terminal_reason` (string, from claude's JSON), `oracle_exit_code` (int, 0/1/2), `oracle_composite` (float or null), `oracle_threshold` (float or null).
+6. **Summary line.** After the last iteration (whether by oracle-pass, iteration-cap, or refusal mid-loop in slices 003-02..05), the loop writes a final JSON line with: `terminal_reason` (`oracle_passed` / `max_iterations_reached`), `iterations_completed` (int), `cumulative_cost_usd` (float), `final_oracle_status` (`pass` / `below_threshold` / `env_error`), `run_id` (string, generated each invocation in 003-01 — `<target>/.servo/runs/<run-id>/` is reserved-only at this slice; the state file lands in 003-04).
+7. **Helper is dependency-free.** Same rule as `scaffold.py` / `gate.py` — Python 3.10+, stdlib only.
+8. **Mock-claude harness.** Tests use a fake `claude` binary (shell script that emits canned `--output-format json` output) injected via `PATH` to avoid actual Claude Code invocations in CI. The harness produces a `session_id`, `total_cost_usd`, `num_turns`, `terminal_reason="completed"`, etc. matching the captured schema from [spike.md](spike.md).
+9. **`claude -p` invocation failure → rc=2 / `claude_invocation_failed`.** Per Clarifications Q8: any failure invoking `claude -p` (binary not on PATH, exit-non-zero without parseable JSON output, JSON parse error, OS-level error) maps to a uniform rc=2 with `reason=claude_invocation_failed`. The stderr breadcrumb names the specific cause (`loop: claude not on PATH`, `loop: claude -p exited <N> without JSON output`, `loop: claude JSON parse error: ...`). (Forward reference: slice 003-04 also persists `claude_invocation_failed` as `last_terminal_reason` in the state file for resume-time forensics.) Tested with a mock harness that variously: removes `claude` from PATH, returns rc=1 with empty stdout, returns invalid JSON.
+
+**DoD:**
+- [x] All ACs pass; full test suite green (no regressions in `test_gate.py` / `test_scaffold.py`).
+- [x] Test coverage per AC under `skills/agent-loop/test_loop.py`: AC1→`IterationCapDefaultTests`, AC2→`IterationCapOverrideTests`, AC3→`EarlyHaltOnOracleTests`, AC4→`PreflightRefusalTests`, AC5→`PerIterationJsonTests`, AC6→`SummaryLineTests`, AC7→`DependencyFreeTests`, AC8→`MockClaudeHarnessTests`, AC9→`ClaudeInvocationFailedTests`.
+- [x] Reviewed by `jig:reviewer` subagent.
+- [x] Implementation review passed.
+- [x] Deviation log produced under this slice heading.
+- [x] Reconciliation review passed.
+- [x] `docs/refinement-todo.md` updated if any decisions were deferred during implementation.
+
+### Close-out (post-DONE)
+
+- [x] `docs/specs/README.md` status board: spec 003 → `IN_PROGRESS (slice 003-01)`.
+- [x] `README.md` skills table row for `agent-loop` flipped from "Future spec" to `Spec 003 — IN PROGRESS`.
+
+**Anti-horizontal-phasing check:** After this slice, a user with a servo-scaffolded target can run `loop.py <target> --prompt "<text>"` and trust that a counted loop runs, halts on its own (either at oracle pass or iteration cap), and emits parseable JSON per iteration. That is end-to-end value — every subsequent slice is a brake, not a prerequisite for "the loop works."
+
+**Spike-shape note:** This slice is **load-bearing spike-shape** for spec 003 as a whole. It validates the spike's central assumption — "loop driver subprocesses Claude Code via `claude -p --output-format json`, parses the JSON, and decides what to do next" — in the only place it can be validated cheaply (without yet wiring cost / context / resume / plateau). If `claude -p` behaves differently than the spike measured (e.g., the JSON schema drifts under a fresh release, `--max-budget-usd` interacts unexpectedly with `--output-format json`, the `session_id` returned isn't actually consumable by `--resume`), pause and re-plan slices 003-02..05 before proceeding. A re-plan here is cheaper than carrying a wrong shape through four more slices.
+
+### Deviation log (after reconciliation)
+
+**Slice 003-01 — implemented 2026-05-19.** 35 tests green via `python3 skills/agent-loop/test_loop.py` (28 AC-tests + 4 schema-version + 3 timeout); full regression suite still green (40/40 `test_scaffold.py`, 13/13 `test_skill_surface.py` scaffold, 75/75 `test_gate.py`, 18/18 `test_skill_surface.py` gate). Mock-claude harness via PATH-injection works end-to-end; the spike's central assumption (loop driver subprocesses `claude -p --output-format json`, parses JSON, decides) holds in vitro — empirical validation against a live `claude` invocation is deferred to slices 003-02 (cost ceiling) and 003-05 (subagent dispatch) where it has natural cover.
+
+Deviations from spec text:
+
+- **AC4 adds `target_not_directory` as a fourth preflight refusal reason.** The spec's AC4 enumerates three (`target_missing`, `manifest_missing`, `oracle_missing`); the implementation adds `target_not_directory` to mirror gate.py's full taxonomy. Tested via `PreflightRefusalTests.test_target_not_a_directory`. Spec's "defers to gate.py's refusal taxonomy" language covers it but the explicit enumeration is now stale by one entry.
+- **`gate_invocation_failed` terminal_reason added as a defensive branch.** Per ADR-0002, gate.py always emits parseable JSON on stdout (even on env-error paths). The loop adds a defensive branch with a distinct `terminal_reason=gate_invocation_failed` for the case where gate.py emits unparseable output anyway — a forensic reader can tell loop / gate / claude failures apart. Not exercised by any test; gate.py is co-located in the same plugin and the branch is unreachable in practice. Documented for completeness rather than tested.
+- **OS-error branch in `_invoke_claude` emits a non-AC9-pinned breadcrumb.** AC9 lists three literal stderr breadcrumbs (`claude not on PATH`, `claude -p exited <N> without JSON output`, `claude JSON parse error: ...`). The implementation also catches `OSError` (PermissionError, IsADirectoryError, etc.) other than FileNotFoundError, emitting `OS error invoking claude: <exc>` — covers AC9's parenthetical "OS-level error" but the breadcrumb format isn't in AC9's literal set. No test exercises this branch.
+- **AC9 "without JSON output" breadcrumb keeps its wording even when stdout was non-empty-but-unparseable.** The current implementation emits `claude -p exited <N> without JSON output` for any non-zero claude exit, regardless of whether stdout contained text. AC9's wording suggests the more literal reading "stdout was empty"; the implementation chose the looser "we couldn't use the stdout as JSON" reading because 003-01 never invokes claude with flags that produce non-zero-with-JSON paths (`--max-budget-usd` lands in 003-02). Slice 003-02 will need to revisit when budget-exceeded paths surface a non-zero exit with parseable JSON — at that point the breadcrumb will split into "without JSON output" vs "with unparseable output" sub-cases. Until then the simplification is documented but not in the spec text.
+- **Per-iteration JSON carries extras beyond AC5's minimum.** Each per-iteration line includes `cumulative_cost_usd`, `oracle_status`, and `run_id` beyond AC5's required minimum field set. AC5's "at minimum" language permits this; the extras are forward-references to surface that slices 003-02 (cumulative cost), 003-04 (run_id-keyed state), and (already in gate.py) status will need.
+- **Run-id format uses second-precision, not millisecond.** ADR-0004's prose says "millisecond-precision timestamp prefix" but its own example `20260519T143205-a3f1` is second-precision. The implementation matches the example (`%Y%m%dT%H%M%S` → 15-char timestamp + 4-hex suffix) and the test regex (`^\d{8}T\d{6}-[0-9a-f]{4}$`). ADR-0004's internal inconsistency (prose vs example) is the upstream issue to reconcile when slice 003-04 lands the collision retry; today, the implementation and the example agree.
+- **`claude_invocation_failed` summary carries prior-iteration counters.** When claude fails on iteration K, the summary's `iterations_completed` is K-1 (count of successfully-completed prior iterations) and `cumulative_cost_usd` includes only those prior iterations' costs. Spec doesn't pin this; the implementation chose "completed iterations only" (the failed iteration didn't produce a score). Tested implicitly via `ClaudeInvocationFailedTests` where `iterations_completed=0` on first-iteration failure.
+- **`final_oracle_status` on mid-loop `claude_invocation_failed` is the "last known" oracle status, not `env_error`.** When iter 1 succeeds with `oracle_status=below_threshold` and iter 2's claude invocation then fails, the summary's `final_oracle_status` is `below_threshold` (from iter 1's gate scoring) — not `env_error` (the current loop state). The semantics chosen are "last successfully-scored state" for forensic value: a consumer correlating `terminal_reason=claude_invocation_failed final_oracle_status=below_threshold` can tell that the loop made progress before claude failed. Alternative ("reset to env_error on any failure") would lose that signal. Documented here so the surface contract is explicit when SKILL.md lands in 003-05.
+- **Test PATH is `/bin:/usr/bin`.** Tests set PATH to `<mock_bindir>:/bin:/usr/bin` to ensure the mock claude shadows any host install. This reliably excludes the typical claude install locations (`/usr/local/bin`, NVM/asdf bin dirs, `~/.local/bin`); brittle if a future Linux packaging puts `claude` directly under `/bin` or `/usr/bin` (uncommon but possible). Flagged for portability monitoring; not blocking today.
+- **`--max-iterations 0` explicitly rejected.** argparse `parser.error()` fires for `< 1` and exits with rc=2 (matching the closed `{0, 2}` exit-code contract). The spec doesn't pin behavior for zero/negative; rejecting upstream is cleaner than emitting a no-iteration summary.
+
+PR-review follow-on additions (2026-05-19, after first reviewer caveats surfaced gaps the AC-focused review didn't probe):
+
+- **`schema_version: 1` added to every JSON line on stdout.** Mirrors gate.py's ADR-0002 contract and ADR-0004's `state_schema_version`. Auto-injected by `_emit_json` so per-iteration, summary, and preflight-refusal lines all carry it as the first key. Cost: ~20 bytes per line. Benefit: forward-compat for spec 005 race driver and any external consumer that parses the JSON. Tested via `SchemaVersionTests` (4 cases). Not in AC5/AC6 literal field lists but covered by the "at minimum" language; the field is additive and gate-parallel.
+- **`claude -p` per-invocation timeout enforced.** Default `DEFAULT_CLAUDE_TIMEOUT_SECONDS=1800` (30 min) — generous upper bound for substantial agentic turns with tool use. Tunable via `SERVO_CLAUDE_TIMEOUT` env var (mirrors gate.py's `SERVO_GATE_TIMEOUT` pattern); `0` disables; malformed values fall back to the default with a stderr breadcrumb. On `subprocess.TimeoutExpired`, Python sends SIGKILL to claude (grandchildren may leak — accepted spike-shape limitation). Routes to the uniform `claude_invocation_failed` terminal_reason per AC9's uniformity rule; the breadcrumb (`claude -p timed out after <X>s (killed)`) names the specific cause for forensics. Tested via `ClaudeTimeoutTests` (3 cases). The 30-min default is a guess flagged in `docs/refinement-todo.md` for tuning with real-world data.
+- **Unused `SERVO_VERSION` constant removed.** First-pass implementation declared `SERVO_VERSION = "0.1.0"` in parallel with gate.py / scaffold.py but never referenced it. Reviewer flagged as dead code; removed. (`gate.py` has the same dead-code shape — flagged separately in `docs/refinement-todo.md` for a future cleanup pass.)
+- **`_invoke_gate` stderr dump truncated to 500 chars each for stdout/stderr.** Previously dumped the full `proc.stdout` / `proc.stderr` strings on JSON parse failure — a misbehaving gate could spam megabytes into the loop's stderr. Now `[:500]` slice on both. Branch remains defensive (unreachable in practice per ADR-0002).
+- **`test_max_iterations_zero_rejected` tightened from `assertNotEqual(0)` to `assertEqual(2)`** and now also asserts the literal `"--max-iterations must be >= 1"` text on stderr. Closes the loose-assertion gap the reviewer flagged.
+
+**Spike-shape check:** The central assumption — loop driver subprocesses `claude -p`, parses JSON, calls gate.py, decides — holds in vitro against the mock-claude harness. The spike's captured JSON schema (session_id, total_cost_usd, terminal_reason, usage.*, modelUsage.<model>.contextWindow) is round-trippable end-to-end. The PATH-injected mock approach successfully isolates tests from any real `claude` binary on the host. Empirical drift between mock and live `claude -p` will surface during 003-02 (live `--max-budget-usd` interaction) and 003-05 (live `--agent <name>` dispatch). **Proceeding to 003-02 with no re-plan.**
+
+**Reviewer caveats (non-blocking, not yet in `docs/refinement-todo.md` because all are addressed in slices 003-02..05):**
+- `gate_invocation_failed` defensive branch is untested. Acceptable — gate.py is part of servo and ADR-0002 guarantees JSON output. A future refinement could add a fault-injection test, but the branch fires on broken-gate.py only.
+- OS-error branch (non-FileNotFoundError OSError) in `_invoke_claude` is untested. Same posture — defensive, uncommon, would require contrived setup (permission-stripped claude, ENOTDIR on the binary path) to exercise.
+- `_invoke_gate` doesn't handle FileNotFoundError on `sys.executable` or `GATE_PATH`. Both are resolved at module load time; failure modes are pathological.
+
+**Reviewer verdict:** PASS (independent review, `jig:reviewer` subagent, 2026-05-19). All 9 ACs met with meaningful subprocess-driven tests; mock-claude harness validates the spike's central assumption; AC9's three literal stderr breadcrumbs are asserted; stdlib-only enforced by source inspection. Deviations are additive (extra refusal reasons, extra JSON fields, defensive branches) and stay within the spec's "at minimum" language. No regressions in `test_gate.py` / `test_scaffold.py`. PR-review follow-on (multi-perspective skill, 2026-05-19) surfaced two Should-Fix gaps (no claude timeout, no schema_version) and one tightening (max-iterations-zero assertion) — all three addressed in-slice with additive tests; 35/35 green post-fix.
+
+---
+

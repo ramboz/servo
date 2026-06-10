@@ -605,19 +605,21 @@ class MultilineRegressionTests(unittest.TestCase):
         self.assertEqual(fams["AC-200-01-1"], "json_contract")
 
     def test_real_spec_006_yields_deterministic_checks(self):
-        # Dogfood smoke against this repo's own (multi-line) spec 006. The
-        # truncation bug produced ZERO deterministic checks here — 27/27
-        # residual. Assert > 0 so that catastrophic regression can never
-        # return silently. (At the time of writing the planner finds 7
-        # deterministic checks across spec 006's slices.)
-        spec006 = REPO_ROOT / "docs" / "specs" / "006-spec-oracle" / "spec.md"
-        self.assertTrue(spec006.is_file(), f"missing dogfood spec: {spec006}")
-        checks = op.classify_acs(op.extract_acs(spec006.read_text()))
+        # Dogfood smoke against this repo's own (multi-line) 006-01 slice file.
+        # The truncation bug produced ZERO deterministic checks on spec 006's
+        # multi-line ACs. Assert > 0 so that catastrophic regression can never
+        # return silently. (The 006-01 slice's six ACs yield 3 deterministic.)
+        # Points at the slice file rather than spec.md because the jig-workflow
+        # migration moved the ACs into per-slice files.
+        slice006 = (REPO_ROOT / "docs" / "specs" / "006-spec-oracle"
+                    / "slice-01-evidence-plan.md")
+        self.assertTrue(slice006.is_file(), f"missing dogfood slice: {slice006}")
+        checks = op.classify_acs(op.extract_acs(slice006.read_text()))
         deterministic = [c for c in checks
                          if c["family"] != "residual_judgment"]
         self.assertGreater(
             len(deterministic), 0,
-            "spec 006 yielded zero deterministic checks — multi-line AC "
+            "006-01 yielded zero deterministic checks — multi-line AC "
             "truncation regression?",
         )
 
