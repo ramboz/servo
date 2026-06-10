@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [001, 002, 003]
-last_verified: 2026-06-09
+last_verified: 2026-06-10
 ---
 
 # Spec 006 — spec-oracle
