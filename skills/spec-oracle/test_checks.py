@@ -914,5 +914,97 @@ class DependencyFreeTests(unittest.TestCase):
         self.assertEqual(offenders, [], f"non-stdlib imports: {offenders}")
 
 
+# ===========================================================================
+# --score-only mode (slice 006-03 — oracle component contract)
+# ===========================================================================
+
+
+class ScoreOnlyModeTests(_TmpBase):
+    """The generated oracle component invokes `checks.py --score-only`, which
+    must print just the composite score and obey the score_<name> contract:
+    exit 0 (score on stdout) on pass/fail, exit 2 only on env error — never 1
+    (a rc=1 from a component makes oracle.sh env-error)."""
+
+    def _write_plan(self, checks) -> Path:
+        out = self.base / ".servo" / "spec-oracles" / "demo"
+        out.mkdir(parents=True, exist_ok=True)
+        p = out / "checks.json"
+        p.write_text(json.dumps(
+            {"schema_version": 1, "spec_id": "demo", "checks": checks,
+             "residual_judgment": []}))
+        return p
+
+    def _run(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(CHECKS_PY), *[str(a) for a in args]],
+            capture_output=True, text=True)
+
+    def test_all_pass_prints_score_exits_zero(self):
+        (self.base / "a.txt").write_text("x")
+        plan = self._write_plan(
+            [{"id": "AC-1", "family": "file_presence", "path": "a.txt"}])
+        res = self._run(plan, "--base-dir", self.base, "--score-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "1.0")
+
+    def test_failure_prints_score_and_exits_zero_not_one(self):
+        # A failing check yields score 0.0 but still exit 0 — the THRESHOLD
+        # gate in oracle.sh decides pass/fail, NOT the component.
+        plan = self._write_plan(
+            [{"id": "AC-1", "family": "file_presence", "path": "gone.txt"}])
+        res = self._run(plan, "--base-dir", self.base, "--score-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "0.0")
+
+    def test_mixed_prints_fractional_score(self):
+        (self.base / "a.txt").write_text("x")
+        plan = self._write_plan([
+            {"id": "AC-1", "family": "file_presence", "path": "a.txt"},
+            {"id": "AC-2", "family": "file_presence", "path": "gone.txt"},
+        ])
+        res = self._run(plan, "--base-dir", self.base, "--score-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "0.5")
+
+    def test_env_error_exits_two(self):
+        plan = self._write_plan(
+            [{"id": "AC-1", "family": "command"}])  # missing command field
+        res = self._run(plan, "--base-dir", self.base, "--score-only")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+
+    def test_score_only_suppresses_jsonl(self):
+        (self.base / "a.txt").write_text("x")
+        plan = self._write_plan(
+            [{"id": "AC-1", "family": "file_presence", "path": "a.txt"}])
+        res = self._run(plan, "--base-dir", self.base, "--score-only")
+        self.assertNotIn("evidence", res.stdout)
+        self.assertNotIn("{", res.stdout)  # no JSON, just the float
+
+
+class LedgerTimestampTests(_TmpBase):
+    """Ledger rows carry a run timestamp so an append-only ledger can tell
+    runs apart (spec goal 6)."""
+
+    def test_ledger_rows_have_ts(self):
+        (self.base / "a.txt").write_text("x")
+        out = self.base / ".servo" / "spec-oracles" / "demo"
+        out.mkdir(parents=True, exist_ok=True)
+        plan = out / "checks.json"
+        plan.write_text(json.dumps(
+            {"schema_version": 1, "spec_id": "demo",
+             "checks": [{"id": "AC-1", "family": "file_presence", "path": "a.txt"}],
+             "residual_judgment": []}))
+        ledger = out / "ledger.jsonl"
+        subprocess.run(
+            [sys.executable, str(CHECKS_PY), str(plan), "--base-dir",
+             str(self.base), "--ledger", str(ledger)],
+            capture_output=True, text=True, check=True)
+        rows = [json.loads(ln) for ln in ledger.read_text().splitlines() if ln.strip()]
+        self.assertTrue(rows)
+        for r in rows:
+            self.assertIn("ts", r)
+            self.assertTrue(r["ts"])
+
+
 if __name__ == "__main__":
     unittest.main()

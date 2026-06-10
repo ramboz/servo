@@ -84,6 +84,7 @@ import sys
 import tarfile
 import tempfile
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -118,6 +119,11 @@ FAMILIES = (
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
+
+def iso_now() -> str:
+    """UTC timestamp for ledger rows (ISO 8601, Z-suffixed)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def _listify(value) -> list:
     """Coerce a scalar/None/list field into a list of items."""
@@ -831,6 +837,9 @@ def main(argv: Optional[list] = None) -> int:
                              "(default: derived from the .servo layout, else cwd)")
     parser.add_argument("--ledger", dest="ledger", default=None,
                         help="append evidence JSONL to this file instead of stdout")
+    parser.add_argument("--score-only", dest="score_only", action="store_true",
+                        help="print only the composite score (for an oracle.sh "
+                             "component): exit 2 iff any check env-errored, else 0")
     args = parser.parse_args(argv)
 
     checks_path = Path(args.checks_json)
@@ -856,18 +865,29 @@ def main(argv: Optional[list] = None) -> int:
                     "runner_version": RUNNER_VERSION,
                     **result["summary"]}
 
+    # Ledger rows carry a shared run timestamp so an append-only ledger can
+    # tell separate runs apart (spec goal 6).
     if args.ledger:
+        ts = iso_now()
         try:
             with open(args.ledger, "a", encoding="utf-8") as fh:
                 for ev in evidence:
-                    fh.write(json.dumps(ev) + "\n")
+                    fh.write(json.dumps({**ev, "ts": ts}) + "\n")
         except OSError as exc:
             print(f"error: cannot write ledger: {exc}", file=sys.stderr)
             return 2
-    else:
+
+    # --score-only: the oracle.sh component contract. Print only the composite
+    # score; exit 2 iff any check env-errored (so oracle.sh marks the component
+    # missing → rc=2), else 0. Never exit 1 — the THRESHOLD gate, not the
+    # component, decides pass/fail.
+    if args.score_only:
+        print(result["summary"]["score"])
+        return 2 if result["summary"].get("env_errors", 0) > 0 else 0
+
+    if not args.ledger:
         for ev in evidence:
             print(json.dumps(ev))
-
     print(json.dumps(summary_line))
     return exit_code_for(result["summary"])
 
