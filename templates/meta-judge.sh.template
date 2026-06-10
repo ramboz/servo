@@ -1,0 +1,71 @@
+#!/bin/sh
+# servo meta-judge — Claude Code `Stop` hook (spec 004).
+#
+# Marker (do not remove — uninstall matches on it): .servo/hooks/meta-judge.sh
+#
+# On every turn-stop, score this project with servo's quality gate and, when the
+# oracle is BELOW THRESHOLD, block the stop with a structured retry hint so the
+# agent keeps working instead of declaring victory early.
+#
+# Safety posture (the inverse of agent-loop's fail-closed brakes):
+#   * Fails OPEN — a missing / misconfigured / slow oracle never blocks, so the
+#     hook can never trap a live session. (Richer env-error reporting: 004-02.)
+#   * Respects `stop_hook_active` — nudges at most once per stop sequence, well
+#     inside Claude Code's consecutive-block cap.
+#
+# Contract: reads the Stop-event JSON on stdin; emits hook JSON on stdout; a
+# block is expressed as {"decision":"block","reason":...}. The project owns this
+# script after install and may customise the hint phrasing or switch modes.
+set -u
+
+INPUT=$(cat)
+
+# Quality gate: SERVO_GATE_PY override wins (tests / power users), else the path
+# baked in at install time.
+GATE="${SERVO_GATE_PY:-__GATE_PY__}"
+
+# --- Runaway guard -------------------------------------------------------- #
+# Suppress the nudge (let the stop proceed) when `stop_hook_active` is set OR
+# cannot be determined. An *indeterminate* guard biases toward never trapping
+# the session: only a definitively-parsed `stop_hook_active: false` proceeds to
+# score. (An absent key means "first stop" and proceeds; unparseable stdin
+# suppresses.)
+SUPPRESS=$(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+try:
+    print("0" if not json.load(sys.stdin).get("stop_hook_active") else "1")
+except Exception:
+    print("1")   # unparseable stdin → suppress; never block on garbage
+' 2>/dev/null) || SUPPRESS="1"   # python3 missing → suppress (cannot score anyway)
+[ "$SUPPRESS" = "1" ] && exit 0
+
+# --- Target --------------------------------------------------------------- #
+TARGET="${CLAUDE_PROJECT_DIR:-}"
+[ -z "$TARGET" ] && exit 0   # nothing to score → fail open
+
+# --- Score ---------------------------------------------------------------- #
+GATE_OUT=$(python3 "$GATE" "$TARGET" --json 2>/dev/null)
+RC=$?
+
+# --- Decide --------------------------------------------------------------- #
+# rc=1 (below threshold) → block with an evidence-backed hint.
+# rc=0 (pass) and rc=2/other (env error / failure) → fail open: allow the stop.
+if [ "$RC" = "1" ]; then
+    printf '%s' "$GATE_OUT" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)   # unparseable gate output → fail open (emit nothing)
+comp = d.get("composite")
+thr = d.get("threshold")
+missing = d.get("missing") or []
+reason = "servo oracle below threshold: composite=%s threshold=%s." % (comp, thr)
+if missing:
+    reason += " Weak or missing components: %s." % ", ".join(map(str, missing))
+reason += " Keep working to raise the oracle score before stopping."
+print(json.dumps({"decision": "block", "reason": reason}))
+'
+fi
+
+exit 0

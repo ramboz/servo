@@ -275,3 +275,29 @@ for "new invariant missing control → approval refused".
 the `checks.json`-integrity gap was hardened in-slice with an
 `approved_content_hash` tripwire; this negative-control leniency was dispositioned
 as spec-sanctioned v1 behaviour and deferred here.
+
+---
+
+## meta-judge below-threshold hint lacks per-component failing-score evidence
+
+**Deferred:** Slice 004-01's meta-judge hint (`templates/meta-judge.sh.template`)
+names `composite` + `threshold` on a below-threshold block, plus any `missing`
+components. But `gate.py --json` exposes only `composite` / `threshold` /
+`missing`, and the stock `oracle.sh.template` emits `missing` **only on its
+env-error (exit-2) path** (it `exit 2`s before computing the composite). So on a
+real below-threshold (exit-1) nudge, `missing` is always empty and the hint
+cannot name *which* components scored low — the agent is told "0.42 < 0.50" but
+not where to look.
+
+**Resolution trigger:** When dogfood (004-05) or real interactive use shows the
+bare composite/threshold hint is too thin to steer the agent. Fix lives in
+spec 002, not 004: have `gate.py --json` surface per-component scores (e.g. a
+`components: [{name, score, weight}]` array), and the oracle template print
+per-component scores on the pass/below path; then the meta-judge names the
+lowest-scoring components. Slice 004-01 already amended AC4 to match today's
+reality and added a defensive test for the `missing`-present case.
+
+**Surfaced by:** slice 004-01 `jig:reviewer` pass (blocker #1): the original AC4
+promised "failing/missing components" but the test masked the gap with a gate
+payload (`status=below_threshold` + `missing=[…]`) the stock oracle never emits
+on exit 1.
