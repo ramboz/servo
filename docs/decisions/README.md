@@ -12,15 +12,17 @@
 - [ADR-0003: Why a fresh subagent roster, not reused from jig](adr-0003-fresh-subagent-roster.md) — Servo ships two fresh agents (`runner`, `judge`) because their machine-parseable verdict-block output diverges from jig's narrative `implementer` / `reviewer`. Architect calls delegate to `jig:architect` directly — no servo-side architect prompt. (2026-05-19, Accepted)
 - [ADR-0004: Session-state file format on disk](adr-0004-session-state-file-format.md) — Per-run loop scoreboard at `<target>/.servo/runs/<run-id>/state.json`, referencing Claude Code sessions by `session_id` only. Atomic-write contract, `state_schema_version`, run-id collision policy. Filesystem-only coupling with Claude Code. (2026-05-19, Accepted)
 - [ADR-0005: Eval as a frozen oracle component](adr-0005-eval-oracle-component.md) — A non-deterministic eval enters the composite only as a *frozen* `score_<name>`: its definition (rubric + dataset + judge model + `n` + `δ`) is hashed and approved, it reports a confidence lower bound rather than a raw judge score, and `loop.py` gains a plateau noise floor. The reciprocal servo-side ADR to jig's ADR-0022. (2026-06-09, Proposed)
+- [ADR-0006: Meta-judge Stop-hook output contract & fail-open posture](adr-0006-meta-judge-output-contract.md) — Spec 004's `Stop` hook blocks with a structured composite/threshold hint on below-threshold (`{"decision":"block"}`, not `additionalContext`), fails **open** on any env-error (a `systemMessage` warning, never a block, so it can't trap a session), and nudges at most once per stop sequence (respects/biases-on `stop_hook_active`). The interactive inverse of agent-loop's fail-closed brakes. (2026-06-10, Accepted)
 
 ## Pending
 
 ADR candidates (numbers are *hints* of the next likely allocation order,
 not reservations — the next accepted ADR claims the next free number
-regardless of which candidate fires first). `0005` is now reserved
-(Proposed) by the eval-oracle-component ADR above:
+regardless of which candidate fires first). `0005` is reserved (Proposed)
+by the eval-oracle-component ADR and `0006` is now Accepted (meta-judge
+output contract), so the next free number is `0007`:
 
-- **ADR-0006 — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
+- **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 
 ## Format
 

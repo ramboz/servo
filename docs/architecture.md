@@ -233,12 +233,14 @@ Each iteration emits one JSON line to stdout (carrying `iteration`, `session_id`
 | [ADR-0002](decisions/adr-0002-gate-caller-contract.md) | Accepted | Quality-gate caller contract: `gate.py` exits only 0/1/2 (unexpected oracle exits remap to 2); `--json` output carries `schema_version` from day one. The contract specs 003/004/005 will consume. |
 | [ADR-0003](decisions/adr-0003-fresh-subagent-roster.md) | Accepted | Servo ships two fresh agents (`runner`, `judge`) rather than reusing jig's `implementer` / `reviewer` — the runtime output schemas diverge (machine-parseable verdict block vs narrative). Architect calls are delegated to `jig:architect` directly; the wrapping format is post-processed into servo's ADR shape. |
 | [ADR-0004](decisions/adr-0004-session-state-file-format.md) | Accepted | Servo's per-run state at `<target>/.servo/runs/<run-id>/state.json`. References Claude Code's session by `session_id`, doesn't copy the transcript. Versioned via `state_schema_version`; filesystem-only coupling with Claude Code per ADR-0001 framing. |
+| [ADR-0005](decisions/adr-0005-eval-oracle-component.md) | Proposed | A non-deterministic eval enters the composite only as a *frozen* `score_<name>` (rubric + dataset + judge model + `n` + `δ` hashed and approved), reporting a confidence lower bound; `loop.py` gains a plateau noise floor. Reciprocal to jig's ADR-0022. |
+| [ADR-0006](decisions/adr-0006-meta-judge-output-contract.md) | Accepted | Meta-judge `Stop`-hook output contract (spec 004): block with a composite/threshold hint on below-threshold (not `additionalContext`), fail **open** on env-error (a `systemMessage`, never a block — can't trap a session), nudge once per stop sequence. The interactive inverse of agent-loop's fail-closed brakes. |
 
 ### Pending (ADR candidates)
 
-Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims `0005` regardless of which candidate fires first.
+Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0007`) regardless of which candidate fires first.
 
-- **ADR-0005 — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
+- **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
 
 ## Open questions (not yet ADR-worthy)
 

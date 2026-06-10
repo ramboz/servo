@@ -33,7 +33,7 @@
 | [003-agent-loop](003-agent-loop/spec.md) | 003-04 — checkpoint-resume | **DONE** | 126 tests total; per-run state at `<target>/.servo/runs/<run-id>/state.json` (atomic write); `--resume <run-id>` + version gates; SIGINT/SIGTERM trap (exit 130); bounded run-id collision retry |
 | [003-agent-loop](003-agent-loop/spec.md) | 003-05 — stuck-loop-and-handoff | **DONE** | 151 tests + 26 surface tests; oracle-score plateau (default M=3); real `runner.md` / `judge.md` prompts ship with `schema_version: 1` verdict blocks; `--agent <name>` dispatch alternates runner/judge; `verdict_schema_mismatch` enforcement closes ADR-0003 |
 | [004-oracle-hook](004-oracle-hook/spec.md) | 004-01 — install-and-judge | **DONE** |  |
-| [004-oracle-hook](004-oracle-hook/spec.md) | 004-02 — fail-open-safety | DRAFT |  |
+| [004-oracle-hook](004-oracle-hook/spec.md) | 004-02 — fail-open-safety | **DONE** |  |
 | [004-oracle-hook](004-oracle-hook/spec.md) | 004-03 — idempotent-install-and-backup | DRAFT |  |
 | [004-oracle-hook](004-oracle-hook/spec.md) | 004-04 — uninstall-and-status | DRAFT |  |
 | [004-oracle-hook](004-oracle-hook/spec.md) | 004-05 — skill-and-dogfood | DRAFT |  |

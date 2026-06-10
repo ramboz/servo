@@ -70,6 +70,9 @@ def _stub_gate(root: Path) -> Path:
         "sentinel = os.environ.get('STUB_GATE_SENTINEL')\n"
         "if sentinel:\n"
         "    open(sentinel, 'w').write('invoked')\n"
+        "argv_file = os.environ.get('STUB_GATE_ARGV')\n"
+        "if argv_file:\n"
+        "    open(argv_file, 'w').write(' '.join(sys.argv[1:]))\n"
         "sys.stdout.write(os.environ.get('STUB_GATE_JSON', '{}'))\n"
         "sys.exit(int(os.environ.get('STUB_GATE_RC', '0')))\n"
     )
@@ -277,7 +280,9 @@ class MetaJudgeScriptTests(unittest.TestCase):
         self.assertEqual(json.loads(proc.stdout)["decision"], "block")
 
     def test_fails_open_on_env_error(self):
-        """gate rc=2 → never block (exit 0, no decision). 004-02 adds the warning."""
+        """gate rc=2 → never block (exit 0). The user-facing systemMessage warning
+        is asserted by FailOpenSafetyTests (004-02); here we guard the no-block
+        invariant from the 004-01 perspective."""
         payload = {"status": "env_error", "reason": "manifest_missing",
                    "composite": None, "threshold": None, "missing": []}
         proc = _run_meta_judge(
@@ -311,6 +316,106 @@ class MetaJudgeScriptTests(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0)
             self.assertEqual(proc.stdout.strip(), "")
+
+
+class FailOpenSafetyTests(unittest.TestCase):
+    """Slice 004-02: a broken/missing/slow oracle must NEVER block — it fails
+    open (lets the stop proceed) and warns the *user* via ``systemMessage``."""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self._tmp.name)
+        _make_scaffolded_target(self.target)
+        hook.main(["install", str(self.target)])
+        self.script = self.target / ".servo" / "hooks" / "meta-judge.sh"
+        self.stub = _stub_gate(self.target)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _env(self, rc, payload, **extra):
+        env = {
+            "SERVO_GATE_PY": str(self.stub),
+            "STUB_GATE_RC": str(rc),
+            "STUB_GATE_JSON": json.dumps(payload),
+        }
+        env.update({k: str(v) for k, v in extra.items()})
+        return env
+
+    def test_env_error_emits_systemmessage_not_block(self):
+        """AC1+AC2: env_error → systemMessage naming the reason, no block, exit 0."""
+        payload = {"status": "env_error", "reason": "manifest_missing",
+                   "composite": None, "threshold": None, "missing": []}
+        proc = _run_meta_judge(
+            self.script, {"stop_hook_active": False},
+            project_dir=self.target, extra_env=self._env(2, payload),
+        )
+        self.assertEqual(proc.returncode, 0)
+        out = json.loads(proc.stdout)
+        self.assertNotIn("decision", out)
+        self.assertIn("systemMessage", out)
+        self.assertIn("manifest_missing", out["systemMessage"])
+
+    def test_all_env_error_reasons_fail_open(self):
+        """AC1+AC5: every env_error reason class warns, none blocks."""
+        for reason in ("oracle_missing", "oracle_not_executable", "timeout",
+                       "unexpected_exit", "unparseable_oracle_output",
+                       "invocation_failed"):
+            with self.subTest(reason=reason):
+                payload = {"status": "env_error", "reason": reason,
+                           "composite": None, "threshold": None, "missing": []}
+                proc = _run_meta_judge(
+                    self.script, {"stop_hook_active": False},
+                    project_dir=self.target, extra_env=self._env(2, payload),
+                )
+                self.assertEqual(proc.returncode, 0)
+                self.assertNotIn("block", proc.stdout)
+                self.assertIn(reason, proc.stdout)
+
+    def test_gate_invocation_failure_fails_open(self):
+        """AC3: gate.py itself uninvocable (path missing) → no block, exit 0."""
+        proc = _run_meta_judge(
+            self.script, {"stop_hook_active": False}, project_dir=self.target,
+            extra_env={"SERVO_GATE_PY": str(self.target / "does-not-exist.py")},
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn("block", proc.stdout)
+
+    def test_unparseable_env_error_emits_generic_warning(self):
+        """AC3: rc=2 with non-JSON gate output → generic systemMessage, no block."""
+        env = {"SERVO_GATE_PY": str(self.stub), "STUB_GATE_RC": "2",
+               "STUB_GATE_JSON": "this is not json"}
+        proc = _run_meta_judge(
+            self.script, {"stop_hook_active": False},
+            project_dir=self.target, extra_env=env,
+        )
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn("decision", proc.stdout)
+        self.assertIn("systemMessage", proc.stdout)
+
+    def test_gate_called_with_timeout_bound(self):
+        """AC4: the meta-judge bounds its gate.py call with a --timeout flag."""
+        argv_file = self.target / "gate-argv"
+        payload = {"status": "pass", "composite": 0.9, "threshold": 0.5}
+        _run_meta_judge(
+            self.script, {"stop_hook_active": False}, project_dir=self.target,
+            extra_env=self._env(0, payload, STUB_GATE_ARGV=str(argv_file)),
+        )
+        self.assertTrue(argv_file.exists())
+        self.assertIn("--timeout", argv_file.read_text())
+
+    def test_timeout_bound_is_env_overridable(self):
+        """AC4: SERVO_META_JUDGE_GATE_TIMEOUT controls the --timeout value."""
+        argv_file = self.target / "gate-argv"
+        payload = {"status": "pass", "composite": 0.9, "threshold": 0.5}
+        _run_meta_judge(
+            self.script, {"stop_hook_active": False}, project_dir=self.target,
+            extra_env=self._env(0, payload, STUB_GATE_ARGV=str(argv_file),
+                                SERVO_META_JUDGE_GATE_TIMEOUT=17),
+        )
+        self.assertIn("--timeout 17", argv_file.read_text())
 
 
 class ResolveGatePyTests(unittest.TestCase):

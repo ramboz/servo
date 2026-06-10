@@ -44,13 +44,20 @@ TARGET="${CLAUDE_PROJECT_DIR:-}"
 [ -z "$TARGET" ] && exit 0   # nothing to score → fail open
 
 # --- Score ---------------------------------------------------------------- #
-GATE_OUT=$(python3 "$GATE" "$TARGET" --json 2>/dev/null)
+# Bound the oracle so a hung component can't hang the turn-stop: gate.py's own
+# --timeout (spec 002-04) fires before Claude Code's hook timeout, yielding a
+# clean env-error we can fail open on. Override with SERVO_META_JUDGE_GATE_TIMEOUT.
+GATE_TIMEOUT="${SERVO_META_JUDGE_GATE_TIMEOUT:-45}"
+GATE_OUT=$(python3 "$GATE" "$TARGET" --json --timeout "$GATE_TIMEOUT" 2>/dev/null)
 RC=$?
 
 # --- Decide --------------------------------------------------------------- #
-# rc=1 (below threshold) → block with an evidence-backed hint.
-# rc=0 (pass) and rc=2/other (env error / failure) → fail open: allow the stop.
-if [ "$RC" = "1" ]; then
+# rc=0 (pass)            → silent; let the stop proceed.
+# rc=1 (below threshold) → BLOCK with an evidence-backed hint.
+# rc=2 / other / failure → FAIL OPEN with a user-facing warning (never block).
+if [ "$RC" = "0" ]; then
+    exit 0
+elif [ "$RC" = "1" ]; then
     printf '%s' "$GATE_OUT" | python3 -c '
 import json, sys
 try:
@@ -66,6 +73,22 @@ if missing:
 reason += " Keep working to raise the oracle score before stopping."
 print(json.dumps({"decision": "block", "reason": reason}))
 '
+    exit 0
 fi
 
+# Env-error (or an uninvocable / unparseable gate): warn the USER and let the
+# stop proceed. The warning is a `systemMessage` (shown to the user, not fed to
+# Claude as a block) — a misconfigured oracle must never trap a live session.
+printf '%s' "$GATE_OUT" | python3 -c '
+import json, sys
+reason = "unknown"
+try:
+    reason = (json.load(sys.stdin).get("reason")
+              or "unknown")
+except Exception:
+    pass
+msg = ("servo meta-judge: oracle env_error (reason=%s); not gating this turn — "
+       "run `/servo:quality-gate` to diagnose." % reason)
+print(json.dumps({"systemMessage": msg}))
+' 2>/dev/null
 exit 0
