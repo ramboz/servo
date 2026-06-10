@@ -21,7 +21,7 @@ Servo's primary entry point is a **scaffolder**, not a runtime. It probes the ta
 | `/servo:agent-loop` | Headless iteration driver with iteration cap, cost ceiling, checkpoint/resume, plateau detection, subagent dispatch | Spec 003 — **DONE** |
 | `/servo:oracle-hook` | Claude Code hook installer (idempotent install / uninstall / status) | Future spec |
 | `/servo:variant-race` | N-worktree parallel race with oracle scoring and winner selection | Future spec |
-| `/servo:spec-oracle` | Compile a spec/slice into a reviewable evidence overlay: AC mapping, deterministic checks, negative controls, and an installable oracle component | Spec 006 — **DRAFT** |
+| `/servo:spec-oracle` | Compile a spec/slice into a reviewable evidence overlay: AC mapping, deterministic checks, negative controls, and an installable oracle component | Spec 006 — **IN PROGRESS** (006-01) |
 
 ## Relationship to jig
 

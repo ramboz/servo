@@ -206,3 +206,23 @@ The clean fix is to extend the manifest schema to carry weights directly (`{"com
 **Resolution trigger:** Either (a) a future template-shape change exposes the coupling, or (b) spec 003+ requires manifest-readable weights. When triggered, write the ADR and amend `_install_manifest()` in `scaffold.py` to emit the richer shape; the gate's `_parse_component_weights` becomes dead code and can be deleted.
 
 **Surfaced by:** slice 002-03 reviewer pass (`jig:reviewer`, PASS verdict). Implementer also flagged the coupling in `_parse_component_weights` docstring.
+
+---
+
+## spec-oracle family classification is a heuristic first pass
+
+**Deferred:** Slice 006-01's `oracle_plan.py` classifies each AC into a check family with a deterministic, ordered keyword/regex rule set (`_classify_family`). This is intentional for v1 — the dogfood fixtures (AC6) need stable, offline behaviour, and the spec's principle is "deterministic checks remain the source of truth." Two known gaps follow from that choice: (a) the spec's non-goal anticipates a **model-assisted classification/candidate-generation pass** that is not built; (b) on real specs the keyword table under-covers — dogfooding the classifier on servo's own (meta) spec 006 lands only ~26% of ACs in deterministic families, and prose that *enumerates* family names (e.g. an AC that lists "…archive inventory…") false-positives on that family. The generated `plan.md` is explicitly **reviewable**, so a human corrects misclassifications; perfect first-pass accuracy is not the v1 bar.
+
+**Resolution trigger:** When 006-02..006-05 dogfood the planner on jig 046/047 and the residual/false-positive rate is high enough to slow review, OR when an EDD spec (ADR-0005) needs a model-assisted candidate pass. Then either grow the ordered rule table (the documented extension point) and/or add an optional model-assist layer behind a flag, keeping the deterministic rules as the source of truth. Add fixtures for the family-name-enumeration false-positive and any new heuristics.
+
+**Surfaced by:** slice 006-01 implementer (model-assist deferral) + `jig:reviewer` PASS verdict (heuristic coverage / docstring-claim accuracy).
+
+---
+
+## spec-oracle AC extraction has two structural blind spots
+
+**Deferred:** `extract_acs` in `oracle_plan.py` (slice 006-01) finds numbered ACs inside an "Acceptance Criteria" section and joins their continuation lines into the full statement. Two Markdown shapes are mishandled: (a) a continuation line that *begins* with bold (`**Note:** …`) matches the bold-pseudo-heading terminator and would close the section early, dropping the rest of that AC; (b) a nested numbered sub-list inside an AC item (`   1. sub-point`) matches the numbered-item regex and is miscounted as a sibling AC. Neither shape appears in the AC6 fixtures or in any current servo spec, so this is latent.
+
+**Resolution trigger:** First real spec whose ACs use either shape (or a reviewer/dogfood run that mis-extracts). Fix options: restrict the bold-terminator to a known label set (`DoD`/`DoR`/`Goal`/`Anti-`/`Close-out`) while an AC is open; and/or only treat top-level (unindented) numbered items as new ACs. Add a fixture per shape.
+
+**Surfaced by:** slice 006-01 `jig:reviewer` pass (tagged `[nit]`, non-blocking).
