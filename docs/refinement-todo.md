@@ -226,3 +226,23 @@ The clean fix is to extend the manifest schema to carry weights directly (`{"com
 **Resolution trigger:** First real spec whose ACs use either shape (or a reviewer/dogfood run that mis-extracts). Fix options: restrict the bold-terminator to a known label set (`DoD`/`DoR`/`Goal`/`Anti-`/`Close-out`) while an AC is open; and/or only treat top-level (unindented) numbered items as new ACs. Add a fixture per shape.
 
 **Surfaced by:** slice 006-01 `jig:reviewer` pass (tagged `[nit]`, non-blocking).
+
+---
+
+## spec-oracle `markdown_links` resolves only inline links
+
+**Deferred:** Slice 006-02's `markdown_links` primitive in `checks.py` parses
+only inline `[text](target)` links (`_MD_LINK_RE`). Reference-style links —
+`[text][ref]` with a separate `[ref]: target` definition — are not collected,
+so a broken reference-style local link would not be caught (it is silently
+treated as having no link target). No AC6 fixture and no current servo doc uses
+reference-style links, so this is latent.
+
+**Resolution trigger:** First spec/doc whose generated-artifact links use the
+reference style, OR a dogfood run that misses a broken reference link. Fix:
+add a second pass that harvests `^\[ref\]:\s*target` definitions and resolves
+the `[text][ref]` usages against them; add a fixture with both a resolving and
+a broken reference-style local link.
+
+**Surfaced by:** slice 006-02 `jig:reviewer` pass (PASS verdict; flagged as a
+disclosed known-limitation, non-blocking).
