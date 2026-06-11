@@ -100,6 +100,12 @@ is part of servo's ordinary development loop, not an oral tradition.
 - **No release-please / asset automation (AC5).** Only the manual recipe is
   documented, which AC5 explicitly permits. No GitHub release-asset upload was
   added; the zip is a local build artifact and `dist/` stays git-ignored.
+  **→ SUPERSEDED by spec 010 (release-automation), 2026-06-11:** release-please
+  now owns versioning/CHANGELOG/tags/releases and a `package` job uploads
+  `servo-v<version>.zip` as a release asset; the README's manual recipe was
+  reframed to the local/fallback path. See
+  [spec 010](../010-release-automation/spec.md) and
+  [ADR-0007](../../decisions/adr-0007-align-release-with-jig.md).
 - **Docs status updates kept additive (AC2).** `docs/architecture.md` gains an
   `## Install surfaces` section with the two-layer table pointing at the
   contract + verifier; `docs/product-vision.md` gains a "Two install layers,

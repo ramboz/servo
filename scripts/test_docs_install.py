@@ -71,20 +71,25 @@ class ReadmeInstallSectionTests(unittest.TestCase):
                     f"referenced script does not exist: {rel}",
                 )
 
-    def test_documented_zip_command_matches_real_output_name(self) -> None:
-        # AC5: the `verify_install.py zip <path>` example in the README must
-        # use the real default builder output name, not an invented one. Read
-        # the plugin version and assert the example zip path matches.
-        plugin_version = re.search(
-            r'"version"\s*:\s*"([^"]+)"',
-            (REPO_ROOT / ".claude-plugin" / "plugin.json").read_text(),
-        )
-        self.assertIsNotNone(plugin_version, "plugin.json has no version")
-        expected = f"dist/servo-v{plugin_version.group(1)}.zip"
+    def test_documented_zip_artifact_name_is_version_neutral(self) -> None:
+        # Spec 010: releases are automated and release-please bumps
+        # .claude-plugin/plugin.json on every release WITHOUT touching the
+        # README. So the README must document the artifact *shape*
+        # (servo-v<version>.zip), not a pinned concrete version — a pinned
+        # version would go stale and redden the release PR's own CI on the
+        # first bump. (Supersedes the earlier exact-version guard from 007-05,
+        # which was correct only while the version was hand-edited.)
         self.assertIn(
-            expected,
+            "servo-v<version>.zip",
             self.readme,
-            f"README zip example should reference {expected}",
+            "README should document the version-neutral artifact name "
+            "servo-v<version>.zip (it survives release-please version bumps)",
+        )
+        pinned = re.search(r"servo-v\d+\.\d+\.\d+\.zip", self.readme)
+        self.assertIsNone(
+            pinned,
+            f"README pins a concrete version ({pinned.group(0) if pinned else ''}); use the "
+            "servo-v<version>.zip placeholder so docs survive release-please bumps",
         )
 
 
