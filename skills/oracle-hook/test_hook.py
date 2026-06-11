@@ -349,6 +349,208 @@ class IdempotentInstallBackupTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# Uninstall + status CLI (slice 004-04, ACs 1-6)
+# --------------------------------------------------------------------------- #
+class UninstallStatusTests(unittest.TestCase):
+    """``uninstall`` reverses install's settings surgery (marker-matched,
+    backup-first, script left on disk, idempotent) and ``status`` reports
+    installed / not_installed / inconsistent in human and ``--json`` form."""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self._tmp.name)
+        _make_scaffolded_target(self.target)
+        self.settings_path = self.target / ".claude" / "settings.json"
+        self.backup_path = self.target / ".claude" / "settings.json.servo-bak"
+        self.script = self.target / ".servo" / "hooks" / "meta-judge.sh"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    # -- helpers -- #
+    def _run(self, *argv):
+        """Run a CLI command capturing (rc, stdout, stderr); argparse's own
+        SystemExit (e.g. an unknown subcommand) is mapped to its exit code."""
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = hook.main(list(argv))
+        except SystemExit as e:  # argparse error path
+            rc = e.code if isinstance(e.code, int) else 1
+        return rc, out.getvalue(), err.getvalue()
+
+    def _settings(self) -> dict:
+        return json.loads(self.settings_path.read_text())
+
+    def _seed_settings(self, raw: str) -> None:
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        self.settings_path.write_text(raw)
+
+    def _servo_entry_count(self) -> int:
+        stop = self._settings().get("hooks", {}).get("Stop", [])
+        return sum(1 for e in stop if hook._entry_is_servo(e))
+
+    def _status_json(self) -> dict:
+        rc, out, _ = self._run("status", str(self.target), "--json")
+        self.assertEqual(rc, 0)
+        return json.loads(out)
+
+    # ---- uninstall ---- #
+    def test_uninstall_removes_only_servo_entry(self):
+        """AC1: uninstall drops servo's entry but keeps other Stop entries, other
+        hook events, and unrelated top-level keys."""
+        self._run("install", str(self.target))
+        settings = self._settings()
+        other_stop = {"hooks": [{"type": "command", "command": "/opt/mine.sh"}]}
+        settings["hooks"]["Stop"].append(other_stop)
+        settings["hooks"]["PreToolUse"] = [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo hi"}]}
+        ]
+        settings["env"] = {"FOO": "bar"}
+        self._seed_settings(json.dumps(settings))
+
+        rc, _, _ = self._run("uninstall", str(self.target))
+        self.assertEqual(rc, 0)
+        merged = self._settings()
+        self.assertEqual(self._servo_entry_count(), 0)            # servo gone
+        self.assertEqual(merged["hooks"]["Stop"], [other_stop])   # user's kept
+        self.assertIn("PreToolUse", merged["hooks"])              # other event kept
+        self.assertEqual(merged["env"], {"FOO": "bar"})           # unrelated key kept
+
+    def test_uninstall_cleans_up_emptied_stop_and_hooks(self):
+        """AC1: removing the only Stop entry cleans up the dead Stop/hooks
+        structure (no `Stop: []` / `hooks: {}` left behind)."""
+        self._run("install", str(self.target))
+        rc, _, _ = self._run("uninstall", str(self.target))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("hooks", self._settings())
+
+    def test_uninstall_leaves_meta_judge_script(self):
+        """AC2: uninstall never deletes the script."""
+        self._run("install", str(self.target))
+        self.assertTrue(self.script.is_file())
+        self._run("uninstall", str(self.target))
+        self.assertTrue(self.script.is_file())
+
+    def test_uninstall_idempotent_when_no_servo_entry(self):
+        """AC3: uninstall with no servo entry is a no-op success; unrelated
+        content is left byte-for-byte and no backup is written."""
+        original = json.dumps({"env": {"A": 1}}, indent=2) + "\n"
+        self._seed_settings(original)
+        rc, _, _ = self._run("uninstall", str(self.target))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.settings_path.read_text(), original)
+        self.assertFalse(self.backup_path.exists())
+
+    def test_uninstall_idempotent_when_no_settings_file(self):
+        """AC3: uninstall with no settings.json is a no-op success (not an error)
+        and creates nothing."""
+        self.assertFalse(self.settings_path.exists())
+        rc, _, _ = self._run("uninstall", str(self.target))
+        self.assertEqual(rc, 0)
+        self.assertFalse(self.settings_path.exists())
+
+    def test_uninstall_backs_up_before_mutating(self):
+        """AC4: uninstall backs up the exact pre-mutation settings.json."""
+        self._run("install", str(self.target))
+        pre = self.settings_path.read_text()
+        rc, _, _ = self._run("uninstall", str(self.target))
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.backup_path.is_file())
+        self.assertEqual(self.backup_path.read_text(), pre)
+
+    def test_uninstall_refuses_malformed(self):
+        """AC4: a malformed settings.json refuses safely (names file, no change,
+        no backup)."""
+        malformed = "{ not json"
+        self._seed_settings(malformed)
+        rc, _out, err = self._run("uninstall", str(self.target))
+        self.assertEqual(rc, 2)
+        self.assertIn(str(self.settings_path), err)
+        self.assertEqual(self.settings_path.read_text(), malformed)
+        self.assertFalse(self.backup_path.exists())
+
+    # ---- status ---- #
+    def test_status_installed(self):
+        """AC5: after install, status reports installed (human + json)."""
+        self._run("install", str(self.target))
+        rc, out, _ = self._run("status", str(self.target))
+        self.assertEqual(rc, 0)
+        self.assertTrue(out.strip().startswith("oracle-hook: installed"))
+        j = self._status_json()
+        self.assertEqual(j["state"], "installed")
+        self.assertTrue(j["entry_present"])
+        self.assertTrue(j["script_present"])
+
+    def test_status_not_installed(self):
+        """AC5: a scaffolded-but-not-installed target reports not_installed."""
+        j = self._status_json()
+        self.assertEqual(j["state"], "not_installed")
+        self.assertFalse(j["entry_present"])
+        self.assertFalse(j["script_present"])
+
+    def test_status_inconsistent_entry_without_script(self):
+        """AC5: entry present but script missing → inconsistent."""
+        self._run("install", str(self.target))
+        self.script.unlink()
+        j = self._status_json()
+        self.assertEqual(j["state"], "inconsistent")
+        self.assertTrue(j["entry_present"])
+        self.assertFalse(j["script_present"])
+
+    def test_status_inconsistent_script_without_entry(self):
+        """AC5: script present but no entry (the post-uninstall orphan) →
+        inconsistent."""
+        self._run("install", str(self.target))
+        self._run("uninstall", str(self.target))  # removes entry, leaves script
+        j = self._status_json()
+        self.assertEqual(j["state"], "inconsistent")
+        self.assertFalse(j["entry_present"])
+        self.assertTrue(j["script_present"])
+
+    def test_status_json_has_expected_keys(self):
+        """AC5: --json carries the machine-readable shape."""
+        self._run("install", str(self.target))
+        j = self._status_json()
+        for k in ("schema_version", "state", "entry_present", "script_present"):
+            self.assertIn(k, j)
+
+    def test_status_refuses_malformed(self):
+        """AC5/AC6: unparseable settings.json → env-error (exit 2, names file)."""
+        self._seed_settings("{ not json")
+        rc, out, err = self._run("status", str(self.target))
+        self.assertEqual(rc, 2)
+        self.assertIn("settings_malformed", out + err)
+        self.assertIn(str(self.settings_path), err)
+
+    # ---- round-trip + shared exit contract ---- #
+    def test_roundtrip_install_status_uninstall_status(self):
+        """DoD round-trip. NOTE: because uninstall leaves the script (AC2) and a
+        script-without-entry is `inconsistent` (AC5), the precise post-uninstall
+        state is `inconsistent` (orphaned script); removing the script then
+        yields `not_installed`. Reconciles the DoD's looser
+        'uninstall → not_installed' wording with AC2 + AC5."""
+        self._run("install", str(self.target))
+        self.assertEqual(self._status_json()["state"], "installed")
+        self._run("uninstall", str(self.target))
+        self.assertEqual(self._status_json()["state"], "inconsistent")
+        self.script.unlink()
+        self.assertEqual(self._status_json()["state"], "not_installed")
+
+    def test_target_missing_is_env_error_for_all_commands(self):
+        """AC6: a non-existent target is a uniform env-error (exit 2) across the
+        install / uninstall / status surface."""
+        missing = self.target / "nope"
+        for cmd in ("install", "uninstall", "status"):
+            with self.subTest(cmd=cmd):
+                rc, out, err = self._run(cmd, str(missing))
+                self.assertEqual(rc, 2)
+                self.assertIn("target_missing", out + err)
+
+
+# --------------------------------------------------------------------------- #
 # Meta-judge script behaviour (ACs 4-8)
 # --------------------------------------------------------------------------- #
 class MetaJudgeScriptTests(unittest.TestCase):

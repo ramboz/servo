@@ -5,12 +5,24 @@
 
 Spec 004. Slice 004-01 ships ``install`` + the meta-judge script template;
 004-02 the fail-open env-error reporting; 004-03 makes ``install`` safe to
-re-run against a populated ``settings.json`` (idempotent merge + backup).
-``uninstall`` / ``status`` (004-04) follow in a later slice.
+re-run against a populated ``settings.json`` (idempotent merge + backup); 004-04
+adds ``uninstall`` (reverse the settings surgery, leave the script) + ``status``.
 
 Usage::
 
-    python3 hook.py install <target> [--timeout N]
+    python3 hook.py install   <target> [--timeout N]
+    python3 hook.py uninstall <target>
+    python3 hook.py status    <target> [--json]
+
+Exit codes — one closed contract shared by all three subcommands:
+
+    0  success: installed / uninstalled (incl. an idempotent no-op) / status
+       reported a valid state (``installed`` | ``not_installed`` | ``inconsistent``).
+    2  env-error: a one-line ``oracle-hook: ... reason=<code>`` is emitted (target
+       missing or not a directory; ``settings.json`` unparseable — or, for the
+       mutating ``install`` / ``uninstall``, wrong-shaped; ``install`` on an
+       unscaffolded target). There is no exit 1 — the below-threshold signal is
+       ``gate.py``'s contract, not the installer's.
 """
 from __future__ import annotations
 
@@ -80,6 +92,50 @@ def _entry_is_servo(entry: object) -> bool:
     return False
 
 
+class _SettingsRefusal(Exception):
+    """Raised by :func:`_load_settings` when ``settings.json`` cannot be used
+    safely. Carries the env-error ``reason`` + a human message for ``_refuse``."""
+
+    def __init__(self, msg: str, reason: str):
+        super().__init__(msg)
+        self.msg = msg
+        self.reason = reason
+
+
+def _load_settings(settings_path: Path, *, validate_structure: bool) -> tuple[dict, bool]:
+    """Parse ``settings.json`` → ``(settings, had_content)``.
+
+    ``had_content`` is True only when a non-empty, parseable JSON *object*
+    existed — an empty / whitespace-only file is an empty config with nothing to
+    preserve. Raises :class:`_SettingsRefusal` on unparseable JSON or a
+    non-object root. When ``validate_structure`` is set (the mutating callers,
+    ``install`` / ``uninstall``) an odd-shaped ``hooks`` / ``hooks.Stop`` also
+    refuses — a mutation must never clobber, or crash into, a structure it does
+    not understand. ``status`` (read-only) passes False and guards its own reads.
+    """
+    settings: dict = {}
+    had_content = False
+    if settings_path.is_file():
+        raw = settings_path.read_text()
+        if raw.strip():
+            try:
+                settings = json.loads(raw)
+            except json.JSONDecodeError:
+                raise _SettingsRefusal(f"{settings_path} is not valid JSON", "settings_malformed")
+            if not isinstance(settings, dict):
+                raise _SettingsRefusal(f"{settings_path} is not a JSON object", "settings_malformed")
+            had_content = True
+    if validate_structure:
+        hooks = settings.get("hooks")
+        if hooks is not None and not isinstance(hooks, dict):
+            raise _SettingsRefusal(f'{settings_path}: "hooks" is not a JSON object', "settings_malformed")
+        if isinstance(hooks, dict):
+            stop = hooks.get("Stop")
+            if stop is not None and not isinstance(stop, list):
+                raise _SettingsRefusal(f'{settings_path}: "hooks.Stop" is not a JSON array', "settings_malformed")
+    return settings, had_content
+
+
 def cmd_install(target: Path, *, timeout: int = DEFAULT_TIMEOUT) -> int:
     # --- validate first (no writes until everything checks out) ------------ #
     # Every refusal below returns before any file is touched, so a rejected
@@ -96,44 +152,12 @@ def cmd_install(target: Path, *, timeout: int = DEFAULT_TIMEOUT) -> int:
         )
 
     settings_path = target / ".claude" / "settings.json"
-    settings: dict = {}
-    had_content = False  # True iff a non-empty, parseable settings.json existed
-    if settings_path.is_file():
-        raw = settings_path.read_text()
-        if raw.strip():
-            try:
-                settings = json.loads(raw)
-            except json.JSONDecodeError:
-                # AC4: never overwrite (or back up) unparseable user content.
-                return _refuse(
-                    f"{settings_path} is not valid JSON; refusing to overwrite",
-                    reason="settings_malformed",
-                )
-            if not isinstance(settings, dict):
-                return _refuse(
-                    f"{settings_path} is not a JSON object; refusing to overwrite",
-                    reason="settings_malformed",
-                )
-            had_content = True
-        # An empty / whitespace-only file is treated as an empty config: there
-        # is no user content to preserve, so it installs cleanly with no backup.
-
-    # Structural pre-validation: a valid-JSON file whose `hooks` container is the
-    # wrong shape is refused rather than clobbered or crashed into — the AC4
-    # posture extended to structure, kept before any write so refusal is a no-op.
-    existing_hooks = settings.get("hooks")
-    if existing_hooks is not None and not isinstance(existing_hooks, dict):
-        return _refuse(
-            f'{settings_path}: "hooks" is not a JSON object; refusing to overwrite',
-            reason="settings_malformed",
-        )
-    if isinstance(existing_hooks, dict):
-        existing_stop = existing_hooks.get("Stop")
-        if existing_stop is not None and not isinstance(existing_stop, list):
-            return _refuse(
-                f'{settings_path}: "hooks.Stop" is not a JSON array; refusing to overwrite',
-                reason="settings_malformed",
-            )
+    # AC4 (004-03): refuse before any write on unparseable / wrong-shaped content
+    # — never overwrite (or back up) something we can't safely merge into.
+    try:
+        settings, had_content = _load_settings(settings_path, validate_structure=True)
+    except _SettingsRefusal as e:
+        return _refuse(f"{e.msg}; refusing to overwrite", reason=e.reason)
 
     template = _templates_root() / "meta-judge.sh.template"
     body = template.read_text().replace("__GATE_PY__", _resolve_gate_py(target))
@@ -172,12 +196,92 @@ def cmd_install(target: Path, *, timeout: int = DEFAULT_TIMEOUT) -> int:
     return EXIT_OK
 
 
+def cmd_uninstall(target: Path) -> int:
+    settings_path = target / ".claude" / "settings.json"
+    try:
+        settings, _ = _load_settings(settings_path, validate_structure=True)
+    except _SettingsRefusal as e:
+        return _refuse(f"{e.msg}; refusing to modify", reason=e.reason)
+
+    hooks = settings.get("hooks")
+    stop = hooks.get("Stop") if isinstance(hooks, dict) else None
+    if not isinstance(stop, list) or not any(_entry_is_servo(e) for e in stop):
+        # AC3: no servo Stop entry present (or no settings.json at all) → an
+        # idempotent no-op success; never rewrite unrelated content, never back up.
+        sys.stdout.write("oracle-hook: no servo Stop hook to remove (no change)\n")
+        return EXIT_OK
+
+    # AC4: back up the pre-mutation settings.json before removing servo's entry.
+    shutil.copyfile(settings_path, settings_path.parent / BACKUP_NAME)
+
+    # AC1: remove only servo's entries; if that empties the array, clean up the
+    # dead structure (no `Stop: []` / `hooks: {}` left behind). AC2: the
+    # meta-judge.sh script is deliberately left on disk (it may be customized).
+    remaining = [e for e in stop if not _entry_is_servo(e)]
+    if remaining:
+        hooks["Stop"] = remaining
+    else:
+        del hooks["Stop"]
+        if not hooks:
+            del settings["hooks"]
+    settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+
+    sys.stdout.write("oracle-hook: removed servo Stop hook (meta-judge.sh left on disk)\n")
+    return EXIT_OK
+
+
+def cmd_status(target: Path, *, as_json: bool = False) -> int:
+    settings_path = target / ".claude" / "settings.json"
+    script = target / ".servo" / "hooks" / "meta-judge.sh"
+    script_present = script.is_file()
+
+    # Read-only: refuse only on unparseable JSON. An odd-shaped (but valid-JSON)
+    # hooks/Stop is reported leniently as "no servo entry" rather than erroring —
+    # inspection need not understand a structure it isn't going to mutate.
+    try:
+        settings, _ = _load_settings(settings_path, validate_structure=False)
+    except _SettingsRefusal as e:
+        return _refuse(f"{e.msg}; cannot determine status", reason=e.reason)
+
+    hooks = settings.get("hooks")
+    stop = hooks.get("Stop") if isinstance(hooks, dict) else None
+    entry_present = isinstance(stop, list) and any(_entry_is_servo(e) for e in stop)
+
+    # AC5: three distinct, machine-readable states. `inconsistent` covers either
+    # XOR case (entry without script — the broken case; or script without entry —
+    # the post-uninstall orphan); the booleans below disambiguate which.
+    if entry_present and script_present:
+        state = "installed"
+    elif not entry_present and not script_present:
+        state = "not_installed"
+    else:
+        state = "inconsistent"
+
+    if as_json:
+        sys.stdout.write(json.dumps({
+            "schema_version": 1,
+            "state": state,
+            "entry_present": entry_present,
+            "script_present": script_present,
+            "settings_path": str(settings_path),
+            "script_path": str(script),
+        }) + "\n")
+    else:
+        sys.stdout.write(
+            f"oracle-hook: {state} "
+            f"(Stop entry: {'present' if entry_present else 'absent'}, "
+            f"meta-judge.sh: {'present' if script_present else 'absent'})\n"
+        )
+    return EXIT_OK
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hook.py",
         description="Install/uninstall/report servo's meta-judge Stop hook.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
+
     p_install = sub.add_parser("install", help="install the meta-judge Stop hook")
     p_install.add_argument("target", help="path to the servo-scaffolded project")
     p_install.add_argument(
@@ -186,16 +290,36 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_TIMEOUT,
         help=f"hook command timeout in seconds (default {DEFAULT_TIMEOUT})",
     )
+
+    p_uninstall = sub.add_parser(
+        "uninstall", help="remove servo's Stop hook entry (leaves the script on disk)"
+    )
+    p_uninstall.add_argument("target", help="path to the project")
+
+    p_status = sub.add_parser(
+        "status", help="report whether the meta-judge Stop hook is installed"
+    )
+    p_status.add_argument("target", help="path to the project")
+    p_status.add_argument(
+        "--json", action="store_true", dest="as_json",
+        help="emit machine-readable JSON instead of a human-readable line",
+    )
+
     args = parser.parse_args(argv)
 
     target = Path(args.target).expanduser().resolve()
+    # Shared precondition for the whole CLI surface (AC6): the target must exist.
+    if not target.is_dir():
+        return _refuse(
+            f"target not found or not a directory: {target}", reason="target_missing"
+        )
+
     if args.cmd == "install":
-        if not target.is_dir():
-            return _refuse(
-                f"target not found or not a directory: {target}",
-                reason="target_missing",
-            )
         return cmd_install(target, timeout=args.timeout)
+    if args.cmd == "uninstall":
+        return cmd_uninstall(target)
+    if args.cmd == "status":
+        return cmd_status(target, as_json=args.as_json)
     return EXIT_ENV_ERROR  # unreachable: subparser is required
 
 
