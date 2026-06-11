@@ -417,6 +417,8 @@ class VendoredOracleInstallSelfContainedTests(unittest.TestCase):
 ILLUSTRATIVE_COMMANDS = {
     "gate.py": "needs an already-scaffolded, runnable oracle.sh",
     "loop.py": "needs a live `claude` binary and burns real cost per iteration",
+    "hook.py": "install/uninstall mutate settings.json against an already-scaffolded "
+    "oracle.sh + .servo/install.json; not a bare-scaffold smoke command",
 }
 # helper basename -> list of (argv-after-helper) that the test executes
 RUNNABLE_COMMAND_ARGS = {

@@ -15,11 +15,16 @@
       {
         "name": "agent-loop",
         "files": ["SKILL.md", "loop.py"]
+      },
+      {
+        "name": "oracle-hook",
+        "files": ["SKILL.md", "hook.py"]
       }
     ],
     "agents": ["runner", "judge"],
     "templates": [
       "oracle.sh.template",
+      "meta-judge.sh.template",
       "components/pytest.sh.fragment",
       "components/vitest.sh.fragment",
       "components/jest.sh.fragment",

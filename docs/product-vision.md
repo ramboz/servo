@@ -44,8 +44,8 @@ The same scars, every project. Servo encodes the scaffolding so the dev sets wei
 1. **`/servo:scaffold-init`** — probe target signals, run Q&A, drop tailored `oracle.sh` (and optionally agent-loop / hook installer / race driver stubs) into target. *Spec 001 — DONE.*
 2. **`/servo:quality-gate`** — runtime invocation of the scaffolded oracle, normalized exit codes. *Spec 002 — DONE.*
 3. **`/servo:agent-loop`** — headless iteration driver with iteration cap, cost ceiling, checkpoint/resume. *Spec 003 — DONE.*
-4. **`/servo:spec-oracle`** — compile a spec/slice into a reviewable, deterministic evidence overlay on top of the baseline oracle. *Spec 006 — DRAFT.*
-5. **`/servo:oracle-hook`** — Claude Code hook installer (idempotent install / uninstall / status). *Future spec.*
+4. **`/servo:spec-oracle`** — compile a spec/slice into a reviewable, deterministic evidence overlay on top of the baseline oracle. *Spec 006 — DONE.*
+5. **`/servo:oracle-hook`** — Claude Code hook installer (idempotent install / uninstall / status). *Spec 004 — DONE.*
 6. **`/servo:variant-race`** — N-worktree parallel race with quality-gate scoring and winner selection. *Future spec.*
 
 ## MVP scope
