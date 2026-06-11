@@ -1,0 +1,37 @@
+name: PR Title
+
+# Spec 010-01 (conventional-commit-gate). Validates that every PR title is a
+# conventional commit so that — with squash-merge — the squashed commit subject
+# on main is machine-readable by release-please (spec 010-02). Mirrors jig's
+# pr-title.yml ruleset (ADR-0007). The `on:` key is quoted to dodge the YAML 1.1
+# truthy-`on` coercion (servo house style, see ci.yml).
+
+"on":
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            perf
+            docs
+            chore
+            refactor
+            test
+            build
+            ci
+          requireScope: true
+          subjectPattern: ^[a-z].*[^.]$
+          subjectPatternError: |
+            The subject "{subject}" must start lowercase and not end with a period.
