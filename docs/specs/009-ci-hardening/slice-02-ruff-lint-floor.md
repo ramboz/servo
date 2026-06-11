@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: []
-last_verified:
+last_verified: 2026-06-11
 ---
 
 ## Slice 009-02 — ruff-lint-floor
@@ -37,10 +37,13 @@ has, enforced in CI rather than by code review alone.
 
 **DoD:**
 
-- [~] All ACs pass; `ruff check .` green; CI lint step active. _AC1–AC3 met;
-      `ruff check .` → "All checks passed!"; the lint step is wired into
-      `ci.yml`'s `test` job. **AC4 (a violation fails the CI lint step)
-      pending the push** — needs a remote Actions run._
+- [x] All ACs pass; `ruff check .` green; CI lint step active. _AC1–AC3 met
+      (`ruff check .` → "All checks passed!"; lint step wired into `ci.yml`'s
+      `test` job). **AC4 proven on the runner:** a throwaway deliberate F401
+      (`7a23d84`) failed run 27376383980 at the **`Lint (ruff)`** step on both
+      `test (3.11)` and `test (3.12)`, while pytest and `install-surfaces`
+      stayed green — the lint step blocks independently. Reverted in `4694989`.
+      (github.com/ramboz/servo/actions/runs/27376383980)_
 - [x] Any pre-existing findings fixed — pure-style changes only, no behavior
       change — and enumerated in the deviation log. _85 findings → 0; full
       suite unchanged at 705/1/13 on both Pythons. Enumerated below._
@@ -120,3 +123,15 @@ Verification (local):
   both 3.11 and 3.12 — identical to the pre-change baseline (no behavior drift).
 - `bash scripts/verify_install_surfaces.sh` → exit 0.
 - All 26 touched `.py` files `py_compile` clean.
+
+CI evidence (after push, branch `claude/infallible-tu-344ea6`, PR #1):
+
+- **Lint step active + green** on the clean tree — run 27376015624 (the
+  `Lint (ruff)` step inside `test (3.11)`/`test (3.12)` passed).
+- **AC4 — lint failures block** — a throwaway deliberate F401
+  (`_canary_lint_009.py`, commit `7a23d84`) failed run **27376383980** at the
+  **`Lint (ruff)`** step on both `test (3.11)` and `test (3.12)`; crucially the
+  `Run full test suite` step PASSED and `install-surfaces` succeeded, so the
+  lint gate is what blocked (isolated by using a non-`test_` file pytest
+  ignores). Reverted in `4694989`, restoring green.
+  github.com/ramboz/servo/actions/runs/27376383980

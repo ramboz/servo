@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: []
-last_verified:
+last_verified: 2026-06-11
 ---
 
 ## Slice 009-01 — full-suite-in-ci
@@ -60,15 +60,18 @@ developer's machine.
 
 **DoD:**
 
-- [~] All ACs pass; CI green across the matrix. _ACs 1–6 met in-artifact (see
-      AC-compliance in the deviation log); the full suite is green **locally**
-      on both matrix Pythons (705 passed, 1 skipped, 13 subtests — 3.11 and
-      3.12). **CI-green-on-the-runner pending the push** (remote Actions run)._
-- [ ] Canary check: a deliberately failing skill test (e.g. under
+- [x] All ACs pass; CI green across the matrix. _ACs 1–6 met (see AC-compliance
+      in the deviation log). Green locally (705 passed, 1 skipped, 13 subtests
+      on 3.11 and 3.12) **and on the runner**: run 27376015624 — `test (3.11)`
+      ✅, `test (3.12)` ✅, `install-surfaces` ✅
+      (github.com/ramboz/servo/actions/runs/27376015624)._
+- [x] Canary check: a deliberately failing skill test (e.g. under
       `skills/agent-loop/`) is shown to redden CI, then reverted — evidence
       (run link or log excerpt) in the deviation log. Proves the suite is
-      really running, not silently skipped. _Pending push (needs a remote
-      Actions run)._
+      really running, not silently skipped. _**Proven:** a throwaway failing
+      test (`854daf7`) reddened run 27376167269 — both `test (3.11)` and
+      `test (3.12)` failed at the **`Run full test suite`** step while
+      `install-surfaces` stayed green; reverted in `e978b6c`._
 - [x] Install-surface gate confirmed still running in the same workflow.
       _`.github/workflows/ci.yml` has a distinct `install-surfaces` job whose
       final step runs `bash scripts/verify_install_surfaces.sh`; gate re-run
@@ -153,3 +156,14 @@ Verification (local):
   gate, including the live `verify_install.py plugin .`).
 - `ci.yml` parsed with PyYAML: jobs `{test, install-surfaces}`; matrix
   `["3.11","3.12"]`; `fail-fast: false`; `on` carries `{push, pull_request}`.
+
+CI evidence (after push, branch `claude/infallible-tu-344ea6`, PR #1):
+
+- **CI green across the matrix** — run **27376015624**: `test (3.11)` ✅,
+  `test (3.12)` ✅, `install-surfaces` ✅ (the `Lint (ruff)` step rides inside
+  the `test` job and passed). github.com/ramboz/servo/actions/runs/27376015624
+- **Canary (suite genuinely gates CI)** — a throwaway failing skill test
+  (`test_canary_009.py`, commit `854daf7`) reddened run **27376167269**: both
+  `test (3.11)` and `test (3.12)` failed at the **`Run full test suite`** step;
+  `install-surfaces` unaffected (success). Reverted in `e978b6c`, restoring
+  green. Proves the full suite runs in CI and is not silently skipped.
