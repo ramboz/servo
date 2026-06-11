@@ -1,0 +1,64 @@
+name: CI
+
+# Spec 009 (ci-hardening). Two orthogonal gates, both required to merge:
+#   - test:             does servo *work*?  the full pytest suite (every test
+#                       under skills/ + scripts/, per pyproject's testpaths)
+#                       across the supported Python matrix — this is the skill
+#                       logic (loop / gate / oracle / scaffold) that is servo's
+#                       actual product.
+#   - install-surfaces: does servo *install*?  the three runtime-install
+#                       surfaces (plugin root / release zip / project-local
+#                       scaffold) via scripts/verify_install_surfaces.sh.
+#
+# Replaces the slice-007-05 verify.yml, which ran only the install-surfaces
+# gate and never exercised the skill suites. The matrix floor mirrors
+# pyproject's requires-python (>=3.11); 3.11 + 3.12 is jig parity.
+#
+# The `on:` key is quoted to dodge the YAML 1.1 truthy-`on` coercion.
+
+"on":
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install pytest
+        run: python3 -m pip install --upgrade pip pytest
+
+      - name: Run full test suite
+        # Bare pytest from the repo root honours pyproject's
+        # testpaths = ["skills", "scripts"] — the same command run locally.
+        run: python3 -m pytest
+
+  install-surfaces:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python3 -m pip install --upgrade pip pytest
+
+      - name: Verify install surfaces
+        # ubuntu-latest ships shellcheck preinstalled, so the oracle shellcheck
+        # test actually runs here (it skips on dev machines without it).
+        run: bash scripts/verify_install_surfaces.sh

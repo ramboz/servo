@@ -16,10 +16,9 @@ import re
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 README = REPO_ROOT / "README.md"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "verify.yml"
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 
 # Every script path the README install section hands the reader. If any of
 # these is renamed or removed, the docs go stale silently — this list is the
@@ -90,9 +89,13 @@ class ReadmeInstallSectionTests(unittest.TestCase):
 
 
 class CiWorkflowTests(unittest.TestCase):
+    # Spec 009-01 retired verify.yml in favour of a single ci.yml (test matrix +
+    # install-surfaces job). These guards still assert the same thing — the
+    # install-surface verification command runs in CI on push and PR — they
+    # just point at the new workflow file.
     def test_workflow_file_exists(self) -> None:
-        # AC4: CI was ADDED (not deferred).
-        self.assertTrue(WORKFLOW.is_file(), "missing .github/workflows/verify.yml")
+        # AC4: the install-surface gate is still wired into CI.
+        self.assertTrue(WORKFLOW.is_file(), "missing .github/workflows/ci.yml")
 
     def test_workflow_runs_verification_command(self) -> None:
         text = WORKFLOW.read_text()
