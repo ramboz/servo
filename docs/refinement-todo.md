@@ -301,3 +301,27 @@ reality and added a defensive test for the `missing`-present case.
 promised "failing/missing components" but the test masked the gap with a gate
 payload (`status=below_threshold` + `missing=[…]`) the stock oracle never emits
 on exit 1.
+
+---
+
+## `install` does not refresh an already-installed `meta-judge.sh` on a servo upgrade
+
+**Deferred:** Slice 004-03 made `hook.py install` write the meta-judge script
+**only when absent** — so a user-customized `meta-judge.sh` survives re-install
+(the slice's non-destructive promise; spec.md calls the script
+"user-customizable") and a deleted script self-heals. The trade-off: when servo
+ships a newer `templates/meta-judge.sh.template`, re-running `install` over an
+existing (servo-written) script will **not** refresh it — the stale script keeps
+running. The interim upgrade path is `uninstall` (004-04) then `install`.
+
+**Resolution trigger:** When 004-04 lands `uninstall` (making the
+`uninstall` + `install` upgrade path real and documentable), or the first time a
+`meta-judge.sh.template` change actually needs to reach already-installed
+targets. Cheap options when triggered: an explicit `install --refresh-script`
+flag, or stamping the template with a version the installer compares (and offers
+to bump) — distinguishing a servo-pristine script (safe to overwrite) from a
+user-edited one (must not clobber).
+
+**Surfaced by:** slice 004-03 implementation (write-if-absent decision) and its
+`jig:reviewer` pass (decision #2 dispositioned in-scope, trade-off flagged for a
+future upgrade slice).

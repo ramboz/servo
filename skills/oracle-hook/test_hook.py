@@ -1,15 +1,23 @@
-"""Tests for the servo oracle-hook installer + meta-judge script (spec 004-01).
+"""Tests for the servo oracle-hook installer + meta-judge script (spec 004).
 
-Two test surfaces:
+Surfaces:
 
-* ``InstallTests`` drive ``hook.py install`` against fixture targets (ACs 1-3).
-* ``MetaJudgeScriptTests`` pipe synthetic ``Stop``-event JSON into the installed
+* ``InstallTests`` — ``hook.py install`` against fixture targets (004-01 ACs 1-3).
+* ``IdempotentInstallBackupTests`` — re-install idempotency, settings merge +
+  byte-faithful backup, and safe refusal on malformed/odd-shaped settings.json
+  (004-03 ACs 1-5).
+* ``MetaJudgeScriptTests`` — pipe synthetic ``Stop``-event JSON into the installed
   ``meta-judge.sh`` and assert its stdout/exit, with a stubbed ``gate.py`` so the
-  full decision table is exercised deterministically (ACs 4-8). One integration
-  test drives the *real* ``gate.py`` against a scaffolded fixture (AC8).
+  full decision table is exercised deterministically (004-01 ACs 4-8). One
+  integration test drives the *real* ``gate.py`` against a scaffolded fixture (AC8).
+* ``FailOpenSafetyTests`` — a broken/missing/slow/unparseable gate never blocks
+  (004-02).
+* ``ResolveGatePyTests`` — ``_resolve_gate_py`` vendored-vs-absolute resolution.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -161,6 +169,183 @@ class InstallTests(unittest.TestCase):
         rc = hook.main(["install", str(self.target)])
         self.assertEqual(rc, 2)
         self.assertFalse((self.target / ".servo" / "hooks" / "meta-judge.sh").exists())
+
+
+# --------------------------------------------------------------------------- #
+# Idempotent install + settings backup/merge (slice 004-03, ACs 1-5)
+# --------------------------------------------------------------------------- #
+class IdempotentInstallBackupTests(unittest.TestCase):
+    """``install`` is safe to re-run against a *populated* ``settings.json``:
+    idempotent (one servo Stop entry), merge-not-clobber, backup-before-mutate,
+    a safe refusal on malformed/odd-shaped content, and a stable entry marker."""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self._tmp.name)
+        _make_scaffolded_target(self.target)
+        self.settings_path = self.target / ".claude" / "settings.json"
+        self.backup_path = self.target / ".claude" / "settings.json.servo-bak"
+        self.script = self.target / ".servo" / "hooks" / "meta-judge.sh"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    # -- helpers -- #
+    def _seed_settings(self, raw: str) -> None:
+        """Write a pre-existing settings.json verbatim (raw text, not re-encoded)."""
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        self.settings_path.write_text(raw)
+
+    def _install(self, *args):
+        """Run ``install`` capturing (rc, stdout, stderr)."""
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = hook.main(["install", str(self.target), *args])
+        return rc, out.getvalue(), err.getvalue()
+
+    def _servo_entry_count(self) -> int:
+        settings = json.loads(self.settings_path.read_text())
+        stop = settings.get("hooks", {}).get("Stop", [])
+        return sum(1 for e in stop if hook._entry_is_servo(e))
+
+    # -- AC1: idempotent install -- #
+    def test_second_install_yields_single_servo_entry(self):
+        """AC1: running install twice produces exactly one servo Stop entry."""
+        rc1, _, _ = self._install()
+        rc2, _, _ = self._install()
+        self.assertEqual((rc1, rc2), (0, 0))
+        self.assertEqual(self._servo_entry_count(), 1)
+
+    # -- AC2: merge, not clobber -- #
+    def test_preserves_unrelated_top_level_keys(self):
+        """AC2: env / permissions / model and friends survive the install."""
+        self._seed_settings(json.dumps({
+            "env": {"FOO": "bar"},
+            "permissions": {"allow": ["Bash(ls:*)"]},
+            "model": "claude-x",
+        }))
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 0)
+        merged = json.loads(self.settings_path.read_text())
+        self.assertEqual(merged["env"], {"FOO": "bar"})
+        self.assertEqual(merged["permissions"], {"allow": ["Bash(ls:*)"]})
+        self.assertEqual(merged["model"], "claude-x")
+        self.assertEqual(self._servo_entry_count(), 1)
+
+    def test_preserves_other_stop_entries_and_hook_events(self):
+        """AC2: a user's own Stop hook and a non-Stop event are left intact;
+        only servo's Stop entry is appended."""
+        other_stop = {"hooks": [{"type": "command", "command": "/opt/my-own-stop.sh"}]}
+        pretooluse = {"matcher": "Bash",
+                      "hooks": [{"type": "command", "command": "echo hi"}]}
+        self._seed_settings(json.dumps(
+            {"hooks": {"PreToolUse": [pretooluse], "Stop": [other_stop]}}
+        ))
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 0)
+        merged = json.loads(self.settings_path.read_text())
+        self.assertEqual(merged["hooks"]["PreToolUse"], [pretooluse])  # other event intact
+        stop = merged["hooks"]["Stop"]
+        self.assertEqual(len(stop), 2)                                 # user's + servo's
+        self.assertIn(other_stop, stop)                                # user's preserved verbatim
+        self.assertEqual(self._servo_entry_count(), 1)
+
+    # -- AC3: backup before mutate -- #
+    def test_backs_up_existing_settings_before_mutating(self):
+        """AC3: the pre-mutation file is copied byte-faithfully to .servo-bak."""
+        original = '{\n    "env": {"FOO": "bar"}\n}\n'  # 4-space; != indent=2 output
+        self._seed_settings(original)
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.backup_path.is_file())
+        self.assertEqual(self.backup_path.read_text(), original)       # exact pre-mutation bytes
+        self.assertEqual(self._servo_entry_count(), 1)                 # live file did change
+
+    def test_no_backup_when_creating_fresh_settings(self):
+        """AC3: a brand-new settings.json (none existed) writes no backup."""
+        self.assertFalse(self.settings_path.exists())
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 0)
+        self.assertFalse(self.backup_path.exists())
+
+    def test_reinstall_does_not_rewrite_backup(self):
+        """AC3: a no-change re-install does not rewrite the backup."""
+        self._seed_settings(json.dumps({"env": {"FOO": "bar"}}))
+        self._install()                                    # creates the backup
+        self.assertTrue(self.backup_path.is_file())
+        self.backup_path.write_text("SENTINEL-do-not-touch")
+        rc, _, _ = self._install()                         # servo present → no-op
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.backup_path.read_text(), "SENTINEL-do-not-touch")
+        self.assertEqual(self._servo_entry_count(), 1)
+
+    # -- AC4: malformed settings refuses safely -- #
+    def test_malformed_settings_refuses_without_change_or_backup(self):
+        """AC4: invalid JSON → refuse (nonzero, names the file), no write, no backup."""
+        malformed = '{ "env": this is not json'
+        self._seed_settings(malformed)
+        rc, _out, err = self._install()
+        self.assertEqual(rc, 2)
+        self.assertIn(str(self.settings_path), err)                    # message names the file
+        self.assertEqual(self.settings_path.read_text(), malformed)    # unparseable content untouched
+        self.assertFalse(self.backup_path.exists())                    # never backed up
+        self.assertFalse(self.script.exists())                         # no half-install
+
+    # -- AC5: stable entry identity -- #
+    def test_servo_entry_carries_stable_marker(self):
+        """AC5: servo's Stop entry is identifiable by a stable marker, and that
+        marker does not match an unrelated user entry."""
+        self._install()
+        settings = json.loads(self.settings_path.read_text())
+        servo = [e for e in settings["hooks"]["Stop"] if hook._entry_is_servo(e)]
+        self.assertEqual(len(servo), 1)
+        self.assertIn(hook.SERVO_HOOK_REL, servo[0]["hooks"][0]["command"])
+        self.assertFalse(hook._entry_is_servo(
+            {"hooks": [{"type": "command", "command": "/opt/other.sh"}]}
+        ))
+
+    # -- empty-file fixture (DoD): treated as an empty config, not malformed -- #
+    def test_empty_settings_file_treated_as_empty_config(self):
+        """An empty (content-free) settings.json installs cleanly with no backup
+        — there is nothing to preserve, and refusing on it would be hostile."""
+        self._seed_settings("")
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 0)
+        self.assertEqual(self._servo_entry_count(), 1)
+        self.assertFalse(self.backup_path.exists())
+
+    # -- non-destructive re-install preserves a customized script (slice theme) -- #
+    def test_reinstall_preserves_customized_meta_judge_script(self):
+        """Re-install must not clobber a user-customized meta-judge.sh (the spec
+        calls the script user-customizable; this slice's promise is non-destructive
+        re-install)."""
+        self._install()
+        self.assertTrue(self.script.is_file())
+        customized = self.script.read_text() + "\n# user customization\n"
+        self.script.write_text(customized)
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.script.read_text(), customized)
+
+    # -- structural refusal: hooks present but wrong shape (defensive, AC4 posture) -- #
+    def test_refuses_when_hooks_is_not_an_object(self):
+        """A valid-JSON but wrong-shaped ``hooks`` refuses rather than crashing
+        mid-install."""
+        self._seed_settings(json.dumps({"hooks": "oops"}))
+        rc, _out, err = self._install()
+        self.assertEqual(rc, 2)
+        self.assertIn(str(self.settings_path), err)
+        self.assertFalse(self.backup_path.exists())
+        self.assertFalse(self.script.exists())
+
+    def test_refuses_when_stop_is_not_an_array(self):
+        """A wrong-shaped ``hooks.Stop`` refuses safely (no half-install)."""
+        self._seed_settings(json.dumps({"hooks": {"Stop": {"not": "a list"}}}))
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 2)
+        self.assertFalse(self.script.exists())
 
 
 # --------------------------------------------------------------------------- #
