@@ -1,7 +1,7 @@
 ---
-status: DRAFT
+status: DONE
 dependencies: [007]
-last_verified:
+last_verified: 2026-06-11
 ---
 
 # Spec 009 - ci-hardening

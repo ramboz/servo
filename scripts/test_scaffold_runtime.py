@@ -22,14 +22,12 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 SCAFFOLD_INIT_DIR = REPO_ROOT / "skills" / "scaffold-init"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import scaffold_runtime  # noqa: E402
-
 
 CONTRACT = json.loads(
     (REPO_ROOT / ".claude-plugin" / "install-contract.json").read_text()
@@ -219,7 +217,9 @@ class NoHookEntriesTests(unittest.TestCase):
 class SelfContainedSmokeTests(unittest.TestCase):
     """AC6: a vendored helper runs using only files under the target."""
 
-    def _run_vendored_detect(self, target: Path, env: dict[str, str]) -> subprocess.CompletedProcess:
+    def _run_vendored_detect(
+        self, target: Path, env: dict[str, str]
+    ) -> subprocess.CompletedProcess:
         vendored = (
             target / ".claude" / "skills"
             / f"{SKILL_PREFIX}scaffold-init" / "scaffold.py"
@@ -490,7 +490,7 @@ class ScaffoldCommandClassificationTests(unittest.TestCase):
                 )
 
     def test_illustrative_helpers_have_a_reason(self):
-        for helper, reason in ILLUSTRATIVE_COMMANDS.items():
+        for reason in ILLUSTRATIVE_COMMANDS.values():
             self.assertTrue(reason and isinstance(reason, str))
 
 

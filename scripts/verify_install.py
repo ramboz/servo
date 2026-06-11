@@ -20,7 +20,6 @@ from json import JSONDecodeError
 from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable, TextIO
 
-
 OUTPUT_SCHEMA_VERSION = 1
 CONTRACT_SCHEMA_VERSION = 1
 CONTRACT_PATH = Path(".claude-plugin") / "install-contract.json"
@@ -197,7 +196,9 @@ def _load_contract(root: Path) -> tuple[dict[str, Any] | None, list[Failure]]:
     return contract, []
 
 
-def _normalize_skill_entries(root: Path, contract: dict[str, Any]) -> tuple[list[dict[str, Any]], list[Failure]]:
+def _normalize_skill_entries(
+    root: Path, contract: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[Failure]]:
     required = contract["required"]
     raw_skills = required.get("skills")
     failures: list[Failure] = []
@@ -257,7 +258,9 @@ def _normalize_skill_entries(root: Path, contract: dict[str, Any]) -> tuple[list
     return normalized, failures
 
 
-def _require_string_list(root: Path, contract: dict[str, Any], key: str) -> tuple[list[str], list[Failure]]:
+def _require_string_list(
+    root: Path, contract: dict[str, Any], key: str
+) -> tuple[list[str], list[Failure]]:
     raw = contract["required"].get(key)
     if isinstance(raw, list) and all(isinstance(item, str) and item for item in raw):
         return list(raw), []
@@ -271,7 +274,9 @@ def _require_string_list(root: Path, contract: dict[str, Any], key: str) -> tupl
     ]
 
 
-def _validate_manifests(root: Path, contract: dict[str, Any]) -> tuple[str | None, str | None, list[Failure]]:
+def _validate_manifests(
+    root: Path, contract: dict[str, Any]
+) -> tuple[str | None, str | None, list[Failure]]:
     plugin_name = contract.get("plugin_name")
     version: str | None = None
     failures: list[Failure] = []
@@ -324,7 +329,8 @@ def _validate_manifests(root: Path, contract: dict[str, Any]) -> tuple[str | Non
                     root,
                     "manifest_mismatch",
                     root / MARKETPLACE_PATH,
-                    f"marketplace name {marketplace_name!r} does not match contract {plugin_name!r}",
+                    f"marketplace name {marketplace_name!r} does not match "
+                    f"contract {plugin_name!r}",
                 )
             )
         plugin_entries = marketplace.get("plugins")
@@ -359,7 +365,9 @@ def _check_artifact_files(root: Path, relative_paths: Iterable[Path]) -> list[Fa
     return failures
 
 
-def _artifact_paths_from_contract(root: Path, contract: dict[str, Any]) -> tuple[list[Path], list[Failure]]:
+def _artifact_paths_from_contract(
+    root: Path, contract: dict[str, Any]
+) -> tuple[list[Path], list[Failure]]:
     failures: list[Failure] = []
     artifacts: list[Path] = []
 
@@ -849,7 +857,9 @@ def run_zip(zip_path: Path | str, *, json_output: bool = False, out: TextIO | No
     return 0 if result.ok else 1
 
 
-def run_scaffold(target: Path | str, *, json_output: bool = False, out: TextIO | None = None) -> int:
+def run_scaffold(
+    target: Path | str, *, json_output: bool = False, out: TextIO | None = None
+) -> int:
     if out is None:
         out = sys.stdout
     result = verify_scaffold(target)

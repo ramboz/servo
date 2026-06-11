@@ -1,0 +1,14 @@
+# Servo's Python lint floor — spec 009-02. Config-only: servo is a Claude Code
+# plugin, not a pip package, so this just configures the lint gate that CI and
+# contributors run. The ruleset mirrors jig (the sibling plugin) so the two
+# projects' lint floors read the same way.
+line-length = 100
+
+[lint]
+select = ["F", "E", "W", "I", "B"]
+# E402 (module-level import not at top of file) is ignored for the same reason
+# jig ignores it: the deferred `sys.path.insert(...)` + sibling-module import
+# pattern (e.g. scripts/build_release_zip.py's `import verify_install` inside
+# smoke_test). No module-level E402 case exists in the tree today, so this is
+# forward-looking + jig parity, not a current suppression.
+ignore = ["E402"]

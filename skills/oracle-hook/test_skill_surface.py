@@ -30,7 +30,6 @@ import re
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_MD = REPO_ROOT / "skills" / "oracle-hook" / "SKILL.md"
 CONTRACT = REPO_ROOT / ".claude-plugin" / "install-contract.json"
@@ -61,7 +60,9 @@ class SkillFileShapeTests(unittest.TestCase):
     def test_has_frontmatter_with_name_and_description(self):
         fm = _frontmatter(_skill_text())
         self.assertIn("name:", fm, "SKILL.md frontmatter must declare a `name:` field")
-        self.assertIn("description:", fm, "SKILL.md frontmatter must declare a `description:` field")
+        self.assertIn(
+            "description:", fm, "SKILL.md frontmatter must declare a `description:` field"
+        )
         self.assertIn("servo:oracle-hook", fm, "name should be `servo:oracle-hook`")
 
 
@@ -189,7 +190,9 @@ class Tier2OptInTests(unittest.TestCase):
     def test_states_explicit_never_auto_install(self):
         self.assertIn("explicit", self.body)
         self.assertTrue(
-            "never auto" in self.body or "not auto" in self.body or "never auto-install" in self.body,
+            "never auto" in self.body
+            or "not auto" in self.body
+            or "never auto-install" in self.body,
             "SKILL.md should state the hook is never auto-installed",
         )
 
@@ -267,7 +270,9 @@ class RefusalHandlingTests(unittest.TestCase):
         self.assertIn("refusal", self.body)
 
     def test_reason_field_documented(self):
-        for reason in ("target_missing", "manifest_missing", "oracle_missing", "settings_malformed"):
+        for reason in (
+            "target_missing", "manifest_missing", "oracle_missing", "settings_malformed"
+        ):
             self.assertIn(reason, self.body, f"refusal table missing reason {reason!r}")
 
     def test_no_silent_retry(self):

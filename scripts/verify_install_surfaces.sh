@@ -2,8 +2,8 @@
 # scripts/verify_install_surfaces.sh — single entry point that proves servo's
 # three runtime-install surfaces (plugin root / release zip / project-local
 # scaffold) stay coherent. Slice 007-05 (docs-and-ci); this is the one
-# documented local command behind AC3, and CI (.github/workflows/verify.yml)
-# runs exactly this script.
+# documented local command behind AC3, and CI (the install-surfaces job in
+# .github/workflows/ci.yml) runs exactly this script.
 #
 # Steps, in order, failing on the first failure:
 #   1. verify the live checked-out plugin root against the install contract;

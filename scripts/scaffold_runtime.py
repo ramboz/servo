@@ -30,7 +30,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-
 MANIFEST_SCHEMA_VERSION = 1
 CONTRACT_PATH = Path(".claude-plugin") / "install-contract.json"
 PLUGIN_MANIFEST_PATH = Path(".claude-plugin") / "plugin.json"

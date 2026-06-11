@@ -18,7 +18,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GATE = REPO_ROOT / "skills" / "quality-gate" / "gate.py"
 

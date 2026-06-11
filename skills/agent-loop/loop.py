@@ -51,7 +51,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-
 # Schema version for every JSON line emitted on stdout. Mirrors gate.py's
 # `schema_version` (ADR-0002) and ADR-0004's `state_schema_version`. Bump
 # on any field rename, type change, or semantic shift; pure additive changes
@@ -280,7 +279,7 @@ def _parse_verdict_block(
     if not matches:
         return None, None  # no block — informational, not a refusal
     block_body = matches[-1].group(1)
-    lines = [l for l in block_body.splitlines() if l.strip()]
+    lines = [line for line in block_body.splitlines() if line.strip()]
     if not lines:
         return None, "verdict block is empty"
     first_line = lines[0].strip()

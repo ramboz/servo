@@ -46,7 +46,6 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-
 SERVO_VERSION = "0.1.0"
 PLANNER_VERSION = "0.1.0"
 SCHEMA_VERSION = 1

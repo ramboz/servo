@@ -37,7 +37,6 @@ import unittest
 from pathlib import Path
 from typing import Optional
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOOP = REPO_ROOT / "skills" / "agent-loop" / "loop.py"
 
@@ -455,10 +454,10 @@ class EarlyHaltOnOracleTests(unittest.TestCase):
         )
         # Per-iteration JSON lines: exactly 2 lines + 1 summary = 3 total.
         lines = _stdout_json_lines(result.stdout)
-        per_iter = [l for l in lines if "iteration" in l]
+        per_iter = [line for line in lines if "iteration" in line]
         self.assertEqual(len(per_iter), 2)
         # Iteration numbers are 1-indexed and contiguous.
-        self.assertEqual([l["iteration"] for l in per_iter], [1, 2])
+        self.assertEqual([line["iteration"] for line in per_iter], [1, 2])
 
 
 # ============================================================================
@@ -575,7 +574,7 @@ class PerIterationJsonTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         lines = _stdout_json_lines(result.stdout)
-        per_iter = [l for l in lines if "iteration" in l]
+        per_iter = [line for line in lines if "iteration" in line]
         self.assertEqual(len(per_iter), 2)
         for line in per_iter:
             # AC5 required minimum field set.
@@ -599,7 +598,7 @@ class PerIterationJsonTests(unittest.TestCase):
             self.target, "--prompt", "x", "--max-iterations", "1",
             mock_bindir=self.bindir,
         )
-        per_iter = [l for l in _stdout_json_lines(result.stdout) if "iteration" in l]
+        per_iter = [line for line in _stdout_json_lines(result.stdout) if "iteration" in line]
         self.assertEqual(len(per_iter), 1)
         line = per_iter[0]
         self.assertEqual(line["iteration"], 1)
@@ -615,8 +614,8 @@ class PerIterationJsonTests(unittest.TestCase):
             self.target, "--prompt", "x", "--max-iterations", "4",
             mock_bindir=self.bindir,
         )
-        per_iter = [l for l in _stdout_json_lines(result.stdout) if "iteration" in l]
-        self.assertEqual([l["iteration"] for l in per_iter], [1, 2, 3, 4])
+        per_iter = [line for line in _stdout_json_lines(result.stdout) if "iteration" in line]
+        self.assertEqual([line["iteration"] for line in per_iter], [1, 2, 3, 4])
 
 
 # ============================================================================
@@ -683,7 +682,7 @@ class SummaryLineTests(unittest.TestCase):
         # Per ADR-0004: YYYYMMDDTHHMMSS-XXXX (4-hex suffix).
         self.assertRegex(summary["run_id"], r"^\d{8}T\d{6}-[0-9a-f]{4}$")
         # Per-iteration JSON carries the same run_id.
-        per_iter = [l for l in _stdout_json_lines(result.stdout) if "iteration" in l]
+        per_iter = [line for line in _stdout_json_lines(result.stdout) if "iteration" in line]
         self.assertEqual(per_iter[0]["run_id"], summary["run_id"])
 
     def test_run_id_unique_per_invocation(self):
@@ -776,7 +775,7 @@ class MockClaudeHarnessTests(unittest.TestCase):
             mock_bindir=self.bindir,
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        per_iter = [l for l in _stdout_json_lines(result.stdout) if "iteration" in l]
+        per_iter = [line for line in _stdout_json_lines(result.stdout) if "iteration" in line]
         self.assertEqual(len(per_iter), 1)
         self.assertEqual(per_iter[0]["session_id"], "harness-test-uuid")
         self.assertAlmostEqual(per_iter[0]["cost_usd"], 0.077, places=6)
@@ -796,7 +795,7 @@ class MockClaudeHarnessTests(unittest.TestCase):
             mock_bindir=self.bindir,
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
-        per_iter = [l for l in _stdout_json_lines(result.stdout) if "iteration" in l]
+        per_iter = [line for line in _stdout_json_lines(result.stdout) if "iteration" in line]
         self.assertEqual(per_iter[0]["session_id"], sentinel_session)
 
     def test_canned_payload_carries_spike_schema_fields(self):
@@ -934,7 +933,7 @@ class SchemaVersionTests(unittest.TestCase):
             mock_bindir=self.bindir,
         )
         lines = _stdout_json_lines(result.stdout)
-        per_iter = [l for l in lines if "iteration" in l]
+        per_iter = [line for line in lines if "iteration" in line]
         self.assertEqual(len(per_iter), 2)
         for line in per_iter:
             self.assertEqual(line.get("schema_version"), 1)
@@ -1345,7 +1344,7 @@ class PerIterationBudgetCapTests(unittest.TestCase):
             for argv in invocations
         ]
         # Strictly monotonic decreasing.
-        for prev, curr in zip(budgets, budgets[1:]):
+        for prev, curr in zip(budgets, budgets[1:], strict=False):
             self.assertGreater(prev, curr, f"budgets={budgets}")
         # First iter sees the full ceiling.
         self.assertAlmostEqual(budgets[0], 2.00, places=6)
@@ -1542,11 +1541,11 @@ class CumulativeCostPerIterationTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         self.assertEqual(len(per_iter), 3)
         running = 0.0
-        for line, expected_cost in zip(per_iter, costs):
+        for line, expected_cost in zip(per_iter, costs, strict=False):
             running += expected_cost
             self.assertIn("cost_usd", line)
             self.assertIn("cumulative_cost_usd", line)
@@ -1710,7 +1709,7 @@ class ClaudeNonzeroWithParseableJsonTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         # First iter recorded; cumulative ($1.50) > ceiling ($1.00) → halt.
         self.assertEqual(len(per_iter), 1)
@@ -1962,7 +1961,7 @@ class ContextFillBelowThresholdTests(unittest.TestCase):
             mock_bindir=self.bindir,
         )
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         self.assertEqual(len(per_iter), 3)
         for line in per_iter:
@@ -2129,7 +2128,7 @@ class ContextFillRefusalBeforeClaudeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         self.assertEqual(int(self.counter.read_text().strip()), 1)
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         self.assertEqual(len(per_iter), 1)
         self.assertEqual(per_iter[0]["iteration"], 1)
@@ -2190,7 +2189,7 @@ class ContextFillDisabledTests(unittest.TestCase):
             mock_bindir=self.bindir,
         )
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         self.assertEqual(len(per_iter), 2)
         for line in per_iter:
@@ -2255,7 +2254,7 @@ class ContextFillMissingContextWindowTests(unittest.TestCase):
             mock_bindir=self.bindir,
         )
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         self.assertEqual(len(per_iter), 2)
         for line in per_iter:
@@ -2853,9 +2852,9 @@ class ResumeFlowTests(unittest.TestCase):
         self.assertEqual(int(self.counter.read_text().strip()), 4)
         # Per-iter lines on the RESUME invocation: iter 3 + iter 4 only.
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
-        self.assertEqual([l["iteration"] for l in per_iter], [3, 4])
+        self.assertEqual([line["iteration"] for line in per_iter], [3, 4])
 
     def test_resume_carries_cumulative_cost(self):
         _run_loop(
@@ -3998,7 +3997,7 @@ class RunnerVerdictBlockTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         self.assertEqual(len(per_iter), 1)
         v = per_iter[0]["verdict"]
@@ -4057,7 +4056,7 @@ class JudgeVerdictBlockTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, msg=result.stderr)
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         self.assertEqual(len(per_iter), 2)
         v = per_iter[1]["verdict"]  # iter 2 is judge
@@ -4111,11 +4110,11 @@ class AgentAlternationDispatchTests(unittest.TestCase):
             mock_bindir=self.bindir,
         )
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         self.assertEqual(len(per_iter), 4)
         self.assertEqual(
-            [l["agent"] for l in per_iter],
+            [line["agent"] for line in per_iter],
             ["runner", "judge", "runner", "judge"],
         )
 
@@ -4204,7 +4203,9 @@ class VerdictSchemaMismatchTests(unittest.TestCase):
 
     def _make_mock_with_block_text(self, block_body_lines: list) -> None:
         """Build a mock that emits a verdict block with the supplied lines."""
-        block_text = "\\n" + f"{_BTICK}verdict\\n" + "\\n".join(block_body_lines) + f"\\n{_BTICK}\\n"
+        block_text = (
+            "\\n" + f"{_BTICK}verdict\\n" + "\\n".join(block_body_lines) + f"\\n{_BTICK}\\n"
+        )
         _mock_claude_with_raw_result(
             self.bindir, self.counter,
             result_text=f"agent text{block_text}",
@@ -4296,7 +4297,7 @@ class VerdictSchemaMismatchTests(unittest.TestCase):
         self.assertEqual(int(self.counter.read_text().strip()), 2)
         # Per-iter JSON carries `verdict: null`.
         per_iter = [
-            l for l in _stdout_json_lines(result.stdout) if "iteration" in l
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
         ]
         for line in per_iter:
             self.assertIsNone(line["verdict"])

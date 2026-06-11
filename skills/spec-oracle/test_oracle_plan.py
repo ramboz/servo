@@ -30,7 +30,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ORACLE_PLAN = REPO_ROOT / "skills" / "spec-oracle" / "oracle_plan.py"
 
