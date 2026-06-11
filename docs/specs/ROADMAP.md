@@ -13,7 +13,7 @@ visible during spec authoring.
 | Spec | Description |
 |---|---|
 | [004-oracle-hook](004-oracle-hook/spec.md) | Claude Code hook installer (idempotent install/uninstall/status). Installs a **meta-judge `Stop` hook** that grades every assistant turn against the scaffolded oracle and feeds back a **structured retry hint** (block + reason) — the deterministic replacement for ad-hoc transcript-regex scans. Fails **open** so a broken oracle never traps a session. |
-| 005-variant-race | N-worktree parallel race with quality-gate scoring and winner selection. Owns worktree-race coordination, variant-lease management, and winner promotion (the unattended cousin of jig's parallel-spec-number reservation). |
+| [005-variant-race](005-variant-race/spec.md) | **DRAFT scope-capture, parked.** N-worktree parallel race with quality-gate scoring and winner selection — best-of-N against the oracle. Owns worktree-race coordination, variant-lease management, and winner promotion (the unattended cousin of jig's parallel-spec-number reservation). An **optimization, not an EDD prerequisite**; activates when a real target shows single-shot loop convergence is the bottleneck. |
 | [008-eval-authoring](008-eval-authoring/spec.md) | **DRAFT scope-capture, parked.** Human-in-the-loop front-end that turns an eval-able `residual_judgment` AC into an [ADR-0005](../decisions/adr-0005-eval-oracle-component.md) frozen eval component: triage, rubric shaping, statistical reference-set collection, and frozen `n`/`δ`/threshold/judge-model — then hands off to `/servo:spec-oracle`. Activates on the first real EDD spec (same trigger as ADR-0005). |
 
 Sequencing rationale: 001 is the foundation everything else depends
