@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: []
-last_verified:
+last_verified: 2026-06-11
 ---
 
 ## Slice 010-01 — conventional-commit-gate
@@ -42,12 +42,12 @@ value: every PR's title is validated before it can merge — the precondition
 
 **DoD:**
 
-- [~] All ACs pass (verified against a sample PR or the action's logs).
-      _AC1–AC3 met in-artifact (independent review + YAML parse confirmed the
-      action/events/permissions/types/scope/subject rules). **AC4 (a bad title
-      fails, a good one passes) is proven on this spec's own PR** — the
-      `pr-title.yml` check runs on the PR that introduces it — captured at
-      push (deferred to that run)._
+- [x] All ACs pass (verified against a sample PR or the action's logs).
+      _AC1–AC3 met in-artifact (independent review + YAML parse). **AC4 proven
+      live on PR #2** (the PR that introduces `pr-title.yml`): the conforming
+      title `feat(release): …` **passed** the check (runs 27378113585 /
+      27378201932), and a deliberately bad title `Update stuff.` **failed** it
+      (run 27378162745, then the good title was restored)._
 - [x] Squash-merge confirmed as the repo merge mode and recorded
       (branch-protection enforcement is out-of-band / server-side). _`gh api
       repos/ramboz/servo`: `allow_squash_merge: true`, `allow_merge_commit:
@@ -75,9 +75,11 @@ release-please-readable before it can merge — the precondition for 010-02.
 - **Squash-merge was already configured** (not changed by this slice) — see
   the DoD note. So the 010-02 precondition (PR title → `main` subject) already
   holds.
-- **AC4 self-proof.** Rather than a throwaway sample PR, the gate is proven by
-  this spec's own PR: its title must pass the very `pr-title.yml` it adds. Run
-  link captured at push.
+- **AC4 self-proof (live on PR #2).** Rather than a throwaway sample PR, the
+  gate was proven on this spec's own PR: the conforming title passed (runs
+  27378113585 / 27378201932); editing the title to `Update stuff.` made the
+  `PR Title` check **fail** (run 27378162745); the good title was then restored
+  (release-please reads it on merge). Both branches of AC4 demonstrated.
 - **Branch protection not added.** The workflow enforces title *shape*; making
   the check *required* for merge is server-side branch protection, explicitly
   out-of-band per ADR-0007 — not in this slice.

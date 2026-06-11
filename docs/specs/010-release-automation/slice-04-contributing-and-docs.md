@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: []
-last_verified:
+last_verified: 2026-06-11
 ---
 
 ## Slice 010-04 — contributing-and-docs
@@ -92,4 +92,6 @@ written down and matches what CI does — not tribal knowledge.
   so it was folded into this docs slice rather than deferred.
 - **Docs guard stayed green (AC4).** `scripts/test_docs_install.py` → 9 passed;
   the rewritten guard preserves the original intent (catch a wrong/invented
-  artifact name) while surviving release bumps.
+  artifact name) while surviving release bumps. Confirmed **on the runner** in
+  PR #2's CI (run 27378113787: `test (3.11)`/`test (3.12)`/`install-surfaces`
+  all green), so this slice is fully verified without a main-merge dependency.
