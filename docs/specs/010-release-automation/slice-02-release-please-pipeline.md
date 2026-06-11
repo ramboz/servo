@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: []
 last_verified:
 ---
@@ -44,14 +44,51 @@ it tags and publishes a release.
 
 **DoD:**
 
-- [ ] All ACs pass; a release PR is observed bumping version + CHANGELOG
+- [~] All ACs pass; a release PR is observed bumping version + CHANGELOG
       (via the first real merge or a `workflow_dispatch` dry run) —
-      evidence in the deviation log.
-- [ ] `release-please-config.json` + `.release-please-manifest.json` are
+      evidence in the deviation log. _AC1–AC3 + AC6 met in-artifact (workflow
+      shape, config, manifest, and the "release-managed, do-not-hand-edit"
+      note in CONTRIBUTING/README). **AC4 (0.x bump semantics) and AC5 (tag +
+      GitHub release) plus the *observed* release PR are deferred to
+      main-merge** — release-please only acts on `main`'s history; it cannot
+      open a release PR from a feature branch. Captured in the main-merge
+      verification._
+- [~] `release-please-config.json` + `.release-please-manifest.json` are
       well-formed JSON and accepted by the action (no schema errors in the
-      run log).
-- [ ] Deviation log produced under this slice.
-- [ ] Independent review pass completed before DONE.
+      run log). _**Well-formed JSON verified locally** (both parse; the
+      config package key `.` matches the manifest key `.`; config is
+      byte-identical to jig's proven file). "Accepted by the action" (no
+      schema errors) is confirmed in the first `release.yml` run on main —
+      deferred._
+- [x] Deviation log produced under this slice. _Below._
+- [x] Independent review pass completed before DONE. _Independent reviewer,
+      2026-06-11 — **PASS, no blockers.** Verified the release-please job
+      shape/outputs/permissions and that the config is a faithful jig mirror._
 
 **Anti-horizontal-phasing check:** After this slice, servo has a version
 history and a changelog generated from commits — no manual version edits.
+
+**Deviation log:**
+
+- **release.yml release-please job + config + manifest = jig parity.** Job
+  uses `googleapis/release-please-action@v4` on `push: branches: [main]` +
+  `workflow_dispatch`, `permissions: contents: write, pull-requests: write`,
+  exposing `release_created` / `tag_name` / `version`. The config is
+  byte-identical to jig's (`release-type: simple`, `include-v-in-tag: true`,
+  `include-component-in-tag: false`, `extra-files` bumping
+  `.claude-plugin/plugin.json` `$.version`, jig's `changelog-sections`). The
+  manifest is seeded at `{ ".": "0.1.0" }` (servo's current version).
+- **Why the live items are main-only.** release-please reads `main`'s
+  conventional-commit history and opens/maintains a release PR *against main*.
+  On a feature branch there is nothing for it to do, so AC4/AC5 and "observe a
+  release PR" can only be exercised after this work merges to `main`. This is
+  the inherent shape of the tool, acknowledged by the DoD's "first real merge
+  or workflow_dispatch" wording.
+- **First-bump robustness pre-secured in 010-04.** Because release-please will
+  bump `plugin.json` on the first release, version-pinned docs/tests would
+  redden the *release PR's own* CI. 010-04 de-pinned them and proved (via a
+  simulated bump) the tree survives — so the first release PR will be green.
+- **`GITHUB_TOKEN` suffices; no cross-workflow trigger gap.** The `package`
+  job (010-03) lives in the *same* `release.yml` run as release-please
+  (`needs:`), so it executes in the same invocation when a release is created
+  — not via a separate workflow that `GITHUB_TOKEN` would fail to trigger.

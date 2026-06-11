@@ -28,6 +28,12 @@ SCAFFOLD_CFG = CONTRACT["scaffold"]
 SKILL_PREFIX = SCAFFOLD_CFG["skill_prefix"]
 AGENT_PREFIX = SCAFFOLD_CFG["agent_prefix"]
 RUNTIME_ROOT = SCAFFOLD_CFG["runtime_root"]
+# The plugin version is release-managed (release-please bumps plugin.json on
+# every release, spec 010). Read it dynamically so these assertions don't pin a
+# literal that goes stale — and redden the release PR's own CI — on the next bump.
+PLUGIN_VERSION = json.loads(
+    (REPO_ROOT / ".claude-plugin" / "plugin.json").read_text()
+)["version"]
 
 
 def _copy_required_file(src: Path, dst: Path) -> None:
@@ -93,7 +99,7 @@ class PluginVerifierSuccessTests(unittest.TestCase):
         result = verify_install.verify_plugin(REPO_ROOT)
         self.assertTrue(result.ok, [failure.to_json() for failure in result.failures])
         self.assertEqual(result.plugin_name, "servo")
-        self.assertEqual(result.version, "0.1.0")
+        self.assertEqual(result.version, PLUGIN_VERSION)
 
     def test_compact_valid_copy_passes_without_hooks_or_settings(self):
         tmpdir = Path(tempfile.mkdtemp(prefix="servo-verify-install-"))
@@ -118,7 +124,7 @@ class PluginVerifierSuccessTests(unittest.TestCase):
             self.assertEqual(payload["mode"], "plugin")
             self.assertEqual(payload["status"], "pass")
             self.assertEqual(payload["plugin_name"], "servo")
-            self.assertEqual(payload["version"], "0.1.0")
+            self.assertEqual(payload["version"], PLUGIN_VERSION)
             self.assertEqual(payload["failures"], [])
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)

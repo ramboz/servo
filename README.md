@@ -75,8 +75,8 @@ Desktop's plugin import:
 # Build → dist/servo-v<version>.zip (version read from .claude-plugin/plugin.json)
 python3 scripts/build_release_zip.py
 
-# Verify an already-built archive
-python3 scripts/verify_install.py zip dist/servo-v0.1.0.zip
+# Verify an already-built archive (substitute the real version)
+python3 scripts/verify_install.py zip dist/servo-v<version>.zip
 ```
 
 The builder smoke-tests the archive by default: it extracts the zip into a
@@ -106,23 +106,28 @@ and `.servo/install.json`.
 
 ### Release recipe
 
-The release flow is manual (no marketplace submission or asset automation in
-this version):
+Releases are **automated** via [release-please](.github/workflows/release.yml)
+(see [CONTRIBUTING.md](CONTRIBUTING.md) for the flow). The primary install
+artifact is the **`servo-v<version>.zip` asset attached to the
+[latest GitHub release](https://github.com/ramboz/servo/releases/latest)** —
+download it and install it as in [Release zip install](#release-zip-install).
+CI builds and smoke-tests each release's zip before uploading it, so a
+published asset is a verified asset.
 
-1. Build the archive — it lands at `dist/servo-v<version>.zip`, where
-   `<version>` comes from `.claude-plugin/plugin.json`:
+To build the same archive **locally** (for development, or as a fallback — this
+is *not* how releases are published):
 
-   ```bash
-   python3 scripts/build_release_zip.py
-   ```
+```bash
+# Build → dist/servo-v<version>.zip (version read from .claude-plugin/plugin.json)
+python3 scripts/build_release_zip.py
 
-2. Verify the produced archive:
-
-   ```bash
-   python3 scripts/verify_install.py zip dist/servo-v0.1.0.zip
-   ```
+# Verify the produced archive (substitute the real version)
+python3 scripts/verify_install.py zip dist/servo-v<version>.zip
+```
 
 `dist/` is git-ignored; the archive is a build artifact, not a tracked file.
+The version in `.claude-plugin/plugin.json` is **release-managed** by
+release-please — do not hand-edit it.
 
 ### Verifying all surfaces at once
 
