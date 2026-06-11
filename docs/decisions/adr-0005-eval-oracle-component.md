@@ -230,6 +230,19 @@ No slice implements this yet; these are the obligations the implementing slice
   rule a frozen per-component field? Lean: frozen per-component field.
 - **Default `n`/`δ`/`k`.** Deferred to the first real EDD spec rather than
   guessed here.
+- **Multimodal eval inputs (added 2026-06-11).** Clause 1's "judge model id" and
+  clause 2's freeze list (rubric + dataset + hashes) tacitly assume **text** I/O.
+  The first concrete consumer on the horizon — a **design-conformance eval** (does
+  a rendered UI match a Claude Design `.dc.html` baseline? — surfaced exploring the
+  SymPill Android/Compose app) — needs **image inputs** in the frozen dataset
+  (design mock + rendered screenshot) and a **multimodal judge model**. The
+  *deterministic* rungs of that use case (token-lint against the design-system
+  token contract; semantic UI assertions) fit servo's existing oracle with no new
+  capability; only this **visual** rung exercises this ADR. Lean: an image set is
+  just another hashed dataset artifact (clause 2 already hashes "the dataset … and
+  its hash") and the judge id must be a multimodal one — an explicit note, not a
+  new clause. Revisit when a real multimodal eval is authored (jig ADR-0022 open
+  Q#3 is the reciprocal spec-DONE-gate consumer).
 
 ## References
 
