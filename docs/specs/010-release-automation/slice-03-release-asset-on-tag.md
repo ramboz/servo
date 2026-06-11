@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: []
 last_verified:
 ---
@@ -38,12 +38,43 @@ ships an installable, verified artifact automatically.
 
 **DoD:**
 
-- [ ] All ACs pass; an end-to-end (or `workflow_dispatch`-simulated)
-      release attaches the zip — evidence in the deviation log.
-- [ ] Asset name verified to match the builder default and the documented
-      recipe.
-- [ ] Deviation log produced under this slice.
-- [ ] Independent review pass completed before DONE.
+- [~] All ACs pass; an end-to-end (or `workflow_dispatch`-simulated)
+      release attaches the zip — evidence in the deviation log. _AC1, AC2, AC5
+      met in-artifact and the build+smoke command was verified against the real
+      builder CLI (built + smoke-passed `servo-v0.1.0.zip` and a simulated
+      `servo-v9.9.9.zip` locally). **The actual asset *attach* needs a created
+      release on `main`** (the `package` job is gated on `release_created`), so
+      it is deferred to the main-merge verification._
+- [x] Asset name verified to match the builder default and the documented
+      recipe. _Builder default output is `dist/servo-v<version>.zip` (confirmed
+      by building 0.1.0 and 9.9.9); the workflow uploads that exact path; the
+      README documents the `servo-v<version>.zip` shape and the docs guard
+      (`test_docs_install.py`) enforces it. All three agree._
+- [x] Deviation log produced under this slice. _Below._
+- [x] Independent review pass completed before DONE. _Independent reviewer,
+      2026-06-11 — **PASS, no blockers.** Confirmed the package job's
+      needs/if-gating, checkout-at-tag, and that the single build+smoke step
+      precedes (gates) the upload step._
 
 **Anti-horizontal-phasing check:** After this slice, a servo release ships
 an installable, smoke-tested artifact automatically — no manual zip upload.
+
+**Deviation log:**
+
+- **Adapted to servo's one-step builder (intentional divergence from jig).**
+  jig's package job builds and smoke-tests in two separate `build_release_zip.py`
+  invocations; servo's builder builds **and** smoke-tests in a single default
+  invocation (`--no-smoke` opts out — spec 007). So the package job runs one
+  `python3 scripts/build_release_zip.py --version "<version>"` step. Because
+  that single step both builds and smokes *before* the separate upload step, a
+  failing smoke test fails the job before any asset is attached (AC5).
+- **`--version` for a loud mismatch (AC2 option taken).** Passing the
+  release-please `version` makes the builder validate it against
+  `.claude-plugin/plugin.json` (which release-please bumped) and exit 2 on
+  mismatch — so a tag/version drift fails the build rather than shipping a
+  mislabeled asset. The default `--output` already lands at
+  `dist/servo-v<version>.zip`, so no `--output` is needed.
+- **Live attach is main-only.** The job is gated on
+  `needs.release-please.outputs.release_created == 'true'`, which is only true
+  in the `release.yml` run where merging the release PR creates the release.
+  Verified end-to-end in the main-merge step.
