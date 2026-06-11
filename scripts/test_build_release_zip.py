@@ -17,14 +17,12 @@ import zipfile
 from contextlib import redirect_stdout
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import build_release_zip  # noqa: E402
 import verify_install  # noqa: E402
-
 
 PLUGIN_VERSION = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())["version"]
 

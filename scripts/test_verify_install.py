@@ -16,14 +16,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import scaffold_runtime  # noqa: E402
 import verify_install  # noqa: E402
-
 
 CONTRACT = json.loads((REPO_ROOT / ".claude-plugin" / "install-contract.json").read_text())
 SCAFFOLD_CFG = CONTRACT["scaffold"]
@@ -310,7 +308,10 @@ class ScaffoldVerifierFailureTests(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_missing_skill_helper_reports_artifact_missing(self):
-        (self.target / ".claude" / "skills" / f"{SKILL_PREFIX}scaffold-init" / "scaffold.py").unlink()
+        scaffold_py = (
+            self.target / ".claude" / "skills" / f"{SKILL_PREFIX}scaffold-init" / "scaffold.py"
+        )
+        scaffold_py.unlink()
         result = verify_install.verify_scaffold(self.target)
         self.assertFalse(result.ok)
         self.assertIn("artifact_missing", _failure_reasons(result))

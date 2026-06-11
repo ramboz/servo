@@ -22,14 +22,12 @@ for the end-to-end pass/fail/env-error paths (the DoD's integration check).
 import hashlib
 import importlib.util
 import json
-import os
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OVERLAY_PY = REPO_ROOT / "skills" / "spec-oracle" / "oracle_overlay.py"

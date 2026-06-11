@@ -44,7 +44,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-
 COMPONENT_PREFIX = "spec_oracle_"
 DEFAULT_WEIGHT = 1.0
 

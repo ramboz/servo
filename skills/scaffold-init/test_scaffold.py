@@ -18,7 +18,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAFFOLD = REPO_ROOT / "skills" / "scaffold-init" / "scaffold.py"
 
@@ -308,7 +307,6 @@ class WeightedCompositeTests(_ScaffoldedFixture):
         stdout_lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
         self.assertEqual(len(stdout_lines), 1,
                          f"expected one summary line; got {stdout_lines!r}")
-        import re
         self.assertRegex(
             stdout_lines[0],
             r"^oracle:\s+composite=[0-9]+(\.[0-9]+)?\s+threshold=[0-9]+(\.[0-9]+)?\s*$",
@@ -323,14 +321,16 @@ class ThresholdGateTests(_ScaffoldedFixture):
         result = run_oracle(self.target, {"PLACEHOLDER_SCORE": "0.0", "THRESHOLD": "1.0"})
         self.assertEqual(
             result.returncode, 1,
-            f"score 0.0 < threshold 1.0 should exit 1: stderr={result.stderr}\nstdout={result.stdout}",
+            f"score 0.0 < threshold 1.0 should exit 1: "
+            f"stderr={result.stderr}\nstdout={result.stdout}",
         )
 
     def test_at_or_above_threshold_exits_zero(self):
         result = run_oracle(self.target, {"PLACEHOLDER_SCORE": "0.0", "THRESHOLD": "0.0"})
         self.assertEqual(
             result.returncode, 0,
-            f"score 0.0 >= threshold 0.0 should exit 0: stderr={result.stderr}\nstdout={result.stdout}",
+            f"score 0.0 >= threshold 0.0 should exit 0: "
+            f"stderr={result.stderr}\nstdout={result.stdout}",
         )
 
 

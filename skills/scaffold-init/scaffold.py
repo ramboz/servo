@@ -21,13 +21,11 @@ falling back to the built-in detector below.
 import argparse
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
 
 SERVO_VERSION = "0.1.0"
 
@@ -97,7 +95,8 @@ def _detect_pytest(target: Path) -> bool:
         return True
     if (target / "pytest.ini").exists():
         return True
-    if (target / "setup.cfg").exists() and "[tool:pytest]" in (target / "setup.cfg").read_text(errors="replace"):
+    setup_cfg = target / "setup.cfg"
+    if setup_cfg.exists() and "[tool:pytest]" in setup_cfg.read_text(errors="replace"):
         return True
     return False
 

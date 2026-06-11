@@ -16,7 +16,6 @@ import zipfile
 from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable, TextIO
 
-
 CONTRACT_PATH = Path(".claude-plugin") / "install-contract.json"
 PLUGIN_MANIFEST_PATH = Path(".claude-plugin") / "plugin.json"
 DEFAULT_MTIME = (2026, 1, 1, 0, 0, 0)
@@ -108,7 +107,9 @@ def iter_release_files(source_root: Path, contract: dict[str, Any]) -> list[Path
                     continue
                 entries.add(rel)
             continue
-        raise ValueError(f"release include path is neither file nor directory: {include_path.as_posix()}")
+        raise ValueError(
+            f"release include path is neither file nor directory: {include_path.as_posix()}"
+        )
 
     sorted_entries = sorted(entries, key=lambda rel: rel.as_posix())
     for rel in sorted_entries:
@@ -171,7 +172,10 @@ def build(
     smoke: bool = True,
     out: TextIO | None = None,
 ) -> int:
-    """Build a release zip. Returns 0 on success, 1 on build/smoke failure, 2 on version mismatch."""
+    """Build a release zip.
+
+    Returns 0 on success, 1 on build/smoke failure, 2 on version mismatch.
+    """
     if out is None:
         out = sys.stdout
     source_root = source_root.resolve()

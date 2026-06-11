@@ -44,6 +44,14 @@ jobs:
         # testpaths = ["skills", "scripts"] — the same command run locally.
         run: python3 -m pytest
 
+      - name: Lint (ruff)
+        # Spec 009-02. Config lives in ruff.toml. Pinned for reproducibility —
+        # a floating linter can redden an unrelated PR the day a new release
+        # adds a rule under our selected prefixes (F/E/W/I/B). pipx is
+        # preinstalled on ubuntu-latest and runs ruff ephemerally (installs
+        # nothing global), matching servo's uvx/pipx local convention.
+        run: pipx run --spec ruff==0.15.17 ruff check .
+
   install-surfaces:
     runs-on: ubuntu-latest
     steps:

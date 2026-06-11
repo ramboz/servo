@@ -89,7 +89,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-
 EVIDENCE_SCHEMA_VERSION = 1
 RUNNER_VERSION = "0.1.0"
 

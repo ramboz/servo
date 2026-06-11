@@ -120,19 +120,27 @@ def _load_settings(settings_path: Path, *, validate_structure: bool) -> tuple[di
         if raw.strip():
             try:
                 settings = json.loads(raw)
-            except json.JSONDecodeError:
-                raise _SettingsRefusal(f"{settings_path} is not valid JSON", "settings_malformed")
+            except json.JSONDecodeError as exc:
+                raise _SettingsRefusal(
+                    f"{settings_path} is not valid JSON", "settings_malformed"
+                ) from exc
             if not isinstance(settings, dict):
-                raise _SettingsRefusal(f"{settings_path} is not a JSON object", "settings_malformed")
+                raise _SettingsRefusal(
+                    f"{settings_path} is not a JSON object", "settings_malformed"
+                )
             had_content = True
     if validate_structure:
         hooks = settings.get("hooks")
         if hooks is not None and not isinstance(hooks, dict):
-            raise _SettingsRefusal(f'{settings_path}: "hooks" is not a JSON object', "settings_malformed")
+            raise _SettingsRefusal(
+                f'{settings_path}: "hooks" is not a JSON object', "settings_malformed"
+            )
         if isinstance(hooks, dict):
             stop = hooks.get("Stop")
             if stop is not None and not isinstance(stop, list):
-                raise _SettingsRefusal(f'{settings_path}: "hooks.Stop" is not a JSON array', "settings_malformed")
+                raise _SettingsRefusal(
+                    f'{settings_path}: "hooks.Stop" is not a JSON array', "settings_malformed"
+                )
     return settings, had_content
 
 

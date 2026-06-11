@@ -289,7 +289,8 @@ class IdempotentInstallBackupTests(unittest.TestCase):
         rc, _out, err = self._install()
         self.assertEqual(rc, 2)
         self.assertIn(str(self.settings_path), err)                    # message names the file
-        self.assertEqual(self.settings_path.read_text(), malformed)    # unparseable content untouched
+        # unparseable content untouched
+        self.assertEqual(self.settings_path.read_text(), malformed)
         self.assertFalse(self.backup_path.exists())                    # never backed up
         self.assertFalse(self.script.exists())                         # no half-install
 

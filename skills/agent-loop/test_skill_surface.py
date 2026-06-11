@@ -15,7 +15,6 @@ import re
 import unittest
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_MD = REPO_ROOT / "skills" / "agent-loop" / "SKILL.md"
 
@@ -45,7 +44,9 @@ class SkillFileShapeTests(unittest.TestCase):
     def test_has_frontmatter_with_name_and_description(self):
         fm = _frontmatter(_skill_text())
         self.assertIn("name:", fm, "SKILL.md frontmatter must declare a `name:` field")
-        self.assertIn("description:", fm, "SKILL.md frontmatter must declare a `description:` field")
+        self.assertIn(
+            "description:", fm, "SKILL.md frontmatter must declare a `description:` field"
+        )
         self.assertIn("servo:agent-loop", fm, "name should be `servo:agent-loop`")
 
 
@@ -154,7 +155,9 @@ class OptionsSectionTests(unittest.TestCase):
 
     def test_examples_present(self):
         # At least one fenced bash example block.
-        self.assertIn("```bash", self.text, "SKILL.md should include at least one fenced bash example")
+        self.assertIn(
+            "```bash", self.text, "SKILL.md should include at least one fenced bash example"
+        )
 
 
 # ---------------------------------------------------------------------------
