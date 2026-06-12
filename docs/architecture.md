@@ -59,7 +59,7 @@ user-facing chooser.
 
 ## Skill split
 
-Servo is **scaffolder-first, runtime second**. The four runtime skills all presuppose artifacts the scaffolder dropped into the target.
+Servo is **scaffolder-first, runtime second**. The runtime skills all presuppose artifacts the scaffolder dropped into the target.
 
 | Skill | Role | Spec |
 |---|---|---|
@@ -69,6 +69,7 @@ Servo is **scaffolder-first, runtime second**. The four runtime skills all presu
 | `/servo:oracle-hook` | Claude Code hook installer | 004 |
 | `/servo:variant-race` | N-worktree parallel race | future |
 | `/servo:spec-oracle` | Compile a spec/slice into AC-mapped deterministic checks and an oracle overlay | 006 |
+| `/servo:heartbeat` | Routine-triggered read-only discovery → triage inbox → oracle-gated dispatch (the scheduled **front-end**) | 011 |
 
 ## Project vs servo-core split
 
@@ -84,6 +85,7 @@ This is the load-bearing distinction. Servo ships **templates and orchestration*
 | Cap + ceiling overrides | Defaults (max-iterations=5, cost-ceiling=$2, context-fill-threshold=0.75) |
 | Hook event choice, retry phrasing | Hook script template, settings.json mutation + backup |
 | Variation strategy, variant count | Worktree management, subagent spawning, scoring |
+| The schedule (the Routine), what counts as an "actionable" finding, the heartbeat cost ceiling | Read-only discovery, the triage-inbox state spine, oracle-gated dispatch orchestration, whole-heartbeat ceiling enforcement |
 
 ## Tier model
 
@@ -91,7 +93,7 @@ Mirrors jig's tier-based scaffolding:
 
 - **Tier 0** — `oracle.sh` only. Always installs. Composite score of whatever signals are detected.
 - **Tier 1** — Tier 0 + agent-loop driver stub. Offered when the project has signals dense enough to make iteration meaningful (tests + lint + types, or similar).
-- **Tier 2** — Tier 1 + hook installer + race driver. **Offered explicitly only.** These are higher-risk surfaces (mutates `settings.json`, races real worktrees) and should never auto-install.
+- **Tier 2** — Tier 1 + hook installer + race driver + heartbeat. **Offered explicitly only.** These are higher-risk surfaces (mutates `settings.json`, races real worktrees, lets a *schedule* spawn loops) and should never auto-install.
 
 ## Signal detection
 
@@ -147,6 +149,7 @@ Runtime and spec-overlay skills produce these at the *target* project
 - `<target>/.servo/runs/<run-id>/state.json` — agent-loop per-run scoreboard (slice 003-04, [ADR-0004](decisions/adr-0004-session-state-file-format.md)). Atomically rewritten after every iteration via `.tmp + os.replace`. Schema: `state_schema_version`, `run_id`, `started_at`, `last_updated_at`, `target_path`, `prompt`, `current_session_id` (the Claude Code session id `claude -p --resume` consumes), `iteration_count`, `max_iterations`, `cost_ceiling_usd`, `cumulative_cost_usd`, `cumulative_input_tokens`, `cumulative_output_tokens`, `context_fill_threshold`, `last_context_fill_ratio`, `oracle_score_history`, `last_terminal_reason`, `claude_version`. Run-id shape: `YYYYMMDDTHHMMSS-XXXX` (15-char timestamp + 4-hex suffix); collision retry is bounded at 3 attempts.
 - `<target>/.servo/hooks/meta-judge.sh` — the **meta-judge** `Stop` hook (spec 004, [ADR-0006](decisions/adr-0006-meta-judge-output-contract.md)). `/servo:oracle-hook install` copies it from `templates/meta-judge.sh.template` and registers a `hooks.Stop[]` entry in `<target>/.claude/settings.json` that points at it via `$CLAUDE_PROJECT_DIR`. **Install model:** `settings.json` is backed up to `settings.json.servo-bak` before the first mutation; the merge is non-clobbering (other top-level keys, hook events, and Stop entries survive); `uninstall` removes only servo's marker-matched entry and **leaves the script on disk** (it may be customized); `status` reports `installed` / `not_installed` / `inconsistent`; the closed exit contract is `0` ok / `2` env-error (no exit 1). **Decision table (per turn-stop):** `stop_hook_active` true (or indeterminate stdin) → silent; oracle `pass` → silent; oracle `below_threshold` → **block** with a composite/threshold (+`missing`) hint; oracle `env_error` / uninvocable gate → **fail open** with a `systemMessage` to the user (never a block, so it can't trap a live session) — nudging at most once per stop sequence. Block (v1 default) vs `additionalContext` soft-context is a project-owned knob; the project owns the script after install. The interactive inverse of `/servo:agent-loop`'s fail-closed brakes.
 - `<target>/.servo/races/<race-id>/` — per-variant scores and metadata from `/servo:variant-race`.
+- `<target>/.servo/triage/inbox.jsonl` (+ a generated `inbox.md` view) — the **triage inbox** from `/servo:heartbeat` (spec 011): the scheduled-discovery state spine. One JSONL record per finding (a stable `finding_id` fingerprint + `open` / `tried` / `passed` / `skipped` status), deduped across runs so the next heartbeat resumes instead of re-discovering. The read-only discovery pass writes here and **nowhere else** in the target; oracle-gated dispatch records each candidate's outcome back to it. Schema + dedupe-identity is an ADR candidate reciprocal to [ADR-0004](decisions/adr-0004-session-state-file-format.md) — reserved now, populated when spec 011 lands.
 - `<target>/.servo/spec-oracles/<spec-id>/` — spec-specific evidence overlay from `/servo:spec-oracle` (specs 006-01..03). Contents: `plan.md` (human-reviewable AC→check map) and `checks.json` (machine plan) from the planner (006-01); `checks.py` (a self-contained copy of the stdlib check engine, 006-02) and `oracle.sh.fragment` (the generated `# SEED:start spec_oracle_<id>` / `# SEED:end spec_oracle_<id>` block) from the overlay compiler (006-03); and append-only `ledger.jsonl` (one JSONL evidence record per AC per run, stamped with a run `ts`). Install splices the fragment into `<target>/oracle.sh` as an ordinary component — a `score_spec_oracle_<id>` function plus a `COMPONENTS` entry — so `gate.py` / `loop.py` score it with **no special-casing**: the component returns the composite check score, or rc=2 if any check env-errors. The overlay is project-owned and reviewable before `/servo:agent-loop` consumes it; uninstall removes the component but keeps the artifacts. Before the loop may score it the overlay must be **approved**, and the installed component runs the engine with `--enforce-freeze` — see *Spec-oracle freeze & approval* below.
 
 These paths are reserved now (in `.gitignore`) so later specs don't have to renegotiate them.
@@ -238,9 +241,10 @@ Each iteration emits one JSON line to stdout (carrying `iteration`, `session_id`
 
 ### Pending (ADR candidates)
 
-Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0007`) regardless of which candidate fires first.
+Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0008`) regardless of which candidate fires first.
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
+- **A future ADR — Triage-inbox state-file schema + dedupe identity (spec 011).** The `/servo:heartbeat` triage inbox (`.servo/triage/inbox.jsonl`) is append-and-update cross-run state; its `finding_id` fingerprint scheme (what makes two discoveries "the same finding") and its `open`/`tried`/`passed`/`skipped` lifecycle are a contract later tooling reads, and changing them after data exists is migration-shaped. Reciprocal to [ADR-0004](decisions/adr-0004-session-state-file-format.md). Crystallizes at slice 011-02; may absorb the whole-heartbeat-vs-per-loop cost-ceiling-semantics call (011-04), which rhymes with spec 005's per-variant-vs-per-race question.
 
 ## Open questions (not yet ADR-worthy)
 
@@ -269,6 +273,7 @@ Each runtime skill traces back to a specific pattern in private learning notes:
 | 004 | `/servo:oracle-hook` | meta-judge hook |
 | 005 | `/servo:variant-race` | worktree race |
 | 006 | `/servo:spec-oracle` | spec-to-evidence compiler |
+| 011 | `/servo:heartbeat` | (none — the scheduled *front-end*; Routines-as-trigger, not one of the four runtime patterns) |
 | n/a | (teams pattern covered) | by jig's `agents/` |
 | n/a | (crews pattern skipped) | post-mortem template only |
 

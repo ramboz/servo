@@ -17,6 +17,7 @@ visible during spec authoring.
 | [008-eval-authoring](008-eval-authoring/spec.md) | **DRAFT scope-capture, parked.** Human-in-the-loop front-end that turns an eval-able `residual_judgment` AC into an [ADR-0005](../decisions/adr-0005-eval-oracle-component.md) frozen eval component: triage, rubric shaping, statistical reference-set collection, and frozen `n`/`δ`/threshold/judge-model — then hands off to `/servo:spec-oracle`. Activates on the first real EDD spec (same trigger as ADR-0005). |
 | [009-ci-hardening](009-ci-hardening/spec.md) | **CI correctness.** Run servo's _full_ test suite (not just the install-surface subset) across a declared Python matrix, plus a ruff lint floor. Closes the gap where the 13 skill test files — the loop/gate/oracle/scaffold logic — never run in CI. |
 | [010-release-automation](010-release-automation/spec.md) | **Release orchestration.** Conventional-commit PR-title gate → release-please (version bump + CHANGELOG + tag + GitHub release) → build/smoke/upload the release zip. Adopts jig's proven pipeline ([ADR-0007](../decisions/adr-0007-align-release-with-jig.md)); servo's `build_release_zip.py` is already release-ready, so this is orchestration only. |
+| [011-heartbeat](011-heartbeat/spec.md) | **Routines-as-trigger / the loop's missing front-end.** Servo owns the middle and tail of the loop (loop / oracle / race / state) but nothing that *surfaces work on a schedule*. A Routine wakes servo; servo does a **read-only** discovery pass over project signals (CI failures, open issues, recent commits) → a servo-owned **triage inbox** (the state spine: dedupe + `open`/`tried`/`passed`/`skipped` so the next run resumes) → **oracle-gated dispatch** of each actionable finding into an isolated worktree loop, under **one whole-heartbeat cost ceiling**. Distinct from jig's `inbox.md` (cross-session continuity, not scheduled-discovery triage). **DRAFT — overview ready for review; slice 011-01 (read-only discovery → inbox) implementation-ready, 011-02..05 goals-only pending a grounding consumer.** Tier-2 (explicit opt-in). |
 
 Sequencing rationale: 001 is the foundation everything else depends
 on; 003 before 005 because race reuses loop primitives; 004 is
@@ -25,7 +26,13 @@ first real EDD spec and depends on 006 + ADR-0005. 009 is independent CI
 hygiene — run it before 010 so release automation gates on a green
 full-suite CI. 010 depends on 007 + 009 and implements ADR-0007. 009 and
 010 are the reverse-alignment specs (servo adopting jig's release/CI
-maturity); see the section below.
+maturity); see the section below. 011 (heartbeat) depends on 003 (the
+dispatch target it composes) and is the **front-end** the loop / race /
+state consume from — the Routines-as-trigger layer. Like 005 and 008, its
+later slices wait for a grounding consumer to pin acceptance criteria; its
+spike slice (011-01, read-only discovery → triage inbox) is fleshed to
+implementation-ready so the front-end shape can be validated before the
+rest is committed.
 
 ## How these specs close jig's long-running-session gaps
 

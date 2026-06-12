@@ -22,6 +22,7 @@ Servo's primary entry point is a **scaffolder**, not a runtime. It probes the ta
 | `/servo:oracle-hook` | Claude Code hook installer (idempotent install / uninstall / status); meta-judge `Stop` hook scores each turn via the oracle and blocks below threshold | Spec 004 — **DONE** |
 | `/servo:variant-race` | N-worktree parallel race with oracle scoring and winner selection | Future spec |
 | `/servo:spec-oracle` | Compile a spec/slice into a reviewable evidence overlay: AC mapping, deterministic checks, negative controls, and an installable oracle component | Spec 006 — **DONE** |
+| `/servo:heartbeat` | Routine-triggered, read-only discovery over project signals → triage inbox → oracle-gated dispatch of each actionable finding into an isolated worktree loop, under one whole-heartbeat cost ceiling (the scheduled front-end) | Spec 011 — **DRAFT** |
 
 ## Relationship to jig
 
