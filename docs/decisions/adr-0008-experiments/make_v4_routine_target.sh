@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# ADR-0008 V4 — generate a self-contained dummy servo target for a Routine probe.
+#
+# Produces a standalone git repo with a trivial FAILING task (make greeting.py
+# print "hello, world"), servo's REAL meta-judge Stop hook installed on a
+# VENDORED (relative) gate.py path so it survives a clone into a Routine env, and
+# a vendored env-auditor + the exact Routine prompt. Point a (local) Routine at
+# the generated dir and capture the transcript — see <dest>/ROUTINE.md.
+#
+# Usage:  ./make_v4_routine_target.sh [dest-dir]   (default: ~/servo-v4-routine-target)
+set -euo pipefail
+source "$(cd "$(dirname "$0")" && pwd)/common.sh"
+
+DEST="${1:-$HOME/servo-v4-routine-target}"
+if [ -e "$DEST" ]; then die "dest already exists: $DEST (remove it or pass another path)"; fi
+mkdir -p "$DEST/.servo" "$DEST/.claude/skills/servo-quality-gate"
+log "generating dummy Routine target at $DEST"
+
+# --- the trivial task: make greeting.py print exactly "hello, world" ---
+cat > "$DEST/greeting.py" <<'EOF'
+# TODO (the Routine's job): make this print exactly:  hello, world
+print("TODO: replace me")
+EOF
+
+cat > "$DEST/test.sh" <<'EOF'
+#!/usr/bin/env bash
+# Passes iff `python3 greeting.py` prints exactly: hello, world
+set -u
+SELF="$(cd "$(dirname "$0")" && pwd)"
+[ "$(python3 "$SELF/greeting.py" 2>/dev/null)" = "hello, world" ]
+EOF
+
+cat > "$DEST/oracle.sh" <<'EOF'
+#!/usr/bin/env bash
+# servo oracle: composite 1.0 iff ./test.sh passes else 0.0. Prints the
+# gate.py-parseable `oracle: composite=X threshold=Y` line + the
+# SERVO_ORACLE_VERDICT sentinel the /goal condition fact-checks.
+set -u
+SELF="$(cd "$(dirname "$0")" && pwd)"
+THRESHOLD="${THRESHOLD:-0.5}"
+if bash "$SELF/test.sh"; then composite=1.0; status=pass; rc=0
+else composite=0.0; status=fail; rc=1; fi
+printf 'SERVO_ORACLE_VERDICT exit=%s status=%s composite=%s threshold=%s\n' "$rc" "$status" "$composite" "$THRESHOLD"
+printf 'oracle: composite=%s threshold=%s\n' "$composite" "$THRESHOLD"
+exit "$rc"
+EOF
+
+printf '{"installed_tier": "tier-0", "components": ["tests"], "servo_version": "v4-routine-demo", "signals": {}}\n' \
+  > "$DEST/.servo/install.json"
+
+# --- vendor servo's real gate.py (relative → clone-portable) + the env auditor ---
+cp "$GATE_PY" "$DEST/.claude/skills/servo-quality-gate/gate.py"
+cp "$EXP_DIR/v3_audit_env.py" "$DEST/audit_env.py"
+chmod +x "$DEST/test.sh" "$DEST/oracle.sh"
+
+# --- install servo's REAL meta-judge; vendored gate.py present → relative path baked ---
+python3 "$HOOK_PY" install "$DEST" >&2
+
+cat > "$DEST/ROUTINE.md" <<'EOF'
+# V4 Routine probe — how to run
+
+This repo is a dummy servo target. `greeting.py` is wrong, so `./oracle.sh`
+reports `status=fail` until the agent fixes it. servo's **real** meta-judge Stop
+hook is installed (`.servo/hooks/meta-judge.sh`) on a **vendored, relative**
+gate.py path (`.claude/skills/servo-quality-gate/gate.py`) so it works after a
+clone into a Routine environment.
+
+## Routine task prompt (paste verbatim)
+
+```
+/goal continue until the transcript contains a line that includes "SERVO_ORACLE_VERDICT exit=0 status=pass"
+
+First, run:  python3 audit_env.py .   and print its full output (records this env's hook policy).
+Then you are working in this repository; goal: make ./test.sh pass. On EACH turn:
+1. Run  ./oracle.sh  and print its complete output verbatim (including the SERVO_ORACLE_VERDICT line).
+2. If the output shows status=fail: edit greeting.py so `python3 greeting.py` prints exactly  hello, world  — then stop the turn.
+3. If the output shows status=pass: stop.
+servo's oracle is the source of truth — do not declare success until it prints status=pass.
+```
+
+## Setup (local Routine first)
+1. Point a **local** Routine at this directory.
+2. Grant the agent **Bash** (run ./oracle.sh, ./test.sh, audit_env.py) and **Edit/Write** (fix greeting.py).
+3. Any model is fine (haiku/sonnet). If the Routine UI exposes hook-events / verbose output, enable it.
+
+## Capture & send back
+- The full run **transcript** (or result JSON).
+- Any **hook events** (look for a `Stop` firing + a `{"decision":"block", … composite=0.0 …}` from servo's meta-judge on a failing turn).
+- The **`audit_env.py` output** from turn 1 (the env's effective hook policy).
+- Did it **loop** (multiple turns) and end with the oracle at `status=pass` (greeting.py fixed)?
+
+## Reading it (→ v4_routines_probe.md rubric)
+- meta-judge **Stop fires + blocks** on a failing turn → Routine env permits project hooks ✓.
+- meta-judge **never fires** + audit shows `disableAllHooks`/`allowManagedHooksOnly` → env restricts hooks → only the external driver (loop.py-style) works there (Kill-criterion 4 in the Routine env).
+- `/goal` **drove multiple turns** to a real oracle pass → unattended continuation + sentinel composition work ✓.
+- oracle/gate ran at all → the vendored quality-gate is Routine-portable ✓.
+EOF
+
+cat > "$DEST/README.md" <<'EOF'
+# servo V4 Routine probe target (dummy)
+
+Generated by `adr-0008-experiments/make_v4_routine_target.sh` to test ADR-0008's
+V4 gate: can a Routine clone this target, run `servo:quality-gate`, fire the
+meta-judge Stop hook, and drive `/goal` continuation? See `ROUTINE.md`.
+
+Ships in a FAILING state on purpose (greeting.py is wrong). The Routine's job is
+to fix it until `./oracle.sh` prints `status=pass`.
+EOF
+
+( cd "$DEST" \
+  && git init -q \
+  && git add -A \
+  && git -c user.email=adr8@example.invalid -c user.name=adr8 commit -qm "servo V4 Routine probe target (dummy, ships failing)" )
+
+log "done → $DEST"
+log "next: open $DEST/ROUTINE.md and point a local Routine at $DEST"
