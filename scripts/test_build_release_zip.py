@@ -200,7 +200,7 @@ class UnsafeContractTests(unittest.TestCase):
 
     def test_parent_traversal_include_refused_before_writing_zip(self):
         self._write_include("../outside.txt")
-        out = self.tmpdir / "servo-v0.1.0.zip"
+        out = self.tmpdir / f"servo-v{PLUGIN_VERSION}.zip"
         sink = io.StringIO()
         rc = build_release_zip.build(
             source_root=self.source,
@@ -214,7 +214,7 @@ class UnsafeContractTests(unittest.TestCase):
 
     def test_windows_drive_include_refused_before_writing_zip(self):
         self._write_include("C:/outside.txt")
-        out = self.tmpdir / "servo-v0.1.0.zip"
+        out = self.tmpdir / f"servo-v{PLUGIN_VERSION}.zip"
         sink = io.StringIO()
         rc = build_release_zip.build(
             source_root=self.source,
