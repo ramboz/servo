@@ -13,14 +13,16 @@
 - [ADR-0004: Session-state file format on disk](adr-0004-session-state-file-format.md) — Per-run loop scoreboard at `<target>/.servo/runs/<run-id>/state.json`, referencing Claude Code sessions by `session_id` only. Atomic-write contract, `state_schema_version`, run-id collision policy. Filesystem-only coupling with Claude Code. (2026-05-19, Accepted)
 - [ADR-0005: Eval as a frozen oracle component](adr-0005-eval-oracle-component.md) — A non-deterministic eval enters the composite only as a *frozen* `score_<name>`: its definition (rubric + dataset + judge model + `n` + `δ`) is hashed and approved, it reports a confidence lower bound rather than a raw judge score, and `loop.py` gains a plateau noise floor. The reciprocal servo-side ADR to jig's ADR-0022. (2026-06-09, Proposed)
 - [ADR-0006: Meta-judge Stop-hook output contract & fail-open posture](adr-0006-meta-judge-output-contract.md) — Spec 004's `Stop` hook blocks with a structured composite/threshold hint on below-threshold (`{"decision":"block"}`, not `additionalContext`), fails **open** on any env-error (a `systemMessage` warning, never a block, so it can't trap a session), and nudges at most once per stop sequence (respects/biases-on `stop_hook_active`). The interactive inverse of agent-loop's fail-closed brakes. (2026-06-10, Accepted)
+- [ADR-0007: Adopt release-please + conventional-commit enforcement for servo releases (align with jig)](adr-0007-align-release-with-jig.md) — Replaces servo's fully manual release (hand-edited `plugin.json` version, local zip build, no tags/changelog) with jig's model: an enforced conventional-commit PR-title gate plus release-please for version / `CHANGELOG.md` / tag / GitHub release. Implemented by spec 010. (2026-06-11, Accepted)
+- [ADR-0008: Rebase agent-loop orchestration onto Claude Code autonomy primitives](adr-0008-loop-on-autonomy-primitives.md) — Delegates continuation (`/goal`), detachment (`/background`), and scheduling (Routines) to the shipped primitives; servo keeps *only* the deterministic guardrail + oracle layer, and retains the external-driver path as the portable layer for hook-restricted / non-Claude-Code hosts (e.g. Codex). Hard constraint: `/goal`'s transcript-only judge never replaces `oracle.sh`. All four verification gates cleared (V1 hooks stack; V2 `/goal` engages headless + both `--max-turns`/`--max-budget-usd` bind; V3 mechanism confirmed live; V4 by-design — `gate.py` is the in-Routine authority). (2026-06-12, Accepted)
 
 ## Pending
 
 ADR candidates (numbers are *hints* of the next likely allocation order,
 not reservations — the next accepted ADR claims the next free number
 regardless of which candidate fires first). `0005` is reserved (Proposed)
-by the eval-oracle-component ADR and `0006` is now Accepted (meta-judge
-output contract), so the next free number is `0007`:
+by the eval-oracle-component ADR and `0008` is Accepted (the
+autonomy-primitives rebase), so the next free number is `0009`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 
