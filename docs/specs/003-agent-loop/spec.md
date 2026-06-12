@@ -1,5 +1,5 @@
 ---
-status: DONE
+status: IN_PROGRESS
 dependencies: [001, 002]
 last_verified: 2026-05-20
 ---
@@ -56,8 +56,13 @@ Mirrors the spec 001 / 002 cadence (spike-shaped first slice → core safety pri
 | 003-03 | context-fill-gate | External ratio from `usage` + `modelUsage.<model>.contextWindow`; refuse iteration N+1 when ratio exceeds threshold (default 75%). The hard-gate cousin of jig's soft `jig-context-check.sh`. |
 | 003-04 | checkpoint-resume | Per-run state at `<target>/.servo/runs/<run-id>/state.json`; `loop.py --resume <run-id>` reads back, passes `--resume <session_id>` to `claude -p`. ADR-0004 lands. |
 | 003-05 | stuck-loop-and-handoff | Oracle-score-plateau detection (halt on no improvement over M iterations) + real `runner.md` / `judge.md` prompts authored; loop dispatches via `claude --agent <name>`. Closes ADR-0003 candidate. |
+| 003-06 | goal-driven-loop | **(ADR-0008 rebase)** `/goal`-driven continuation alongside the hand-rolled loop; loop body prints the `SERVO_ORACLE_VERDICT` sentinel, `/goal` fact-checks it, hard caps (`--max-turns` + `--max-budget-usd`) on the outer call, final `gate.py` is authority. |
+| 003-07 | portable-guardrails | **(ADR-0008 rebase)** Vendor `gate.py` (clone-portability); `refuse-on-dirty-tree` preflight; host-scope routing (primitives vs external driver). |
+| 003-08 | detach-and-schedule | **(ADR-0008 rebase)** `/background` detachment + Routine-ready target; `gate.py`-authority in Routines (meta-judge moot per V4). |
 
 Five slices, sized to match the spec 001 / 002 cadence. The vertical-value rule still applies — after every slice the loop driver is end-to-end usable on its own.
+
+**Amendment (2026-06-12):** slices 003-06..08 add the **ADR-0008 rebase phase** (see [## Amendments](#amendments)). The original five slices (003-01..05) remain DONE and are **retained as the external-driver / portable layer**; they are not invalidated.
 
 ---
 
@@ -68,6 +73,9 @@ Five slices, sized to match the spec 001 / 002 cadence. The vertical-value rule 
 - [003-03 — context-fill-gate](slice-03-context-fill-gate.md)
 - [003-04 — checkpoint-resume](slice-04-checkpoint-resume.md)
 - [003-05 — stuck-loop-and-handoff](slice-05-stuck-loop-and-handoff.md)
+- [003-06 — goal-driven-loop](slice-06-goal-driven-loop.md) — DRAFT (ADR-0008 rebase)
+- [003-07 — portable-guardrails](slice-07-portable-guardrails.md) — DRAFT (ADR-0008 rebase)
+- [003-08 — detach-and-schedule](slice-08-detach-and-schedule.md) — DRAFT (ADR-0008 rebase)
 
 
 ## Spec-level Definition of Done
@@ -200,3 +208,63 @@ _(category: Non-functional Requirements)_
 | Terminology Consistency | Clear (terms align with spike.md + spec 002) |
 
 After the 2026-05-18 `/jig:clarify` pass, four of the six categories are Clear or Resolved; Edge Cases & Failure Modes remains Partial because four spike-surfaced questions (Q1, Q2, Q5, Q6) still require empirical verification against `claude -p` during their respective slices. The spec is **READY_FOR_REVIEW** at the spec-overview level and **READY_FOR_IMPLEMENTATION on slice 003-01** without further clarification — slice 003-01's spike-shape posture is the planned escape hatch if empirical observations contradict assumptions.
+
+---
+
+## Amendments
+
+### 2026-06-12 — ADR-0008: rebase orchestration onto Claude Code autonomy primitives
+
+[ADR-0008](../../decisions/adr-0008-loop-on-autonomy-primitives.md) (Accepted
+2026-06-12) reframes agent-loop's architecture. Since this spec shipped, Claude
+Code shipped autonomy primitives — `/goal` (across-turn continuation),
+`/background` (detached sessions), Routines (scheduled unattended runs) — that
+overlap the hand-rolled driver. The decision: **delegate continuation /
+detachment / scheduling / turn-capping to the primitives where available, and
+keep servo's deterministic guardrail + oracle layer as the sole value-add.**
+Implemented by new DRAFT slices **003-06..08** (added to the slice index above).
+
+**What changes (new slices):**
+
+- **003-06 goal-driven-loop** — a `/goal`-driven continuation mode alongside the
+  hand-rolled loop. The loop body runs `servo:quality-gate` and prints a
+  `SERVO_ORACLE_VERDICT` sentinel; the `/goal` condition only *fact-checks* it; a
+  **final `gate.py` run is the authority**. `oracle.sh` is never replaced by
+  `/goal`'s transcript judge (hard constraint).
+- Hard caps move to the **outer** invocation: `--max-budget-usd` (cost ceiling)
+  AND `--max-turns` (iteration cap) — both **verified to bind a `/goal` run**
+  (ADR-0008 V2).
+- **003-07 portable-guardrails** — vendor `gate.py` into the target
+  (clone-portability, V4); `refuse-on-dirty-tree` preflight (scheduled-run
+  state-pollution, V4); host-scope routing (V3).
+- **003-08 detach-and-schedule** — `/background` + Routine-ready targets; in a
+  Routine (continuous invocation) `gate.py` is the authority — the meta-judge
+  `Stop` hook is moot there (V4).
+
+**What does NOT change:**
+
+- **The five DONE slices (003-01..05) are retained, not invalidated.** The
+  hand-rolled `loop.py` driver becomes the **external-driver / portable layer** —
+  the supported path for hook-restricted environments and **non-Claude-Code
+  hosts (e.g. Codex)**, where the primitives don't exist and hooks are blocked by
+  default (ADR-0008 Assumption 7, V3). It is demoted from default to one of two
+  first-class paths, not removed.
+- The `gate.py` `0/1/2` exit-code contract (ADR-0002) and `oracle.sh`'s authority
+  are unchanged.
+
+**Correction of record — "Pre-spec research" / spike.** That section states "no
+`--max-turns` flag exists." ADR-0008 verification (claude 2.1.142 + 2.1.175)
+found `--max-turns` **is** a real, runtime-enforced flag — merely **hidden from
+`claude --help`** (confirmed by an acceptance probe vs. a bogus-flag control: it
+halts a run with `error_max_turns` at the cap and binds a `/goal` run). The
+original prose is **preserved above** per
+[ADR-0010](../../decisions/adr-0010-amendment-scope-records-vs-live-prose.md)
+(closed-spec records are amended, not rewritten); this note is the correction.
+
+**Cross-spec follow-up (not a 003 slice):** repositioning the meta-judge (spec
+004 / ADR-0006) as the *interactive-only* backstop — since it does not fire in a
+continuous-invocation Routine — is tracked as an amendment to **spec 004**, which
+owns the meta-judge deliverable.
+
+**Verification harness:** the V1–V4 probes backing this rebase live at
+[`docs/decisions/adr-0008-experiments/`](../../decisions/adr-0008-experiments/).
