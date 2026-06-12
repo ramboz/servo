@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/ramboz/servo/compare/v0.2.0...v0.2.1) (2026-06-12)
+
+
+### Documentation
+
+* **specs:** mark 010 release-automation DONE — release 0.2.0 verified live ([11ef66e](https://github.com/ramboz/servo/commit/11ef66ea6754a2733fdf714615bf5be693949951))
+
 ## [0.2.0](https://github.com/ramboz/servo/compare/v0.1.0...v0.2.0) (2026-06-12)
 
 
