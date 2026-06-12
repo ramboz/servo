@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: []
-last_verified:
+last_verified: 2026-06-12
 ---
 
 ## Slice 010-03 — release-asset-on-tag
@@ -38,13 +38,14 @@ ships an installable, verified artifact automatically.
 
 **DoD:**
 
-- [~] All ACs pass; an end-to-end (or `workflow_dispatch`-simulated)
+- [x] All ACs pass; an end-to-end (or `workflow_dispatch`-simulated)
       release attaches the zip — evidence in the deviation log. _AC1, AC2, AC5
       met in-artifact and the build+smoke command was verified against the real
       builder CLI (built + smoke-passed `servo-v0.1.0.zip` and a simulated
-      `servo-v9.9.9.zip` locally). **The actual asset *attach* needs a created
-      release on `main`** (the `package` job is gated on `release_created`), so
-      it is deferred to the main-merge verification._
+      `servo-v9.9.9.zip` locally). The actual asset *attach* needed a created
+      release on `main` (the `package` job is gated on `release_created`) — now
+      done: PR #3's merge published release `v0.2.0` with `servo-v0.2.0.zip`
+      (97,640 bytes) attached. See the main-merge verification below._
 - [x] Asset name verified to match the builder default and the documented
       recipe. _Builder default output is `dist/servo-v<version>.zip` (confirmed
       by building 0.1.0 and 9.9.9); the workflow uploads that exact path; the
@@ -78,3 +79,10 @@ an installable, smoke-tested artifact automatically — no manual zip upload.
   `needs.release-please.outputs.release_created == 'true'`, which is only true
   in the `release.yml` run where merging the release PR creates the release.
   Verified end-to-end in the main-merge step.
+- **Main-merge verification (2026-06-12).** Merging PR #3 published release
+  `v0.2.0`; the `package` job ran in `release.yml` run 27437946710 (gated on
+  `release_created == 'true'`), built + smoke-tested the zip, and attached
+  **`servo-v0.2.0.zip` (97,640 bytes)** to the release (AC3/AC4/AC5). The asset
+  name matches the builder default and the README recipe. End-to-end value
+  proven: the release shipped an installable, verified artifact with no manual
+  step.

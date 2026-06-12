@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: []
-last_verified:
+last_verified: 2026-06-12
 ---
 
 ## Slice 010-02 — release-please-pipeline
@@ -44,22 +44,22 @@ it tags and publishes a release.
 
 **DoD:**
 
-- [~] All ACs pass; a release PR is observed bumping version + CHANGELOG
+- [x] All ACs pass; a release PR is observed bumping version + CHANGELOG
       (via the first real merge or a `workflow_dispatch` dry run) —
       evidence in the deviation log. _AC1–AC3 + AC6 met in-artifact (workflow
       shape, config, manifest, and the "release-managed, do-not-hand-edit"
-      note in CONTRIBUTING/README). **AC4 (0.x bump semantics) and AC5 (tag +
-      GitHub release) plus the *observed* release PR are deferred to
-      main-merge** — release-please only acts on `main`'s history; it cannot
-      open a release PR from a feature branch. Captured in the main-merge
-      verification._
-- [~] `release-please-config.json` + `.release-please-manifest.json` are
+      note in CONTRIBUTING/README). AC4 (0.x bump semantics) and AC5 (tag +
+      GitHub release) plus the *observed* release PR were deferred to
+      main-merge — now met by PR #3 (merged 2026-06-12: minor bump
+      `0.1.0 → 0.2.0`, tag `v0.2.0`, GitHub release published). See the
+      main-merge verification below._
+- [x] `release-please-config.json` + `.release-please-manifest.json` are
       well-formed JSON and accepted by the action (no schema errors in the
       run log). _**Well-formed JSON verified locally** (both parse; the
       config package key `.` matches the manifest key `.`; config is
-      byte-identical to jig's proven file). "Accepted by the action" (no
-      schema errors) is confirmed in the first `release.yml` run on main —
-      deferred._
+      byte-identical to jig's proven file). "Accepted by the action"
+      confirmed: `release.yml` run 27437946710 succeeded with no schema
+      errors._
 - [x] Deviation log produced under this slice. _Below._
 - [x] Independent review pass completed before DONE. _Independent reviewer,
       2026-06-11 — **PASS, no blockers.** Verified the release-please job
@@ -92,3 +92,17 @@ history and a changelog generated from commits — no manual version edits.
   job (010-03) lives in the *same* `release.yml` run as release-please
   (`needs:`), so it executes in the same invocation when a release is created
   — not via a separate workflow that `GITHUB_TOKEN` would fail to trigger.
+- **Main-merge verification (2026-06-12).** PR #3 (`chore(main): release
+  0.2.0`) was release-please's release PR, observed bumping `plugin.json` +
+  `CHANGELOG.md` + manifest together (AC4: minor bump `0.1.0 → 0.2.0` from a
+  `feat`). Merging it created tag `v0.2.0` and a published GitHub release
+  (AC5) via `release.yml` run 27437946710 (success). Caveat — the first
+  release PR was *not* green initially: two `UnsafeContractTests` in
+  `scripts/test_build_release_zip.py` hardcoded `servo-v0.1.0.zip`, so the
+  bump to 0.2.0 reddened `install-surfaces` (the builder's version-consistency
+  guard returns 2 on a filename/manifest mismatch, short-circuiting before the
+  unsafe-include check that returns 1). 010-04's de-pin sweep missed these two.
+  Fixed on `main` in `b097834` (`test:` — use live `PLUGIN_VERSION`); after
+  `gh pr update-branch 3` refreshed the stale release-PR branch, all checks
+  went green and the merge cut the release. AC4/AC5 + the observed release PR
+  are now satisfied end-to-end.
