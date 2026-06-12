@@ -1,0 +1,3 @@
+# Throwaway targets, captured streams, mj logs, and analysis rollups.
+# The harness (fixtures + scripts) is tracked; its runtime output is not.
+_work/
