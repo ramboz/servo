@@ -4379,5 +4379,51 @@ class ParseVerdictBlockUnitTests(unittest.TestCase):
         self.assertIn("string", err)
 
 
+class PlateauNoiseFloorTests(unittest.TestCase):
+    """ADR-0005 clause 4 (δ): `_check_plateau`'s frozen noise floor lets a
+    wobbling non-deterministic eval component neither fake progress (dodging a
+    real plateau halt) nor fake a plateau (halting early).
+
+    Verification obligation (ADR-0005 §Verification): sub-δ wobble still fires
+    the plateau halt (no false progress), and a supra-δ gain does NOT fire it
+    early (genuine progress resets the brake).
+    """
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("loop", LOOP)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.check = module._check_plateau
+
+    @staticmethod
+    def _hist(*composites):
+        return [{"composite": c} for c in composites]
+
+    def test_default_floor_zero_is_legacy_strict(self):
+        # δ defaults to 0.0 → exact prior behaviour (equality is non-improving).
+        self.assertTrue(self.check(self._hist(0.3, 0.3, 0.3, 0.3), 3))
+        self.assertFalse(self.check(self._hist(0.3, 0.4, 0.5, 0.6), 3))
+
+    def test_sub_delta_wobble_still_plateaus(self):
+        # Composite wobbles ±0.01 around 0.80 with δ=0.05 → reads as flat → halt.
+        self.assertTrue(self.check(self._hist(0.80, 0.81, 0.79, 0.805), 3, 0.05))
+
+    def test_sub_delta_climb_does_not_count_as_improvement(self):
+        # A monotone but sub-δ climb (overall_max 0.83 ≤ earlier_max 0.80 + δ
+        # 0.05) is still a plateau — no false progress.
+        self.assertTrue(self.check(self._hist(0.80, 0.81, 0.82, 0.83), 3, 0.05))
+
+    def test_supra_delta_gain_resets_plateau_no_early_halt(self):
+        # A genuine jump beyond δ (0.80 → 0.90 > earlier_max + 0.05) is real
+        # improvement → not a plateau; the brake must not fire early.
+        self.assertFalse(self.check(self._hist(0.80, 0.79, 0.81, 0.90), 3, 0.05))
+
+    def test_gain_exactly_at_floor_is_non_improving(self):
+        # Boundary: a gain of exactly δ does not exceed earlier_max + δ → plateau
+        # (the `≤` direction, consistent with AC3's equality-is-non-improving).
+        self.assertTrue(self.check(self._hist(0.80, 0.80, 0.80, 0.85), 3, 0.05))
+
+
 if __name__ == "__main__":
     unittest.main()
