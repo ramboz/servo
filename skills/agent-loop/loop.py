@@ -1,5 +1,21 @@
 """
-servo agent-loop — full spec 003 (slices 003-01 through 003-05)
+servo agent-loop — full spec 003 (slices 003-01 through 003-06)
+
+Two drivers, selected by `--driver {loop|goal}` (default `loop`):
+
+- **`loop`** (slices 003-01..05): the hand-rolled driver described below — a
+  `for`-loop over N `claude -p` calls with every guardrail enforced servo-side.
+  Retained as the portable / external-driver layer for hook-restricted and
+  non-Claude-Code hosts (ADR-0008).
+- **`goal`** (slice 003-06, ADR-0008 rebase): a single `claude -p` whose prompt
+  carries a `/goal` completion condition that drives across-turn continuation.
+  The loop body runs `servo:quality-gate` each turn and prints a
+  machine-greppable `SERVO_ORACLE_VERDICT` sentinel; the `/goal` condition only
+  *fact-checks* that sentinel; the hard caps ride the OUTER call (`--max-turns`
+  + `--max-budget-usd`, both V2-verified to bind a `/goal` run); and a **final
+  authoritative `gate.py --json` run is the verdict** — never the transcript
+  judge (ADR-0008 hard constraint; ADR-0002 exit-code contract). See
+  `run_goal_loop`.
 
 Headless iteration driver. Subprocesses `claude -p --output-format json
 --agent <runner|judge>` against a target N times under guardrails, and
@@ -42,8 +58,10 @@ Summary line: one JSON line on stdout after the last iteration (or refusal).
 import argparse
 import json
 import os
+import platform
 import re
 import secrets
+import shutil
 import signal
 import subprocess
 import sys
@@ -168,6 +186,12 @@ REASON_STATE_SCHEMA_MISMATCH = "state_schema_mismatch"
 REASON_CLAUDE_VERSION_MISMATCH = "claude_version_mismatch"
 REASON_RUN_ID_COLLISION = "run_id_collision"
 
+# Slice 003-07 preflight refusal shared by both drivers (ADR-0008 V4): a
+# scheduled / unattended run against a dirty working tree can score leftover
+# uncommitted state as a spurious immediate pass. On by default; `--allow-dirty`
+# opts out; a non-git target skips the check entirely.
+REASON_DIRTY_TREE = "dirty_tree"
+
 # Slice 003-04 state-file constants (per ADR-0004).
 STATE_SCHEMA_VERSION = 1
 STATE_FILE_NAME = "state.json"
@@ -189,6 +213,97 @@ EXIT_INTERRUPTED = 130
 # gate.py lives at a sibling skill path. Resolve once at import time so a
 # repeated `subprocess.run` cost stays trivial.
 GATE_PATH = Path(__file__).resolve().parent.parent / "quality-gate" / "gate.py"
+
+# Slice 003-07 (ADR-0008 V4): the clone-portable location for gate.py inside the
+# target. Spec 004's `hook.py` already PREFERS this relative path when baking the
+# meta-judge command (`$CLAUDE_PROJECT_DIR/.claude/skills/servo-quality-gate/
+# gate.py`); this slice makes vendoring a guardrail-layer responsibility so the
+# meta-judge + the goal/Routine driver resolve the oracle relative to the target
+# after a clone instead of baking servo's absolute install path (which fails open
+# in a clone). Kept in sync with hook.py's `_resolve_gate_py`.
+VENDORED_GATE_REL = Path(".claude") / "skills" / "servo-quality-gate" / "gate.py"
+
+# ===========================================================================
+# Slice 003-06 goal-driver constants (ADR-0008 rebase)
+# ===========================================================================
+
+# The loop drivers. `loop` (slices 003-01..05) is the hand-rolled external-driver
+# path — the portable layer for hook-restricted / non-Claude-Code hosts; `goal`
+# (003-06) delegates continuation to Claude Code's `/goal` primitive while servo
+# keeps the guardrail + oracle layer. `auto` (003-07, the default) picks the best
+# available path for the host via a deterministic host-support probe.
+DRIVER_LOOP = "loop"
+DRIVER_GOAL = "goal"
+DRIVER_AUTO = "auto"
+
+# Slice 003-07 host-scope routing (ADR-0008 V3 / Assumption 7). `/goal` is a
+# Claude Code primitive introduced in 2.1.139; a host whose `claude` predates
+# that (or is absent / non-Claude) cannot run the goal driver. Probed
+# deterministically off `claude --version` so `auto` can route without spending
+# an API call, and so an explicit `--driver goal` on an unsupported host refuses
+# upfront rather than burning a turn to discover it.
+GOAL_MIN_VERSION = (2, 1, 139)
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+# The oracle-verdict sentinel (AC2). A SINGLE pinned shape used by BOTH the
+# loop-body prompt instruction (what the agent is told to print each turn) AND
+# the transcript-scan parser (what the driver greps for, and what the `/goal`
+# condition fact-checks):
+#   SERVO_ORACLE_VERDICT exit=<rc> status=<pass|fail> composite=<c> threshold=<t>
+SENTINEL_PREFIX = "SERVO_ORACLE_VERDICT"
+
+# Strict matcher: REQUIRES the composite=/threshold= tail. The bare substring
+# `SERVO_ORACLE_VERDICT exit=0 status=pass` (which the `/goal` condition text
+# itself carries) and the placeholder instruction line (`status=<status>`) both
+# fail this — so neither is miscounted as a real oracle pass (AC2 bare-substring
+# guard). Capturing groups: exit, status, composite, threshold.
+_SENTINEL_RE = re.compile(
+    r"SERVO_ORACLE_VERDICT\s+exit=(\S+)\s+status=(\S+)\s+"
+    r"composite=(\S+)\s+threshold=(\S+)"
+)
+
+# The bare form the `/goal` completion condition fact-checks (AC1). Deliberately
+# WITHOUT the composite=/threshold= tail so it reads as a cue, never a self-
+# satisfying pass under `_SENTINEL_RE`.
+SENTINEL_PASS_BARE = f"{SENTINEL_PREFIX} exit=0 status=pass"
+
+# Claude result `subtype` values a `/goal` run emits — empirically re-confirmed
+# at implementation on claude 2.1.175 (folds in the DoR's open string-capture
+# item; matches ADR-0008 V2): success → `success` (terminal_reason=`completed`);
+# turn cap → `error_max_turns` (terminal_reason=`max_turns`); budget cap →
+# `error_max_budget_usd`. (`--max-turns` is functional though hidden from
+# `claude --help` — never infer flag availability from `--help`.)
+SUBTYPE_SUCCESS = "success"
+SUBTYPE_ERROR_MAX_TURNS = "error_max_turns"
+SUBTYPE_ERROR_MAX_BUDGET = "error_max_budget_usd"
+
+# Goal-mode terminal reasons (AC4/AC5). Distinct from the loop-mode taxonomy:
+# the goal driver runs a single `claude -p` + one final authoritative gate.py,
+# so its halt reasons key on the `/goal` result subtype and the final gate.
+# `cost_ceiling_reached` is shared with loop mode (REASON_COST_CEILING_REACHED).
+REASON_ORACLE_PASS = "oracle_pass"
+REASON_ORACLE_BELOW_THRESHOLD = "oracle_below_threshold"
+REASON_ORACLE_DISAGREEMENT = "oracle_disagreement"
+REASON_ITERATION_CAP_REACHED = "iteration_cap_reached"
+REASON_GOAL_UNAVAILABLE = "goal_unavailable"
+REASON_GOAL_RESUME_UNSUPPORTED = "goal_resume_unsupported"
+
+# Slice 003-07: fail-closed when the clone-portable gate.py can't be vendored
+# into the target (e.g. `.claude` is an unexpected non-directory, or perms block
+# the write). Without a resolvable oracle the goal driver has no authority, so it
+# refuses rather than running unguarded.
+REASON_GATE_VENDOR_FAILED = "gate_vendor_failed"
+
+# `/goal` refusal under hook restrictions (AC6 / ADR-0008 V3). When
+# `disableAllHooks` / `allowManagedHooksOnly` is set, `/goal` refuses verbatim
+# ("/goal can't run while hooks are restricted ..."). Two detection signals
+# (see `_detect_goal_unavailable`): the discriminating refusal SENTENCE (safe
+# to match anywhere in the transcript), and the managed-settings KEYS — which
+# only count when corroborated by a zero-turn run, since an agent's own
+# *successful* work could legitimately surface those key names (e.g. a task
+# that audits or edits a settings file), and must not be mis-flagged.
+_GOAL_REFUSAL_RE = re.compile(r"can'?t run while hooks are restricted", re.IGNORECASE)
+_GOAL_HOOK_KEYS_RE = re.compile(r"disableAllHooks|allowManagedHooksOnly")
 
 # Signal-handler state: incremented on each delivery of SIGINT/SIGTERM.
 # First delivery sets the flag and forwards the signal to the active
@@ -569,6 +684,229 @@ def _get_claude_version() -> Optional[str]:
     return out or None
 
 
+# ===========================================================================
+# Slice 003-07 host-scope routing (ADR-0008 V3 / Assumption 7)
+#
+# A single auditable decision — which driver runs, and the settings/version
+# facts that forced it — productionized from `adr-0008-experiments/v3_audit_env.py`.
+# ===========================================================================
+
+
+def _parse_claude_version(version_str: Optional[str]) -> Optional[tuple[int, int, int]]:
+    """Extract a (major, minor, patch) tuple from a `claude --version` string.
+
+    Tolerant of trailing text (`2.1.175 (Claude Code)`) and pre-release suffixes
+    (`1.0.0-mock`). Returns None when no `N.N.N` triple is present.
+    """
+    if not version_str:
+        return None
+    m = _VERSION_RE.search(version_str)
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+
+def _goal_primitive_available() -> tuple[bool, Optional[str], Optional[str]]:
+    """Is the `/goal` primitive available on this host? (AC4 host-support probe.)
+
+    Deterministic from `claude --version`: `/goal` shipped in GOAL_MIN_VERSION.
+    Returns `(available, version_str, reason)` — `reason` is a breadcrumb only
+    when unavailable (binary absent, version unparseable, or too old).
+    """
+    version_str = _get_claude_version()
+    parsed = _parse_claude_version(version_str)
+    if parsed is None:
+        reason = (
+            "claude binary not found on PATH" if version_str is None
+            else f"claude --version {version_str!r} is unparseable"
+        )
+        return False, version_str, reason
+    if parsed < GOAL_MIN_VERSION:
+        need = ".".join(str(n) for n in GOAL_MIN_VERSION)
+        return False, version_str, (
+            f"claude {version_str} predates the /goal primitive (needs >= {need})"
+        )
+    return True, version_str, None
+
+
+def _managed_settings_paths() -> list[Path]:
+    """Platform-specific managed-settings.json locations (per Claude Code docs).
+
+    `SERVO_MANAGED_SETTINGS_PATH` overrides the OS default: a path (possibly
+    absent) for unusual installs, or empty string for "no managed layer." This
+    is the seam that keeps subprocess-level routing tests hermetic on hosts that
+    happen to ship a real managed-settings.json (e.g. MDM-managed CI). Otherwise
+    production reads the real OS paths. Mirrors `adr-0008-experiments/v3_audit_env.py`.
+    """
+    override = os.environ.get("SERVO_MANAGED_SETTINGS_PATH")
+    if override is not None:
+        return [Path(override)] if override else []
+    sysname = platform.system()
+    if sysname == "Darwin":
+        return [Path("/Library/Application Support/ClaudeCode/managed-settings.json")]
+    if sysname == "Windows":
+        return [Path(os.path.expandvars(r"%PROGRAMDATA%\ClaudeCode\managed-settings.json"))]
+    return [Path("/etc/claude-code/managed-settings.json")]
+
+
+def _load_settings_file(path: Path) -> Optional[dict]:
+    """Parse a settings.json layer. None when absent; `{__parse_error__: ...}`
+    on malformed JSON (so the audit can report it without crashing)."""
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return {"__parse_error__": str(exc)}
+    except json.JSONDecodeError as exc:
+        return {"__parse_error__": str(exc)}
+
+
+def _audit_hook_settings(target: Path) -> dict:
+    """Inspect the settings hierarchy for the switches that disable `/goal`.
+
+    Productionized from `v3_audit_env.py`. `disableAllHooks` truthy at ANY layer,
+    or `allowManagedHooksOnly` truthy in the MANAGED layer, disables BOTH `/goal`
+    and servo's (project, non-managed) meta-judge (ADR-0008 V3 / settled
+    grounding). Returns a structured, auditable result:
+
+        {hooks_permitted: bool, forcing_layer: str|None, layers: [per-layer dict]}
+
+    `forcing_layer` is the first layer+key that forced the restriction (e.g.
+    `"project-local:disableAllHooks"`), so the routing decision names exactly
+    what disabled it.
+    """
+    layers: list[tuple[str, Path, bool]] = [
+        ("user", Path.home() / ".claude" / "settings.json", False),
+        ("project", target / ".claude" / "settings.json", False),
+        ("project-local", target / ".claude" / "settings.local.json", False),
+    ] + [("managed", p, True) for p in _managed_settings_paths()]
+
+    findings: list[dict] = []
+    forcing_layer: Optional[str] = None
+    for name, path, is_managed in layers:
+        entry = {
+            "layer": name, "path": str(path), "present": False,
+            "disableAllHooks": False, "allowManagedHooksOnly": False,
+            "parse_error": None, "forces": False,
+        }
+        data = _load_settings_file(path)
+        if data is None:
+            findings.append(entry)
+            continue
+        if isinstance(data, dict) and "__parse_error__" in data:
+            entry["parse_error"] = data["__parse_error__"]
+            findings.append(entry)
+            continue
+        entry["present"] = True
+        dah = bool(data.get("disableAllHooks"))
+        # allowManagedHooksOnly only binds in the managed tier (per the docs);
+        # in a non-managed layer it is recorded but inert.
+        amho = bool(data.get("allowManagedHooksOnly"))
+        entry["disableAllHooks"] = dah
+        entry["allowManagedHooksOnly"] = amho
+        forces_here = dah or (amho and is_managed)
+        if forces_here:
+            entry["forces"] = True
+            if forcing_layer is None:
+                key = "disableAllHooks" if dah else "allowManagedHooksOnly"
+                forcing_layer = f"{name}:{key}"
+        findings.append(entry)
+
+    return {
+        "hooks_permitted": forcing_layer is None,
+        "forcing_layer": forcing_layer,
+        "layers": findings,
+    }
+
+
+def _decide_route(target: Path, requested_driver: str) -> dict:
+    """Resolve which driver runs (AC4) and record why (AC5). Never raises.
+
+    Eligibility for the goal driver = `/goal` available (version probe) AND hooks
+    permitted (settings audit). Routing:
+      - `loop`  → always the hand-rolled driver (the portable path).
+      - `goal`  → the goal driver if eligible; otherwise `refused=True` (an
+                  explicit force on an unsupported host refuses; per 003-06 AC6).
+      - `auto`  → the goal driver when eligible, else a fail-safe downgrade to
+                  the loop driver (the always-works path).
+    """
+    audit = _audit_hook_settings(target)
+    goal_available, version_str, goal_reason = _goal_primitive_available()
+    hooks_permitted = audit["hooks_permitted"]
+    eligible = hooks_permitted and goal_available
+
+    if not hooks_permitted:
+        ineligible_reason = f"hooks restricted ({audit['forcing_layer']})"
+    elif not goal_available:
+        ineligible_reason = goal_reason
+    else:
+        ineligible_reason = None
+
+    refused = False
+    if requested_driver == DRIVER_LOOP:
+        chosen = DRIVER_LOOP
+    elif requested_driver == DRIVER_GOAL:
+        chosen = DRIVER_GOAL
+        refused = not eligible
+    else:  # DRIVER_AUTO
+        chosen = DRIVER_GOAL if eligible else DRIVER_LOOP
+
+    return {
+        "requested_driver": requested_driver,
+        "chosen_driver": chosen,
+        "goal_eligible": eligible,
+        "refused": refused,
+        "ineligible_reason": ineligible_reason,
+        "hooks_permitted": hooks_permitted,
+        "forcing_layer": audit["forcing_layer"],
+        "goal_available": goal_available,
+        "claude_version": version_str,
+        "audit": audit,
+    }
+
+
+def _format_routing_explanation(verdict: dict, target: Path) -> str:
+    """Render `--explain-routing` output: the verdict + the layer that forced it
+    (AC5). Human-readable + greppable; the routing decision is auditable without
+    running anything."""
+    eligible = "YES" if verdict["goal_eligible"] else "NO"
+    lines = [
+        f"servo routing verdict for {target}:",
+        f"  requested driver : {verdict['requested_driver']}",
+        f"  chosen driver    : {verdict['chosen_driver']}",
+        f"  /goal eligible   : {eligible}",
+    ]
+    if verdict["ineligible_reason"]:
+        lines.append(f"  ineligible because: {verdict['ineligible_reason']}")
+    if verdict["refused"]:
+        lines.append("  NOTE: explicit --driver goal on an unsupported host "
+                     "would refuse (rc=2); use --driver loop or auto.")
+    lines.append(f"  claude version   : {verdict['claude_version'] or '(not found)'}")
+    lines.append(f"  /goal available  : {'YES' if verdict['goal_available'] else 'NO'}")
+    permitted = (
+        "YES" if verdict["hooks_permitted"]
+        else f"NO  (forced by {verdict['forcing_layer']})"
+    )
+    lines.append(f"  hooks permitted  : {permitted}")
+    lines.append("  settings layers:")
+    for entry in verdict["audit"]["layers"]:
+        flags = []
+        if entry["parse_error"]:
+            state = f"⚠ PARSE ERROR: {entry['parse_error']}"
+        elif not entry["present"]:
+            state = "absent"
+        else:
+            if entry["disableAllHooks"]:
+                flags.append("disableAllHooks=true")
+            if entry["allowManagedHooksOnly"]:
+                flags.append("allowManagedHooksOnly=true")
+            state = "present  " + ("  ".join(flags) if flags else "(no relevant keys)")
+        marker = "  ← forces" if entry["forces"] else ""
+        lines.append(f"    {entry['layer']:14} {entry['path']}  — {state}{marker}")
+    return "\n".join(lines) + "\n"
+
+
 def _build_initial_state(
     *, run_id: str, target: Path, prompt: str,
     max_iterations: int, cost_ceiling: float,
@@ -686,58 +1024,110 @@ def _refuse_preflight(
     return EXIT_ENV_ERROR
 
 
+def _target_preflight_error(target: Path) -> Optional[tuple[str, str]]:
+    """Existence checks shared by both drivers (slice 003-06 extraction).
+
+    Returns `(reason, message)` on the first failure, or None when
+    target / manifest / oracle all exist. Reason strings mirror gate.py's
+    taxonomy (`target_missing`, `target_not_directory`, `manifest_missing`,
+    `oracle_missing`) per AC4: both drivers defer to gate.py's vocabulary so
+    downstream consumers pivot on the same strings. Existence-only check —
+    malformed manifest, non-executable oracle, etc., surface from gate.py at
+    score time as `oracle_status=env_error`, not a driver-level refusal.
+    """
+    if not target.exists():
+        return REASON_TARGET_MISSING, f"target does not exist: {target}"
+    if not target.is_dir():
+        return REASON_TARGET_NOT_DIRECTORY, f"target is not a directory: {target}"
+    manifest_path = target / ".servo" / "install.json"
+    if not manifest_path.exists():
+        return REASON_MANIFEST_MISSING, (
+            f".servo/install.json not found at {manifest_path}; "
+            f"run /servo:scaffold-init first"
+        )
+    oracle_path = target / "oracle.sh"
+    if not oracle_path.exists():
+        return REASON_ORACLE_MISSING, (
+            f"oracle.sh not found at {oracle_path}; run /servo:scaffold-init first"
+        )
+    return None
+
+
+# Cap on how many dirty paths the refusal breadcrumb enumerates, so a wildly
+# dirty tree can't spam the log; the count is always reported in full.
+_DIRTY_PATHS_SHOWN = 20
+
+
+def _is_git_work_tree(target: Path) -> bool:
+    """True iff `target` is inside a git working tree (AC3 non-git skip)."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "--is-inside-work-tree"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return False  # git not installed → treat as non-git (skip the check)
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
+def _dirty_tree_paths(target: Path) -> Optional[list[str]]:
+    """Tracked-file dirty paths, or None when clean / not-a-git-repo (AC2/AC3).
+
+    - Non-git target → None (AC3 skip; no false refusal).
+    - Git repo → `git status --porcelain`; any tracked-file change (staged or
+      unstaged; porcelain XY status other than `??`) makes the tree dirty.
+      Untracked files (`??`) are NOT "changes to tracked files" per AC2's
+      wording — and excluding them means servo's own run artifacts (`.servo/`,
+      the vendored gate.py) never self-trip the brake on a later run.
+    - Pathological case (valid work tree but `git status` itself errors) → None
+      (skip) rather than a false refusal; the brake is best-effort over git.
+    """
+    if not _is_git_work_tree(target):
+        return None
+    proc = subprocess.run(
+        ["git", "-C", str(target), "status", "--porcelain"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    dirty: list[str] = []
+    for line in proc.stdout.splitlines():
+        if not line.strip():
+            continue
+        xy = line[:2]
+        if xy == "??":
+            continue  # untracked — not a tracked-file change
+        # porcelain v1: "XY <path>"; a rename shows "orig -> new" in the path.
+        dirty.append(line[3:].strip())
+    return dirty or None
+
+
+def _dirty_tree_message(paths: list[str]) -> str:
+    """Refusal breadcrumb naming the dirty paths (AC2), bounded in length."""
+    shown = paths[:_DIRTY_PATHS_SHOWN]
+    more = "" if len(paths) <= _DIRTY_PATHS_SHOWN else f" (+{len(paths) - _DIRTY_PATHS_SHOWN} more)"
+    return (
+        f"refusing to run against a dirty working tree: {len(paths)} uncommitted "
+        f"change(s) to tracked file(s): {', '.join(shown)}{more}. Commit or stash "
+        f"them, or pass --allow-dirty for an intentional dirty run."
+    )
+
+
 def _preflight(
     target: Path, run_id: str, *,
     cost_ceiling: float, context_fill_threshold: float,
 ) -> Optional[int]:
-    """Validate target / manifest / oracle exist. Return rc on refusal, None on pass.
+    """Validate target / manifest / oracle exist (loop mode). rc on refusal, None on pass.
 
-    Reason strings mirror gate.py's taxonomy (`target_missing`,
-    `target_not_directory`, `manifest_missing`, `oracle_missing`) per
-    AC4: the loop defers to gate.py's vocabulary so downstream consumers
-    can pivot on the same strings whether they're reading gate or loop
-    output. Existence-only check — malformed manifest, non-executable
-    oracle, etc., surface from gate.py during iteration 1 and feed the
-    per-iteration `oracle_status=env_error` rather than a loop-level
-    refusal.
+    Thin wrapper over `_target_preflight_error` that renders a loop-shaped
+    refusal summary via `_refuse_preflight`. The goal driver shares the same
+    existence checks but renders a goal-shaped summary (`_refuse_goal`).
     """
-    if not target.exists():
+    err = _target_preflight_error(target)
+    if err is not None:
+        reason, message = err
         return _refuse_preflight(
-            run_id=run_id,
-            reason=REASON_TARGET_MISSING,
-            message=f"target does not exist: {target}",
-            cost_ceiling=cost_ceiling,
-            context_fill_threshold=context_fill_threshold,
-        )
-    if not target.is_dir():
-        return _refuse_preflight(
-            run_id=run_id,
-            reason=REASON_TARGET_NOT_DIRECTORY,
-            message=f"target is not a directory: {target}",
-            cost_ceiling=cost_ceiling,
-            context_fill_threshold=context_fill_threshold,
-        )
-    manifest_path = target / ".servo" / "install.json"
-    if not manifest_path.exists():
-        return _refuse_preflight(
-            run_id=run_id,
-            reason=REASON_MANIFEST_MISSING,
-            message=(
-                f".servo/install.json not found at {manifest_path}; "
-                f"run /servo:scaffold-init first"
-            ),
-            cost_ceiling=cost_ceiling,
-            context_fill_threshold=context_fill_threshold,
-        )
-    oracle_path = target / "oracle.sh"
-    if not oracle_path.exists():
-        return _refuse_preflight(
-            run_id=run_id,
-            reason=REASON_ORACLE_MISSING,
-            message=(
-                f"oracle.sh not found at {oracle_path}; "
-                f"run /servo:scaffold-init first"
-            ),
+            run_id=run_id, reason=reason, message=message,
             cost_ceiling=cost_ceiling,
             context_fill_threshold=context_fill_threshold,
         )
@@ -924,7 +1314,45 @@ def _invoke_claude(
     return None, parse_error
 
 
-def _invoke_gate(target: Path) -> Optional[dict]:
+def _vendored_gate_path(target: Path) -> Path:
+    """Absolute path of the clone-portable gate.py copy inside `target`."""
+    return target / VENDORED_GATE_REL
+
+
+def _ensure_vendored_gate(target: Path) -> tuple[Optional[Path], Optional[str]]:
+    """Ensure `<target>/.claude/skills/servo-quality-gate/gate.py` exists + is current (AC1).
+
+    Idempotent: copies servo's own `gate.py` when the vendored copy is absent or
+    byte-stale; a no-op (no rewrite) when it is already byte-identical, so the
+    preflight is cheap on every run. Returns `(vendored_path, None)` on success
+    or `(None, breadcrumb)` when servo's gate.py can't be read or the destination
+    can't be written — the caller fails closed (a goal/Routine run has no oracle
+    authority without a resolvable gate.py).
+
+    Why vendor at all (ADR-0008 V4): the meta-judge resolves the oracle on a
+    *relative* gate.py path after a clone; a non-vendored install bakes servo's
+    absolute path and fails open in a clone. `hook.py:_resolve_gate_py` already
+    prefers this path — this makes putting the file there a driver responsibility.
+    """
+    src = GATE_PATH
+    dest = _vendored_gate_path(target)
+    try:
+        src_bytes = src.read_bytes()
+    except OSError as exc:
+        return None, f"cannot read servo's gate.py at {src}: {exc}"
+    try:
+        if dest.is_file() and dest.read_bytes() == src_bytes:
+            return dest, None  # present and current → no rewrite
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        # copy2 preserves gate.py's mode; the file is always invoked via
+        # `sys.executable`, so the exec bit is not load-bearing.
+        shutil.copy2(src, dest)
+    except OSError as exc:
+        return None, f"cannot vendor gate.py into target at {dest}: {exc}"
+    return dest, None
+
+
+def _invoke_gate(target: Path, gate_path: Path = GATE_PATH) -> Optional[dict]:
     """Invoke `gate.py <target> --json`. Return parsed JSON dict or None on parse failure.
 
     gate.py emits exactly one JSON line on stdout regardless of exit code
@@ -932,12 +1360,17 @@ def _invoke_gate(target: Path) -> Optional[dict]:
     exit code — the loop's exit code is governed by the iteration outcome,
     not by gate's pass/fail/env-error signal on any single iteration.
 
+    `gate_path` (slice 003-07): which gate.py to run. Loop mode uses servo's own
+    `GATE_PATH` (the external-driver path runs on servo's host); the goal driver
+    passes the target's *vendored* copy so the authoritative final score resolves
+    on the same clone-portable path the meta-judge uses.
+
     Slice 003-04: registers the Popen as `_active_subprocess` so the signal
     handler can forward SIGINT/SIGTERM to gate.py (so the loop's wait
     returns promptly under interrupt).
     """
     global _active_subprocess
-    cmd = [sys.executable, str(GATE_PATH), str(target), "--json"]
+    cmd = [sys.executable, str(gate_path), str(target), "--json"]
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
@@ -1014,6 +1447,7 @@ def run_loop(
     plateau_noise_floor: Optional[float] = None,
     resume_run_id: Optional[str] = None,
     resume_anyway: bool = False,
+    allow_dirty: bool = False,
 ) -> int:
     """Drive the iteration loop with state persistence + resume + signal handling.
 
@@ -1075,6 +1509,22 @@ def run_loop(
                 message=(
                     f"state file at {state_path} is missing or malformed; "
                     f"--resume-anyway does not bypass parse errors"
+                ),
+                cost_ceiling=refusal_ceiling,
+                context_fill_threshold=refusal_threshold,
+            )
+
+        # Slice 003-06 AC7: a goal-driven run cannot be resumed (detachment is
+        # 003-08). Such a state carries `driver: "goal"`; refuse with a clear
+        # breadcrumb rather than replaying it as a hand-rolled loop.
+        if state.get("driver") == DRIVER_GOAL:
+            return _refuse_preflight(
+                run_id=resume_run_id,
+                reason=REASON_GOAL_RESUME_UNSUPPORTED,
+                message=(
+                    f"run-id {resume_run_id} was created by --driver goal; "
+                    f"resuming a goal-driven run is out of scope (slice 003-08). "
+                    f"Start a fresh run with --driver goal (no --resume)."
                 ),
                 cost_ceiling=refusal_ceiling,
                 context_fill_threshold=refusal_threshold,
@@ -1164,6 +1614,21 @@ def run_loop(
         )
         if rc is not None:
             return rc
+
+        # AC2/AC3: refuse a FRESH run against a dirty tree (a scheduled run could
+        # otherwise score leftover state as a spurious pass). Resume deliberately
+        # skips this — a resumed loop's tree is legitimately dirty from the prior
+        # iterations' agent mutations. `--allow-dirty` opts out; non-git skips.
+        if not allow_dirty:
+            dirty = _dirty_tree_paths(target)
+            if dirty:
+                return _refuse_preflight(
+                    run_id=_generate_preflight_run_id(),
+                    reason=REASON_DIRTY_TREE,
+                    message=_dirty_tree_message(dirty),
+                    cost_ceiling=cost_ceiling,
+                    context_fill_threshold=context_fill_threshold,
+                )
 
         run_dir, run_id, attempted = _create_run_dir(target)
         if run_dir is None or run_id is None:
@@ -1463,6 +1928,475 @@ def run_loop(
     return EXIT_OK
 
 
+# ===========================================================================
+# Slice 003-06 — goal-driven loop (ADR-0008 rebase)
+# ===========================================================================
+
+
+def _compose_goal_prompt(seed: str, gate_path: Path = GATE_PATH) -> str:
+    """Build the single `/goal`-driven prompt (AC1/AC2).
+
+    `gate_path` (slice 003-07): the gate.py the in-transcript loop body is told
+    to run. `run_goal_loop` passes the target's *vendored* copy so the agent's
+    every-turn gate run and the driver's authoritative final run resolve the same
+    clone-portable path.
+
+    Shape: a `/goal` completion condition that only FACT-CHECKS the printed
+    pass sentinel, then the user's seed task, then a per-turn loop-body
+    instruction to run servo:quality-gate (`gate.py --json`) and print the
+    SERVO_ORACLE_VERDICT sentinel verbatim. The `/goal` evaluator confirms a
+    deterministic fact (the oracle already printed a pass); it never re-judges
+    — `oracle.sh` stays the authority (ADR-0008 hard constraint).
+
+    The instruction uses placeholder tokens (`<exit_code>`, `<status>`, …), and
+    the `/goal` line carries only the bare `SENTINEL_PASS_BARE` (no tail), so
+    neither the prompt nor its echo can satisfy `_SENTINEL_RE`'s pass predicate.
+
+    The gate command names the SAME interpreter the driver's authoritative
+    `_invoke_gate` uses (`sys.executable`) so the agent's in-transcript gate run
+    can't drift to a different `python3` than the final verdict's. The final
+    `gate.py` remains the only authority regardless; this just keeps the two
+    runs consistent.
+    """
+    python = sys.executable or "python3"
+    return (
+        f"/goal Continue working until the transcript contains a line "
+        f"`{SENTINEL_PASS_BARE}` that was printed by the quality gate (step 3 "
+        f"below) on a turn where the gate actually exited 0.\n"
+        f"\n"
+        f"{seed.rstrip()}\n"
+        f"\n"
+        f"On EVERY turn, after doing work toward the task above, surface the "
+        f"servo quality gate's verdict so this loop can decide whether to "
+        f"continue:\n"
+        f"1. Run exactly: {python} {gate_path} . --json\n"
+        f"2. Read the JSON it prints (fields: exit_code, status, composite, "
+        f"threshold).\n"
+        f"3. Print EXACTLY this one line (no code fence), substituting the real "
+        f"values, where <status> is `pass` when exit_code is 0 and `fail` "
+        f"otherwise:\n"
+        f"   {SENTINEL_PREFIX} exit=<exit_code> status=<status> "
+        f"composite=<composite> threshold=<threshold>\n"
+        f"Never print the sentinel with `status=pass` unless that gate run "
+        f"reported exit_code 0 this turn — the oracle, not your judgement, "
+        f"decides what passes.\n"
+    )
+
+
+def _scan_pass_sentinel(text: str) -> bool:
+    """True iff `text` carries a REAL oracle pass sentinel (AC2/AC4).
+
+    A match counts as a pass only when the strict sentinel (with the
+    composite=/threshold= tail) reports exit=0 AND status=pass. The bare
+    `/goal`-condition substring (no tail) and the placeholder instruction line
+    (`status=<status>`) both fail this predicate, so neither is miscounted as
+    the oracle having actually passed.
+    """
+    for m in _SENTINEL_RE.finditer(text or ""):
+        if m.group(1) == "0" and m.group(2) == "pass":
+            return True
+    return False
+
+
+def _detect_goal_unavailable(raw_stdout: str, num_turns: int) -> bool:
+    """True iff `/goal` refused to run under hook restrictions (AC6 / V3).
+
+    Two signals, deliberately asymmetric to avoid false positives:
+    - the verbatim refusal SENTENCE ("can't run while hooks are restricted")
+      is specific to `/goal`'s refusal → safe to match anywhere; but
+    - the managed-settings KEYS (`disableAllHooks` / `allowManagedHooksOnly`)
+      could legitimately appear in an agent's own successful work, so they
+      only count when corroborated by a zero-turn run (nothing actually ran —
+      the V3-observed signature: `num_turns=0`, `$0`, zero hooks fired).
+    """
+    text = raw_stdout or ""
+    if _GOAL_REFUSAL_RE.search(text):
+        return True
+    return num_turns == 0 and bool(_GOAL_HOOK_KEYS_RE.search(text))
+
+
+def _invoke_claude_goal(
+    prompt: str, target: Path, *,
+    max_turns: int,
+    max_budget_usd: Optional[float],
+    timeout_seconds: Optional[float] = None,
+) -> tuple[Optional[dict], str, Optional[str]]:
+    """Invoke one `claude -p --output-format stream-json --verbose` `/goal` run.
+
+    Hard caps ride the OUTER call (AC3): `--max-turns <max_turns>` always, and
+    `--max-budget-usd <max_budget_usd>` when a positive ceiling is set — the two
+    caps ADR-0008 V2 proved bind a `/goal` run. stream-json (which requires
+    `--verbose` in print mode) lets the driver scan the whole transcript for the
+    sentinel, not just the final message.
+
+    Returns `(result_event, raw_stdout, breadcrumb)`. `breadcrumb` is non-None
+    only on a hard invocation failure (binary missing / timeout / no parseable
+    `type=result` event), mirroring `_invoke_claude`'s AC9 split. `raw_stdout`
+    is always returned (even on failure) so the caller can scan it for the
+    `/goal` hook-restriction refusal (AC6).
+    """
+    global _active_subprocess
+    cmd: list[str] = [
+        "claude", "-p", "--output-format", "stream-json", "--verbose",
+        "--max-turns", str(max_turns),
+    ]
+    if max_budget_usd is not None and max_budget_usd > 0:
+        cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    cmd.append(prompt)
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=str(target),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except FileNotFoundError:
+        return None, "", "claude not on PATH"
+    except OSError as exc:
+        return None, "", f"OS error invoking claude: {exc}"
+
+    _active_subprocess = proc
+    try:
+        try:
+            stdout, _stderr = proc.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return None, "", f"claude -p timed out after {timeout_seconds}s (killed)"
+    finally:
+        _active_subprocess = None
+
+    result_event: Optional[dict] = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # tolerate non-JSON noise interleaved in the stream
+        if isinstance(ev, dict) and ev.get("type") == "result":
+            result_event = ev  # last result event wins
+
+    if result_event is None:
+        if proc.returncode != 0:
+            return None, stdout, (
+                f"claude -p exited {proc.returncode} without a result event"
+            )
+        return None, stdout, "claude -p emitted no parseable result event"
+    return result_event, stdout, None
+
+
+def _build_goal_state(
+    *, run_id: str, target: Path, prompt: str,
+    max_turns: int, cost_ceiling: float, claude_version: Optional[str],
+) -> dict:
+    """Goal-driver per-run state (ADR-0004 shape, goal-mode fields).
+
+    Carries `driver: "goal"` so a later `--resume` of this run-id refuses
+    (AC7). `state_schema_version` stays 1 — the goal fields are additive per
+    ADR-0004's "pure additive changes MAY keep version at 1" clause.
+    """
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return {
+        "state_schema_version": STATE_SCHEMA_VERSION,
+        "driver": DRIVER_GOAL,
+        "run_id": run_id,
+        "started_at": now_iso,
+        "last_updated_at": now_iso,
+        "target_path": str(target),
+        "prompt": prompt,
+        "max_turns": max_turns,
+        "cost_ceiling_usd": cost_ceiling,
+        "cumulative_cost_usd": 0.0,
+        "num_turns": 0,
+        "subtype": None,
+        "claude_terminal_reason": None,
+        "transcript_showed_pass": False,
+        "final_oracle_status": None,
+        "oracle_composite": None,
+        "oracle_threshold": None,
+        "terminal_reason": None,
+        "claude_version": claude_version,
+    }
+
+
+def _goal_summary(
+    *, run_id: str, terminal_reason: str, cumulative_cost_usd: float,
+    cost_ceiling: float, max_turns: int, final_oracle_status: str,
+    composite, threshold, subtype, claude_terminal_reason,
+    num_turns: int, transcript_showed_pass: bool,
+) -> dict:
+    """Single source for the goal-mode summary line (every halt path uses it)."""
+    return {
+        "driver": DRIVER_GOAL,
+        "terminal_reason": terminal_reason,
+        "subtype": subtype,
+        "claude_terminal_reason": claude_terminal_reason,
+        "num_turns": num_turns,
+        "cumulative_cost_usd": cumulative_cost_usd,
+        "cost_ceiling_usd": cost_ceiling,
+        "max_turns": max_turns,
+        "final_oracle_status": final_oracle_status,
+        "oracle_composite": composite,
+        "oracle_threshold": threshold,
+        "transcript_showed_pass": transcript_showed_pass,
+        "run_id": run_id,
+    }
+
+
+def _refuse_goal(
+    *, run_id: str, reason: str, message: str,
+    cost_ceiling: float, max_turns: int,
+) -> int:
+    """Stderr breadcrumb + goal-shaped summary line; return rc=2 (no run dir)."""
+    sys.stderr.write(f"loop: {message}\n")
+    _emit_json(_goal_summary(
+        run_id=run_id, terminal_reason=reason, cumulative_cost_usd=0.0,
+        cost_ceiling=cost_ceiling, max_turns=max_turns,
+        final_oracle_status=STATUS_ENV_ERROR, composite=None, threshold=None,
+        subtype=None, claude_terminal_reason=None, num_turns=0,
+        transcript_showed_pass=False,
+    ))
+    return EXIT_ENV_ERROR
+
+
+def run_goal_loop(
+    target: Path, *,
+    prompt: Optional[str],
+    max_iterations: Optional[int],
+    cost_ceiling: Optional[float],
+    resume_run_id: Optional[str] = None,
+    allow_dirty: bool = False,
+) -> int:
+    """Drive a single `/goal`-continuation run with servo's guardrails wired
+    through the OUTER `claude -p` invocation (slice 003-06 / ADR-0008).
+
+    The platform owns *"keep going"* (`/goal` + `--max-turns`); servo owns *"is
+    it actually good, and is it safe to keep going"* — the hard caps on the
+    outer call (AC3), a final authoritative `gate.py` run as the verdict (AC4),
+    fail-closed handling when the transcript and the oracle disagree (AC4), and
+    a refuse-don't-degrade posture when `/goal` can't run at all (AC6).
+    """
+    _install_signal_handlers()
+    claude_timeout_seconds = _resolve_claude_timeout()
+
+    max_turns = (
+        max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
+    )
+    ceiling = (
+        cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
+    )
+
+    # AC7: resume of a goal-driven run is out of scope (detachment is 003-08).
+    if resume_run_id is not None:
+        return _refuse_goal(
+            run_id=resume_run_id,
+            reason=REASON_GOAL_RESUME_UNSUPPORTED,
+            message=(
+                "--resume is not supported with --driver goal (detachment is "
+                "slice 003-08); re-run without --resume, or use --driver loop "
+                "to resume a hand-rolled run"
+            ),
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    # Preflight (shared existence checks; goal-shaped refusal summary).
+    err = _target_preflight_error(target)
+    if err is not None:
+        reason, message = err
+        return _refuse_goal(
+            run_id=_generate_preflight_run_id(), reason=reason, message=message,
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    # AC2/AC3: refuse against a dirty tree before any side effects (vendoring,
+    # run-dir, spend). `--allow-dirty` opts out; a non-git target skips.
+    if not allow_dirty:
+        dirty = _dirty_tree_paths(target)
+        if dirty:
+            return _refuse_goal(
+                run_id=_generate_preflight_run_id(),
+                reason=REASON_DIRTY_TREE, message=_dirty_tree_message(dirty),
+                cost_ceiling=ceiling, max_turns=max_turns,
+            )
+
+    # AC1: vendor the clone-portable gate.py into the target. The goal driver's
+    # in-transcript loop body AND its authoritative final score both resolve this
+    # path, so the oracle survives a clone (ADR-0008 V4). Fail closed if it can't
+    # be written — a goal run without a resolvable oracle has no authority.
+    vendored_gate, vendor_err = _ensure_vendored_gate(target)
+    if vendored_gate is None:
+        return _refuse_goal(
+            run_id=_generate_preflight_run_id(),
+            reason=REASON_GATE_VENDOR_FAILED, message=str(vendor_err),
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    # Allocate a run dir (same per-run-id isolation as loop mode; AC7).
+    run_dir, run_id, attempted = _create_run_dir(target)
+    if run_dir is None or run_id is None:
+        attempt_list = ", ".join(attempted) if attempted else "(none)"
+        return _refuse_goal(
+            run_id=(attempted[0] if attempted else _generate_preflight_run_id()),
+            reason=REASON_RUN_ID_COLLISION,
+            message=(
+                f"could not allocate a fresh run-id after {RUN_ID_MAX_ATTEMPTS} "
+                f"attempts; colliding ids: {attempt_list}"
+            ),
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    assert prompt is not None  # argparse enforces --prompt for goal fresh runs
+    # Re-probes `claude --version` (auto/goal routing already read it via
+    # `_goal_primitive_available`); a second sub-second call is cheaper than
+    # threading the value across the main()→run boundary, and re-reads it at the
+    # moment of state init.
+    claude_version = _get_claude_version()
+    state_path = _state_path_for(target, run_id)
+    state = _build_goal_state(
+        run_id=run_id, target=target, prompt=prompt,
+        max_turns=max_turns, cost_ceiling=ceiling, claude_version=claude_version,
+    )
+    _atomic_write_state(state, state_path)
+
+    def _finalize(terminal_reason, *, cumulative_cost_usd, final_oracle_status,
+                  composite=None, threshold=None, subtype=None,
+                  claude_terminal_reason=None, num_turns=0,
+                  transcript_showed_pass=False, exit_code):
+        """Persist final state + emit the goal summary; return exit_code."""
+        state["terminal_reason"] = terminal_reason
+        state["cumulative_cost_usd"] = cumulative_cost_usd
+        state["final_oracle_status"] = final_oracle_status
+        state["oracle_composite"] = composite
+        state["oracle_threshold"] = threshold
+        state["subtype"] = subtype
+        state["claude_terminal_reason"] = claude_terminal_reason
+        state["num_turns"] = num_turns
+        state["transcript_showed_pass"] = transcript_showed_pass
+        _atomic_write_state(state, state_path)
+        _emit_json(_goal_summary(
+            run_id=run_id, terminal_reason=terminal_reason,
+            cumulative_cost_usd=cumulative_cost_usd, cost_ceiling=ceiling,
+            max_turns=max_turns, final_oracle_status=final_oracle_status,
+            composite=composite, threshold=threshold, subtype=subtype,
+            claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
+            transcript_showed_pass=transcript_showed_pass,
+        ))
+        return exit_code
+
+    goal_prompt = _compose_goal_prompt(prompt, gate_path=vendored_gate)
+    result_event, raw_stdout, error = _invoke_claude_goal(
+        goal_prompt, target,
+        max_turns=max_turns, max_budget_usd=ceiling,
+        timeout_seconds=claude_timeout_seconds,
+    )
+
+    # Pull cost + turn count off the result event once, defensively — every
+    # exit path (interrupt, goal_unavailable, the normal verdict) reports the
+    # real spend, not a hardcoded $0, even when the run was cut short.
+    _rev = result_event or {}
+    try:
+        result_cost = float(_rev.get("total_cost_usd", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        result_cost = 0.0
+    try:
+        result_num_turns = int(_rev.get("num_turns", 0) or 0)
+    except (TypeError, ValueError):
+        result_num_turns = 0
+
+    # Interrupt during the /goal run (Q9 posture): finalize and exit 130.
+    if _was_interrupted():
+        return _finalize(
+            REASON_INTERRUPTED, cumulative_cost_usd=result_cost,
+            final_oracle_status=STATUS_UNKNOWN_INTERRUPTED,
+            subtype=_rev.get("subtype"), num_turns=result_num_turns,
+            exit_code=EXIT_INTERRUPTED,
+        )
+
+    # AC6: /goal refused to run (hooks restricted) — refuse loudly, don't
+    # silently degrade. The stderr names --driver loop as the portable
+    # fallback. `_detect_goal_unavailable` corroborates the managed-settings
+    # keys with a zero-turn run so an agent's own work mentioning those keys
+    # can't spuriously flip a successful run to goal_unavailable.
+    if _detect_goal_unavailable(raw_stdout, result_num_turns):
+        sys.stderr.write(
+            "loop: /goal did not engage — it refuses when hooks are restricted "
+            "(disableAllHooks / allowManagedHooksOnly). Use --driver loop (the "
+            "portable hand-rolled driver) for hook-restricted or non-Claude-Code "
+            "hosts.\n"
+        )
+        return _finalize(
+            REASON_GOAL_UNAVAILABLE, cumulative_cost_usd=result_cost,
+            final_oracle_status=STATUS_ENV_ERROR,
+            subtype=_rev.get("subtype"),
+            claude_terminal_reason=_rev.get("terminal_reason"),
+            num_turns=result_num_turns,
+            exit_code=EXIT_ENV_ERROR,
+        )
+
+    # Hard invocation failure (binary missing / timeout / no result event).
+    if error is not None or result_event is None:
+        sys.stderr.write(f"loop: {error}\n")
+        return _finalize(
+            REASON_CLAUDE_INVOCATION_FAILED, cumulative_cost_usd=0.0,
+            final_oracle_status=STATUS_ENV_ERROR, exit_code=EXIT_ENV_ERROR,
+        )
+
+    subtype = str(result_event.get("subtype", ""))
+    claude_terminal_reason = str(result_event.get("terminal_reason", ""))
+    cost_usd = result_cost
+    num_turns = result_num_turns
+    transcript_showed_pass = _scan_pass_sentinel(raw_stdout)
+
+    # AC4: the FINAL gate.py run is the authority — never the transcript judge.
+    # Run it on every clean-return path (incl. the caps) to populate the
+    # forensic `final_oracle_status`. Uses the vendored copy (003-07 AC1) so the
+    # authority resolves on the same clone-portable path as the in-transcript run.
+    gate_data = _invoke_gate(target, gate_path=vendored_gate)
+    if gate_data is None:
+        return _finalize(
+            REASON_GATE_INVOCATION_FAILED, cumulative_cost_usd=cost_usd,
+            final_oracle_status=STATUS_ENV_ERROR, subtype=subtype,
+            claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
+            transcript_showed_pass=transcript_showed_pass,
+            exit_code=EXIT_ENV_ERROR,
+        )
+    gate_exit = int(gate_data.get("exit_code", 2))
+    gate_status = str(gate_data.get("status", STATUS_ENV_ERROR))
+    composite = gate_data.get("composite")
+    threshold = gate_data.get("threshold")
+
+    # AC5 terminal-reason map, subtype-first; AC4 fail-closed disagreement.
+    #
+    # Precedence: a hard cap (error_max_turns / error_max_budget_usd) wins over
+    # the disagreement branch. Had a real pass sentinel been printed, /goal
+    # would have stopped with subtype=success BEFORE the cap fired — so a cap
+    # subtype means /goal never saw a pass, and the cap is the honest reason.
+    # The oracle's authority is preserved regardless: the run is never reported
+    # as a pass, and `final_oracle_status` carries the final gate's real verdict.
+    if subtype == SUBTYPE_ERROR_MAX_TURNS:
+        terminal_reason, exit_code = REASON_ITERATION_CAP_REACHED, EXIT_OK
+    elif subtype == SUBTYPE_ERROR_MAX_BUDGET:
+        terminal_reason, exit_code = REASON_COST_CEILING_REACHED, EXIT_OK
+    elif transcript_showed_pass and gate_exit != 0:
+        # The transcript printed a real pass sentinel, but the authoritative
+        # final gate disagrees → fail-closed (AC4). Pins the ADR-0008 hard
+        # constraint at the loop boundary: the oracle, not the transcript
+        # judge, decides.
+        terminal_reason, exit_code = REASON_ORACLE_DISAGREEMENT, EXIT_ENV_ERROR
+    elif gate_exit == 0:
+        terminal_reason, exit_code = REASON_ORACLE_PASS, EXIT_OK
+    else:
+        terminal_reason, exit_code = REASON_ORACLE_BELOW_THRESHOLD, EXIT_OK
+
+    return _finalize(
+        terminal_reason, cumulative_cost_usd=cost_usd,
+        final_oracle_status=gate_status, composite=composite, threshold=threshold,
+        subtype=subtype, claude_terminal_reason=claude_terminal_reason,
+        num_turns=num_turns, transcript_showed_pass=transcript_showed_pass,
+        exit_code=exit_code,
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
@@ -1484,6 +2418,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         "target",
         type=Path,
         help="Path to the servo-scaffolded target project.",
+    )
+    parser.add_argument(
+        "--driver",
+        choices=[DRIVER_AUTO, DRIVER_LOOP, DRIVER_GOAL],
+        default=DRIVER_AUTO,
+        help=(
+            "Continuation driver. `auto` (default) runs a deterministic "
+            "host-support probe (is `/goal` available; are hooks permitted) and "
+            "picks the best path — the goal driver where supported, else a "
+            "fail-safe downgrade to the loop driver. `loop` is the hand-rolled "
+            "003-01..05 driver — every guardrail enforced servo-side; the "
+            "portable path for hook-restricted / non-Claude-Code hosts. `goal` "
+            "issues a single `claude -p` whose `/goal` condition drives "
+            "across-turn continuation, with the hard caps (`--max-turns` = "
+            "`--max-iterations`, `--max-budget-usd` = `--cost-ceiling`) on the "
+            "outer call and a final `gate.py` run as the authority (ADR-0008); "
+            "an explicit `--driver goal` on an unsupported host refuses (rc=2). "
+            "See `--explain-routing` for the verdict without running."
+        ),
     )
     parser.add_argument(
         "--prompt",
@@ -1582,7 +2535,40 @@ def main(argv: Optional[list[str]] = None) -> int:
             "have changed between the recorded version and the current one."
         ),
     )
+    parser.add_argument(
+        "--allow-dirty",
+        dest="allow_dirty",
+        action="store_true",
+        help=(
+            "Bypass the refuse-on-dirty-tree preflight (slice 003-07). By "
+            "default a fresh run against a git target with uncommitted changes "
+            "to tracked files refuses (rc=2 / dirty_tree) — a scheduled or "
+            "unattended run could otherwise score leftover state as a spurious "
+            "pass. Pass this for an intentional dirty run. Non-git targets skip "
+            "the check regardless."
+        ),
+    )
+    parser.add_argument(
+        "--explain-routing",
+        dest="explain_routing",
+        action="store_true",
+        help=(
+            "Print the host-scope routing verdict for <target> (the chosen "
+            "driver, /goal eligibility, the settings layers inspected, and the "
+            "layer that forced any restriction) and exit 0 without running. "
+            "Reads the settings hierarchy + `claude --version`; mutates nothing."
+        ),
+    )
     args = parser.parse_args(argv)
+    target = args.target.resolve()
+
+    # --explain-routing (slice 003-07 AC5): print the verdict and exit 0,
+    # read-only. Handled before flag-shape validation so it needs no --prompt.
+    if args.explain_routing:
+        verdict = _decide_route(target, args.driver)
+        sys.stdout.write(_format_routing_explanation(verdict, target))
+        return EXIT_OK
+
     # ---- Flag-shape validation ---------------------------------------------
     if args.resume_anyway and args.resume is None:
         parser.error("--resume-anyway requires --resume <run-id>")
@@ -1600,8 +2586,69 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--plateau-window must be >= 0")
     if args.plateau_noise_floor is not None and args.plateau_noise_floor < 0:
         parser.error("--plateau-noise-floor must be >= 0")
+
+    # ---- Host-scope routing (slice 003-07 AC4) -----------------------------
+    # `loop` always runs (the portable path needs no probe). `goal` / `auto`
+    # resolve via the deterministic host-support verdict: an explicit `goal` on
+    # an unsupported host refuses (rc=2 / goal_unavailable), while `auto`
+    # fail-safe-downgrades to `loop` and logs why.
+    if args.driver == DRIVER_LOOP:
+        effective_driver = DRIVER_LOOP
+    else:
+        verdict = _decide_route(target, args.driver)
+        if verdict["refused"]:
+            ceiling = (args.cost_ceiling if args.cost_ceiling is not None
+                       else DEFAULT_COST_CEILING_USD)
+            max_turns = (args.max_iterations if args.max_iterations is not None
+                         else DEFAULT_MAX_ITERATIONS)
+            sys.stderr.write(
+                "loop: --driver goal is unsupported on this host "
+                f"({verdict['ineligible_reason']}). Use --driver loop (the "
+                "portable hand-rolled driver) or --driver auto.\n"
+            )
+            return _refuse_goal(
+                run_id=_generate_preflight_run_id(),
+                reason=REASON_GOAL_UNAVAILABLE,
+                message=f"goal driver unsupported: {verdict['ineligible_reason']}",
+                cost_ceiling=ceiling, max_turns=max_turns,
+            )
+        effective_driver = verdict["chosen_driver"]
+        if args.driver == DRIVER_AUTO and effective_driver == DRIVER_LOOP:
+            sys.stderr.write(
+                f"loop: auto-routing to --driver loop ({verdict['ineligible_reason']}); "
+                "the goal driver is unavailable on this host.\n"
+            )
+
+    # ---- Dispatch ----------------------------------------------------------
+    # `--context-fill-threshold` / `--plateau-window` / `--resume-anyway` are
+    # loop-mode brakes; they're ignored when the effective driver is `goal` (the
+    # /goal primitive owns continuation). `--max-iterations` / `--cost-ceiling`
+    # carry over as the outer-call `--max-turns` / `--max-budget-usd` caps.
+    if effective_driver == DRIVER_GOAL:
+        loop_only = [
+            name for name, val in (
+                ("--context-fill-threshold", args.context_fill_threshold),
+                ("--plateau-window", args.plateau_window),
+                ("--plateau-noise-floor", args.plateau_noise_floor),
+                ("--resume-anyway", args.resume_anyway or None),
+            ) if val is not None
+        ]
+        if loop_only:
+            sys.stderr.write(
+                f"loop: {', '.join(loop_only)} {'is' if len(loop_only) == 1 else 'are'} "
+                f"a loop-mode brake and {'is' if len(loop_only) == 1 else 'are'} ignored "
+                f"under --driver goal (the /goal primitive owns continuation).\n"
+            )
+        return run_goal_loop(
+            target,
+            prompt=args.prompt,
+            max_iterations=args.max_iterations,
+            cost_ceiling=args.cost_ceiling,
+            resume_run_id=args.resume,
+            allow_dirty=args.allow_dirty,
+        )
     return run_loop(
-        args.target.resolve(),
+        target,
         prompt=args.prompt,
         max_iterations=args.max_iterations,
         cost_ceiling=args.cost_ceiling,
@@ -1610,6 +2657,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         plateau_noise_floor=args.plateau_noise_floor,
         resume_run_id=args.resume,
         resume_anyway=args.resume_anyway,
+        allow_dirty=args.allow_dirty,
     )
 
 

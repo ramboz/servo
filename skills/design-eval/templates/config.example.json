@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "approval_status": "draft",
+  "app_url": "http://localhost:4173/",
+  "viewport": { "width": 392, "height": 812, "deviceScaleFactor": 2 },
+  "judge": { "model": "claude-sonnet-4-6", "transport": "api", "temperature": 0.6, "max_tokens": 1024 },
+  "samples": { "n": 4, "k": 1.0, "delta": 0.03 },
+  "threshold": 0.8,
+  "rubric": "Score, in [0,1], how faithfully the FIRST image (the implemented app screen) reproduces the SECOND image (the design reference): layout & section order, spacing & proportion, colour palette (accent, neutrals, semantic/tag colours), typography (families, weights, relative sizes), and component shapes (cards, pills, buttons, FAB). IGNORE device chrome (status bar, bezel, home indicator), dynamic content values (specific times, dates, item names), and exact pixel positions. 1.0 = visually indistinguishable in design intent; 0.5 = right structure, wrong styling; 0.0 = unrelated.",
+  "screens": [
+    {
+      "id": "home",
+      "reference": "refs/home.png",
+      "referenceSource": {
+        "file": "docs/designs/design_v1.0/food-log.dc.html",
+        "selector": "[data-screen-label=\"Home\"]",
+        "crop": { "top": 47, "right": 9, "bottom": 33, "left": 9 },
+        "settleMs": 2500
+      },
+      "setup": "setups/home.mjs",
+      "weight": 1.0
+    },
+    {
+      "id": "settings",
+      "reference": "refs/settings.png",
+      "referenceSource": {
+        "file": "docs/designs/design_v1.0/food-log.dc.html",
+        "selector": "[data-screen-label=\"Settings\"]",
+        "crop": { "top": 47, "right": 9, "bottom": 33, "left": 9 },
+        "settleMs": 2500
+      },
+      "setup": "setups/settings.mjs",
+      "weight": 1.0
+    }
+  ]
+}

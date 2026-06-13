@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: [001, 002, 003]
 last_verified:
 ---
@@ -98,7 +98,9 @@ of a scheduled job stomping a human's continuity notes.
 
 ## Guardrails (servo's contract, applied to the heartbeat)
 
-The task framing names three; each maps onto an existing servo invariant.
+The task framing names three; each maps onto an existing servo invariant. A
+**fourth** falls out of the unattended posture and was added at plan review
+(2026-06-12).
 
 1. **Discovery is strictly read-only — it proposes, it does not execute.**
    The discovery pass enumerates signals via `gh` / `git` (and, optionally and
@@ -127,6 +129,26 @@ The task framing names three; each maps onto an existing servo invariant.
    No finding crosses from "proposed in the inbox" to "a running loop" without
    passing the oracle gate. This is the existing **refuse-on-missing-prerequisite**
    principle, applied at the heartbeat's one execution edge.
+
+4. **Discovered content is untrusted input — dispatch treats it as data, not
+   instructions.** Discovery is read-only, but the text it ingests — issue
+   titles/bodies, commit messages — is **attacker-influenceable** on any target
+   whose repo accepts outside contributions, and the heartbeat's whole point is
+   *unattended* dispatch (a human reviews the inbox *later*). So crafted issue or
+   commit text can reach a tool-using `claude -p` loop **before** any human sees
+   it. The blast radius is bounded — worktree isolation, the oracle gate on the
+   *final* score (a prompt-injected loop still has to pass the project's oracle to
+   "succeed"), and the whole-heartbeat ceiling — but the vector is real and shapes
+   two downstream contracts: **011-03's dispatch prompt must frame discovered text
+   as untrusted *data*, never instructions**, and **011-02's finding record may
+   carry a provenance/trust marker** so dispatch can treat issue/commit-sourced
+   findings differently from CI-sourced ones. This is the same threat-model honesty
+   the spec-oracle freeze layer already applies (see
+   [architecture.md](../../architecture.md) "Spec-oracle freeze & approval"
+   threat model) — name the adversary and bound the blast radius rather than
+   assume read-only discovery makes downstream dispatch safe. *(011-01 itself is
+   discovery-only — no dispatch, no LLM — so the vector is inert here; this
+   guardrail binds 011-02/011-03.)*
 
 ## Core model
 
@@ -225,11 +247,11 @@ capability.
 
 ## Slices
 
-- [011-01 — discover-and-inbox](slice-01-discover-and-inbox.md) — **implementation-ready**
-- 011-02 — triage-state-spine — *goals-only (see slice index); file authored when SPIDR-split*
-- 011-03 — candidate-dispatch — *goals-only*
-- 011-04 — heartbeat-cost-ceiling — *goals-only*
-- 011-05 — skill-and-dogfood — *goals-only*
+- [011-01 — discover-and-inbox](slice-01-discover-and-inbox.md) — **DONE**
+- [011-02 — triage-state-spine](slice-02-triage-state-spine.md) — *goals-only DRAFT stub; ACs pinned at SPIDR-split*
+- [011-03 — candidate-dispatch](slice-03-candidate-dispatch.md) — *goals-only DRAFT stub*
+- [011-04 — heartbeat-cost-ceiling](slice-04-heartbeat-cost-ceiling.md) — *goals-only DRAFT stub*
+- [011-05 — skill-and-dogfood](slice-05-skill-and-dogfood.md) — *goals-only DRAFT stub*
 
 ## Spec-level Definition of Done (forward-looking)
 
@@ -282,6 +304,15 @@ Two hard-to-reverse decisions this spec is likely to force (next free number is
   reviewable — perfect first-pass accuracy is not the bar (same posture as
   006-01's classifier). A model-assisted triage pass is a flagged extension
   behind the whole-heartbeat ceiling.
+- **What is a commit-derived finding?** A CI failure maps cleanly to "fix this"
+  and an open issue to "do this"; a *recent commit* maps to neither — it is
+  history, not a request. v1 enumerates recent commits as findings (011-01 AC1,
+  recorded `open`), but what makes one ever *actionable* — a revert? a commit
+  touching code with no test? a message carrying `TODO`/`FIXME`? — is unpinned.
+  Until 011-02 pins it (alongside "what makes a finding actionable?"),
+  commit-findings may be inbox noise; resolve the two together against the
+  spike's real output before 011-02's ACs are written. (Surfaced at plan review,
+  2026-06-12.)
 - **Finding fingerprint scheme.** What dedupes a CI failure across runs — the
   failing job name? the workflow + step? the error signature? Too coarse merges
   distinct failures; too fine re-surfaces the same one every heartbeat. Wants a
