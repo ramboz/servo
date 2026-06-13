@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/ramboz/servo/compare/v0.3.0...v0.4.0) (2026-06-13)
+
+
+### Features
+
+* **agent-loop:** detach + Routine-ready unattended runs (003-08, closes ADR-0008 rebase) ([4b77a1d](https://github.com/ramboz/servo/commit/4b77a1de96dfdab6591c1a1a0e857c7be8ce89b1))
+
 ## [0.3.0](https://github.com/ramboz/servo/compare/v0.2.1...v0.3.0) (2026-06-13)
 
 
