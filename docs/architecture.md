@@ -146,7 +146,7 @@ Current state: both runner and judge are **placeholders**. Full prompts are auth
 Runtime and spec-overlay skills produce these at the *target* project
 (not in servo's plugin repo):
 
-- `<target>/.servo/runs/<run-id>/state.json` — agent-loop per-run scoreboard (slice 003-04, [ADR-0004](decisions/adr-0004-session-state-file-format.md)). Atomically rewritten after every iteration via `.tmp + os.replace`. Schema: `state_schema_version`, `run_id`, `started_at`, `last_updated_at`, `target_path`, `prompt`, `current_session_id` (the Claude Code session id `claude -p --resume` consumes), `iteration_count`, `max_iterations`, `cost_ceiling_usd`, `cumulative_cost_usd`, `cumulative_input_tokens`, `cumulative_output_tokens`, `context_fill_threshold`, `last_context_fill_ratio`, `oracle_score_history`, `last_terminal_reason`, `claude_version`. Run-id shape: `YYYYMMDDTHHMMSS-XXXX` (15-char timestamp + 4-hex suffix); collision retry is bounded at 3 attempts.
+- `<target>/.servo/runs/<run-id>/state.json` — agent-loop per-run scoreboard (slice 003-04, [ADR-0004](decisions/adr-0004-session-state-file-format.md)). Atomically rewritten after every iteration via `.tmp + os.replace`. Schema: `state_schema_version`, `run_id`, `started_at`, `last_updated_at`, `target_path`, `prompt`, `current_session_id` (the Claude Code session id `claude -p --resume` consumes), `iteration_count`, `max_iterations`, `cost_ceiling_usd`, `cumulative_cost_usd`, `cumulative_input_tokens`, `cumulative_output_tokens`, `context_fill_threshold`, `last_context_fill_ratio`, `oracle_score_history`, `last_terminal_reason`, `claude_version`. Run-id shape: `YYYYMMDDTHHMMSS-XXXX` (15-char timestamp + 4-hex suffix); collision retry is bounded at 3 attempts. A `--background` detached run (slice 003-08) carries `detached: true` and writes the detached child's stdout/stderr to a sibling `background.log`; the parent pre-allocates the run-id and seeds `state.json`, the child rewrites it as it progresses.
 - `<target>/.servo/hooks/meta-judge.sh` — the **meta-judge** `Stop` hook (spec 004, [ADR-0006](decisions/adr-0006-meta-judge-output-contract.md)). `/servo:oracle-hook install` copies it from `templates/meta-judge.sh.template` and registers a `hooks.Stop[]` entry in `<target>/.claude/settings.json` that points at it via `$CLAUDE_PROJECT_DIR`. **Install model:** `settings.json` is backed up to `settings.json.servo-bak` before the first mutation; the merge is non-clobbering (other top-level keys, hook events, and Stop entries survive); `uninstall` removes only servo's marker-matched entry and **leaves the script on disk** (it may be customized); `status` reports `installed` / `not_installed` / `inconsistent`; the closed exit contract is `0` ok / `2` env-error (no exit 1). **Decision table (per turn-stop):** `stop_hook_active` true (or indeterminate stdin) → silent; oracle `pass` → silent; oracle `below_threshold` → **block** with a composite/threshold (+`missing`) hint; oracle `env_error` / uninvocable gate → **fail open** with a `systemMessage` to the user (never a block, so it can't trap a live session) — nudging at most once per stop sequence. Block (v1 default) vs `additionalContext` soft-context is a project-owned knob; the project owns the script after install. The interactive inverse of `/servo:agent-loop`'s fail-closed brakes.
 - `<target>/.claude/skills/servo-quality-gate/gate.py` — a **vendored, clone-portable copy** of servo's `gate.py`, written by the agent-loop driver's preflight (slice 003-07, [ADR-0008](decisions/adr-0008-loop-on-autonomy-primitives.md) V4). The goal/Routine driver runs the oracle through this relative path (and the meta-judge install — [`hook.py:_resolve_gate_py`](../skills/oracle-hook/hook.py) — already prefers it), so the oracle resolves *relative to `$CLAUDE_PROJECT_DIR`* after a clone instead of baking servo's absolute install path (which would fail open in a clone). Vendoring is idempotent — a byte-identical copy is left untouched; a stale or absent copy is (re)written. The loop (external-driver) path keeps using servo's own in-repo `gate.py`. (Untracked in the target by design — see the dirty-tree note below.)
 - `<target>/.servo/races/<race-id>/` — per-variant scores and metadata from `/servo:variant-race`.
@@ -246,6 +246,48 @@ Since the ADR-0008 rebase the driver has three modes. `--driver auto` (the **def
 | `loop` (explicit) | → loop driver | → loop driver |
 
 The downgrade is **fail-safe** (the always-works external driver), and the refusal is **fail-closed** (an explicit `--driver goal` never silently degrades) — both consistent with spec 003's "brakes wired in from day one" posture. The loop driver remains the **portable cross-host layer** ([ADR-0008](decisions/adr-0008-loop-on-autonomy-primitives.md) Assumption 7), demoted from default to one of two first-class paths.
+
+### Execution matrix by host (spec 003-08)
+
+The host-scope *routing* above picks **which driver** runs. This matrix records the
+complementary contract — **what enforces the oracle** in each execution context.
+Servo's deterministic guardrail + oracle layer is the constant; the mechanism that
+carries it depends on how the host runs the agent:
+
+| Host / execution context | Continuation owner | servo's authority mechanism | Spec |
+|---|---|---|---|
+| **Claude Code, interactive** | human (+ optional `/goal`) | meta-judge `Stop` hook (backstop) + `gate.py` | 004 / [ADR-0006](decisions/adr-0006-meta-judge-output-contract.md) |
+| **Claude Code, headless `claude -p`** | `/goal` (goal driver) | hard caps on the outer call + a **final `gate.py`** run | 003-06 |
+| **Routine / continuous invocation** | `/goal` (one continuous session) | **`gate.py`** — loop-body run each turn + (local driver) a final run; meta-judge **moot** (no per-turn `Stop`) | 003-08 |
+| **Hook-restricted / non-Claude host** (e.g. Codex) | external `loop.py` driver | servo's hand-rolled loop — every brake servo-side, no hooks, no `/goal` | 003-01..05 |
+
+Two load-bearing [ADR-0008](decisions/adr-0008-loop-on-autonomy-primitives.md) V4
+findings fix the bottom two rows:
+
+- **In a Routine the meta-judge is moot.** A Routine runs the task as a *single
+  continuous agent invocation* — no per-turn `Stop` event — so the project
+  meta-judge `Stop` hook never fires there, *independent of the cloud's hook
+  policy*. The deterministic authority is `gate.py` (the loop-body run each turn +,
+  for the local goal driver, a final authoritative run), never the `Stop` hook.
+  The meta-judge stays the **interactive-only** backstop.
+- **Scheduled reruns need a clean baseline.** A scheduled run reusing a persistent
+  tree can inherit a dirty working tree from a prior run → a spurious immediate
+  pass. Each scheduled run must start from a **clean committed baseline** — a
+  **fresh clone**, or `git reset --hard` to the committed state — and servo's
+  **refuse-on-dirty-tree** brake (003-07) enforces this fail-closed (`--background`
+  runs the check *before* detaching). Routines are **vendored-`gate.py`-portable**
+  (003-07): the oracle resolves relative to `$CLAUDE_PROJECT_DIR` after the cloud
+  clone.
+
+**Detached + scheduled surfaces (003-08).** `loop.py --background` launches the goal
+driver in a new OS session (`start_new_session`) — the headless analog of the
+*interactive* `/background` agent-view action (there is **no** headless
+`--background` flag on `claude -p`, verified on 2.1.175). The run-id + `state.json`
+are the inspect/await surface; the detached child's output goes to
+`<target>/.servo/runs/<run-id>/background.log`. **Routines** themselves are created
+from the web/desktop app, not the CLI (no `routine` / `schedule` subcommand);
+`loop.py --emit-routine-prompt` makes a target Routine-ready (vendors `gate.py`) and
+emits the paste-ready `/goal` prompt with a portable relative gate command.
 
 ## Decisions
 

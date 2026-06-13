@@ -5762,5 +5762,237 @@ class PlateauNoiseFloorLoopTests(unittest.TestCase):
         self.assertFalse(self.counter.exists())
 
 
+# ===========================================================================
+# Slice 003-08 — AC1: `--background` detached run mode
+# ===========================================================================
+
+
+def _await_terminal_state(target: Path, timeout: float = 30.0) -> dict:
+    """Poll the single detached run's state.json until it carries a terminal_reason.
+
+    A poll-until-condition (NOT a fixed sleep): the parent seeds state.json with
+    `terminal_reason=None`, the detached child overwrites it as it runs, and the
+    child's finalize writes the real terminal_reason. Bounded by `timeout` so a
+    wedged child fails loudly instead of hanging.
+    """
+    import time
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        states = list(target.glob(".servo/runs/*/state.json"))
+        if states:
+            try:
+                data = json.loads(states[0].read_text())
+            except (json.JSONDecodeError, OSError):
+                data = {}
+            if data.get("terminal_reason"):
+                return data
+        time.sleep(0.1)
+    raise AssertionError(
+        f"detached run under {target} did not reach a terminal_reason within {timeout}s"
+    )
+
+
+class BackgroundArgvUnitTests(unittest.TestCase):
+    """Pure helpers behind `--background`: child argv + the detach summary shape."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+
+    def test_child_argv_core_shape(self):
+        argv = self.m._build_detached_child_argv(
+            Path("/tmp/t"), "RID", prompt="do it",
+            max_iterations=None, cost_ceiling=None,
+        )
+        # Re-execs THIS file as the goal driver, into the parent's run-id, with
+        # --allow-dirty (the parent already cleared the tree before detaching).
+        self.assertEqual(argv[0], sys.executable)
+        self.assertEqual(argv[1], str(self.m._LOOP_PY))
+        self.assertEqual(argv[2], "/tmp/t")
+        self.assertEqual(argv[argv.index("--driver") + 1], "goal")
+        self.assertIn("--allow-dirty", argv)
+        self.assertEqual(argv[argv.index("--_detached-run-id") + 1], "RID")
+        self.assertEqual(argv[argv.index("--prompt") + 1], "do it")
+        # Caps omitted when unset → the child applies the parent's computed defaults.
+        self.assertNotIn("--max-iterations", argv)
+        self.assertNotIn("--cost-ceiling", argv)
+
+    def test_child_argv_forwards_caps_when_set(self):
+        argv = self.m._build_detached_child_argv(
+            Path("/tmp/t"), "RID", prompt="p", max_iterations=4, cost_ceiling=0.5,
+        )
+        self.assertEqual(argv[argv.index("--max-iterations") + 1], "4")
+        self.assertEqual(argv[argv.index("--cost-ceiling") + 1], "0.5")
+
+    def test_detach_summary_shape(self):
+        s = self.m._detach_summary(
+            run_id="RID", pid=4321, state_path=Path("/t/state.json"),
+            log_path=Path("/t/bg.log"), cost_ceiling=2.0, max_turns=5,
+        )
+        self.assertTrue(s["detached"])
+        self.assertEqual(s["terminal_reason"], self.m.REASON_DETACHED)
+        self.assertEqual(s["driver"], "goal")
+        self.assertEqual(s["run_id"], "RID")
+        self.assertEqual(s["pid"], 4321)
+        self.assertEqual(s["state_path"], "/t/state.json")
+        self.assertEqual(s["log_path"], "/t/bg.log")
+
+
+class BackgroundDispatchTests(_GoalTargetMixin, unittest.TestCase):
+    """End-to-end `--background`: detach, return the run-id, child runs to verdict (AC1)."""
+
+    def test_launches_detached_and_completes(self):
+        self._setup_target(_passing_oracle())
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(assistant_text=GOAL_PASS_SENTINEL))
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        # The parent returns immediately with the detach summary (run continues
+        # in the child).
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = self._summary(result)
+        self.assertTrue(summary["detached"])
+        self.assertEqual(summary["terminal_reason"], "detached")
+        self.assertIsInstance(summary["pid"], int)
+        run_id = summary["run_id"]
+        self.assertTrue(run_id)
+        # The detached child runs the real goal loop to an authoritative verdict.
+        state = _await_terminal_state(self.target)
+        self.assertTrue(state["detached"])
+        self.assertEqual(state["terminal_reason"], "oracle_pass")
+        self.assertEqual(state["run_id"], run_id)
+        # Child output went to the run-dir log, not the parent's stdout.
+        self.assertTrue(
+            (self.target / ".servo" / "runs" / run_id / "background.log").is_file()
+        )
+
+    def test_refuses_on_dirty_tree_before_detaching(self):
+        # AC4: a scheduled rerun must start from a clean baseline — the dirty-tree
+        # brake runs BEFORE any detach, so no child is spawned against dirty state.
+        self._setup_target(_passing_oracle())
+        (self.target / "tracked.txt").write_text("baseline\n")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+        (self.target / "tracked.txt").write_text("uncommitted\n")
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(assistant_text=GOAL_PASS_SENTINEL))
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "dirty_tree")
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])  # no detach
+
+    def test_refuses_when_target_not_scaffolded(self):
+        # Preflight refuses synchronously (visible to the user), not buried in the
+        # detached child's log.
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-bg-")
+        self.target = Path(self.tmpdir) / "bare"
+        self.target.mkdir()
+        self.bindir = Path(self.tmpdir) / "bin"
+        self.bindir.mkdir()
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "manifest_missing")
+
+    def test_refuses_on_unsupported_host(self):
+        # --background needs the goal driver; an old claude can't run /goal, so it
+        # refuses rather than silently downgrading to a non-detachable loop run.
+        self._setup_target(_passing_oracle())
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="1.0.0")
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "goal_unavailable")
+        self.assertIn("--background needs the goal driver", result.stderr)
+
+
+class BackgroundFlagConflictTests(unittest.TestCase):
+    """`--background`'s argparse-level guards (no run; rc=2 straight from argparse)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-bgflag-")
+        self.target = Path(self.tmpdir) / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_background_with_loop_driver_rejected(self):
+        result = _run_raw(self.target, "--background", "--driver", "loop", "--prompt", "x")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--background requires the goal driver", result.stderr)
+
+    def test_background_with_resume_rejected(self):
+        result = _run_raw(self.target, "--background", "--resume", "RID")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--background does not support --resume", result.stderr)
+
+
+# ===========================================================================
+# Slice 003-08 — AC2/AC3: `--emit-routine-prompt` (Routine-ready target)
+# ===========================================================================
+
+
+class EmitRoutinePromptTests(_GoalTargetMixin, unittest.TestCase):
+    """`--emit-routine-prompt` vendors gate.py + prints the paste-ready /goal prompt."""
+
+    def test_emits_portable_routine_prompt_and_vendors_gate(self):
+        self._setup_target(_passing_oracle())
+        result = _run_raw(self.target, "--emit-routine-prompt", "--prompt", "fix the tests")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        out = result.stdout
+        # The /goal loop-body shape (AC2): a /goal condition that fact-checks the
+        # sentinel, the seed task, and a per-turn gate run.
+        self.assertIn("/goal", out)
+        self.assertIn("SERVO_ORACLE_VERDICT", out)
+        self.assertIn("fix the tests", out)
+        # PORTABLE gate command — relative vendored path + bare `python3` — because
+        # the Routine runs in a cloud clone, not on this host.
+        self.assertIn("python3 .claude/skills/servo-quality-gate/gate.py . --json", out)
+        self.assertNotIn(sys.executable, out)  # no absolute local interpreter leaks
+        # AC3: states gate.py is the authority + the meta-judge is moot in a Routine.
+        self.assertIn("authority", out.lower())
+        self.assertIn("meta-judge", out.lower())
+        # The target is now Routine-ready: the clone-portable gate.py is vendored.
+        self.assertTrue(
+            (self.target / ".claude" / "skills" / "servo-quality-gate" / "gate.py").is_file()
+        )
+        # Emit runs nothing — no run dir created.
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+    def test_emitted_prompt_cannot_self_satisfy(self):
+        # The emitted prompt (and any echo of it) must not trip the strict pass
+        # predicate — bare cue + placeholders only (the AC2 bare-substring guard).
+        self._setup_target(_passing_oracle())
+        result = _run_raw(self.target, "--emit-routine-prompt", "--prompt", "do the thing")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertFalse(_load_loop_module()._scan_pass_sentinel(result.stdout))
+
+    def test_refuses_when_target_not_scaffolded(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-emit-")
+        self.target = Path(self.tmpdir) / "bare"
+        self.target.mkdir()
+        self.bindir = Path(self.tmpdir) / "bin"
+        self.bindir.mkdir()
+        result = _run_raw(self.target, "--emit-routine-prompt", "--prompt", "x")
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertIn("install.json not found", result.stderr)
+
+    def test_requires_prompt(self):
+        self._setup_target(_passing_oracle())
+        result = _run_raw(self.target, "--emit-routine-prompt")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--prompt is required", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

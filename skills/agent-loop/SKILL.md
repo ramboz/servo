@@ -20,6 +20,11 @@ description: |
       servo keeps the oracle + guardrail layer (caps on the outer call, final
       `gate.py` verdict). `--driver auto` (default) probes the host and picks
       goal-or-loop; `--driver loop` forces the portable hand-rolled path.
+    - "run it detached / in the background / unattended" / "--background" —
+      launch the goal loop detached so it survives terminal close (slice 003-08).
+    - "set up a scheduled run" / "make this Routine-ready" /
+      "--emit-routine-prompt" — vendor gate.py + print the /goal prompt to paste
+      into a scheduled Routine (web/desktop; gate.py is the in-Routine authority).
 
   Do NOT fire on:
 
@@ -124,6 +129,44 @@ It prints the chosen driver, `/goal` eligibility, every settings layer inspected
 
 Before a fresh run, if `<target>` is a git repo with **uncommitted changes to tracked files**, the driver refuses (rc=2 / `terminal_reason=dirty_tree`; the breadcrumb names the dirty paths) — a scheduled / unattended run could otherwise score leftover state as a spurious immediate pass (ADR-0008 V4). On by default. `--allow-dirty` opts out for an intentional dirty run; a non-git target skips the check; untracked files don't count; and a loop-mode `--resume` skips it (its tree is legitimately mid-flight). 
 
+## Detached runs & scheduled Routines (slice 003-08)
+
+Two surfaces let the guardrailed goal loop run **unattended** — no human at the terminal.
+
+### `loop.py <target> --background --prompt "<text>"` — detached run
+
+Launches the goal-driven run **detached, in a new OS session**, so a long unattended run survives the terminal closing, then returns immediately with the run-id:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-loop/loop.py" <target> --background --prompt "fix the failing tests"
+```
+
+`/background` (alias `/bg`) is an **interactive** agent-view action — it detaches a TUI session — and there is **no headless `--background` flag** on `claude -p` (verified on 2.1.175). So servo detaches at the OS level: it re-execs itself as the goal driver under `start_new_session` (POSIX `setsid`), redirects the child's output to `<target>/.servo/runs/<run-id>/background.log`, and hands you the run-id. Inspect or await the run through its `state.json` (003-04) — the detached child rewrites it atomically as it progresses:
+
+```bash
+cat <target>/.servo/runs/<run-id>/state.json   # "detached": true + the evolving verdict
+```
+
+The detached run carries **every guardrail unchanged** — the hard caps ride the child's outer `claude -p`, the final `gate.py` is the authority (it's the same goal driver, just re-exec'd). Preflight refusals (unscaffolded target, **dirty tree**, un-vendorable gate) are checked **synchronously, before detaching**, so they surface to you instead of being buried in the log. `--background` **requires the goal driver**: on a host that can't run `/goal` it refuses (like an explicit `--driver goal` would) rather than silently downgrading to a non-detachable loop run; `--driver loop --background` is rejected up front (detach a foreground loop with your shell's `nohup`/`&`, or use `--resume`). The parent prints one summary line (`"detached": true`, `terminal_reason: "detached"`, the `run_id`, child `pid`, and the `state_path` / `log_path`) and exits 0 — `detached` means *launched*, not finished.
+
+### `loop.py <target> --emit-routine-prompt --prompt "<text>"` — Routine-ready target
+
+A **Routine** (a scheduled, unattended run on Anthropic-managed cloud infra) is created from the web / desktop app — there is **no `routine` / `schedule` CLI subcommand** (2.1.175). So servo can't *create* a Routine; it makes the target **Routine-ready** and prints the exact prompt to paste:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-loop/loop.py" <target> --emit-routine-prompt --prompt "fix the failing tests"
+```
+
+It (1) vendors the **clone-portable `gate.py`** (003-07) so the oracle resolves relative to `$CLAUDE_PROJECT_DIR` after the Routine clones the repo into the cloud, and (2) prints the canonical `/goal` loop-body prompt — the same shape the live goal driver composes, but with a **portable** gate command (`python3 .claude/skills/servo-quality-gate/gate.py . --json`, not this host's absolute interpreter). Paste it into a Routine pointed at the repo, grant Bash + Edit/Write, and schedule it. It runs nothing locally and exits 0; it does **not** gate on this host's `/goal` support (the Routine runs in the cloud).
+
+### `gate.py` is the authority in a Routine (the meta-judge is moot)
+
+A Routine executes the task as a **single continuous agent invocation** — no per-turn `Stop` event — so servo's meta-judge `Stop` hook (spec 004) **never fires** there (ADR-0008 V4), *independent of the cloud's hook policy*. servo's deterministic authority in a continuous-invocation context is therefore **`gate.py`**: the loop body runs `servo:quality-gate` every turn and prints the `SERVO_ORACLE_VERDICT` sentinel, the `/goal` condition only **fact-checks** it, and (for the local goal driver) a **final authoritative `gate.py` run** is the verdict. The run does **not** depend on the meta-judge firing. `oracle.sh` stays the sole authority for what "pass" means (ADR-0002); the meta-judge is the **interactive-only** backstop (it fires on turn-mediated `claude -p` / interactive stops, never in a Routine).
+
+### Clean baseline per scheduled run
+
+A scheduled rerun must start from a **clean committed baseline** — a **fresh clone**, or `git reset --hard` to the committed state — so leftover state from a prior run can't score as a spurious immediate pass (ADR-0008 V4 saw exactly this). servo's **refuse-on-dirty-tree** brake (003-07) enforces this fail-closed: `--background` runs the dirty check *before* detaching, and any fresh goal/loop run refuses (`rc=2 / dirty_tree`) against uncommitted tracked changes unless you pass `--allow-dirty`.
+
 ## Output shape
 
 One per-iteration JSON line on stdout per completed iteration (plus one final summary line):
@@ -151,6 +194,8 @@ Final summary line carries `terminal_reason` (one of `oracle_passed`, `max_itera
 | `--plateau-noise-floor N` | Frozen noise floor δ (ADR-0005 clause 4): composite gains smaller than N read as "flat" for plateau detection, so a wobbling non-deterministic eval component can neither fake progress nor fake a plateau. Default 0.0 (any strict gain counts as improvement). Set to a frozen eval's δ when an eval component contributes to the composite. Loop-mode brake — ignored under `--driver goal`. |
 | `--allow-dirty` | Bypass the refuse-on-dirty-tree preflight (slice 003-07). By default a fresh run against a git target with uncommitted changes to tracked files refuses (rc=2 / `dirty_tree`). Non-git targets skip the check regardless. |
 | `--explain-routing` | Print the host-scope routing verdict for `<target>` (chosen driver, `/goal` eligibility, settings layers, forcing layer) and exit 0. Read-only — needs no `--prompt`, runs nothing. |
+| `--background` | Launch the goal-driven run **detached** in a new OS session (slice 003-08) so it survives the terminal closing; prints the run-id + state/log paths and returns 0. Requires the goal driver (refuses on a host that can't run `/goal`; rejected with `--driver loop`). Inspect via `<target>/.servo/runs/<run-id>/state.json`. |
+| `--emit-routine-prompt` | Make `<target>` Routine-ready — vendor the clone-portable `gate.py` (003-07) — and print the paste-ready `/goal` Routine prompt (portable `python3` + relative gate path), then exit 0 (slice 003-08). Requires `--prompt`; runs no loop. |
 | `--resume <run-id>` | Resume a prior run. Refuses with rc=2 on missing / schema-mismatched / claude-version-mismatched state (escape via `--resume-anyway`). |
 | `--resume-anyway` | Bypass the schema/version mismatch refusals on resume. Risky — silent mis-decoding may corrupt the run. Does not bypass missing-state refusal. |
 
@@ -201,6 +246,8 @@ Goal mode emits a single summary line (`"driver": "goal"`, no per-iteration line
 | `goal_resume_unsupported` | 2 | `--resume` of a goal-driven run (out of scope until 003-08) | Start a fresh `--driver goal` run, or use `--driver loop` for resumable runs. |
 | `dirty_tree` | 2 | Preflight: the git target has uncommitted changes to tracked files (slice 003-07) | Commit/stash, or pass `--allow-dirty` for an intentional dirty run. The breadcrumb names the paths. |
 | `gate_vendor_failed` | 2 | Couldn't vendor the clone-portable `gate.py` into the target (e.g. `.claude` is a non-directory, or perms block the write) | Surface the breadcrumb; fix the target's `.claude/` path/permissions. |
+| `detached` | 0 | **Parent of a `--background` launch** (slice 003-08): the run was launched detached — this is not a finished outcome. | None — inspect `state.json` for the real verdict as the detached child progresses. |
+| `detach_failed` | 2 | `--background` couldn't spawn the detached child (e.g. the run-dir `background.log` can't be opened) | Surface the breadcrumb; check the target's `.servo/runs/` path/permissions. |
 | `claude_invocation_failed` / `gate_invocation_failed` | 2 | Same as loop mode (binary/JSON failure; final gate unparseable) | Surface the stderr breadcrumb. |
 
 ## Examples

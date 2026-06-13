@@ -17,6 +17,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_MD = REPO_ROOT / "skills" / "agent-loop" / "SKILL.md"
+ARCH_MD = REPO_ROOT / "docs" / "architecture.md"
 
 
 def _skill_text() -> str:
@@ -271,6 +272,59 @@ class OutputShapeTests(unittest.TestCase):
     def test_schema_version_documented(self):
         # The loop's schema_version is the forward-compat contract.
         self.assertIn("schema_version", self.text)
+
+
+# ---------------------------------------------------------------------------
+# Slice 003-08 — detach + Routine-ready + gate.py-authority + host matrix (DoD)
+# ---------------------------------------------------------------------------
+
+
+class Slice003_08SurfaceTests(unittest.TestCase):
+    """SKILL.md documents `--background` + the Routine-ready / scheduled-run modes
+    + the gate.py-authority contract; architecture.md carries the execution matrix
+    + the clean-baseline expectation (003-08 DoD; AC3/AC4/AC5)."""
+
+    def setUp(self):
+        self.skill = _skill_text()
+        self.skill_lower = self.skill.lower()
+        self.assertTrue(ARCH_MD.exists(), f"architecture.md missing at {ARCH_MD}")
+        self.arch_lower = ARCH_MD.read_text().lower()
+
+    def test_background_flag_documented(self):
+        self.assertIn("--background", self.skill)
+
+    def test_emit_routine_prompt_documented(self):
+        self.assertIn("--emit-routine-prompt", self.skill)
+
+    def test_routine_run_mode_documented(self):
+        self.assertIn("routine", self.skill_lower)
+
+    def test_detached_terminal_reasons_documented(self):
+        self.assertIn("detached", self.skill_lower)
+        self.assertIn("detach_failed", self.skill)
+
+    def test_gate_authority_contract_documented(self):
+        # AC3: in a Routine / continuous invocation gate.py is the authority and
+        # the meta-judge Stop hook is moot.
+        self.assertIn("authority", self.skill_lower)
+        self.assertTrue(
+            "meta-judge" in self.skill_lower and "moot" in self.skill_lower,
+            "SKILL.md should state the meta-judge is moot in a Routine (gate.py is authority)",
+        )
+
+    def test_architecture_execution_matrix_present(self):
+        # AC5: the full host-scope execution matrix (the four host rows).
+        for token in ("interactive", "headless", "routine", "non-claude"):
+            self.assertIn(token, self.arch_lower, f"execution matrix missing {token!r} row")
+
+    def test_architecture_clean_baseline_documented(self):
+        # AC4: the clean-baseline / git-reset / fresh-clone expectation for runs.
+        self.assertTrue(
+            "git reset" in self.arch_lower
+            or "fresh clone" in self.arch_lower
+            or "fresh-clone" in self.arch_lower,
+            "architecture.md should document the clean-baseline expectation for scheduled runs",
+        )
 
 
 if __name__ == "__main__":

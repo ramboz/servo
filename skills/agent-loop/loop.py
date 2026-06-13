@@ -195,6 +195,10 @@ REASON_DIRTY_TREE = "dirty_tree"
 # Slice 003-04 state-file constants (per ADR-0004).
 STATE_SCHEMA_VERSION = 1
 STATE_FILE_NAME = "state.json"
+
+# Slice 003-08: the detached `--background` child's stdout/stderr land here, a
+# sibling of `state.json` in the run dir.
+BACKGROUND_LOG_NAME = "background.log"
 STATE_TMP_SUFFIX = ".tmp"  # written then os.replace'd for atomicity
 RUN_ID_MAX_ATTEMPTS = 3  # initial + 2 retries before refusing
 
@@ -213,6 +217,11 @@ EXIT_INTERRUPTED = 130
 # gate.py lives at a sibling skill path. Resolve once at import time so a
 # repeated `subprocess.run` cost stays trivial.
 GATE_PATH = Path(__file__).resolve().parent.parent / "quality-gate" / "gate.py"
+
+# This file's own path. Slice 003-08 re-execs it as the detached child of a
+# `--background` launch: `sys.executable <_LOOP_PY> <target> --driver goal …`
+# runs the goal loop in a new OS session (see `_build_detached_child_argv`).
+_LOOP_PY = Path(__file__).resolve()
 
 # Slice 003-07 (ADR-0008 V4): the clone-portable location for gate.py inside the
 # target. Spec 004's `hook.py` already PREFERS this relative path when baking the
@@ -293,6 +302,15 @@ REASON_GOAL_RESUME_UNSUPPORTED = "goal_resume_unsupported"
 # the write). Without a resolvable oracle the goal driver has no authority, so it
 # refuses rather than running unguarded.
 REASON_GATE_VENDOR_FAILED = "gate_vendor_failed"
+
+# Slice 003-08 (ADR-0008 rebase, detach-and-schedule): `--background` launches
+# the goal driver in a detached OS session so a long unattended run survives the
+# terminal closing. `detached` is the PARENT's provisional terminal reason — the
+# run continues in the child; the real outcome lands in `state.json` as the child
+# progresses. `detach_failed` is the fail-closed reason when the child can't be
+# spawned (e.g. the background log can't be opened).
+REASON_DETACHED = "detached"
+REASON_DETACH_FAILED = "detach_failed"
 
 # `/goal` refusal under hook restrictions (AC6 / ADR-0008 V3). When
 # `disableAllHooks` / `allowManagedHooksOnly` is set, `/goal` refuses verbatim
@@ -1933,13 +1951,22 @@ def run_loop(
 # ===========================================================================
 
 
-def _compose_goal_prompt(seed: str, gate_path: Path = GATE_PATH) -> str:
+def _compose_goal_prompt(
+    seed: str, gate_path: Path = GATE_PATH, *, python: Optional[str] = None
+) -> str:
     """Build the single `/goal`-driven prompt (AC1/AC2).
 
     `gate_path` (slice 003-07): the gate.py the in-transcript loop body is told
     to run. `run_goal_loop` passes the target's *vendored* copy so the agent's
     every-turn gate run and the driver's authoritative final run resolve the same
     clone-portable path.
+
+    `python` (slice 003-08): the interpreter token in the gate command. Defaults
+    to this host's `sys.executable` for a live `claude -p` run (so the agent's
+    in-transcript gate run shares the interpreter of the authoritative
+    `_invoke_gate`). The Routine emitter (`_emit_routine_prompt`) overrides it to
+    a portable `python3` + a *relative* `gate_path`, because that prompt runs in a
+    cloud clone where this host's absolute interpreter path is meaningless.
 
     Shape: a `/goal` completion condition that only FACT-CHECKS the printed
     pass sentinel, then the user's seed task, then a per-turn loop-body
@@ -1952,13 +1979,14 @@ def _compose_goal_prompt(seed: str, gate_path: Path = GATE_PATH) -> str:
     the `/goal` line carries only the bare `SENTINEL_PASS_BARE` (no tail), so
     neither the prompt nor its echo can satisfy `_SENTINEL_RE`'s pass predicate.
 
-    The gate command names the SAME interpreter the driver's authoritative
-    `_invoke_gate` uses (`sys.executable`) so the agent's in-transcript gate run
-    can't drift to a different `python3` than the final verdict's. The final
-    `gate.py` remains the only authority regardless; this just keeps the two
+    By default the gate command names the SAME interpreter the driver's
+    authoritative `_invoke_gate` uses (`sys.executable`) so the agent's
+    in-transcript gate run can't drift to a different `python3` than the final
+    verdict's (the Routine emitter overrides this via `python=` — see above). The
+    final `gate.py` remains the only authority regardless; this just keeps the two
     runs consistent.
     """
-    python = sys.executable or "python3"
+    python = python or sys.executable or "python3"
     return (
         f"/goal Continue working until the transcript contains a line "
         f"`{SENTINEL_PASS_BARE}` that was printed by the quality gate (step 3 "
@@ -2166,6 +2194,8 @@ def run_goal_loop(
     cost_ceiling: Optional[float],
     resume_run_id: Optional[str] = None,
     allow_dirty: bool = False,
+    run_id: Optional[str] = None,
+    detached: bool = False,
 ) -> int:
     """Drive a single `/goal`-continuation run with servo's guardrails wired
     through the OUTER `claude -p` invocation (slice 003-06 / ADR-0008).
@@ -2231,19 +2261,26 @@ def run_goal_loop(
             cost_ceiling=ceiling, max_turns=max_turns,
         )
 
-    # Allocate a run dir (same per-run-id isolation as loop mode; AC7).
-    run_dir, run_id, attempted = _create_run_dir(target)
-    if run_dir is None or run_id is None:
-        attempt_list = ", ".join(attempted) if attempted else "(none)"
-        return _refuse_goal(
-            run_id=(attempted[0] if attempted else _generate_preflight_run_id()),
-            reason=REASON_RUN_ID_COLLISION,
-            message=(
-                f"could not allocate a fresh run-id after {RUN_ID_MAX_ATTEMPTS} "
-                f"attempts; colliding ids: {attempt_list}"
-            ),
-            cost_ceiling=ceiling, max_turns=max_turns,
-        )
+    # Allocate a run dir (same per-run-id isolation as loop mode; AC7). A detached
+    # `--background` child (slice 003-08) is handed the parent's pre-allocated
+    # run-id via `run_id=` so the run-id the user saw at launch is the one the
+    # state file lives under — reuse that dir instead of allocating a second.
+    if run_id is not None:
+        run_dir = _runs_dir(target) / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        run_dir, run_id, attempted = _create_run_dir(target)
+        if run_dir is None or run_id is None:
+            attempt_list = ", ".join(attempted) if attempted else "(none)"
+            return _refuse_goal(
+                run_id=(attempted[0] if attempted else _generate_preflight_run_id()),
+                reason=REASON_RUN_ID_COLLISION,
+                message=(
+                    f"could not allocate a fresh run-id after {RUN_ID_MAX_ATTEMPTS} "
+                    f"attempts; colliding ids: {attempt_list}"
+                ),
+                cost_ceiling=ceiling, max_turns=max_turns,
+            )
 
     assert prompt is not None  # argparse enforces --prompt for goal fresh runs
     # Re-probes `claude --version` (auto/goal routing already read it via
@@ -2256,6 +2293,8 @@ def run_goal_loop(
         run_id=run_id, target=target, prompt=prompt,
         max_turns=max_turns, cost_ceiling=ceiling, claude_version=claude_version,
     )
+    if detached:
+        state["detached"] = True  # slice 003-08: a `--background` child run
     _atomic_write_state(state, state_path)
 
     def _finalize(terminal_reason, *, cumulative_cost_usd, final_oracle_status,
@@ -2395,6 +2434,242 @@ def run_goal_loop(
         num_turns=num_turns, transcript_showed_pass=transcript_showed_pass,
         exit_code=exit_code,
     )
+
+
+# ===========================================================================
+# Slice 003-08 — detach (`--background`) + Routine-ready target emit
+# ===========================================================================
+
+
+def _emit_routine_prompt(target: Path, seed: str) -> int:
+    """Make `target` Routine-ready + print the paste-ready prompt (AC2).
+
+    A Routine — a scheduled, unattended run on Anthropic-managed infra — is
+    created from the web / desktop app, NOT the CLI (claude 2.1.175 exposes no
+    `routine` / `schedule` subcommand — ADR-0008 V4 discovery). So servo can't
+    *create* a Routine; what it does is make the target Routine-ready and hand the
+    user the exact prompt to paste:
+
+    1. Vendor a clone-portable `gate.py` (003-07) so the oracle resolves relative
+       to `$CLAUDE_PROJECT_DIR` after the Routine clones the repo into the cloud.
+    2. Emit the canonical `/goal` loop-body prompt — same shape the live goal
+       driver composes — but with a PORTABLE gate command (`python3` + the
+       relative vendored path), because it runs in the cloud clone, not on this
+       host.
+
+    Read-only w.r.t. the run loop: it vendors + prints, then exits 0. It does NOT
+    gate on *this* host's `/goal` support — the Routine runs on a different host
+    (the cloud), whose policy is captured at run time, not here.
+    """
+    err = _target_preflight_error(target)
+    if err is not None:
+        _reason, message = err
+        sys.stderr.write(f"loop: {message}\n")
+        return EXIT_ENV_ERROR
+    vendored_gate, vendor_err = _ensure_vendored_gate(target)
+    if vendored_gate is None:
+        sys.stderr.write(f"loop: {vendor_err}\n")
+        return EXIT_ENV_ERROR
+
+    routine_prompt = _compose_goal_prompt(
+        seed, gate_path=VENDORED_GATE_REL, python="python3"
+    )
+    sys.stdout.write(
+        "# servo Routine-ready target\n"
+        f"# Vendored clone-portable gate.py at {VENDORED_GATE_REL} (commit it).\n"
+        "#\n"
+        "# Create a Routine (claude.ai/code or desktop) pointed at this repo,\n"
+        "# grant it Bash + Edit/Write, and paste the block below as the task.\n"
+        "# The loop body runs servo:quality-gate every turn and prints the\n"
+        "# SERVO_ORACLE_VERDICT sentinel; the /goal condition only fact-checks it.\n"
+        "# In a Routine (one continuous invocation, no per-turn Stop hook) gate.py\n"
+        "# is the authority — the meta-judge is moot (ADR-0008 V4). Start each\n"
+        "# scheduled run from a clean committed baseline (fresh clone, or\n"
+        "# `git reset --hard`) so leftover state can't score as a spurious pass.\n"
+        "# ----- paste from here -----\n"
+    )
+    sys.stdout.write(routine_prompt)
+    if not routine_prompt.endswith("\n"):
+        sys.stdout.write("\n")
+    return EXIT_OK
+
+
+def _build_detached_child_argv(
+    target: Path, run_id: str, *,
+    prompt: str, max_iterations: Optional[int], cost_ceiling: Optional[float],
+) -> list[str]:
+    """argv for the detached goal-driver child of a `--background` launch (AC1).
+
+    `--allow-dirty` is set unconditionally: the parent already ran the dirty-tree
+    preflight (or the user passed `--allow-dirty`), so the child must not re-refuse
+    on a tree the parent already accepted. `--_detached-run-id` hands the child the
+    parent's pre-allocated run-id so both processes share one run directory.
+    Resolved caps are forwarded only when explicitly set, so the child applies the
+    same defaults the parent computed.
+    """
+    argv = [
+        sys.executable, str(_LOOP_PY), str(target),
+        "--driver", DRIVER_GOAL, "--prompt", prompt,
+        "--allow-dirty", "--_detached-run-id", run_id,
+    ]
+    if max_iterations is not None:
+        argv += ["--max-iterations", str(max_iterations)]
+    if cost_ceiling is not None:
+        argv += ["--cost-ceiling", str(cost_ceiling)]
+    return argv
+
+
+def _spawn_detached(
+    argv: list[str], log_path: Path
+) -> tuple[Optional[int], Optional[str]]:
+    """Spawn `argv` detached in a new OS session; child output → `log_path` (AC1).
+
+    `start_new_session=True` (POSIX setsid) detaches the child from the parent's
+    controlling terminal and process group, so it survives the parent exiting or
+    the terminal closing — the headless equivalent of the interactive `/background`
+    agent-view action (there is no headless `--background` flag on `claude -p`;
+    probed on 2.1.175). stdin is `/dev/null`; stdout + stderr are redirected to the
+    run-dir log. Returns `(pid, None)`, or `(None, breadcrumb)` on failure — the
+    caller fails closed.
+    """
+    try:
+        log_f = open(log_path, "ab")
+    except OSError as exc:
+        return None, f"cannot open background log {log_path}: {exc}"
+    try:
+        proc = subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=log_f,
+            stderr=subprocess.STDOUT, start_new_session=True,
+        )
+    except OSError as exc:
+        return None, f"cannot spawn detached child: {exc}"
+    finally:
+        # The child has its own dup'd fd; closing the parent's copy is correct.
+        log_f.close()
+    return proc.pid, None
+
+
+def _detach_summary(
+    *, run_id: str, pid: int, state_path: Path, log_path: Path,
+    cost_ceiling: float, max_turns: int,
+) -> dict:
+    """Parent's one-line summary for a `--background` launch (AC1).
+
+    Distinct shape from `_goal_summary`: `detached: true` + the `pid` and the paths
+    to inspect. `terminal_reason=detached` means the run was *launched*, not
+    finished — its real outcome lands in `state.json` as the detached child runs.
+    """
+    return {
+        "driver": DRIVER_GOAL,
+        "detached": True,
+        "terminal_reason": REASON_DETACHED,
+        "run_id": run_id,
+        "pid": pid,
+        "state_path": str(state_path),
+        "log_path": str(log_path),
+        "cost_ceiling_usd": cost_ceiling,
+        "max_turns": max_turns,
+    }
+
+
+def run_goal_loop_background(
+    target: Path, *,
+    prompt: str,
+    max_iterations: Optional[int],
+    cost_ceiling: Optional[float],
+    allow_dirty: bool,
+) -> int:
+    """Launch the goal driver DETACHED so an unattended run survives terminal close (AC1).
+
+    The detached run carries every guardrail unchanged — the hard caps ride the
+    child's outer `claude -p`, the final `gate.py` is the authority (it's the same
+    `run_goal_loop`, just re-exec'd in a new OS session). The run-id + `state.json`
+    (003-04) are the inspect / reattach surface: this returns immediately after
+    printing the run-id; the user watches `state.json` for the outcome.
+
+    Preflight refusals (missing / unscaffolded target, dirty tree, un-vendorable
+    gate, run-id collision) are checked HERE, synchronously, so they surface to the
+    user instead of being buried in the detached child's log. AC4: the dirty-tree
+    brake runs before any detach, so a scheduled rerun can't inherit a dirty tree.
+
+    Precondition (caller's responsibility): `/goal` host-eligibility is verified by
+    `main()`'s routing (`--background` routes as goal-required) *before* this runs;
+    this function does not re-probe it. The detached child re-checks via its own
+    `run_goal_loop` and logs `goal_unavailable` as defense-in-depth.
+    """
+    ceiling = cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
+    max_turns = max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
+
+    err = _target_preflight_error(target)
+    if err is not None:
+        reason, message = err
+        return _refuse_goal(
+            run_id=_generate_preflight_run_id(), reason=reason, message=message,
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    if not allow_dirty:
+        dirty = _dirty_tree_paths(target)
+        if dirty:
+            return _refuse_goal(
+                run_id=_generate_preflight_run_id(),
+                reason=REASON_DIRTY_TREE, message=_dirty_tree_message(dirty),
+                cost_ceiling=ceiling, max_turns=max_turns,
+            )
+
+    vendored_gate, vendor_err = _ensure_vendored_gate(target)
+    if vendored_gate is None:
+        return _refuse_goal(
+            run_id=_generate_preflight_run_id(),
+            reason=REASON_GATE_VENDOR_FAILED, message=str(vendor_err),
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    run_dir, run_id, attempted = _create_run_dir(target)
+    if run_dir is None or run_id is None:
+        attempt_list = ", ".join(attempted) if attempted else "(none)"
+        return _refuse_goal(
+            run_id=(attempted[0] if attempted else _generate_preflight_run_id()),
+            reason=REASON_RUN_ID_COLLISION,
+            message=(
+                f"could not allocate a fresh run-id after {RUN_ID_MAX_ATTEMPTS} "
+                f"attempts; colliding ids: {attempt_list}"
+            ),
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    # Seed the state file so `state.json` exists the moment we hand back the
+    # run-id; the detached child overwrites it with its evolving state.
+    claude_version = _get_claude_version()
+    state_path = _state_path_for(target, run_id)
+    state = _build_goal_state(
+        run_id=run_id, target=target, prompt=prompt,
+        max_turns=max_turns, cost_ceiling=ceiling, claude_version=claude_version,
+    )
+    state["detached"] = True
+    _atomic_write_state(state, state_path)
+
+    log_path = run_dir / BACKGROUND_LOG_NAME
+    argv = _build_detached_child_argv(
+        target, run_id, prompt=prompt,
+        max_iterations=max_iterations, cost_ceiling=cost_ceiling,
+    )
+    pid, spawn_err = _spawn_detached(argv, log_path)
+    if pid is None:
+        return _refuse_goal(
+            run_id=run_id, reason=REASON_DETACH_FAILED, message=str(spawn_err),
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    sys.stderr.write(
+        f"loop: launched detached (pid {pid}, run-id {run_id}). "
+        f"Inspect with `cat {state_path}`; child log at {log_path}.\n"
+    )
+    _emit_json(_detach_summary(
+        run_id=run_id, pid=pid, state_path=state_path, log_path=log_path,
+        cost_ceiling=ceiling, max_turns=max_turns,
+    ))
+    return EXIT_OK
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -2559,6 +2834,41 @@ def main(argv: Optional[list[str]] = None) -> int:
             "Reads the settings hierarchy + `claude --version`; mutates nothing."
         ),
     )
+    parser.add_argument(
+        "--background",
+        dest="background",
+        action="store_true",
+        help=(
+            "Launch the goal-driven run DETACHED, in a new OS session, so a long "
+            "unattended run survives the terminal closing (slice 003-08). Prints "
+            "the run-id + state/log paths and returns immediately; inspect or "
+            "await the run via its `state.json` (003-04). Requires the goal driver "
+            "(it delegates continuation to /goal); on a host that can't run /goal "
+            "it refuses, like an explicit --driver goal would. The headless analog "
+            "of the interactive `/background` agent-view action."
+        ),
+    )
+    parser.add_argument(
+        "--emit-routine-prompt",
+        dest="emit_routine_prompt",
+        action="store_true",
+        help=(
+            "Make <target> Routine-ready and print the paste-ready /goal prompt, "
+            "then exit 0 (slice 003-08). Vendors a clone-portable gate.py (003-07) "
+            "and emits the canonical loop-body prompt — with a portable `python3` + "
+            "relative gate path — to paste into a scheduled Routine (created from "
+            "the web/desktop app; there is no `routine` CLI subcommand). Requires "
+            "--prompt (the task); runs no loop."
+        ),
+    )
+    parser.add_argument(
+        # Internal: the detached child of a `--background` launch runs the goal
+        # loop into this parent-allocated run-id (so both share one run dir).
+        "--_detached-run-id",
+        dest="detached_run_id",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
     target = args.target.resolve()
 
@@ -2586,25 +2896,65 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--plateau-window must be >= 0")
     if args.plateau_noise_floor is not None and args.plateau_noise_floor < 0:
         parser.error("--plateau-noise-floor must be >= 0")
+    # Slice 003-08 flag conflicts.
+    if args.emit_routine_prompt and args.background:
+        parser.error("--emit-routine-prompt and --background are mutually exclusive")
+    if args.emit_routine_prompt and args.resume is not None:
+        parser.error("--emit-routine-prompt emits a prompt and runs nothing; it "
+                     "does not take --resume")
+    if args.background and args.resume is not None:
+        parser.error("--background does not support --resume (a detached run is a "
+                     "fresh goal run; goal mode has no resume)")
+    if args.background and args.driver == DRIVER_LOOP:
+        parser.error("--background requires the goal driver (it delegates "
+                     "continuation to /goal); --driver loop runs in the "
+                     "foreground — detach it with your shell's nohup/&, or use "
+                     "--resume for unattended continuation")
+
+    # --emit-routine-prompt (slice 003-08 AC2): vendor a clone-portable gate.py
+    # and print the paste-ready Routine prompt, then exit 0. Handled before
+    # routing — the Routine runs on a different host (the cloud), so this host's
+    # /goal support is irrelevant to producing the artifact.
+    if args.emit_routine_prompt:
+        return _emit_routine_prompt(target, args.prompt)
+
+    # Detached child of a `--background` launch (slice 003-08 AC1): run the goal
+    # loop into the parent-allocated run-id, bypassing routing (the parent
+    # already verified host support before detaching).
+    if args.detached_run_id is not None:
+        return run_goal_loop(
+            target,
+            prompt=args.prompt,
+            max_iterations=args.max_iterations,
+            cost_ceiling=args.cost_ceiling,
+            allow_dirty=args.allow_dirty,
+            run_id=args.detached_run_id,
+            detached=True,
+        )
 
     # ---- Host-scope routing (slice 003-07 AC4) -----------------------------
     # `loop` always runs (the portable path needs no probe). `goal` / `auto`
     # resolve via the deterministic host-support verdict: an explicit `goal` on
     # an unsupported host refuses (rc=2 / goal_unavailable), while `auto`
-    # fail-safe-downgrades to `loop` and logs why.
-    if args.driver == DRIVER_LOOP:
+    # fail-safe-downgrades to `loop` and logs why. `--background` (003-08) needs
+    # the goal driver (it delegates continuation to /goal), so it routes as if
+    # `--driver goal` was requested — an unsupported host refuses rather than
+    # silently downgrading to a non-detachable loop run.
+    routing_driver = DRIVER_GOAL if args.background else args.driver
+    if routing_driver == DRIVER_LOOP:
         effective_driver = DRIVER_LOOP
     else:
-        verdict = _decide_route(target, args.driver)
+        verdict = _decide_route(target, routing_driver)
         if verdict["refused"]:
             ceiling = (args.cost_ceiling if args.cost_ceiling is not None
                        else DEFAULT_COST_CEILING_USD)
             max_turns = (args.max_iterations if args.max_iterations is not None
                          else DEFAULT_MAX_ITERATIONS)
+            hint = ("--background needs the goal driver" if args.background
+                    else "--driver goal is unsupported on this host")
             sys.stderr.write(
-                "loop: --driver goal is unsupported on this host "
-                f"({verdict['ineligible_reason']}). Use --driver loop (the "
-                "portable hand-rolled driver) or --driver auto.\n"
+                f"loop: {hint} ({verdict['ineligible_reason']}). Use --driver loop "
+                "(the portable hand-rolled driver) or --driver auto.\n"
             )
             return _refuse_goal(
                 run_id=_generate_preflight_run_id(),
@@ -2613,11 +2963,24 @@ def main(argv: Optional[list[str]] = None) -> int:
                 cost_ceiling=ceiling, max_turns=max_turns,
             )
         effective_driver = verdict["chosen_driver"]
-        if args.driver == DRIVER_AUTO and effective_driver == DRIVER_LOOP:
+        if (args.driver == DRIVER_AUTO and not args.background
+                and effective_driver == DRIVER_LOOP):
             sys.stderr.write(
                 f"loop: auto-routing to --driver loop ({verdict['ineligible_reason']}); "
                 "the goal driver is unavailable on this host.\n"
             )
+
+    # ---- Detached launch (slice 003-08 AC1) --------------------------------
+    # Routing above guaranteed effective_driver == goal (an ineligible host
+    # already refused). Spawn the goal driver in a new OS session and return.
+    if args.background:
+        return run_goal_loop_background(
+            target,
+            prompt=args.prompt,
+            max_iterations=args.max_iterations,
+            cost_ceiling=args.cost_ceiling,
+            allow_dirty=args.allow_dirty,
+        )
 
     # ---- Dispatch ----------------------------------------------------------
     # `--context-fill-threshold` / `--plateau-window` / `--resume-anyway` are
