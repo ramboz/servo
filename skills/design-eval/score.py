@@ -24,10 +24,12 @@ import hashlib
 import json
 import math
 import os
+import random
 import shutil
 import statistics
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -60,15 +62,17 @@ def sha256_file(path: Path) -> str:
 
 def definition_hash(config: dict) -> str:
     """Hash the *frozen definition* (ADR-0005 clause 2): judge model + decoding,
-    sample count / aggregation / δ, threshold, and the screen set. Excludes the
-    hash-bearing/bookkeeping fields so it is stable and self-consistent.
+    sample count / aggregation / δ, threshold, viewport, and the screen set.
+    Excludes the hash-bearing/bookkeeping fields so it is stable and
+    self-consistent — and excludes ``app_url``, which is *environmental* (where
+    the running app is reached, e.g. a dev-server port), not part of the eval
+    definition; pinning it would force a re-freeze + re-approval on a port move.
     """
     definition = {
         "judge": config.get("judge"),
         "samples": config.get("samples"),
         "threshold": config.get("threshold"),
         "viewport": config.get("viewport"),
-        "app_url": config.get("app_url"),
         "screens": [
             {
                 "id": s["id"],
@@ -147,9 +151,9 @@ def capture_app(base_dir: Path, screen: dict) -> Path:
     try:
         proc = subprocess.run(cmd, cwd=str(base_dir), capture_output=True, text=True, timeout=180)
     except FileNotFoundError as e:
-        raise EnvError(f"node/playwright unavailable for capture: {e}")
+        raise EnvError(f"node/playwright unavailable for capture: {e}") from e
     except subprocess.TimeoutExpired:
-        raise EnvError(f"capture timed out for screen {screen['id']!r}")
+        raise EnvError(f"capture timed out for screen {screen['id']!r}") from None
     if proc.returncode != 0 or not out.is_file():
         raise EnvError(
             f"capture failed for screen {screen['id']!r}: {proc.stderr.strip()[:200]}")
@@ -194,9 +198,9 @@ def _judge_cli(app_png: Path, ref_png: Path, config: dict) -> float:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                               cwd=str(app_png.parent.parent))
     except FileNotFoundError as e:
-        raise EnvError(f"claude CLI not executable: {e}")
+        raise EnvError(f"claude CLI not executable: {e}") from e
     except subprocess.TimeoutExpired:
-        raise EnvError("claude judge timed out")
+        raise EnvError("claude judge timed out") from None
     if proc.returncode != 0:
         raise EnvError(f"claude judge failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}")
     try:
@@ -206,7 +210,30 @@ def _judge_cli(app_png: Path, ref_png: Path, config: dict) -> float:
         obj = json.loads(_extract_json(envelope.get("result", "")))
         return max(0.0, min(1.0, float(obj["score"])))
     except (KeyError, ValueError, TypeError, json.JSONDecodeError) as e:
-        raise EnvError(f"unparseable claude judge response: {e}")
+        raise EnvError(f"unparseable claude judge response: {e}") from e
+
+
+def _post_with_retry(req, timeout: int, attempts: int = 3) -> dict:
+    """POST ``req`` and return the parsed JSON body, with bounded exponential
+    backoff on *transient* failures only: HTTP 429 / 5xx and network/timeout
+    errors are retried; HTTP 4xx (bad request, auth) surfaces immediately because
+    a retry cannot fix it. Exhausting the attempts raises ``EnvError`` (→ rc 2),
+    never a silent score. Each of the ``n`` samples calls this, so a single
+    transient blip on the last sample no longer discards the whole screen."""
+    delay = 1.0
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            if not (e.code == 429 or 500 <= e.code < 600) or attempt == attempts:
+                raise EnvError(f"vision judge request failed (HTTP {e.code}): {e}") from e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            if attempt == attempts:
+                raise EnvError(f"vision judge request failed: {e}") from e
+        time.sleep(delay + random.uniform(0.0, 0.5))
+        delay *= 2
+    raise EnvError("vision judge request failed: retries exhausted")  # unreachable
 
 
 def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
@@ -223,8 +250,10 @@ def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
         '{"score": <number 0..1>, "reasoning": "<one sentence>"}.'
     )
 
-    def b64(p: Path) -> str:
-        return base64.b64encode(p.read_bytes()).decode("ascii")
+    def img(p: Path) -> dict:
+        data = base64.b64encode(p.read_bytes()).decode("ascii")
+        return {"type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": data}}
 
     body = {
         "model": j["model"],
@@ -234,8 +263,8 @@ def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
             "role": "user",
             "content": [
                 {"type": "text", "text": prompt},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(app_png)}},
-                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64(ref_png)}},
+                img(app_png),
+                img(ref_png),
             ],
         }],
     }
@@ -248,18 +277,14 @@ def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
             "anthropic-version": "2023-06-01",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
-            payload = json.loads(resp.read())
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        raise EnvError(f"vision judge request failed: {e}")
+    payload = _post_with_retry(req, timeout=180)
     try:
         text = "".join(
             b.get("text", "") for b in payload.get("content", []) if b.get("type") == "text")
         obj = json.loads(_extract_json(text))
         return max(0.0, min(1.0, float(obj["score"])))
     except (KeyError, ValueError, TypeError, json.JSONDecodeError) as e:
-        raise EnvError(f"unparseable judge response: {e}")
+        raise EnvError(f"unparseable judge response: {e}") from e
 
 
 def _extract_json(text: str) -> str:
@@ -320,6 +345,7 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float) -> None:
     record = {
         "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "model": config["judge"]["model"],
+        "transport": (config.get("judge") or {}).get("transport", "api"),
         "composite": round(composite, 4),
         "definition_hash": config.get("approved_content_hash"),
         "screens": [
@@ -335,9 +361,10 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float) -> None:
 
 
 def main(argv=None) -> int:
-    argv = argv if argv is not None else sys.argv[1:]
-    # The component invokes `score.py <target>`; the frozen eval lives beside this
-    # file, so the base dir is always this script's directory.
+    # The component invokes `score.py <target>`, but the frozen eval lives beside
+    # this file, so the base dir is always this script's directory (the arg is
+    # accepted for the oracle.sh contract and intentionally ignored). `argv` stays
+    # in the signature so tests can call `main([])` without touching `sys.argv`.
     base_dir = Path(__file__).resolve().parent
     try:
         composite = score(base_dir)

@@ -33,8 +33,13 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 - The project can screenshot its UI with **Playwright** (a project
   devDependency; `npx playwright install chromium` once). servo ships no browser.
 - Design mockups renderable in a browser (e.g. claude-design `.dc.html`).
-- `ANTHROPIC_API_KEY` in the environment for live scoring (the freeze + install
-  steps need no key; only `score` does).
+- A judge transport for live scoring (the freeze + install steps need neither;
+  only `score` does):
+  - **`"api"`** (default) — the Anthropic Messages API; needs `ANTHROPIC_API_KEY`
+    in the environment.
+  - **`"cli"`** — a headless `claude -p`, which runs the vision judge on a Claude
+    subscription with **no API key** (set `judge.transport: "cli"`; needs the
+    `claude` CLI on `PATH`, or point `SERVO_DESIGN_EVAL_CLAUDE_BIN` at it).
 
 ## Flow
 
@@ -50,8 +55,14 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
    - `setup` — a `setups/<id>.mjs` exporting `default(page, config)` that seeds
      **deterministic** state (the app is now-dependent: seed entries, pin the
      period/clock) and navigates to the screen;
-   - and globally: `app_url`, `viewport`, `judge.model` (+ decoding), `samples`
-     (`n`, `k`, `delta`), `threshold`, and the `rubric`.
+   - and globally: `app_url`, `viewport`, `samples` (`n`, `k`, `delta`),
+     `threshold`, the `rubric`, and `judge`:
+     - `model` — a **vision-capable** model id (e.g. `claude-sonnet-4-6`);
+     - `transport` — `"api"` (default) or `"cli"` (see Prerequisites);
+     - `temperature` / `max_tokens` — decoding params that apply to the **`"api"`
+       transport only**; `claude -p` exposes no decoding flags, so the `"cli"`
+       transport runs at the model's CLI default and ignores them. (Both are
+       still hashed into the freeze, so editing either re-freezes regardless.)
 
 3. **`capture-refs`** — `python3 design_eval.py capture-refs <target>` renders
    each `referenceSource` to its `reference` PNG (cropped). Eyeball them.
@@ -94,5 +105,12 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
   improves; the loop optimises toward it.
 - Tune `k`/`δ` together: too wide and the component never passes; too narrow and
   it flaps. Lean conservative (wider) when the judge is noisy.
+- Sample at `temperature > 0`. The n-sample lower bound (`mean − k·stderr`) only
+  protects you if the samples can *spread*: the app is screenshotted once and
+  judged `n`× against it, so at `temperature: 0` those calls are near-identical,
+  `stderr ≈ 0`, the lower bound collapses to the mean, and you pay `n`× the cost
+  for no within-run anti-flap (ADR-0005 clause 3). The example ships `0.6`; lean
+  higher for a more conservative judge. (Applies to the `"api"` transport; the
+  `"cli"` transport runs at the model's CLI default.)
 - The rubric should score *design intent* (layout/palette/type/shape), not
   dynamic content; bake the ignore-list into the rubric text.

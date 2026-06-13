@@ -220,6 +220,104 @@ class InstallTests(unittest.TestCase):
             text = (tmp / "oracle.sh").read_text()
             self.assertNotIn("design_fidelity", text)
             self.assertIn('"vitest:1.0"', text)
+            # ...and the install manifest is deregistered symmetrically (no drift).
+            manifest = json.loads((tmp / ".servo" / "install.json").read_text())
+            self.assertNotIn("design_fidelity", manifest["components"])
+            self.assertIn("vitest", manifest["components"])  # baseline untouched
+
+
+class _FakeResp:
+    """Minimal stand-in for the urlopen context manager (a queued behaviour)."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_a):
+        return False
+
+    def read(self):
+        return self._body
+
+
+@contextlib.contextmanager
+def _patched_urlopen(behaviors):
+    """Replay queued behaviours through score's urlopen (an Exception is raised,
+    anything else is returned) and no-op the backoff sleep so retries are fast."""
+    queue = list(behaviors)
+    calls = {"n": 0}
+
+    def fake(_req, timeout=None):
+        item = queue[calls["n"]]
+        calls["n"] += 1
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    orig_open, orig_sleep = score.urllib.request.urlopen, score.time.sleep
+    score.urllib.request.urlopen = fake
+    score.time.sleep = lambda *_a, **_k: None
+    try:
+        yield calls
+    finally:
+        score.urllib.request.urlopen = orig_open
+        score.time.sleep = orig_sleep
+
+
+class JudgeParseTests(unittest.TestCase):
+    """The `_extract_json` + transient-retry paths behind AC4 (unparseable /
+    unreachable judge → env_error, never a 0.0) — without a real API or browser."""
+
+    def setUp(self):
+        os.environ["ANTHROPIC_API_KEY"] = "test-key"
+
+    def tearDown(self):
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    def test_extract_json_from_noisy_reply(self):
+        self.assertEqual(
+            score._extract_json('Sure! {"score": 0.8, "reasoning": "x"} done'),
+            '{"score": 0.8, "reasoning": "x"}')
+
+    def test_extract_json_raises_without_object(self):
+        with self.assertRaises(ValueError):
+            score._extract_json("no json object here")
+
+    def _pngs(self, tmp: Path):
+        (tmp / "a.png").write_bytes(b"\x89PNG-app")
+        (tmp / "b.png").write_bytes(b"\x89PNG-ref")
+        return tmp / "a.png", tmp / "b.png"
+
+    def _resp(self, text: str) -> _FakeResp:
+        return _FakeResp(json.dumps({"content": [{"type": "text", "text": text}]}).encode())
+
+    def test_api_unparseable_reply_is_env_error(self):
+        # AC4: a reply with no JSON object → env_error, never a silent score.
+        with tempfile.TemporaryDirectory() as t:
+            app, ref = self._pngs(Path(t))
+            with _patched_urlopen([self._resp("I cannot score this.")]):
+                with self.assertRaises(score.EnvError):
+                    score._judge_api(app, ref, _base_config())
+
+    def test_api_retries_transient_then_succeeds(self):
+        transient = score.urllib.error.HTTPError("u", 503, "Service Unavailable", {}, None)
+        with tempfile.TemporaryDirectory() as t:
+            app, ref = self._pngs(Path(t))
+            with _patched_urlopen([transient, self._resp('{"score": 0.91}')]) as calls:
+                val = score._judge_api(app, ref, _base_config())
+            self.assertEqual(calls["n"], 2)  # one retry, then success
+            self.assertAlmostEqual(val, 0.91)
+
+    def test_api_does_not_retry_on_4xx(self):
+        bad = score.urllib.error.HTTPError("u", 400, "Bad Request", {}, None)
+        with tempfile.TemporaryDirectory() as t:
+            app, ref = self._pngs(Path(t))
+            with _patched_urlopen([bad, bad]) as calls:
+                with self.assertRaises(score.EnvError):
+                    score._judge_api(app, ref, _base_config())
+            self.assertEqual(calls["n"], 1)  # 4xx is surfaced immediately, not retried
 
 
 # --- helper: run score.main() with the eval dir as the script's base dir ---

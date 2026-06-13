@@ -34,6 +34,10 @@ _DRIVER_ANCHOR = 'weighted_sum="0"'
 
 _FRAGMENT = """# SEED:start design_fidelity
 score_design_fidelity() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "missing: python3 (design-eval)" >&2
+    return 2
+  fi
   python3 .servo/design-eval/score.py "$PWD"
 }
 # SEED:end design_fidelity
@@ -94,7 +98,8 @@ def freeze(target: Path) -> dict:
         for rel in (s.get("reference"), s.get("setup")):
             if rel and not (d / rel).is_file():
                 raise FileNotFoundError(
-                    f"screen {s['id']!r}: missing {rel} — capture references / write the setup first")
+                    f"screen {s['id']!r}: missing {rel} — "
+                    "capture references / write the setup first")
     config["hashes"] = _score.artifact_hashes(config, d)
     config["approved_content_hash"] = _score.definition_hash(config)
     config["approval_status"] = "approved"
@@ -151,8 +156,22 @@ def _register_manifest(target: Path) -> None:
         manifest.write_text(json.dumps(data, indent=2) + "\n")
 
 
+def _deregister_manifest(target: Path) -> None:
+    manifest = target / ".servo" / "install.json"
+    if not manifest.is_file():
+        return
+    data = json.loads(manifest.read_text())
+    components = data.get("components")
+    if isinstance(components, list) and COMPONENT in components:
+        components.remove(COMPONENT)
+        manifest.write_text(json.dumps(data, indent=2) + "\n")
+
+
 def uninstall(target: Path) -> None:
-    """Remove the SEED block + COMPONENTS entry; keep the frozen artifacts."""
+    """Remove the SEED block + COMPONENTS entry and deregister from the install
+    manifest; keep the frozen artifacts. Symmetric with ``install`` (which both
+    splices and registers), so ``.servo/install.json`` never lists a component
+    that is no longer in ``oracle.sh``."""
     oracle = target / "oracle.sh"
     if not oracle.is_file():
         raise FileNotFoundError(f"oracle.sh not found: {oracle}")
@@ -162,6 +181,7 @@ def uninstall(target: Path) -> None:
         "", text, flags=re.DOTALL)
     text = re.sub(r'[ \t]*"' + COMPONENT + r':[^"]*"\n', "", text)
     oracle.write_text(text)
+    _deregister_manifest(target)
 
 
 def main(argv=None) -> int:
