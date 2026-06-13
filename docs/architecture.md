@@ -260,10 +260,10 @@ The downgrade is **fail-safe** (the always-works external driver), and the refus
 
 ### Pending (ADR candidates)
 
-Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0008`) regardless of which candidate fires first.
+Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0011`, with `0009` Accepted and `0010` reserved Proposed) regardless of which candidate fires first.
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
-- **A future ADR — Triage-inbox state-file schema + dedupe identity (spec 011).** The `/servo:heartbeat` triage inbox (`.servo/triage/inbox.jsonl`) is append-and-update cross-run state; its `finding_id` fingerprint scheme (what makes two discoveries "the same finding") and its `open`/`tried`/`passed`/`skipped` lifecycle are a contract later tooling reads, and changing them after data exists is migration-shaped. Reciprocal to [ADR-0004](decisions/adr-0004-session-state-file-format.md). Crystallizes at slice 011-02; may absorb the whole-heartbeat-vs-per-loop cost-ceiling-semantics call (011-04), which rhymes with spec 005's per-variant-vs-per-race question.
+- **Drafted as Proposed [ADR-0010](decisions/adr-0010-triage-inbox-schema.md) — Triage-inbox state-file schema + dedupe identity (spec 011).** The `/servo:heartbeat` triage inbox (`.servo/triage/inbox.jsonl`) is append-and-update cross-run state; its `finding_id` fingerprint scheme (what makes two discoveries "the same finding") and its `open`/`tried`/`passed`/`skipped` lifecycle are a contract later tooling reads, and changing them after data exists is migration-shaped. Reciprocal to [ADR-0004](decisions/adr-0004-session-state-file-format.md). Crystallized at slice 011-02 as Proposed ADR-0010; graduates to the Decisions table above (and the "Runtime artifacts" inbox-schema prose is finalized) when Accepted at 011-02 close-out. The whole-heartbeat-vs-per-loop cost-ceiling-semantics call (011-04) is left to its own slice; ADR-0010 only *reserves* `outcome.cost_usd` so that ceiling can sum from the inbox.
 
 ## Open questions (not yet ADR-worthy)
 

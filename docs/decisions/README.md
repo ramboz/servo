@@ -16,14 +16,16 @@
 - [ADR-0007: Adopt release-please + conventional-commit enforcement for servo releases (align with jig)](adr-0007-align-release-with-jig.md) — Replaces servo's fully manual release (hand-edited `plugin.json` version, local zip build, no tags/changelog) with jig's model: an enforced conventional-commit PR-title gate plus release-please for version / `CHANGELOG.md` / tag / GitHub release. Implemented by spec 010. (2026-06-11, Accepted)
 - [ADR-0008: Rebase agent-loop orchestration onto Claude Code autonomy primitives](adr-0008-loop-on-autonomy-primitives.md) — Delegates continuation (`/goal`), detachment (`/background`), and scheduling (Routines) to the shipped primitives; servo keeps *only* the deterministic guardrail + oracle layer, and retains the external-driver path as the portable layer for hook-restricted / non-Claude-Code hosts (e.g. Codex). Hard constraint: `/goal`'s transcript-only judge never replaces `oracle.sh`. All four verification gates cleared (V1 hooks stack; V2 `/goal` engages headless + both `--max-turns`/`--max-budget-usd` bind; V3 mechanism confirmed live; V4 by-design — `gate.py` is the in-Routine authority). (2026-06-12, Accepted)
 - [ADR-0009: Design-fidelity as a first-class eval recipe (`/servo:design-eval`)](adr-0009-design-fidelity-eval-recipe.md) — Ships `/servo:design-eval`, a guided skill (+ reusable `score.py` / `design_eval.py` / `capture.mjs`) that turns "does the built UI match the design mockup?" into a frozen `score_design_fidelity` oracle component — the non-deterministic sibling of servo's deterministic component templates. Captures app-vs-reference screenshots, judges fidelity with a pinned vision model (n-sampled, confidence-lower-bound), sha256-freezes the definition, and installs into `oracle.sh` (rc 0/1/2 unchanged; `env_error` never a silent `0.0`). Rides ADR-0005's frozen-eval contract; first consumer is food-log's slice 002-01. (2026-06-12, Accepted)
+- [ADR-0010: Triage-inbox state-file schema & dedupe identity](adr-0010-triage-inbox-schema.md) — The `/servo:heartbeat` triage inbox (`.servo/triage/inbox.jsonl`) as append-and-update cross-run state: `schema_version: 2`; the ratified `finding_id` fingerprint (CI = `workflowName+headBranch`, issue = `number`, commit = `sha`); a *sticky* `open`/`tried`/`passed`/`skipped` lifecycle kept separate from a *recomputed* `actionable` verdict and an *immutable* `provenance` trust marker (Guardrail #4); one uniform merge + retention rule (keep live-or-lifecycle-bearing, evict stale `open`) that bounds growth across all sources; and `flock` double-fire safety. Reciprocal to ADR-0004; crystallizes spec 011-02 (Accepted at slice close-out). (2026-06-12, Proposed)
 
 ## Pending
 
 ADR candidates (numbers are *hints* of the next likely allocation order,
 not reservations — the next accepted ADR claims the next free number
 regardless of which candidate fires first). `0005` is reserved (Proposed)
-by the eval-oracle-component ADR and `0008` is Accepted (the
-autonomy-primitives rebase), so the next free number is `0009`:
+by the eval-oracle-component ADR, `0009` is Accepted (the design-fidelity-eval
+recipe), and `0010` is reserved (Proposed) by the triage-inbox-schema ADR, so
+the next free number is `0011`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 
