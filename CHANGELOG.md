@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/ramboz/servo/compare/v0.2.1...v0.3.0) (2026-06-13)
+
+
+### Features
+
+* **agent-loop:** add /goal-driven loop driver (003-06) ([61f774d](https://github.com/ramboz/servo/commit/61f774d72a0646472cf6ca9ef5e5945c75173697))
+* **agent-loop:** add plateau noise floor δ (ADR-0005 clause 4) ([#9](https://github.com/ramboz/servo/issues/9)) ([01d27bd](https://github.com/ramboz/servo/commit/01d27bd835a3b7c093dd9d643731d1689cb43e58))
+* **agent-loop:** portable guardrails — vendor gate.py, dirty-tree refusal, host-scope routing (003-07) ([fb0b62c](https://github.com/ramboz/servo/commit/fb0b62c29b8437f114e8103c6671f59ff0a188f2))
+* **design-eval:** add /servo:design-eval skill (spec 012, ADR-0009) ([#8](https://github.com/ramboz/servo/issues/8)) ([028e0a3](https://github.com/ramboz/servo/commit/028e0a334c5366019935680cab3367e552b47eba))
+* **heartbeat:** add read-only discovery pass and triage inbox (slice 011-01) ([254acb0](https://github.com/ramboz/servo/commit/254acb0d13e969075ae7620f0a07d0b3f3f18d5a))
+
+
+### Documentation
+
+* **decisions:** accept ADR-0008 (rebase agent-loop onto autonomy primitives) ([#6](https://github.com/ramboz/servo/issues/6)) ([9fdb8f6](https://github.com/ramboz/servo/commit/9fdb8f6978d835ba2b41a32dcb7c0084be62291f))
+
 ## [0.2.1](https://github.com/ramboz/servo/compare/v0.2.0...v0.2.1) (2026-06-12)
 
 
