@@ -151,7 +151,21 @@ def _claude_json_payload(
     return json.dumps(payload)
 
 
-MOCK_CLAUDE_VERSION = "1.0.0-mock"
+# Slice 003-07: the mock stands in for a `/goal`-capable claude, so its version
+# must clear `GOAL_MIN_VERSION` (2.1.139). Host-scope routing (AC4) gates the
+# goal driver on `claude --version`; goal-mode + auto-routing tests need the mock
+# to read as capable. No test asserts this literal value (the version-mismatch
+# resume tests use a distinct `9.9.9-stale-version`).
+MOCK_CLAUDE_VERSION = "2.1.175"
+
+# Slice 003-07: an isolated, empty HOME so the routing audit's *user* settings
+# layer (`~/.claude/settings.json`, read by `_audit_hook_settings`) is hermetic
+# across dev machines / CI — a dev's real `disableAllHooks` must not flip a test.
+# Tests that exercise the user layer override HOME via `extra_env`.
+import atexit as _atexit  # noqa: E402
+
+_ISOLATED_HOME = tempfile.mkdtemp(prefix="servo-home-")
+_atexit.register(lambda: shutil.rmtree(_ISOLATED_HOME, ignore_errors=True))
 
 
 def _make_mock_claude(bindir: Path, body: str, *, version: str = MOCK_CLAUDE_VERSION) -> Path:
@@ -256,16 +270,23 @@ def _run_loop(
     mocks that would otherwise trip the default plateau brake at iter 4
     instead of running to the test's expected iteration count. Plateau-
     specific tests opt back in by passing their own `--plateau-window N`.
+
+    Slice 003-07: pins `--driver loop` (unless the caller passes `--driver`)
+    so these loop-driver tests exercise the driver they target regardless of
+    the new `auto` default, and defaults HOME to an isolated empty dir so the
+    routing audit's user-settings layer stays hermetic.
     """
     if "--plateau-window" not in extra_args:
         extra_args = ("--plateau-window", "0", *extra_args)
+    if "--driver" not in extra_args:
+        extra_args = ("--driver", "loop", *extra_args)
     if path_override is not None:
         path = path_override
     elif mock_bindir is not None:
         path = f"{mock_bindir}:{SYSTEM_PATH}"
     else:
         path = SYSTEM_PATH
-    env = {**os.environ, "PATH": path}
+    env = {**os.environ, "PATH": path, "HOME": _ISOLATED_HOME}
     if extra_env:
         env.update(extra_env)
     cmd = [sys.executable, str(LOOP), str(target), *extra_args]
@@ -3301,7 +3322,7 @@ class SignalHandlingTests(unittest.TestCase):
         }
         cmd = [
             sys.executable, str(LOOP), str(self.target),
-            "--prompt", "x", "--max-iterations", "3",
+            "--driver", "loop", "--prompt", "x", "--max-iterations", "3",
             *extra,
         ]
         return subprocess.Popen(
@@ -3434,7 +3455,7 @@ class SignalHandlingDuringGateTests(unittest.TestCase):
         }
         cmd = [
             sys.executable, str(LOOP), str(self.target),
-            "--prompt", "x", "--max-iterations", "3",
+            "--driver", "loop", "--prompt", "x", "--max-iterations", "3",
         ]
         return subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -4474,6 +4495,10 @@ def _run_goal(
     Uses `sys.executable` so the goal driver's final `gate.py` run executes
     under the same (modern) interpreter as the test runner. Unlike `_run_loop`
     this does not inject `--plateau-window` (a loop-mode-only brake).
+
+    Slice 003-07: defaults HOME to an isolated empty dir and neutralises the
+    managed-settings layer so the host-scope routing audit is hermetic (the goal
+    driver is now gated by `_decide_route`, which reads the settings hierarchy).
     """
     if path_override is not None:
         path = path_override
@@ -4481,7 +4506,8 @@ def _run_goal(
         path = f"{mock_bindir}:{SYSTEM_PATH}"
     else:
         path = SYSTEM_PATH
-    env = {**os.environ, "PATH": path}
+    env = {**os.environ, "PATH": path, "HOME": _ISOLATED_HOME,
+           "SERVO_MANAGED_SETTINGS_PATH": ""}
     if extra_env:
         env.update(extra_env)
     cmd = [sys.executable, str(LOOP), str(target), "--driver", "goal", *extra_args]
@@ -4917,6 +4943,12 @@ class GoalStateRecordingTests(_GoalTargetMixin, unittest.TestCase):
         self.assertEqual(self._summary(result)["run_id"], state["run_id"])
 
     def test_goal_driver_refuses_resume(self):
+        # A goal-capable mock so host-scope routing (003-07) admits the goal
+        # driver; the resume refusal is then the operative reason (not the
+        # host-unsupported one). The mock body is never invoked — resume refuses
+        # first — but its --version short-circuit lets the routing probe pass.
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text=GOAL_PASS_SENTINEL))
         result = _run_goal(self.target, "--resume", "20260101T000000-abcd",
                            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
         self.assertEqual(result.returncode, 2, msg=result.stdout)
@@ -4939,6 +4971,625 @@ class GoalStateRecordingTests(_GoalTargetMixin, unittest.TestCase):
             _stdout_json_lines(result.stdout)[-1]["terminal_reason"],
             "goal_resume_unsupported",
         )
+
+
+# ============================================================================
+# Slice 003-07 — portable guardrails (ADR-0008 rebase)
+#
+# Test classes map to the slice's acceptance criteria:
+#   AC1     → VendorGateUnitTests / VendorGateIntegrationTests
+#   AC2/AC3 → DirtyTreeLoopTests / DirtyTreeGoalTests / DirtyTreeUnitTests
+#   AC4/AC5 → RoutingUnitTests / HostScopeRoutingDispatchTests / ExplainRoutingTests
+#   AC6     → SafeDefaultsTests
+# ============================================================================
+
+
+def _load_loop_module():
+    """Import loop.py as an in-process module (for unit tests + monkeypatching)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("loop_mod_0307", LOOP)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _git_init(target: Path) -> None:
+    """Initialise a quiet, identity-pinned git repo at `target`."""
+    env = {**os.environ,
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    subprocess.run(["git", "init", "-q"], cwd=target, check=True, env=env,
+                   capture_output=True)
+
+
+def _git_commit_all(target: Path, message: str = "init") -> None:
+    env = {**os.environ,
+           "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e"}
+    subprocess.run(["git", "add", "-A"], cwd=target, check=True, env=env,
+                   capture_output=True)
+    subprocess.run(["git", "commit", "-q", "-m", message], cwd=target, check=True,
+                   env=env, capture_output=True)
+
+
+# ---------------------------------------------------------------------------
+# AC1 — vendor gate.py into the target (idempotent), relative path
+# ---------------------------------------------------------------------------
+
+
+class VendorGateUnitTests(unittest.TestCase):
+    """`_ensure_vendored_gate` idempotence + path; goal prompt + authoritative
+    gate run resolve gate.py on the vendored relative path (ADR-0008 V4)."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-vendor-")
+        self.target = Path(self.tmpdir) / "demo"
+        self.target.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _vendored(self) -> Path:
+        return self.target / ".claude" / "skills" / "servo-quality-gate" / "gate.py"
+
+    def test_creates_byte_identical_vendored_copy(self):
+        dest, err = self.m._ensure_vendored_gate(self.target)
+        self.assertIsNone(err)
+        self.assertEqual(dest, self._vendored())
+        self.assertTrue(dest.is_file())
+        self.assertEqual(dest.read_bytes(), self.m.GATE_PATH.read_bytes())
+
+    def test_noop_when_present_and_current(self):
+        dest, _ = self.m._ensure_vendored_gate(self.target)
+        first_mtime = dest.stat().st_mtime_ns
+        dest2, err = self.m._ensure_vendored_gate(self.target)
+        self.assertIsNone(err)
+        # Current copy → no rewrite (mtime unchanged), so the vendoring preflight
+        # is cheap on every run.
+        self.assertEqual(dest2.stat().st_mtime_ns, first_mtime)
+
+    def test_refreshes_stale_copy(self):
+        v = self._vendored()
+        v.parent.mkdir(parents=True, exist_ok=True)
+        v.write_text("# stale — not the real gate\n")
+        dest, err = self.m._ensure_vendored_gate(self.target)
+        self.assertIsNone(err)
+        self.assertEqual(dest.read_bytes(), self.m.GATE_PATH.read_bytes())
+
+    def test_breadcrumb_when_destination_unwritable(self):
+        # `.claude` is a FILE, so mkdir of the skills subtree must fail → the
+        # helper returns a breadcrumb rather than raising (fail-closed caller).
+        (self.target / ".claude").write_text("not a dir")
+        dest, err = self.m._ensure_vendored_gate(self.target)
+        self.assertIsNone(dest)
+        self.assertIsNotNone(err)
+
+    def test_compose_goal_prompt_references_vendored_path(self):
+        vendored = self._vendored()
+        prompt = self.m._compose_goal_prompt("do the task", gate_path=vendored)
+        self.assertIn(str(vendored), prompt)
+
+    def test_run_goal_uses_vendored_path_for_authoritative_gate(self):
+        # Spy on the authoritative final gate to capture the gate_path it runs,
+        # and stub claude so no subprocess spawns.
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        captured = {}
+
+        def fake_gate(target, gate_path=None):
+            captured["gate_path"] = gate_path
+            return {"exit_code": 0, "status": "pass",
+                    "composite": 0.9, "threshold": 0.5}
+
+        def fake_claude_goal(prompt, target, **kw):
+            return ({"type": "result", "subtype": "success",
+                     "terminal_reason": "completed", "num_turns": 1,
+                     "total_cost_usd": 0.01}, "transcript", None)
+
+        self.m._invoke_gate = fake_gate
+        self.m._invoke_claude_goal = fake_claude_goal
+        self.m._get_claude_version = lambda: "2.1.175"
+        rc = self.m.run_goal_loop(self.target, prompt="x",
+                                  max_iterations=3, cost_ceiling=1.0)
+        self.assertEqual(rc, 0)
+        self.assertEqual(captured["gate_path"], self._vendored())
+
+
+class VendorGateIntegrationTests(_GoalTargetMixin, unittest.TestCase):
+    """End-to-end: a goal run vendors gate.py and the vendored copy is functional."""
+
+    def test_goal_run_creates_functional_vendored_gate(self):
+        self._setup_target(_passing_oracle())
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text=GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success"),
+        ))
+        result = _run_goal(self.target, "--prompt", "x",
+                           mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        vendored = (self.target / ".claude" / "skills"
+                    / "servo-quality-gate" / "gate.py")
+        self.assertTrue(vendored.is_file(), msg=result.stderr)
+        servo_gate = REPO_ROOT / "skills" / "quality-gate" / "gate.py"
+        self.assertEqual(vendored.read_bytes(), servo_gate.read_bytes())
+        # The vendored copy actually scored the oracle: a passing run.
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(self._summary(result)["terminal_reason"], "oracle_pass")
+
+
+# ---------------------------------------------------------------------------
+# AC2/AC3 — refuse-on-dirty-tree + --allow-dirty opt-out + non-git skip
+# ---------------------------------------------------------------------------
+
+
+class _DirtyTreeContract:
+    """Shared AC2/AC3 contract, exercised against BOTH drivers (ADR-0008 V4).
+
+    Concrete subclasses set `GOAL` and inherit `unittest.TestCase`. The target is
+    a git repo with a committed baseline; tests dirty a tracked file (or not) and
+    assert the refusal / bypass / skip behaviour.
+    """
+
+    GOAL = False
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-dirty-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        (self.target / "src.txt").write_text("baseline\n")
+        self.bindir = tmp / "bin"
+        self.bindir.mkdir(parents=True, exist_ok=True)
+        if self.GOAL:
+            _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+                assistant_text=GOAL_PASS_SENTINEL,
+                result_event=_goal_result_event(subtype="success"),
+            ))
+        else:
+            _mock_claude_constant(self.bindir, _claude_json_payload(),
+                                  tmp / "counter.txt")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _run(self, *extra):
+        fn = _run_goal if self.GOAL else _run_loop
+        return fn(self.target, "--prompt", "x", *extra,
+                  mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+
+    def _summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def test_refuses_dirty_tracked_file(self):
+        (self.target / "src.txt").write_text("uncommitted edit\n")
+        result = self._run()
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "dirty_tree")
+        # AC2: the breadcrumb names the dirty path.
+        self.assertIn("src.txt", result.stderr)
+
+    def test_allow_dirty_bypasses(self):
+        (self.target / "src.txt").write_text("uncommitted edit\n")
+        result = self._run("--allow-dirty")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotEqual(self._summary(result)["terminal_reason"], "dirty_tree")
+
+    def test_clean_tree_runs(self):
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotEqual(self._summary(result)["terminal_reason"], "dirty_tree")
+
+    def test_untracked_files_do_not_trigger(self):
+        # AC2 is scoped to "uncommitted changes to tracked files"; a stray
+        # untracked file (incl. servo's own .servo/ + vendored gate artifacts) is
+        # not a tracked-file change and must not false-refuse.
+        (self.target / "scratch.tmp").write_text("untracked\n")
+        result = self._run()
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotEqual(self._summary(result)["terminal_reason"], "dirty_tree")
+
+
+class DirtyTreeLoopTests(_DirtyTreeContract, unittest.TestCase):
+    GOAL = False
+
+
+class DirtyTreeGoalTests(_DirtyTreeContract, unittest.TestCase):
+    GOAL = True
+
+
+class DirtyTreeUnitTests(unittest.TestCase):
+    """Direct unit coverage of the `_dirty_tree_paths` predicate (AC2/AC3)."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-dirtyunit-")
+        self.target = Path(self.tmpdir) / "demo"
+        self.target.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_non_git_target_returns_none(self):
+        (self.target / "a.txt").write_text("x")
+        self.assertIsNone(self.m._dirty_tree_paths(self.target))
+
+    def test_clean_repo_returns_none(self):
+        (self.target / "a.txt").write_text("x")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+        self.assertIsNone(self.m._dirty_tree_paths(self.target))
+
+    def test_modified_tracked_file_listed(self):
+        (self.target / "a.txt").write_text("x")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+        (self.target / "a.txt").write_text("changed")
+        dirty = self.m._dirty_tree_paths(self.target)
+        self.assertIsNotNone(dirty)
+        self.assertIn("a.txt", dirty)
+
+    def test_untracked_only_returns_none(self):
+        (self.target / "a.txt").write_text("x")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+        (self.target / "b.txt").write_text("new untracked")
+        self.assertIsNone(self.m._dirty_tree_paths(self.target))
+
+
+# ---------------------------------------------------------------------------
+# AC4/AC5 — host-scope routing + --explain-routing
+# ---------------------------------------------------------------------------
+
+
+def _loop_mock_body() -> str:
+    return "#!/usr/bin/env bash\ncat <<'__J__'\n" + _claude_json_payload() + "\n__J__\n"
+
+
+def _goal_mock_body(*, assistant_text=GOAL_PASS_SENTINEL, subtype="success") -> str:
+    jsonl = _goal_stream_jsonl(
+        assistant_text=assistant_text,
+        result_event=_goal_result_event(subtype=subtype),
+    )
+    return "#!/usr/bin/env bash\ncat <<'__J__'\n" + jsonl + "\n__J__\n"
+
+
+def _run_raw(target, *extra, mock_bindir=None, extra_env=None):
+    """Invoke loop.py with NO injected --driver (exercises the real default).
+
+    Isolates HOME (user settings layer) and neutralises the managed-settings
+    layer (`SERVO_MANAGED_SETTINGS_PATH=""`) so the routing audit is hermetic
+    regardless of the host's real settings hierarchy. A test that wants a managed
+    restriction overrides `SERVO_MANAGED_SETTINGS_PATH` via `extra_env`.
+    """
+    path = f"{mock_bindir}:{SYSTEM_PATH}" if mock_bindir else SYSTEM_PATH
+    env = {**os.environ, "PATH": path, "HOME": _ISOLATED_HOME,
+           "SERVO_MANAGED_SETTINGS_PATH": ""}
+    if extra_env:
+        env.update(extra_env)
+    cmd = [sys.executable, str(LOOP), str(target), *extra]
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+
+class RoutingUnitTests(unittest.TestCase):
+    """Pure-logic coverage of the host-support probe + routing decision (AC4)."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-route-")
+        self.target = Path(self.tmpdir) / "demo"
+        self.target.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    # --- version parsing / goal availability ---
+    def test_parse_version_variants(self):
+        self.assertEqual(self.m._parse_claude_version("2.1.175 (Claude Code)"), (2, 1, 175))
+        self.assertEqual(self.m._parse_claude_version("1.0.0-mock"), (1, 0, 0))
+        self.assertIsNone(self.m._parse_claude_version("not-a-version"))
+        self.assertIsNone(self.m._parse_claude_version(None))
+
+    def test_goal_available_at_and_below_min_version(self):
+        self.m._get_claude_version = lambda: "2.1.139"
+        avail, _v, reason = self.m._goal_primitive_available()
+        self.assertTrue(avail)
+        self.assertIsNone(reason)
+        self.m._get_claude_version = lambda: "2.1.138"
+        avail, _v, reason = self.m._goal_primitive_available()
+        self.assertFalse(avail)
+        self.assertIn("predates", reason)
+
+    def test_goal_unavailable_when_claude_absent(self):
+        self.m._get_claude_version = lambda: None
+        avail, _v, reason = self.m._goal_primitive_available()
+        self.assertFalse(avail)
+        self.assertIn("not found", reason)
+
+    # --- settings-hierarchy audit ---
+    def test_audit_disable_all_hooks_user_layer(self):
+        from unittest import mock
+        home = Path(self.tmpdir) / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude" / "settings.json").write_text(json.dumps({"disableAllHooks": True}))
+        with mock.patch.dict(os.environ, {"HOME": str(home)}):
+            audit = self.m._audit_hook_settings(self.target)
+        self.assertFalse(audit["hooks_permitted"])
+        self.assertEqual(audit["forcing_layer"], "user:disableAllHooks")
+
+    def test_audit_allow_managed_hooks_only_binds_in_managed_tier(self):
+        managed = Path(self.tmpdir) / "managed.json"
+        managed.write_text(json.dumps({"allowManagedHooksOnly": True}))
+        self.m._managed_settings_paths = lambda: [managed]
+        from unittest import mock
+        empty_home = Path(self.tmpdir) / "emptyhome"
+        empty_home.mkdir()
+        with mock.patch.dict(os.environ, {"HOME": str(empty_home)}):
+            audit = self.m._audit_hook_settings(self.target)
+        self.assertFalse(audit["hooks_permitted"])
+        self.assertEqual(audit["forcing_layer"], "managed:allowManagedHooksOnly")
+
+    def test_audit_allow_managed_hooks_only_inert_in_project_layer(self):
+        # allowManagedHooksOnly only binds in the managed tier (per the docs).
+        (self.target / ".claude").mkdir(parents=True)
+        (self.target / ".claude" / "settings.local.json").write_text(
+            json.dumps({"allowManagedHooksOnly": True}))
+        from unittest import mock
+        empty_home = Path(self.tmpdir) / "emptyhome2"
+        empty_home.mkdir()
+        self.m._managed_settings_paths = lambda: [Path(self.tmpdir) / "absent.json"]
+        with mock.patch.dict(os.environ, {"HOME": str(empty_home)}):
+            audit = self.m._audit_hook_settings(self.target)
+        self.assertTrue(audit["hooks_permitted"])
+
+    # --- decision logic (audit + probe stubbed) ---
+    def _stub(self, *, hooks_permitted, goal_available, forcing_layer=None):
+        self.m._audit_hook_settings = lambda target: {
+            "hooks_permitted": hooks_permitted, "forcing_layer": forcing_layer,
+            "layers": [],
+        }
+        reason = None if goal_available else "claude too old"
+        self.m._goal_primitive_available = lambda: (goal_available, "2.1.175", reason)
+
+    def test_auto_picks_goal_when_eligible(self):
+        self._stub(hooks_permitted=True, goal_available=True)
+        v = self.m._decide_route(self.target, self.m.DRIVER_AUTO)
+        self.assertEqual(v["chosen_driver"], "goal")
+        self.assertFalse(v["refused"])
+
+    def test_auto_downgrades_to_loop_when_hooks_restricted(self):
+        self._stub(hooks_permitted=False, goal_available=True,
+                   forcing_layer="project:disableAllHooks")
+        v = self.m._decide_route(self.target, self.m.DRIVER_AUTO)
+        self.assertEqual(v["chosen_driver"], "loop")
+        self.assertFalse(v["refused"])
+        self.assertIn("hooks restricted", v["ineligible_reason"])
+
+    def test_auto_downgrades_to_loop_when_goal_unavailable(self):
+        self._stub(hooks_permitted=True, goal_available=False)
+        v = self.m._decide_route(self.target, self.m.DRIVER_AUTO)
+        self.assertEqual(v["chosen_driver"], "loop")
+        self.assertFalse(v["refused"])
+
+    def test_explicit_goal_refused_when_ineligible(self):
+        self._stub(hooks_permitted=False, goal_available=True,
+                   forcing_layer="managed:allowManagedHooksOnly")
+        v = self.m._decide_route(self.target, self.m.DRIVER_GOAL)
+        self.assertTrue(v["refused"])
+        self.assertEqual(v["chosen_driver"], "goal")
+
+    def test_explicit_goal_admitted_when_eligible(self):
+        self._stub(hooks_permitted=True, goal_available=True)
+        v = self.m._decide_route(self.target, self.m.DRIVER_GOAL)
+        self.assertFalse(v["refused"])
+
+    def test_explicit_loop_never_refused(self):
+        self._stub(hooks_permitted=False, goal_available=False,
+                   forcing_layer="user:disableAllHooks")
+        v = self.m._decide_route(self.target, self.m.DRIVER_LOOP)
+        self.assertEqual(v["chosen_driver"], "loop")
+        self.assertFalse(v["refused"])
+
+
+class HostScopeRoutingDispatchTests(unittest.TestCase):
+    """End-to-end wiring of the routing verdict into the dispatch (AC4)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-routedisp-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        self.bindir = tmp / "bin"
+        self.bindir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _restrict_hooks(self):
+        (self.target / ".claude").mkdir(parents=True, exist_ok=True)
+        (self.target / ".claude" / "settings.json").write_text(
+            json.dumps({"disableAllHooks": True}))
+
+    def _summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def test_auto_routes_to_goal_on_eligible_host(self):
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--driver", "auto", "--prompt", "x",
+                          mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(self._summary(result)["driver"], "goal")
+
+    def test_auto_downgrades_to_loop_when_hooks_restricted(self):
+        self._restrict_hooks()
+        _make_mock_claude(self.bindir, _loop_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--driver", "auto", "--prompt", "x",
+                          "--plateau-window", "0",
+                          mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # Loop-shaped summary (no `driver` key; has iterations_completed).
+        summary = self._summary(result)
+        self.assertNotIn("driver", summary)
+        self.assertIn("iterations_completed", summary)
+        self.assertIn("auto-routing to --driver loop", result.stderr)
+        self.assertIn("hooks restricted", result.stderr)
+
+    def test_auto_downgrades_to_loop_when_claude_too_old(self):
+        _make_mock_claude(self.bindir, _loop_mock_body(), version="1.0.0")
+        result = _run_raw(self.target, "--driver", "auto", "--prompt", "x",
+                          "--plateau-window", "0",
+                          mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("iterations_completed", self._summary(result))
+        self.assertIn("auto-routing to --driver loop", result.stderr)
+        self.assertIn("predates", result.stderr)
+
+    def test_explicit_goal_refuses_when_hooks_restricted(self):
+        self._restrict_hooks()
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--driver", "goal", "--prompt", "x",
+                          mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "goal_unavailable")
+        self.assertIn("project:disableAllHooks", result.stderr)
+
+    def test_explicit_goal_refuses_when_claude_too_old(self):
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="1.0.0")
+        result = _run_raw(self.target, "--driver", "goal", "--prompt", "x",
+                          mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "goal_unavailable")
+        self.assertIn("predates", result.stderr)
+
+    def test_explicit_goal_refuses_when_managed_allow_managed_hooks_only(self):
+        # End-to-end exercise of the managed-tier audit via the test seam.
+        managed = Path(self.tmpdir) / "managed.json"
+        managed.write_text(json.dumps({"allowManagedHooksOnly": True}))
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--driver", "goal", "--prompt", "x",
+                          mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20",
+                                     "SERVO_MANAGED_SETTINGS_PATH": str(managed)})
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "goal_unavailable")
+        self.assertIn("managed:allowManagedHooksOnly", result.stderr)
+
+    def test_explicit_loop_runs_loop_on_eligible_host(self):
+        _make_mock_claude(self.bindir, _loop_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--driver", "loop", "--prompt", "x",
+                          "--plateau-window", "0",
+                          mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("iterations_completed", self._summary(result))
+
+
+class ExplainRoutingTests(unittest.TestCase):
+    """`--explain-routing` prints the verdict + forcing layer, runs nothing (AC5)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-explain-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        self.bindir = tmp / "bin"
+        self.bindir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_explain_eligible_host_chooses_goal(self):
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--explain-routing",
+                          mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("chosen driver    : goal", result.stdout)
+        self.assertIn("/goal eligible   : YES", result.stdout)
+        # No run happened: no state file written.
+        self.assertEqual(list(self.target.glob(".servo/runs/*/state.json")), [])
+
+    def test_explain_names_forcing_layer(self):
+        (self.target / ".claude").mkdir(parents=True, exist_ok=True)
+        (self.target / ".claude" / "settings.local.json").write_text(
+            json.dumps({"disableAllHooks": True}))
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--explain-routing", "--driver", "auto",
+                          mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("chosen driver    : loop", result.stdout)
+        self.assertIn("project-local:disableAllHooks", result.stdout)
+        self.assertIn("← forces", result.stdout)
+
+    def test_explain_explicit_goal_on_unsupported_warns(self):
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="1.0.0")
+        result = _run_raw(self.target, "--explain-routing", "--driver", "goal",
+                          mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("would refuse", result.stdout)
+        self.assertIn("predates", result.stdout)
+
+    def test_explain_needs_no_prompt(self):
+        # --explain-routing is read-only and must not require --prompt.
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--explain-routing", mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+
+# ---------------------------------------------------------------------------
+# AC6 — safe defaults (host-scope routing + dirty-tree refusal on by default)
+# ---------------------------------------------------------------------------
+
+
+class SafeDefaultsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-defaults-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        self.bindir = tmp / "bin"
+        self.bindir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def test_default_driver_is_auto_and_routes_to_goal(self):
+        # No --driver: the default engages host-scope routing (AC6) and, on an
+        # eligible host, picks the goal driver.
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(self._summary(result)["driver"], "goal")
+
+    def test_dirty_tree_refusal_on_by_default(self):
+        # No --allow-dirty: a dirty git tree refuses by default (fail-closed).
+        (self.target / "src.txt").write_text("baseline\n")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+        (self.target / "src.txt").write_text("uncommitted\n")
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="2.1.175")
+        result = _run_raw(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                          extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "dirty_tree")
 
 
 if __name__ == "__main__":

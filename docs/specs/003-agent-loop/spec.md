@@ -74,7 +74,7 @@ Five slices, sized to match the spec 001 / 002 cadence. The vertical-value rule 
 - [003-04 — checkpoint-resume](slice-04-checkpoint-resume.md)
 - [003-05 — stuck-loop-and-handoff](slice-05-stuck-loop-and-handoff.md)
 - [003-06 — goal-driven-loop](slice-06-goal-driven-loop.md) — DRAFT (ADR-0008 rebase)
-- [003-07 — portable-guardrails](slice-07-portable-guardrails.md) — DRAFT (ADR-0008 rebase)
+- [003-07 — portable-guardrails](slice-07-portable-guardrails.md) — DONE (ADR-0008 rebase)
 - [003-08 — detach-and-schedule](slice-08-detach-and-schedule.md) — DRAFT (ADR-0008 rebase)
 
 

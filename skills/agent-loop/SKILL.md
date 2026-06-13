@@ -18,7 +18,8 @@ description: |
     - "use /goal to keep going" / "goal-driven loop" / "--driver goal" — the
       ADR-0008 mode that delegates continuation to Claude Code's `/goal` while
       servo keeps the oracle + guardrail layer (caps on the outer call, final
-      `gate.py` verdict). `--driver loop` (default) is the portable fallback.
+      `gate.py` verdict). `--driver auto` (default) probes the host and picks
+      goal-or-loop; `--driver loop` forces the portable hand-rolled path.
 
   Do NOT fire on:
 
@@ -64,12 +65,15 @@ Reads state from `<target>/.servo/runs/<run-id>/state.json` and continues from `
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-loop/loop.py" <target> --resume 20260520T143205-a3f1
 ```
 
-## Drivers — `--driver {loop|goal}` (ADR-0008)
+## Drivers — `--driver {auto|loop|goal}` (ADR-0008)
 
-Two continuation drivers deliver the same guardrailed-iteration value; pick by host:
+Two continuation drivers deliver the same guardrailed-iteration value; `auto` picks between them per host:
 
-- **`--driver loop`** (default) — the hand-rolled driver above. Servo owns the whole loop: it subprocesses `claude -p` once per iteration and enforces every brake itself. The **portable / external-driver** path — works in hook-restricted environments and non-Claude-Code hosts (e.g. Codex) where the platform primitives don't exist.
-- **`--driver goal`** — delegates *continuation* to Claude Code's `/goal` primitive. A **single** `claude -p` carries a `/goal` completion condition that drives across-turn continuation; servo's hard guardrails ride the **outer** invocation. The platform owns "keep going"; servo owns "is it actually good, and is it safe to keep going."
+- **`--driver auto`** (default) — runs a deterministic **host-support probe** (slice 003-07) and routes: the goal driver when `/goal` is available (`claude` ≥ 2.1.139) **and** hooks are permitted, else a fail-safe downgrade to the loop driver (the reason is logged to stderr). See [Host-scope routing](#host-scope-routing-slice-003-07).
+- **`--driver loop`** — the hand-rolled driver above. Servo owns the whole loop: it subprocesses `claude -p` once per iteration and enforces every brake itself. The **portable / external-driver** path — works in hook-restricted environments and non-Claude-Code hosts (e.g. Codex) where the platform primitives don't exist.
+- **`--driver goal`** — delegates *continuation* to Claude Code's `/goal` primitive. A **single** `claude -p` carries a `/goal` completion condition that drives across-turn continuation; servo's hard guardrails ride the **outer** invocation. The platform owns "keep going"; servo owns "is it actually good, and is it safe to keep going." On an unsupported host an explicit `--driver goal` **refuses** (rc=2) rather than silently degrading.
+
+The goal driver also **vendors a clone-portable copy of `gate.py`** into `<target>/.claude/skills/servo-quality-gate/gate.py` before running (idempotent), so the in-transcript gate run and the authoritative final score resolve the oracle relative to `$CLAUDE_PROJECT_DIR` after a clone (ADR-0008 V4).
 
 ### `loop.py <target> --driver goal --prompt "<text>"` — /goal-driven run
 
@@ -95,6 +99,31 @@ The `/goal` condition fact-checks the **bare** `SERVO_ORACLE_VERDICT exit=0 stat
 
 **Refuse, don't degrade.** If `/goal` can't run (hooks restricted via `disableAllHooks` / `allowManagedHooksOnly`, or a binary without `/goal`), `--driver goal` refuses with `terminal_reason=goal_unavailable` (exit 2); the breadcrumb names `--driver loop` as the portable fallback. `--resume` is **not** supported in goal mode (detachment is slice 003-08) — both a goal-mode `--resume` and a loop-mode `--resume` of a goal-written run-id refuse with `goal_resume_unsupported`.
 
+## Host-scope routing (slice 003-07)
+
+`--driver auto` (the default) decides the path from two deterministic facts and never silently runs the wrong one:
+
+- **`/goal` available** — `claude --version` ≥ 2.1.139.
+- **hooks permitted** — neither `disableAllHooks` (any settings layer) nor `allowManagedHooksOnly` (managed tier) is set; either disables both `/goal` and the meta-judge, leaving only the no-hooks loop driver.
+
+| `--driver` | eligible (both true) | otherwise |
+|---|---|---|
+| `auto` (default) | goal driver | loop driver — fail-safe downgrade, reason on stderr |
+| `goal` | goal driver | **refuses** rc=2 / `goal_unavailable` |
+| `loop` | loop driver | loop driver |
+
+Inspect the decision without running anything:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-loop/loop.py" <target> --explain-routing
+```
+
+It prints the chosen driver, `/goal` eligibility, every settings layer inspected, and the layer that forced any restriction — then exits 0.
+
+## Refuse-on-dirty-tree (slice 003-07)
+
+Before a fresh run, if `<target>` is a git repo with **uncommitted changes to tracked files**, the driver refuses (rc=2 / `terminal_reason=dirty_tree`; the breadcrumb names the dirty paths) — a scheduled / unattended run could otherwise score leftover state as a spurious immediate pass (ADR-0008 V4). On by default. `--allow-dirty` opts out for an intentional dirty run; a non-git target skips the check; untracked files don't count; and a loop-mode `--resume` skips it (its tree is legitimately mid-flight). 
+
 ## Output shape
 
 One per-iteration JSON line on stdout per completed iteration (plus one final summary line):
@@ -107,18 +136,20 @@ One per-iteration JSON line on stdout per completed iteration (plus one final su
  "oracle_composite": 0.6, "oracle_threshold": 0.5, "run_id": "..."}
 ```
 
-Final summary line carries `terminal_reason` (one of `oracle_passed`, `max_iterations_reached`, `cost_ceiling_reached`, `context_full`, `oracle_plateau`, `interrupted`, `claude_invocation_failed`, `gate_invocation_failed`, `verdict_schema_mismatch`, plus the resume-time refusals), `iterations_completed`, `cumulative_cost_usd`, and the configured caps.
+Final summary line carries `terminal_reason` (one of `oracle_passed`, `max_iterations_reached`, `cost_ceiling_reached`, `context_full`, `oracle_plateau`, `interrupted`, `claude_invocation_failed`, `gate_invocation_failed`, `verdict_schema_mismatch`, the preflight `dirty_tree` refusal, plus the resume-time refusals), `iterations_completed`, `cumulative_cost_usd`, and the configured caps.
 
 ## Options
 
 | Flag | What it does |
 |---|---|
-| `--driver {loop\|goal}` | Continuation driver. `loop` (default) is the hand-rolled 003-01..05 driver (portable; every brake servo-side). `goal` delegates continuation to `/goal` with the caps on the outer call + a final `gate.py` verdict (ADR-0008). See [Drivers](#drivers----driver-loopgoal-adr-0008). |
-| `--prompt "<text>"` | Seed prompt sent to claude each iteration. Required for fresh runs; optional on resume (persisted prompt is used when omitted). |
+| `--driver {auto\|loop\|goal}` | Continuation driver. `auto` (default) probes the host and routes goal-or-loop; `loop` is the hand-rolled 003-01..05 driver (portable; every brake servo-side); `goal` delegates continuation to `/goal` with the caps on the outer call + a final `gate.py` verdict (ADR-0008). See [Host-scope routing](#host-scope-routing-slice-003-07). |
+| `--prompt "<text>"` | Seed prompt sent to claude each iteration. Required for fresh runs; optional on resume (persisted prompt is used when omitted). Not required with `--explain-routing`. |
 | `--max-iterations N` | Iteration cap. Default 5. Loop halts at N if no earlier brake fires. **Goal mode:** becomes `--max-turns N` on the outer `claude -p`. |
 | `--cost-ceiling N` | Cumulative cost ceiling in USD. Default $2.00. The iteration that first crosses is the last one to run. Pass `0` to disable. **Goal mode:** becomes `--max-budget-usd N` on the outer call (`0` omits it). |
 | `--context-fill-threshold N` | Refuse iter N+1 when the prior iteration's context-fill ratio ≥ this value (in [0.0, 1.0]). Default 0.75. Pass `0` to disable. |
 | `--plateau-window N` | Halt when the oracle composite has not improved over the last N iterations. Default 3. Pass `0` to disable. |
+| `--allow-dirty` | Bypass the refuse-on-dirty-tree preflight (slice 003-07). By default a fresh run against a git target with uncommitted changes to tracked files refuses (rc=2 / `dirty_tree`). Non-git targets skip the check regardless. |
+| `--explain-routing` | Print the host-scope routing verdict for `<target>` (chosen driver, `/goal` eligibility, settings layers, forcing layer) and exit 0. Read-only — needs no `--prompt`, runs nothing. |
 | `--resume <run-id>` | Resume a prior run. Refuses with rc=2 on missing / schema-mismatched / claude-version-mismatched state (escape via `--resume-anyway`). |
 | `--resume-anyway` | Bypass the schema/version mismatch refusals on resume. Risky — silent mis-decoding may corrupt the run. Does not bypass missing-state refusal. |
 
@@ -165,8 +196,10 @@ Goal mode emits a single summary line (`"driver": "goal"`, no per-iteration line
 | `iteration_cap_reached` | 0 | `--max-turns` bound the `/goal` run (`subtype=error_max_turns`) | Offer a fresh `--driver goal` run with a higher `--max-iterations`. |
 | `cost_ceiling_reached` | 0 | `--max-budget-usd` bound the run (`subtype=error_max_budget_usd`) | Offer a fresh run with a higher `--cost-ceiling` if the user wants to keep spending. |
 | `oracle_disagreement` | 2 | Transcript printed a real pass sentinel but the final gate is below threshold — **fail-closed** | The transcript judge was fooled (or the tree changed). Inspect the target; do NOT treat as a pass. |
-| `goal_unavailable` | 2 | `/goal` couldn't run (hooks restricted, or no `/goal` in this binary) | Re-run with `--driver loop` (the portable hand-rolled driver). Surface the breadcrumb. |
+| `goal_unavailable` | 2 | `/goal` couldn't run — explicit `--driver goal` on an unsupported host (hooks restricted, or `claude` predates `/goal`), or `/goal` refused at runtime | Re-run with `--driver loop` (the portable hand-rolled driver), or `--driver auto`. Surface the breadcrumb; `--explain-routing` shows why. |
 | `goal_resume_unsupported` | 2 | `--resume` of a goal-driven run (out of scope until 003-08) | Start a fresh `--driver goal` run, or use `--driver loop` for resumable runs. |
+| `dirty_tree` | 2 | Preflight: the git target has uncommitted changes to tracked files (slice 003-07) | Commit/stash, or pass `--allow-dirty` for an intentional dirty run. The breadcrumb names the paths. |
+| `gate_vendor_failed` | 2 | Couldn't vendor the clone-portable `gate.py` into the target (e.g. `.claude` is a non-directory, or perms block the write) | Surface the breadcrumb; fix the target's `.claude/` path/permissions. |
 | `claude_invocation_failed` / `gate_invocation_failed` | 2 | Same as loop mode (binary/JSON failure; final gate unparseable) | Surface the stderr breadcrumb. |
 
 ## Examples
