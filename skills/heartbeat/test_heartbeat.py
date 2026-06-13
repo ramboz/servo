@@ -19,8 +19,9 @@ Test classes map 1:1 to slice 011-01 acceptance criteria:
 
 The mock `gh` / `git` harness (AC7) writes bash scripts into a per-test
 `bin/` directory; PATH is set to `<bindir>:/bin:/usr/bin` so the mocks
-shadow any real `gh` / `git` (which live outside /bin or /usr/bin) while
-keeping bash/env available. No live network, gh, or repo state is touched.
+shadow a real `git` (and a real `gh` where it lives outside /bin:/usr/bin)
+while keeping bash/env available. (Ubuntu CI ships /usr/bin/gh, which leaks
+through — see SYSTEM_PATH.) No live network, gh, or repo state is touched.
 """
 
 import hashlib
@@ -39,8 +40,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 HEARTBEAT = REPO_ROOT / "skills" / "heartbeat" / "heartbeat.py"
 
 # Minimal system PATH for tests. /bin + /usr/bin host bash/env on Linux and
-# macOS; intentionally excludes /usr/local/bin and any shim dirs so the real
-# `gh` / `git` binaries cannot accidentally satisfy a test.
+# macOS; intentionally excludes /usr/local/bin and any shim dirs so a real
+# `git` cannot accidentally satisfy a test. NOTE: GitHub's Ubuntu runners ship
+# `gh` at /usr/bin/gh, so gh *does* leak through here — gh-absent scenarios must
+# assert graceful degradation (absent OR non-zero exit), never the exact "not on
+# PATH" wording (which only holds where gh lives outside /bin:/usr/bin).
 SYSTEM_PATH = "/bin:/usr/bin"
 
 
@@ -619,7 +623,11 @@ class SourceDegradationTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_gh_absent_skips_ci_and_issue_keeps_commit(self):
-        # Only git present (no gh on PATH). ci + issue skip; commit survives.
+        # Only a mock git is on PATH, so the real gh is unusable — either absent
+        # (dev machines keep gh outside /bin:/usr/bin) or present-but-failing
+        # (GitHub's Ubuntu runners ship /usr/bin/gh, which leaks through
+        # SYSTEM_PATH and exits non-zero). Either way the gh-backed ci + issue
+        # sources skip independently and commit survives.
         _make_mock_git(self.bindir)
         res = _run_discover(self.target, self.bindir)
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -627,7 +635,10 @@ class SourceDegradationTests(unittest.TestCase):
         sources = {f["source"] for f in findings}
         self.assertEqual(sources, {"commit"})
         self.assertEqual(len(findings), 4)
-        self.assertIn("gh not on PATH", res.stderr)
+        # Assert the degradation was logged for both gh-backed sources, tolerant
+        # of the cause (not-on-PATH vs non-zero exit) so it holds on any runner.
+        self.assertRegex(res.stderr, r"gh (not on PATH|exited \d+).*skipping ci source")
+        self.assertRegex(res.stderr, r"gh (not on PATH|exited \d+).*skipping issue source")
 
     def test_git_log_failure_skips_commit_keeps_gh(self):
         _make_mock_gh(self.bindir)
