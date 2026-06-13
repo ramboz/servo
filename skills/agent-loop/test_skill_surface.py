@@ -123,7 +123,8 @@ class DescriptionBoundsTests(unittest.TestCase):
 
 class OptionsSectionTests(unittest.TestCase):
     """`--prompt`, `--max-iterations`, `--cost-ceiling`, `--context-fill-threshold`,
-    `--plateau-window`, `--resume`, `--resume-anyway` are each named in the body."""
+    `--plateau-window`, `--plateau-noise-floor`, `--resume`, `--resume-anyway` are
+    each named in the body."""
 
     def setUp(self):
         self.text = _skill_text()
@@ -143,6 +144,9 @@ class OptionsSectionTests(unittest.TestCase):
 
     def test_plateau_window_flag_documented(self):
         self.assertIn("--plateau-window", self.text)
+
+    def test_plateau_noise_floor_flag_documented(self):
+        self.assertIn("--plateau-noise-floor", self.text)
 
     def test_resume_flag_documented(self):
         self.assertIn("--resume", self.text)

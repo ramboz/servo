@@ -121,6 +121,11 @@ DEFAULT_CONTEXT_FILL_THRESHOLD = 0.75
 # while the agent gathers context. Flagged in `docs/refinement-todo.md`
 # for tuning once real-world plateau data accumulates. Pass 0 to disable.
 DEFAULT_PLATEAU_WINDOW = 3
+# ADR-0005 clause 4 (δ): plateau treats composite gains smaller than this
+# frozen noise floor as "flat", so a wobbling non-deterministic eval component
+# can neither fake progress (dodging a real plateau halt) nor fake a plateau
+# (halting early). 0.0 = legacy behaviour — any strict gain counts as progress.
+DEFAULT_PLATEAU_NOISE_FLOOR = 0.0
 
 # Slice 003-05 subagent dispatch (ADR-0003). The loop alternates
 # runner → judge → runner → judge → ... starting with runner on iter 1.
@@ -480,20 +485,27 @@ def _assemble_iteration_prompt(
     return "\n".join(parts) + "\n"
 
 
-def _check_plateau(history: list, window: int) -> bool:
+def _check_plateau(
+    history: list, window: int, noise_floor: float = 0.0,
+) -> bool:
     """True iff the last `window` iterations are all non-improving.
 
-    "Non-improving" = composite ≤ max(prior composites). For window=M,
-    requires at least M+1 entries in `history` (one baseline + M
-    non-improving). Equivalent formulation: the global max of all
-    composites equals the max of composites excluding the last M
-    iterations. AC3 pins the `≤` direction (equality counts as
+    "Non-improving" = composite ≤ max(prior composites) + `noise_floor`. For
+    window=M, requires at least M+1 entries in `history` (one baseline + M
+    non-improving). Equivalent formulation: the global max of all composites
+    does not exceed the max of composites excluding the last M iterations by
+    more than the noise floor. AC3 pins the `≤` direction (equality counts as
     non-improving).
 
     `window <= 0` disables the gate (AC4). Entries missing a numeric
     `composite` are ignored (defensive — env-error iterations carry
     composite=None in the history; they don't contribute to the plateau
     judgement).
+
+    `noise_floor` (ADR-0005 clause 4, δ): an improvement must exceed
+    `earlier_max + noise_floor` to reset the plateau; sub-δ wobble reads as
+    flat. Defaults to 0.0 (legacy strict-`≤` behaviour). This is the one
+    additive change the frozen-eval contract requires of `loop.py`.
     """
     if window <= 0:
         return False
@@ -506,7 +518,7 @@ def _check_plateau(history: list, window: int) -> bool:
         return False
     earlier_max = max(composites[:-window])
     overall_max = max(composites)
-    return overall_max <= earlier_max
+    return overall_max <= earlier_max + noise_floor
 
 
 # Test hook: when set, `_generate_run_id` returns comma-separated values
@@ -899,6 +911,7 @@ def _build_initial_state(
     *, run_id: str, target: Path, prompt: str,
     max_iterations: int, cost_ceiling: float,
     context_fill_threshold: float, plateau_window: int,
+    plateau_noise_floor: float,
     claude_version: Optional[str],
 ) -> dict:
     """Construct the canonical fresh-run state dict (ADR-0004 schema).
@@ -933,6 +946,7 @@ def _build_initial_state(
         "context_fill_threshold": context_fill_threshold,
         "last_context_fill_ratio": None,
         "plateau_window": plateau_window,
+        "plateau_noise_floor": plateau_noise_floor,
         "oracle_score_history": [],
         "last_terminal_reason": None,
         "claude_version": claude_version,
@@ -1393,6 +1407,9 @@ def _summary_payload(state: dict, *, terminal_reason: str, final_oracle_status: 
         "context_fill_threshold": state["context_fill_threshold"],
         "context_fill_ratio": state.get("last_context_fill_ratio"),
         "plateau_window": state.get("plateau_window", DEFAULT_PLATEAU_WINDOW),
+        "plateau_noise_floor": state.get(
+            "plateau_noise_floor", DEFAULT_PLATEAU_NOISE_FLOOR,
+        ),
         "oracle_score_history": state.get("oracle_score_history", []),
         "final_oracle_status": final_oracle_status,
         "run_id": state["run_id"],
@@ -1427,6 +1444,7 @@ def run_loop(
     cost_ceiling: Optional[float],
     context_fill_threshold: Optional[float],
     plateau_window: Optional[int] = None,
+    plateau_noise_floor: Optional[float] = None,
     resume_run_id: Optional[str] = None,
     resume_anyway: bool = False,
     allow_dirty: bool = False,
@@ -1557,10 +1575,13 @@ def run_loop(
             state["context_fill_threshold"] = context_fill_threshold
         if plateau_window is not None:
             state["plateau_window"] = plateau_window
+        if plateau_noise_floor is not None:
+            state["plateau_noise_floor"] = plateau_noise_floor
         # Backfill defaults for state files written before slice 003-05.
         # Same state_schema_version=1; additive fields per ADR-0004's
         # "pure additive changes MAY keep version at 1" clause.
         state.setdefault("plateau_window", DEFAULT_PLATEAU_WINDOW)
+        state.setdefault("plateau_noise_floor", DEFAULT_PLATEAU_NOISE_FLOOR)
         state.setdefault("last_verdict", None)
         state.setdefault("last_oracle_json", None)
 
@@ -1584,6 +1605,8 @@ def run_loop(
             context_fill_threshold = DEFAULT_CONTEXT_FILL_THRESHOLD
         if plateau_window is None:
             plateau_window = DEFAULT_PLATEAU_WINDOW
+        if plateau_noise_floor is None:
+            plateau_noise_floor = DEFAULT_PLATEAU_NOISE_FLOOR
         rc = _preflight(
             target, _generate_preflight_run_id(),
             cost_ceiling=cost_ceiling,
@@ -1640,6 +1663,7 @@ def run_loop(
             max_iterations=max_iterations, cost_ceiling=cost_ceiling,
             context_fill_threshold=context_fill_threshold,
             plateau_window=plateau_window,
+            plateau_noise_floor=plateau_noise_floor,
             claude_version=current_claude_version,
         )
         state_path = _state_path_for(target, run_id)
@@ -1884,6 +1908,7 @@ def run_loop(
         # max-prior-composite, halt. AC4 disables when window==0.
         if _check_plateau(
             state["oracle_score_history"], state["plateau_window"],
+            state.get("plateau_noise_floor", DEFAULT_PLATEAU_NOISE_FLOOR),
         ):
             terminal_reason = REASON_ORACLE_PLATEAU
             halted_on_plateau = True
@@ -2474,6 +2499,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--plateau-noise-floor",
+        type=float,
+        default=None,
+        help=(
+            f"Frozen noise floor δ (ADR-0005 clause 4): composite gains "
+            f"smaller than this read as 'flat' for plateau detection, so a "
+            f"wobbling non-deterministic eval component can neither fake "
+            f"progress nor fake a plateau. Default "
+            f"{DEFAULT_PLATEAU_NOISE_FLOOR}. Set to a frozen eval's δ when an "
+            f"eval component contributes to the composite."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         dest="resume",
         default=None,
@@ -2546,6 +2584,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--context-fill-threshold must be in [0.0, 1.0]")
     if args.plateau_window is not None and args.plateau_window < 0:
         parser.error("--plateau-window must be >= 0")
+    if args.plateau_noise_floor is not None and args.plateau_noise_floor < 0:
+        parser.error("--plateau-noise-floor must be >= 0")
 
     # ---- Host-scope routing (slice 003-07 AC4) -----------------------------
     # `loop` always runs (the portable path needs no probe). `goal` / `auto`
@@ -2589,6 +2629,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             name for name, val in (
                 ("--context-fill-threshold", args.context_fill_threshold),
                 ("--plateau-window", args.plateau_window),
+                ("--plateau-noise-floor", args.plateau_noise_floor),
                 ("--resume-anyway", args.resume_anyway or None),
             ) if val is not None
         ]
@@ -2613,6 +2654,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         cost_ceiling=args.cost_ceiling,
         context_fill_threshold=args.context_fill_threshold,
         plateau_window=args.plateau_window,
+        plateau_noise_floor=args.plateau_noise_floor,
         resume_run_id=args.resume,
         resume_anyway=args.resume_anyway,
         allow_dirty=args.allow_dirty,

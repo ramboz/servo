@@ -4642,6 +4642,22 @@ class GoalDriverDispatchTests(_GoalTargetMixin, unittest.TestCase):
         self.assertIn("--plateau-window", result.stderr)
         self.assertIn("ignored", result.stderr)
 
+    def test_plateau_noise_floor_warns_under_goal_driver(self):
+        # --plateau-noise-floor is a plateau brake too, so like --plateau-window
+        # it is a loop-mode-only flag: goal mode ignores it but says so.
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text=GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success"),
+        ))
+        result = _run_goal(self.target, "--prompt", "x",
+                           "--plateau-noise-floor", "0.05",
+                           mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(self._summary(result)["terminal_reason"], "oracle_pass")
+        self.assertIn("--plateau-noise-floor", result.stderr)
+        self.assertIn("ignored", result.stderr)
+
     def test_default_driver_is_loop_and_unchanged(self):
         # Default (no --driver) routes to the hand-rolled loop: a constant mock
         # emits the 003-01..05 single-result JSON; the summary carries loop-mode
@@ -5590,6 +5606,160 @@ class SafeDefaultsTests(unittest.TestCase):
                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
         self.assertEqual(result.returncode, 2, msg=result.stdout)
         self.assertEqual(self._summary(result)["terminal_reason"], "dirty_tree")
+
+
+class PlateauNoiseFloorTests(unittest.TestCase):
+    """ADR-0005 clause 4 (δ): `_check_plateau`'s frozen noise floor lets a
+    wobbling non-deterministic eval component neither fake progress (dodging a
+    real plateau halt) nor fake a plateau (halting early).
+
+    Verification obligation (ADR-0005 §Verification): sub-δ wobble still fires
+    the plateau halt (no false progress), and a supra-δ gain does NOT fire it
+    early (genuine progress resets the brake). These unit-test the predicate;
+    PlateauNoiseFloorLoopTests drives the same obligation through the loop.
+    """
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("loop", LOOP)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.check = module._check_plateau
+
+    @staticmethod
+    def _hist(*composites):
+        return [{"composite": c} for c in composites]
+
+    def test_default_floor_zero_is_legacy_strict(self):
+        # δ defaults to 0.0 → exact prior behaviour (equality is non-improving).
+        self.assertTrue(self.check(self._hist(0.3, 0.3, 0.3, 0.3), 3))
+        self.assertFalse(self.check(self._hist(0.3, 0.4, 0.5, 0.6), 3))
+
+    def test_sub_delta_wobble_still_plateaus(self):
+        # Composite wobbles ±0.01 around 0.80 with δ=0.05 → reads as flat → halt.
+        self.assertTrue(self.check(self._hist(0.80, 0.81, 0.79, 0.805), 3, 0.05))
+
+    def test_sub_delta_climb_does_not_count_as_improvement(self):
+        # A monotone but sub-δ climb (overall_max 0.83 ≤ earlier_max 0.80 + δ
+        # 0.05) is still a plateau — no false progress.
+        self.assertTrue(self.check(self._hist(0.80, 0.81, 0.82, 0.83), 3, 0.05))
+
+    def test_supra_delta_gain_resets_plateau_no_early_halt(self):
+        # A genuine jump beyond δ (0.80 → 0.90 > earlier_max + 0.05) is real
+        # improvement → not a plateau; the brake must not fire early.
+        self.assertFalse(self.check(self._hist(0.80, 0.79, 0.81, 0.90), 3, 0.05))
+
+    def test_gain_exactly_at_floor_is_non_improving(self):
+        # Boundary: a gain of exactly δ does not exceed earlier_max + δ → plateau
+        # (the `≤` direction, consistent with AC3's equality-is-non-improving).
+        self.assertTrue(self.check(self._hist(0.80, 0.80, 0.80, 0.85), 3, 0.05))
+
+
+class PlateauNoiseFloorLoopTests(unittest.TestCase):
+    """End-to-end wiring for `--plateau-noise-floor` δ (ADR-0005 clause 4).
+
+    PlateauNoiseFloorTests above unit-test the `_check_plateau` predicate; these
+    drive the whole loop so the flag's plumbing — CLI parse + validation,
+    persistence into run state, and the threading into the plateau call site —
+    is actually exercised, discharging the ADR §Verification obligation against
+    real loop behaviour rather than the predicate in isolation.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-noise-floor-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    # Strictly-increasing sub-δ climb: every iteration sets a new max, but the
+    # whole span (0.30 → 0.309) is far under δ=0.05. Used by the with/without
+    # pair below to isolate the floor's effect.
+    _SUB_DELTA_CLIMB = [
+        0.30, 0.301, 0.302, 0.303, 0.304,
+        0.305, 0.306, 0.307, 0.308, 0.309,
+    ]
+
+    def test_sub_delta_climb_halts_with_noise_floor(self):
+        # With δ=0.05 the tiny gains read as flat, so the plateau halt fires at
+        # iter 4: history=[0.30,0.301,0.302,0.303]; earlier_max (excl. last 3)
+        # =0.30; overall=0.303 ≤ 0.30+0.05. No false progress.
+        _make_oracle(
+            self.target, _composite_progression_oracle(self._SUB_DELTA_CLIMB),
+        )
+        _mock_claude_with_verdict(self.bindir, self.counter)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "10",
+            "--plateau-window", "3", "--plateau-noise-floor", "0.05",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 4)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+        self.assertEqual(summary["plateau_noise_floor"], 0.05)
+
+    def test_sub_delta_climb_runs_on_without_noise_floor(self):
+        # Same climb, default floor (0.0): each tiny gain is a strict
+        # improvement, so plateau never fires and the loop runs to the cap.
+        # The control proving the floor — not some other change — is what halts
+        # the run above, i.e. the flag is wired through end-to-end.
+        _make_oracle(
+            self.target, _composite_progression_oracle(self._SUB_DELTA_CLIMB),
+        )
+        _mock_claude_with_verdict(self.bindir, self.counter)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--plateau-window", "3",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 5)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertEqual(summary["plateau_noise_floor"], 0.0)
+
+    def test_supra_delta_gain_does_not_halt_early(self):
+        # A genuine >δ jump (0.30→0.40) resets the brake. With δ=0.05 the jump
+        # at iter 4 keeps the loop running past where a flat run would halt; it
+        # only halts once the 0.40 level itself plateaus, at iter 7
+        # (history=[0.30,0.31,0.31,0.40,0.40,0.40,0.40]; earlier_max excl. last
+        # 3 = 0.40; overall 0.40 ≤ 0.40+0.05). Asserting iter 7 (not 4) is the
+        # "does not fire early" half of the ADR obligation.
+        _make_oracle(
+            self.target,
+            _composite_progression_oracle(
+                [0.30, 0.31, 0.31, 0.40, 0.40, 0.40, 0.40],
+            ),
+        )
+        _mock_claude_with_verdict(self.bindir, self.counter)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "10",
+            "--plateau-window", "3", "--plateau-noise-floor", "0.05",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 7)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+
+    def test_negative_noise_floor_rejected(self):
+        # Mirrors the --cost-ceiling / --plateau-window validation: a negative
+        # floor is meaningless; argparse rejects it (rc=2) before any run.
+        _mock_claude_with_verdict(self.bindir, self.counter)
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            "--plateau-noise-floor", "-0.1",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--plateau-noise-floor must be >= 0", result.stderr)
+        self.assertFalse(self.counter.exists())
 
 
 if __name__ == "__main__":
