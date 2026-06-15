@@ -1689,7 +1689,8 @@ class ActionabilityClassificationTests(unittest.TestCase):
 
     def test_ci_pull_request_event_not_actionable(self):
         # A pull_request run on the default branch is still NOT actionable
-        # (someone's in-progress PR); the event gate, not just the branch.
+        # (someone's in-progress PR). The disqualifier is the EVENT, not the
+        # branch — the reason must name the event, even though headBranch==main.
         pr_run = json.dumps([{
             "workflowName": "CI", "headBranch": "main", "conclusion": "failure",
             "url": "https://github.com/o/r/actions/runs/900",
@@ -1702,7 +1703,25 @@ class ActionabilityClassificationTests(unittest.TestCase):
         self.assertTrue(ci)
         for f in ci:
             self.assertFalse(f["actionable"], "pull_request run must not be actionable")
-            self.assertEqual(f["actionable_reason"], "ci_non_default_branch")
+            self.assertEqual(f["actionable_reason"], "ci_non_actionable_event")
+
+    def test_ci_non_actionable_event_takes_precedence_over_branch(self):
+        # Both gates fail: a pull_request event AND a non-default branch. The
+        # event gate is checked first, so the reason names the event — not the
+        # branch — because a PR run is non-actionable regardless of its branch.
+        pr_run = json.dumps([{
+            "workflowName": "CI", "headBranch": "feature-x", "conclusion": "failure",
+            "url": "https://github.com/o/r/actions/runs/903",
+            "displayTitle": "pr build", "event": "pull_request",
+            "createdAt": "2026-06-10T09:00:00Z",
+        }])
+        _make_mock_gh(self.bindir, run_list_json=pr_run, default_branch="main")
+        _make_mock_git(self.bindir)
+        ci = [f for f in self._discover_findings() if f["source"] == "ci"]
+        self.assertTrue(ci)
+        for f in ci:
+            self.assertFalse(f["actionable"])
+            self.assertEqual(f["actionable_reason"], "ci_non_actionable_event")
 
     def test_ci_default_branch_unknown_not_actionable(self):
         # gh repo view fails AND git symbolic-ref fails AND the branch is neither

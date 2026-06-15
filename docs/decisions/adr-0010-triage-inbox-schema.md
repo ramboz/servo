@@ -51,7 +51,7 @@ Each line of `inbox.jsonl` is one JSON object. Fields fall into three **volatili
 - `title`, `detail` (str), `evidence` (object) — refreshed to the current observation
 - `last_seen_at` (ISO-8601 str) — most recent pass that re-observed this finding
 - `actionable` (bool) — the deterministic triage verdict; consulted by 011-03 dispatch
-- `actionable_reason` (str) — machine code, e.g. `ci_default_branch` / `ci_non_default_branch` / `ci_default_branch_unknown` / `issue_open` / `issue_label_<name>` / `commit_context_only`
+- `actionable_reason` (str) — machine code, e.g. `ci_default_branch` / `ci_non_default_branch` / `ci_default_branch_unknown` / `ci_non_actionable_event` / `issue_open` / `issue_label_<name>` / `commit_context_only`
 
 **Reserved `outcome` shape** (written by 011-03, fixed here so 011-04 is stable): `{ "run_id": <str — the `.servo/runs/<run-id>/` the dispatched loop spent in>, "oracle_status": <str>, "oracle_composite": <float>, "cost_usd": <float>, "dispatched_at": <ISO-8601 str> }`. `outcome.cost_usd` is load-bearing: 011-04's whole-heartbeat **resumable** ceiling (= discovery cost + Σ dispatched-loop costs) can then sum from the **inbox alone**, instead of cross-joining into N `state.json` files. Note `evidence` (refreshed — the *latest* observation of a recurring finding) and `outcome.run_id` (sticky — the specific servo run a past dispatch spent in) are **different namespaces** and a reader must not conflate them; for CI, `evidence.run_url` is a *GitHub Actions* run URL while `outcome.run_id` is a *servo* run id.
 

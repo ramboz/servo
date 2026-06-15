@@ -142,6 +142,7 @@ _NON_ACTIONABLE_ISSUE_LABELS = frozenset({
 REASON_CI_DEFAULT_BRANCH = "ci_default_branch"
 REASON_CI_NON_DEFAULT_BRANCH = "ci_non_default_branch"
 REASON_CI_DEFAULT_BRANCH_UNKNOWN = "ci_default_branch_unknown"
+REASON_CI_NON_ACTIONABLE_EVENT = "ci_non_actionable_event"
 REASON_ISSUE_OPEN = "issue_open"
 REASON_ISSUE_LABEL_PREFIX = "issue_label_"   # + the matched label name
 REASON_COMMIT_CONTEXT_ONLY = "commit_context_only"
@@ -313,12 +314,25 @@ def _classify_ci(branch: str, event: str, default_branch: Optional[str]) -> tupl
     """Actionability verdict + reason for a CI finding (AC6).
 
     Actionable iff the run's trigger `event ∈ {push, schedule}` AND its
-    `headBranch` is the repo's default branch. The default branch is the
-    authoritatively-resolved value (`_resolve_default_branch`); when that is
-    unknown, a `main` / `master` heuristic on the finding's own branch is the
-    last resort, and failing even that the finding is classified
-    `ci_default_branch_unknown` (NOT actionable — fail toward not auto-spending).
+    `headBranch` is the repo's default branch. The two gates are reported with
+    distinct reasons so 011-03 / a human sees the actual disqualifier without
+    re-deriving it:
+
+    - `ci_non_actionable_event` — wrong trigger event (a `pull_request` run is
+      someone's in-progress PR, never auto-actionable regardless of branch).
+      Checked first: the event disqualifies independently of branch resolution.
+    - `ci_default_branch_unknown` — actionable event, but the default branch
+      could not be authoritatively resolved (`_resolve_default_branch`) and the
+      run's own branch is neither `main` nor `master` (the last-resort
+      heuristic); NOT actionable — fail toward not auto-spending.
+    - `ci_non_default_branch` — actionable event, default branch resolved, but
+      the run is on some other branch.
+    - `ci_default_branch` — actionable event on the resolved default branch.
     """
+    if event not in _CI_ACTIONABLE_EVENTS:
+        # The disqualifier is the event, not the branch — say so precisely, even
+        # when headBranch happens to be the default branch.
+        return False, REASON_CI_NON_ACTIONABLE_EVENT
     resolved = default_branch
     if resolved is None:
         # Last-resort heuristic: a branch literally named main/master is taken to
@@ -328,7 +342,7 @@ def _classify_ci(branch: str, event: str, default_branch: Optional[str]) -> tupl
             resolved = branch
         else:
             return False, REASON_CI_DEFAULT_BRANCH_UNKNOWN
-    if event in _CI_ACTIONABLE_EVENTS and branch == resolved:
+    if branch == resolved:
         return True, REASON_CI_DEFAULT_BRANCH
     return False, REASON_CI_NON_DEFAULT_BRANCH
 

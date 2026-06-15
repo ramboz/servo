@@ -328,11 +328,9 @@ future upgrade slice).
 
 ---
 
-## `actionable_reason` mis-codes an event-disqualified CI run as `ci_non_default_branch`
+## ~~`actionable_reason` mis-codes an event-disqualified CI run as `ci_non_default_branch`~~ — RESOLVED 2026-06-15
 
-**Deferred:** `_classify_ci` (slice 011-02) returns `ci_non_default_branch` for a CI run disqualified by its *event* (e.g. `pull_request`) even when its `headBranch` IS the default branch. The `actionable: false` verdict is correct; only the machine `actionable_reason` misattributes the cause (the disqualifier is the event, not the branch). Since `actionable_reason` exists so 011-03 / a human can see *why* without re-deriving, the imprecision undercuts that purpose.
-
-**Resolution trigger:** Before 011-03 consumes `actionable_reason` for dispatch logic, OR the next time ADR-0010's CI reason vocabulary is touched. Fix: add an additive `ci_non_actionable_event` reason code (extend ADR-0010's enumerated vocabulary), return it from `_classify_ci` when the event gate fails, and update `test_ci_pull_request_event_not_actionable`.
+**Resolution:** Added `REASON_CI_NON_ACTIONABLE_EVENT = "ci_non_actionable_event"` and reordered `_classify_ci` to check the event gate **first** — a non-`{push, schedule}` run (e.g. `pull_request`) now returns `ci_non_actionable_event` regardless of branch, so the reason names the real disqualifier. The branch gates run only for actionable events, yielding a clean non-overlapping taxonomy: `ci_non_actionable_event` / `ci_default_branch_unknown` / `ci_non_default_branch` / `ci_default_branch`. ADR-0010's `actionable_reason` vocabulary line extended with the new code. `test_ci_pull_request_event_not_actionable` now asserts `ci_non_actionable_event`, and a new `test_ci_non_actionable_event_takes_precedence_over_branch` pins the event-first precedence when both gates fail. 112/112 heartbeat tests green; ruff clean. Closed ahead of the 011-03 dispatch consumer (first half of the resolution trigger).
 
 **Surfaced by:** slice 011-02 craft review (`jig:reviewer`, `[nit]`, PASS verdict).
 
