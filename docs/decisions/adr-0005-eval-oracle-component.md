@@ -1,12 +1,28 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-06-09
+accepted: 2026-06-13
 deciders: ramboz
 supersedes:
 superseded-by:
 ---
 
 # ADR-0005: Eval as a frozen oracle component
+
+> **Accepted 2026-06-13.** The "first real non-deterministic spec" this ADR was
+> written ahead of (see §Context and the design-conformance note under §Open
+> questions) now exists: the **food-log** project authored a frozen
+> **design-fidelity** eval — a `score_design_fidelity` component under
+> `.servo/design-eval/` that screenshots a running UI and judges it against a
+> Claude Design baseline with a pinned multimodal model — and ran it end-to-end
+> on a real slice. It exercised every clause of this contract in practice:
+> n-sample lower-bound gating (clause 3), the plateau noise floor δ (clause 4),
+> `env_error`-not-silent-zero on an unreachable judge (clause 5), and the
+> freeze/stale refusal (clause 2 — swapping the runtime changed the definition
+> hash and the eval correctly refused as stale until re-frozen). jig's
+> attest-only `design-review` pass (jig ADR-0022) attested the frozen verdict
+> read-only, confirming servo-scores / jig-attests holds. This is the
+> "integrate on signal" trigger named in §Context, not a speculative build-out.
 
 ## Context
 
