@@ -1,6 +1,6 @@
 ---
-status: Proposed
-date: 2026-06-12
+status: Accepted
+date: 2026-06-15
 deciders: ramboz
 supersedes:
 superseded-by:
@@ -26,7 +26,7 @@ Cross-run triage state lives at **`<target>/.servo/triage/inbox.jsonl`** (the ma
 
 ### Schema version
 
-`schema_version` is the **first key** of every record (mirroring `gate.py` / `loop.py` / ADR-0004) and is **bumped 1 → 2** for this slice. Per ADR-0002's "bump on any doubt" bias, the bump is warranted: 011-02 adds required fields, changes the *meaning* of `discovered_at` (now first-seen, preserved), and changes the write discipline from overwrite to merge. `schema_version` is written **per record**, and all records in a file MUST carry the **same** version — a mixed-version file is corruption (a reader refuses with rc=2). Per-record (rather than a file header) matches 011-01 and gives line-level robustness.
+`schema_version` is the **first key** of every record (mirroring `gate.py` / `loop.py` / ADR-0004) and is **bumped 1 → 2** for this slice. Per ADR-0002's "bump on any doubt" bias, the bump is warranted: 011-02 adds required fields, changes the *meaning* of `discovered_at` (now first-seen, preserved), and changes the write discipline from overwrite to merge. `schema_version` is written **per record**, and all records in a file MUST carry the **same** version — a mixed-version file is corruption (a reader refuses with rc=2, `schema_version_mixed`). Per-record (rather than a file header) matches 011-01 and gives line-level robustness.
 
 ### Record schema (`schema_version: 2`)
 

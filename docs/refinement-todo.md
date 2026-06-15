@@ -325,3 +325,43 @@ user-edited one (must not clobber).
 **Surfaced by:** slice 004-03 implementation (write-if-absent decision) and its
 `jig:reviewer` pass (decision #2 dispositioned in-scope, trade-off flagged for a
 future upgrade slice).
+
+---
+
+## `actionable_reason` mis-codes an event-disqualified CI run as `ci_non_default_branch`
+
+**Deferred:** `_classify_ci` (slice 011-02) returns `ci_non_default_branch` for a CI run disqualified by its *event* (e.g. `pull_request`) even when its `headBranch` IS the default branch. The `actionable: false` verdict is correct; only the machine `actionable_reason` misattributes the cause (the disqualifier is the event, not the branch). Since `actionable_reason` exists so 011-03 / a human can see *why* without re-deriving, the imprecision undercuts that purpose.
+
+**Resolution trigger:** Before 011-03 consumes `actionable_reason` for dispatch logic, OR the next time ADR-0010's CI reason vocabulary is touched. Fix: add an additive `ci_non_actionable_event` reason code (extend ADR-0010's enumerated vocabulary), return it from `_classify_ci` when the event gate fails, and update `test_ci_pull_request_event_not_actionable`.
+
+**Surfaced by:** slice 011-02 craft review (`jig:reviewer`, `[nit]`, PASS verdict).
+
+---
+
+## Triage by-status tally is computed in two places
+
+**Deferred:** Slice 011-02's `_status_counts` (consumed by the `inbox.md` markdown view) and the inline by-status tally in `_summarize_inbox` (the `status` verb) compute the same status histogram independently. A future status-value change must touch both or they drift.
+
+**Resolution trigger:** Next time either read surface's status tally changes, or a fifth `status` value is added. Extract a shared `_tally_by_status(records)` helper both consume.
+
+**Surfaced by:** slice 011-02 craft review (`jig:reviewer`, `[nit]`, PASS verdict).
+
+---
+
+## `heartbeat.py status` best-effort-skips torn JSONL lines (no strict mode)
+
+**Deferred:** The `status` read path tolerates an unparseable `inbox.jsonl` line by skipping it (never gates — closed `{0,2}`), a deliberately friendly read for a hand-editable artifact. There is no strict-read mode that would rc=2 on any torn line.
+
+**Resolution trigger:** First time a silently-skipped torn line masks a real corruption a human needed to see, OR when a consumer (011-03/011-04) needs a guaranteed-complete read. Add an opt-in `--strict` that refuses rc=2 on any unparseable line.
+
+**Surfaced by:** slice 011-02 implementation (deliberate friendly-read choice, flagged for revisit).
+
+---
+
+## No fixture for a mixed file of two *known* versions (e.g. v1 + v2)
+
+**Deferred:** `SchemaMigrationTests` covers the higher-unknown refusal (`schema_version_unsupported`, e.g. v2+v3) and the lower-only warn-and-display, but the `schema_version_mixed` rc=2 path for two *known* ≤current versions (v1+v2 on the `status` read path) has no dedicated fixture — the higher-unknown branch happens to satisfy the AC1 mixed assertion.
+
+**Resolution trigger:** First `schema_version` bump beyond 2 that makes a mixed-known file plausible, OR opportunistically when `SchemaMigrationTests` is next touched. Add a v1+v2 fixture asserting `schema_version_mixed` rc=2.
+
+**Surfaced by:** slice 011-02 implementation + compliance review (`jig:reviewer`, PASS verdict).

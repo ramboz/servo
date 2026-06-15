@@ -1,12 +1,12 @@
 ---
-status: READY_FOR_REVIEW
+status: DONE
 dependencies: [011-01, adr-0010]
-last_verified:
+last_verified: 2026-06-15
 ---
 
 ## Slice 011-02 — triage-state-spine
 
-**STATUS: READY_FOR_REVIEW**
+**STATUS: DONE**
 
 **Goal:** The inbox becomes the **state spine**: a stable `finding_id`
 fingerprint dedupes across runs; a status lifecycle
@@ -111,8 +111,13 @@ at this slice's close-out).
    `lock_contended` stderr breadcrumb and exits **0** (the closed `{0,2}` contract
    holds — the other run is maintaining the inbox); a `flock` `OSError` exits **2**;
    a missing `fcntl` module (non-POSIX) degrades to unlocked with a one-time
-   breadcrumb (atomic write still prevents torn files). No `.inbox.lock`/`.tmp`
-   cruft is left behind. *Test:* `ConcurrencyLockTests`.
+   breadcrumb (atomic write still prevents torn files). The `.inbox.lock` file is a
+   **persistent** git-ignored lock target — never unlinked (unlinking it races the
+   `flock`: a run arriving in the unlink→close window would create a fresh inode and
+   proceed concurrently; the kernel releases the *lock* on process exit, so no
+   *stale lock* ever blocks a future run — the ADR-0010 property a pidfile lacks).
+   No orphaned `.tmp` staging file is left behind after a successful or failed write.
+   *Test:* `ConcurrencyLockTests`.
 9. **`heartbeat.py status` subcommand (read-only read-back).** `heartbeat.py
    status <target>` reads `inbox.jsonl` and prints a **human** summary by default —
    counts by `status`, by `source`, by actionability, plus the open-actionable
@@ -141,30 +146,30 @@ at this slice's close-out).
     `HumanViewTests` / `DependencyFreeTests`.
 
 **DoD:**
-- [ ] All ACs pass; full existing suite green (no regressions in `test_gate.py` /
+- [x] All ACs pass; full existing suite green (no regressions in `test_gate.py` /
       `test_scaffold.py` / `test_loop.py`).
-- [ ] Per-AC coverage under `skills/heartbeat/test_heartbeat.py`:
+- [x] Per-AC coverage under `skills/heartbeat/test_heartbeat.py`:
       AC1→`SchemaV2RecordShapeTests`, AC2→`FindingIdStabilityTests`,
       AC3→`MergeDedupeTests`, AC4→`ResumeTests`, AC5→`RetentionTests`,
       AC6→`ActionabilityClassificationTests`, AC7→`ProvenanceMarkerTests`,
       AC8→`ConcurrencyLockTests`, AC9→`StatusSubcommandTests`,
       AC10→`SchemaMigrationTests`, AC11→the extended 011-01 classes.
-- [ ] Reviewed by independent reviewer subagent (compliance + craft +
+- [x] Reviewed by independent reviewer subagent (compliance + craft +
       reconciliation passes; verdicts recorded under `reviews/`).
-- [ ] Implementation review passed.
-- [ ] Deviation log produced under this slice heading.
-- [ ] Reconciliation review passed.
-- [ ] **ADR-0010 flipped Proposed → Accepted** — the crystallizing decision is now
+- [x] Implementation review passed.
+- [x] Deviation log produced under this slice heading.
+- [x] Reconciliation review passed.
+- [x] **ADR-0010 flipped Proposed → Accepted** — the crystallizing decision is now
       implemented and verified.
-- [ ] `docs/architecture.md` updated: ADR-0010 graduated into the "Decisions"
+- [x] `docs/architecture.md` updated: ADR-0010 graduated into the "Decisions"
       table, and the "Runtime artifacts" inbox-schema prose finalized to the
       shipped v2 shape (the spec-level DoD's "finalized at close-out" item).
-- [ ] `docs/refinement-todo.md` updated if any decisions were deferred during
+- [x] `docs/refinement-todo.md` updated if any decisions were deferred during
       implementation.
 
 ### Close-out (post-DONE)
 
-- [ ] `docs/specs/README.md` status board: spec 011 → `IN_PROGRESS (slice 011-02)`
+- [x] `docs/specs/README.md` status board: spec 011 → `IN_PROGRESS (slice 011-02)`
       (via `workflow.py status-board`).
 
 **Anti-horizontal-phasing check:** After this slice a Routine can run **repeated**
@@ -194,3 +199,75 @@ heuristic, commit-as-context) are tuned to 011-01's real output per the spike's
   and retry-with-backoff for `tried` findings.
 - **Target `.gitignore` `triage/` reservation** — a separate scaffold-init
   refinement-todo; servo's *own* repo already ignores `.servo/`.
+
+### Deviation log (after reconciliation)
+
+Implementation matched the ACs as written; the items below are clarifications,
+in-slice test evolutions, and disclosed limitations. No AC was dropped or
+reshaped beyond the AC8 plan-review clarification (now recorded in AC8 itself).
+
+**Plan-review clarification (pre-implementation).**
+- AC8's "no `.inbox.lock` left behind" was clarified to "the lock file is
+  **persistent** — never unlinked" before implementation. Unlinking a `flock`
+  target reintroduces a race (a run arriving in the unlink→close window mints a
+  fresh inode and proceeds concurrently); the kernel releases the *lock* on
+  process exit, so no stale lock persists. Aligns the AC with ADR-0010's own
+  pidfile-vs-flock reasoning.
+
+**In-slice test evolutions (live-shape regression tests updated, not new gaps).**
+- `FindingRecordShapeTests::test_schema_version_is_first_key_and_int_one` (011-01)
+  asserted `== 1`; renamed `...int_two` + assertion updated for the universal v2
+  bump (AC1).
+- `AtomicWriteTests::test_rerun_overwrites_not_appends` →
+  `test_rerun_does_not_duplicate`: overwrite became merge; on identical signals
+  the record count is unchanged, so the assertion held and only the name/comment
+  were corrected to describe merge-in-place (AC3/AC11).
+- `.inbox.lock` added to the AC11 byte-snapshot exact-set + the stdlib allowlist
+  (`fcntl`). The read-only-*outside*-triage invariant is unchanged — the lock
+  lives *inside* `.servo/triage/`.
+
+**Design clarifications (faithful to ADR-0010, made explicit).**
+- Default branch is resolved **lazily inside `_discover_ci`** (only when ≥1 CI
+  run exists), honoring ADR-0010's "once per pass" while avoiding a needless
+  `gh repo view` on the bad-JSON / empty-ci degradation paths (AC4/AC6).
+- The `main`/`master` last-resort tier is applied per-finding in `_classify_ci`
+  (matching only the two conventional names, so it never up-classifies a feature
+  branch); `_resolve_default_branch` returns `None` when both `gh` and
+  `git symbolic-ref` fail (AC6).
+- `provenance` is **re-derived (healed)** from `source` on every merge, and
+  `_normalize_record` re-emits records in canonical v2 key order — a hand-edited
+  inbox is restored to a byte-stable, drift-free shape. "Immutable" is enforced,
+  not merely asserted (AC7).
+
+**Reason-code reconciliation (ADR-0010 finalized to shipped reality).**
+- The implementation emits `schema_version_mixed` (rc=2) when the `status` read
+  path sees >1 distinct known version. ADR-0010 already specified the
+  mixed-version refusal ("a reader refuses with rc=2"); the reason-code *name*
+  was added to ADR-0010 at reconciliation so the vocabulary matches the code.
+- Migration asymmetry (consistent with ADR-0010): the **`status` read path**
+  rejects a mixed/higher-unknown version (rc=2); the **`discover` write path**
+  discards any non-current record (incl. a stray higher version) and rebuilds
+  from live signals — "rejection" on read, "discard+rebuild" on write. The
+  write-path drop is by `schema_version != current`, marginally broader than
+  AC10's literal "< 2"; benign because the inbox is fully re-derivable.
+
+**Disclosed limitations (deferred — see `docs/refinement-todo.md`).**
+- `_classify_ci` returns `ci_non_default_branch` for a CI run disqualified by its
+  *event* even when its branch is the default — a cosmetic reason-code
+  imprecision (the `actionable: false` verdict is correct). A future additive
+  `ci_non_actionable_event` code is queued for before 011-03 consumes
+  `actionable_reason`.
+- `_status_counts` (markdown view) and the inline by-status tally in
+  `_summarize_inbox` (status verb) duplicate a small computation; a shared helper
+  is queued as a nice-to-have.
+- Contributor-controlled `title`/`detail` render verbatim into `inbox.md`
+  (`detail` line-1-trimmed; `title` not newline-sanitized). Out of scope for
+  011-02 — the artifact is human-reviewed and ADR-0010 scopes untrusted-text
+  handling to 011-03, which acts on the recorded `provenance`.
+
+**Verification.** 111 `test_heartbeat.py` tests green (53 original + 58
+new/extended); ruff 0.15.17 clean (targeted + repo-wide). Full suite: 943 passed,
+1 skipped, 2 pre-existing `skills/oracle-hook/` env failures (empty meta-judge
+stdout under the venv) — proven unrelated by re-running with the heartbeat changes
+`git stash`ed (they fail identically on a clean tree); no regressions in
+`test_gate.py` / `test_scaffold.py` / `test_loop.py`.
