@@ -363,3 +363,13 @@ future upgrade slice).
 **Resolution trigger:** First `schema_version` bump beyond 2 that makes a mixed-known file plausible, OR opportunistically when `SchemaMigrationTests` is next touched. Add a v1+v2 fixture asserting `schema_version_mixed` rc=2.
 
 **Surfaced by:** slice 011-02 implementation + compliance review (`jig:reviewer`, PASS verdict).
+
+---
+
+## Reciprocal "servo-available" breadcrumb for jig's `slice-land` pull-hint
+
+**Deferred:** jig's `slice-land prepare` wants to nudge a user toward `/servo:scaffold-init` when servo is available on the machine but the *current project* is not yet servo-scaffolded (no `.servo/`). jig cannot reliably detect the servo **plugin** itself: jig's spike (jig spec 072-03) found no signal that is at once documented/supported, install-method-robust, host-agnostic, subprocess-free, and non-forcing — `~/.claude/plugins/installed_plugins.json` is an undocumented internal that misses local-clone installs (including this maintainer's own servo clone, which appears in no registry), `claude plugin list` is a subprocess, and a `plugin.json` dependency would force servo onto every jig user. The agreed direction (human, 2026-06-15) is a **reciprocal servo-side breadcrumb**: servo writes a small, host-agnostic "servo is available here" marker at install/scaffold time that jig reads with a plain filesystem `stat` (no subprocess, no servo invocation). servo owns the contract — mirroring [ADR-0004](decisions/adr-0004-session-state-file-format.md)'s "the writer owns the cross-plugin format" precedent (ADR-0004 already documents jig reading `.servo/runs/*/state.json`).
+
+**Resolution trigger:** Write a reciprocal servo-side ADR defining the breadcrumb's exact path + format, then emit it from servo's install/scaffold path. Constraints: (a) host-agnostic location — NOT under `~/.claude/` (Claude-Code-specific and `CLAUDE_CONFIG_DIR`-relocatable); (b) written for a **local-clone** servo user too, not only marketplace installs (the exact gap that sank jig's plugin auto-detection); (c) cheap + read-only for the consumer. Once defined + emitted, jig spec 072-02 (reshaped, currently blocked on this) consumes it: servo-available AND no project `.servo/` → nudge.
+
+**Surfaced by:** jig spec 072 — 072-01 shipped the present-`.servo/` pull-hint (jig `land.py prepare`); 072-03 spike found plugin auto-detection NO-GO; 072-02 was reshaped onto this breadcrumb and is blocked on this servo-side work. Cross-refs: jig ADR-0022 Scope ("a reciprocal servo-side ADR — servo's call"), jig `docs/inbox.md` 2026-06-15.
