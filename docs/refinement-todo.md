@@ -373,3 +373,53 @@ future upgrade slice).
 **Resolution trigger:** Write a reciprocal servo-side ADR defining the breadcrumb's exact path + format, then emit it from servo's install/scaffold path. Constraints: (a) host-agnostic location — NOT under `~/.claude/` (Claude-Code-specific and `CLAUDE_CONFIG_DIR`-relocatable); (b) written for a **local-clone** servo user too, not only marketplace installs (the exact gap that sank jig's plugin auto-detection); (c) cheap + read-only for the consumer. Once defined + emitted, jig spec 072-02 (reshaped, currently blocked on this) consumes it: servo-available AND no project `.servo/` → nudge.
 
 **Surfaced by:** jig spec 072 — 072-01 shipped the present-`.servo/` pull-hint (jig `land.py prepare`); 072-03 spike found plugin auto-detection NO-GO; 072-02 was reshaped onto this breadcrumb and is blocked on this servo-side work. Cross-refs: jig ADR-0022 Scope ("a reciprocal servo-side ADR — servo's call"), jig `docs/inbox.md` 2026-06-15.
+
+---
+
+## Worktree retention / GC for `.servo/dispatch/` is unbounded
+
+**Deferred:** slice 011-03 dispatch creates a fresh linked worktree per candidate at `<target>/.servo/dispatch/<finding_id>/` and **retains** it (v1) so a `passed` candidate's proposed fix is inspectable/landable and its `outcome.run_id` correlates. Nothing bounds the number of retained worktrees + branches, so a long-lived scheduled target accumulates `.servo/dispatch/*` (and `servo/heartbeat/*` branches) without limit. A `tried`/`passed` finding is never re-dispatched, so a given finding's worktree is created once — but distinct findings across many heartbeats grow the set unboundedly.
+
+**Resolution trigger:** First target where `.servo/dispatch/` growth is a disk/clutter problem, OR when 011-04's `run` verb lands (natural place to add a retention knob). Options to weigh: GC-on-completion (lose inspectability), retain-only-on-`passed` (keep the landable ones, prune `tried`/`env_error`), or a `--keep-last N` / age bound. A `heartbeat.py gc <target>` verb or a `--prune` flag on `dispatch`/`run` would `git worktree remove` + delete the branch for evicted entries.
+
+**Surfaced by:** slice 011-03 (Out-of-scope + Open questions: "Worktree + result lifecycle"); DoD-required follow-up.
+
+---
+
+## Does the dispatched loop commit its fix? (landable branch vs working-tree diff)
+
+**Deferred:** 011-03 dispatches `loop.py` into the worktree on branch `servo/heartbeat/<finding_id>` but does not decide whether the loop **commits** its fix. If the loop commits, the branch is directly landable (cherry-pick / merge / PR); if it leaves a dirty working tree, a human reconstructs the fix from the worktree diff. The dispatch contract deliberately does not depend on either (it records `outcome.run_id` and retains the worktree regardless), but landing ergonomics do.
+
+**Resolution trigger:** Resolve against a **live** `loop.py` dispatch (the same live-`claude -p` gap the 003 spike open-questions note records) — observe whether a real loop run commits. If it does not and landability matters, either have dispatch commit the worktree's result on a `passed` outcome, or document the working-tree-diff reconstruction in the 011-05 skill. Pairs with the worktree-retention decision above.
+
+**Surfaced by:** slice 011-03 (Assumptions A3 + Open questions: "Does the dispatched loop commit its fix?"); DoD-required follow-up.
+
+---
+
+## Dispatch holds the inbox advisory lock across the whole pass
+
+**Deferred:** unlike `discover` (which holds the `fcntl.flock` only around the fast read-merge-write, explicitly *not* across the slow `gh`/`git` enumeration), `dispatch` acquires the lock once up front and **holds it across the entire pass** — including every slow `loop.py` subprocess. This guarantees no *completed* loop outcome is ever lost to mid-pass contention (each outcome is written atomically under the held lock) and is the model AC8's `LOCK_EX | LOCK_NB` + "backs off (exit 0)" wording most directly supports. The trade-off: a concurrent `discover` (or a second `dispatch`) finds the lock contended and backs off (exit 0) for the *whole* dispatch duration, so that tick's discovery is skipped (self-correcting on the next Routine tick; rare outside a double-fire, and a non-issue for 011-04's single-process `run` = discover-then-dispatch).
+
+**Resolution trigger:** First time the "a long dispatch starves discovery" trade-off bites a real schedule (e.g. discovery cadence matters and dispatch passes run long). Alternative to weigh: a lock-per-outcome-write model (release during loops, re-acquire briefly per write) — but that must block-and-retry rather than back off, to avoid losing a just-completed loop's outcome, which diverges from `discover`'s non-blocking back-off. Revisit alongside 011-04's ceiling accounting.
+
+**Surfaced by:** slice 011-03 implementation (deliberate design choice; deviation log).
+
+---
+
+## A dispatch env-error leaves the finding `tried` — no auto-retry for *transient* env-errors
+
+**Deferred:** a per-candidate dispatch env-error (non-git target, worktree-create failure, worktree oracle unverified, or a `loop.py` that emitted no parseable summary) records `attempts += 1`, `outcome.oracle_status = "env_error"`, and `status = "tried"` (AC7's unconditional "passed iff pass, else tried"). The one-attempt-in-v1 rule (ADR-0010) then prevents re-dispatch — correct for a *non-transient* env-error (a non-git target fails identically forever), but a *transient* one (a flaky `git`, a momentarily-busy worktree path) is also frozen at `tried` and won't retry without a human reopening it (and v1 has no machine "reopen" — `skipped` is human-only and `open` is not auto-restored).
+
+**Resolution trigger:** First time a transient dispatch env-error wrongly parks a still-fixable finding. Options: distinguish transient vs permanent env-errors (leave transient ones `open` with a bounded retry counter on `attempts`), or add a `heartbeat.py reopen <finding_id>` verb / `--retry-env-errors` flag. Pairs with ADR-0010's deferred "retry-with-backoff for `tried`". **Coupled with `_remove_worktree_if_present`:** today a retained worktree is force-removed on re-dispatch only for a finding that stayed `open` (never looped) — safe precisely because a looped finding is `tried`/`passed` and leaves the candidate set. If transient env-errors start staying `open` for retry, that teardown would begin clobbering a worktree whose prior loop *did* run; resolve this entry and the worktree-GC/retention entry together.
+
+**Surfaced by:** slice 011-03 implementation (AC6/AC7 env-error status interpretation; deviation log) + arch review (`jig:reviewer`, PASS-WITH-NITS).
+
+---
+
+## Dispatch leaves `inbox.md` stale; uncommitted-`oracle.sh` edits env-error the candidate
+
+**Deferred:** two small disclosed limitations of 011-03 dispatch. (1) `dispatch` updates only `inbox.jsonl` (the spine); the generated `inbox.md` human view is **not** regenerated, so after a dispatch pass it shows pre-dispatch statuses until the next `discover` rewrites it (the accurate read-back is `heartbeat.py status`, which reads the jsonl). (2) Provisioning copies the **live** `<target>/oracle.sh` over the worktree's HEAD checkout; if the target has an **uncommitted** `oracle.sh` edit, the worktree's tracked `oracle.sh` then differs from its HEAD → `loop.py`'s dirty-tree preflight refuses (`dirty_tree`) → the candidate is recorded as an env-error. v1 deliberately does **not** pass `--allow-dirty` on the unattended path (don't loosen a guardrail without a spec mandate).
+
+**Resolution trigger:** (1) First time a stale `inbox.md` confuses a reviewer — have `dispatch` regenerate `inbox.md` (needs a small `_render_markdown` tweak for a non-discovery "Updated at" header, since dispatch has no per-source discovery health to report). (2) First time a legitimately-edited-but-uncommitted oracle should be scored — decide whether dispatch passes `--allow-dirty` for the worktree it provisioned (the dirt is its own intentional provisioning) or requires a committed oracle.
+
+**Surfaced by:** slice 011-03 implementation (deviation log).

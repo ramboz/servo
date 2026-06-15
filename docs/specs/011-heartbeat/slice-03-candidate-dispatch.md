@@ -1,13 +1,13 @@
 ---
-status: READY_FOR_REVIEW
+status: DONE
 dependencies: [011-02, 002, 003, adr-0010]
 arch_review: true
-last_verified:
+last_verified: 2026-06-15
 ---
 
 ## Slice 011-03 — candidate-dispatch
 
-**STATUS: READY_FOR_REVIEW**
+**STATUS: DONE**
 
 **Goal:** Each **actionable, `open`** finding becomes a candidate and gets one
 oracle-gated loop attempt in isolation: a `gate.py` oracle **preflight
@@ -161,32 +161,129 @@ oracle gate. `heartbeat.py dispatch <target>` is the new verb.
     `DependencyFreeTests`.
 
 **DoD:**
-- [ ] All ACs pass; full existing suite green (no regressions in `test_gate.py` /
-      `test_loop.py` / `test_scaffold.py`).
-- [ ] Per-AC coverage under `skills/heartbeat/test_heartbeat.py`:
+- [x] All ACs pass; full existing suite green (no regressions in `test_gate.py` /
+      `test_loop.py` / `test_scaffold.py`). *(heartbeat 168, gate 75, scaffold 42/1
+      skipped, loop 253 — all green; ruff 0.15.17 clean.)*
+- [x] Per-AC coverage under `skills/heartbeat/test_heartbeat.py`:
       AC1→`CandidateSelectionTests`, AC2→`OraclePreflightRefusalTests`,
       AC3→`WorktreeIsolationTests`, AC4→`WorktreeOracleProvisioningTests`,
       AC5→`UntrustedPromptFramingTests`, AC6→`LoopDispatchOutcomeTests`,
       AC7→`OutcomeRecordingTests`, AC8→`DispatchConcurrencyTests`,
-      AC9→`SerialDispatchTests`, AC10→`DispatchExitContractTests` + the extended
-      011-01/02 invariant classes. `loop.py` / `gate.py` are driven via the
-      established PATH-injected mock-binary harness (003-01 AC8 pattern) so no
-      test makes a live `claude -p` call.
-- [ ] **arch_review TRIGGERED** (`arch_review: true`): this slice opens the
+      AC9→`SerialDispatchTests`, AC10→`DispatchExitContractTests` +
+      `DispatchReadOnlyByteSnapshotTests` + `DispatchStdlibOnlyTests` (the extended
+      011-01/02 invariant classes). `loop.py` / `gate.py` are driven via the
+      established mock-binary harness (003-01 AC8 pattern) — adapted to the
+      `SERVO_HEARTBEAT_{GATE,LOOP}_PY` env-override test-hook (see deviation log) —
+      so no test makes a live `claude -p` call.
+- [x] **arch_review TRIGGERED** (`arch_review: true`): this slice opens the
       heartbeat's **one execution edge** — it spawns `loop.py` subprocesses and
       creates git worktrees, a new module boundary (heartbeat *composes* the loop;
       the loop stays trigger-agnostic) with an adversarial surface (Guardrail #4).
-      Record the arch-pass verdict under `reviews/slice-03-arch.md` alongside
-      compliance + craft.
-- [ ] Reviewed by independent reviewer subagent (compliance + craft + arch +
-      reconciliation passes; verdicts recorded under `reviews/`).
-- [ ] Deviation log produced under this slice heading.
-- [ ] `docs/architecture.md` updated: the dispatch execution edge, the reserved
+      Arch-pass verdict recorded under `reviews/slice-03-arch.md`
+      (**PASS-WITH-NITS** — module boundary sound, Guardrails #3/#4 well-bounded,
+      A1/A2 de-risked, no new ADR needed; nits folded into the deviation log +
+      refinement-todo).
+- [x] Reviewed by independent reviewer subagent (`jig:reviewer`): compliance
+      (**PASS**), craft (**PASS-WITH-NITS**), arch (**PASS-WITH-NITS**),
+      reconciliation (**PASS**) — verdicts under `reviews/slice-03-*.md`. No
+      blockers; all nits addressed inline or routed to refinement-todo.
+- [x] Deviation log produced under this slice heading.
+- [x] `docs/architecture.md` updated: the dispatch execution edge, the reserved
       git-ignored `<target>/.servo/dispatch/` worktree path (added beside
       `runs/` / `races/` / `triage/`), and the heartbeat-composes-loop boundary.
-- [ ] `docs/refinement-todo.md` updated for any decisions deferred during
+- [x] `docs/refinement-todo.md` updated for any decisions deferred during
       implementation (esp. the worktree-retention / GC policy and the
       does-the-loop-commit question — see Open questions).
+
+### Deviation log
+
+Implementation matched the ACs as written. The items below are implementer's
+calls within the spec's stated latitude, assumption resolutions, and disclosed
+limitations. No AC was dropped or reshaped. **168 heartbeat tests green** (112
+prior + 56 new), full suite green (`test_gate.py` 75, `test_scaffold.py` 42/1
+skipped, `test_loop.py` unchanged), ruff clean (0.15.17).
+
+**Assumption resolutions (the `arch_review: true` load-bearing claims).**
+- **A1 — nested worktree path: CONFIRMED by probe.** `git worktree add -B
+  servo/heartbeat/<fid> .servo/dispatch/<fid> HEAD` yields a working linked
+  worktree even though `.servo/` is git-ignored; the HEAD checkout carries the
+  tracked source (`src.py`, a committed `oracle.sh`) but **not** `.servo/`
+  (git-ignored) — which is exactly why AC4 provisioning is required.
+  `git worktree remove --force` cleans up. No fallback to an out-of-tree temp dir
+  was needed; `WorktreeIsolationTests` exercises the real path.
+- **A2 — provisioning completeness: de-risked by the AC4 gate verification.**
+  `test_incomplete_provisioning_records_env_error_and_skips` drives an oracle that
+  reads a deliberately non-provisioned file (`.servo/triage/sentinel`) — it passes
+  the `<target>` preflight but `exit 2`s in the worktree, and the candidate is
+  recorded `env_error` and skipped, never mis-scored.
+- **A3 — loop result shape:** v1 **retains** the worktree + records
+  `outcome.run_id`, so the contract does not depend on the loop committing. The
+  live-`claude -p` gap is unchanged from the 003 spike (tests use a deterministic
+  stand-in loop).
+
+**Implementer's calls (within spec latitude).**
+- **Test seam = `SERVO_HEARTBEAT_{GATE,LOOP}_PY` env override**, not a literal
+  PATH-injected binary. servo scripts are invoked as `python3 <abspath>` (loop.py
+  resolves gate.py via `GATE_PATH`, not PATH), so the established `SERVO_*`
+  test-hook idiom (cf. `SERVO_TEST_RUN_IDS`, `SERVO_MANAGED_SETTINGS_PATH`) is the
+  faithful mechanism. The mock `loop.py` is injected via the override (logs argv +
+  emits a canned summary); `gate.py` runs **for real** against a controlled
+  `oracle.sh` for AC2/AC4, proving genuine deference to gate.py's taxonomy. Same
+  principle as the cited 003-01 AC8 pattern (a fake stand-in so no live
+  `claude -p` runs); no test makes a live call.
+- **Advisory lock held across the whole pass**, not just the brief read-merge-
+  write `discover` uses. AC8's `LOCK_EX | LOCK_NB` + "backs off (exit 0)" wording
+  most directly supports an up-front-acquire-and-hold model, and holding it
+  guarantees no *completed* loop outcome is ever lost to mid-pass contention
+  (outcomes are written atomically after each candidate). Trade-off: a concurrent
+  `discover` backs off for the pass duration (self-correcting; rare outside a
+  double-fire). Flagged in refinement-todo.
+- **Dispatch env-error → `status = tried`** (`attempts += 1`,
+  `outcome.oracle_status = "env_error"`). AC7's status rule is unconditional
+  ("`passed` iff `pass`, else `tried`") and recording an `outcome` implies an
+  attempt was made; the one-attempt-in-v1 rule (ADR-0010) then prevents
+  re-dispatch churn against a non-transient env-error (non-git target, missing
+  sidecar). A human sees `tried` + `env_error` in the reviewable inbox. The
+  "should a *transient* env-error stay `open` for retry?" question is in
+  refinement-todo.
+- **Provisioning scope = `oracle.sh` + all of `.servo/` minus
+  `{runs,races,triage,dispatch}`.** The manifest does not enumerate sidecars, and
+  the spec-oracle overlay vendors `checks.py`/`checks.json`/frozen baselines under
+  `.servo/spec-oracles/<id>/`; copying the tree minus the volatile/recursive dirs
+  captures them future-proofly, with the AC4 gate verification as the completeness
+  net (A2). `dispatch/` is excluded as a recursion hazard (it *contains* the
+  worktrees).
+- **`dispatch` writes only `inbox.jsonl`** (the spine + the contract AC8 pins),
+  not `inbox.md`. The accurate post-dispatch human read-back is
+  `heartbeat.py status` (reads the jsonl); the next `discover` regenerates the
+  `inbox.md` view. Minimal write surface (tightest AC10 read-only posture); noted
+  in refinement-todo.
+- **`--cost-ceiling` / `--max-iterations` forwarded only when provided** (else
+  loop.py's own defaults — $2 / 5). Defers a heartbeat-specific per-candidate
+  default to 011-04's whole-pass ceiling (the Open question).
+- **No outer subprocess timeout on the loop or the gate preflight** — both
+  self-bound: `loop.py` via `--max-iterations` + the per-iteration claude timeout
+  + the cost ceiling; `gate.py` via its own oracle timeout
+  (`DEFAULT_TIMEOUT_SECONDS = 300`, `SERVO_GATE_TIMEOUT`-overridable), so a wedged
+  oracle on an attacker-influenced repo can't hang the preflight. An outer
+  wall-clock cap would prematurely kill a legitimate long loop.
+
+**Disclosed limitations (→ refinement-todo).**
+- An `oracle.sh` whose **live content or mode diverges from HEAD** in the target
+  makes the provisioned worktree's tracked `oracle.sh` differ from its checkout →
+  loop.py's dirty-tree preflight refuses (`dirty_tree`) → recorded as a
+  per-candidate env-error (safe degradation; v1 does **not** pass `--allow-dirty`
+  on the unattended path). The common trigger is an **uncommitted** oracle edit; a
+  subtler one is a committed-non-exec oracle made executable only in the working
+  tree (provisioning's defensive `chmod +x` then diverges from HEAD's mode).
+- The env-error→`tried` rule and `_remove_worktree_if_present`'s
+  clobber-safety are **coupled**: a retained worktree is only ever force-removed
+  for a finding that stayed `open` (never looped), because a looped finding is
+  `tried`/`passed` and leaves the candidate set. If a future slice lets a
+  *transient* env-error stay `open` for retry (the refinement-todo question),
+  that teardown would start clobbering a worktree whose prior loop *did* run —
+  resolve the two together.
+- Worktree **retention is unbounded** (v1 retains every `.servo/dispatch/<fid>/`).
 
 ### Close-out (post-DONE)
 
