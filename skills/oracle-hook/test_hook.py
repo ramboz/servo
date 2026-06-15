@@ -94,6 +94,11 @@ def _run_meta_judge(
     encoded) or a raw ``str`` (sent verbatim, to exercise unparseable stdin)."""
     payload = stdin_obj if isinstance(stdin_obj, str) else json.dumps(stdin_obj)
     env = dict(os.environ)
+    # Pin the meta-judge's bare `python3` to this suite's interpreter (servo's
+    # >=3.11 floor) so the real-gate integration tests don't fall back to an
+    # older system python3 (gate.py uses 3.10+ unions). No-op in CI. See the
+    # matching note in test_dogfood.py:_fire_stop.
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
     env["CLAUDE_PROJECT_DIR"] = str(project_dir)
     if extra_env:
         env.update(extra_env)

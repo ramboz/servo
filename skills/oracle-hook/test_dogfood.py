@@ -78,6 +78,12 @@ def _fire_stop(target: Path, *, stop_hook_active: bool = False) -> subprocess.Co
     with `CLAUDE_PROJECT_DIR` pointed at the fixture (as Claude Code sets it)."""
     script = target / ".servo" / "hooks" / "meta-judge.sh"
     env = dict(os.environ)
+    # The meta-judge shells out to bare `python3`; pin it to the interpreter
+    # running this suite (servo's >=3.11 floor) so it can't fall back to an
+    # older system python3 on a dev box — gate.py uses 3.10+ `X | Y` unions and
+    # dies under 3.9 with an empty-stdout rc=1 the chain misreads as a silent
+    # pass. CI's python3 is already >=3.11, so this is a no-op there.
+    env["PATH"] = os.path.dirname(sys.executable) + os.pathsep + env.get("PATH", "")
     env["CLAUDE_PROJECT_DIR"] = str(target)
     payload = {"hook_event_name": "Stop", "stop_hook_active": stop_hook_active}
     return subprocess.run(
