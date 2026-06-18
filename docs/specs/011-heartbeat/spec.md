@@ -238,7 +238,7 @@ capability, not a prerequisite for "discovery works."
 | 011-01 | discover-and-inbox | **Spike-shaped, implementation-ready.** `heartbeat.py discover <target>` does a **read-only** probe of CI failures (`gh`), open issues (`gh`), and recent commits (`git`), and writes findings to `<target>/.servo/triage/inbox.jsonl` + a generated `inbox.md` view. Validates the scheduled-read-only-discovery→inbox assumption end-to-end. | Implementation-ready |
 | 011-02 | triage-state-spine | The inbox becomes the **state spine**: a stable `finding_id` fingerprint dedupes across runs; a status lifecycle (`open`→`tried`→`passed`/`skipped`) is tracked; `heartbeat.py status` reads it back. The next heartbeat **resumes** — already-passed/tried findings are not re-surfaced as new work. | Goal only |
 | 011-03 | candidate-dispatch | Each **actionable, `open`** finding becomes a candidate: `gate.py` oracle **preflight (refuse-without-oracle)** → an **isolated git worktree** → `loop.py` (spec 003) → the outcome (`tried` + final oracle status, or `passed`) is recorded back to the inbox. Nothing spawns a loop without passing the oracle. (Seam: `race.py` (005) as an alternate dispatch target when it lands.) | Goal only |
-| 011-04 | heartbeat-cost-ceiling | A **heartbeat-level** hard cost ceiling bounds *discovery (any LLM assist) + the sum of all dispatched loops* — **not** per-loop. `heartbeat.py run` = discover → dispatch under this one ceiling; **fail-closed** halt of the whole pass leaves remaining findings `open` for the next run. Distinct from `loop.py`'s per-run ceiling (003-02). | Goal only |
+| 011-04 | heartbeat-cost-ceiling | A **heartbeat-level** hard cost ceiling bounds *discovery (any LLM assist) + the sum of all dispatched loops* — **not** per-loop. `heartbeat.py run` = discover → dispatch under this one ceiling; **fail-closed** halt of the whole pass leaves remaining findings `open` for the next run. Distinct from `loop.py`'s per-run ceiling (003-02). | RECONCILED |
 | 011-05 | skill-and-dogfood | `/servo:heartbeat` SKILL.md — **Tier-2 explicit-opt-in** framing, the read-only-discovery promise, the whole-heartbeat-ceiling warning up front, the refusal table, and the **Routine-wiring recipe** (cron / CI `schedule:` / scheduled agent). Plus an end-to-end dogfood driving the real discover → triage → preflight → worktree → loop → record chain on a fixture target. | Goal only |
 
 Five slices, sized to the spec 001 / 002 / 003 cadence. The vertical-value rule
@@ -250,7 +250,7 @@ capability.
 - [011-01 — discover-and-inbox](slice-01-discover-and-inbox.md) — **DONE**
 - [011-02 — triage-state-spine](slice-02-triage-state-spine.md) — *goals-only DRAFT stub; ACs pinned at SPIDR-split*
 - [011-03 — candidate-dispatch](slice-03-candidate-dispatch.md) — *goals-only DRAFT stub*
-- [011-04 — heartbeat-cost-ceiling](slice-04-heartbeat-cost-ceiling.md) — *goals-only DRAFT stub*
+- [011-04 — heartbeat-cost-ceiling](slice-04-heartbeat-cost-ceiling.md) — **RECONCILED**
 - [011-05 — skill-and-dogfood](slice-05-skill-and-dogfood.md) — *goals-only DRAFT stub*
 
 ## Spec-level Definition of Done (forward-looking)

@@ -1,6 +1,6 @@
 """
 servo heartbeat — slices 011-01 (discover-and-inbox) + 011-02 (triage-state-spine)
-                   + 011-03 (candidate-dispatch)
+                   + 011-03 (candidate-dispatch) + 011-04 (heartbeat-cost-ceiling)
 
 The scheduled front-end of the servo loop. A Routine (cron / scheduled agent
 / CI `schedule:`) wakes servo on an interval; this helper's `discover`
@@ -51,10 +51,13 @@ target's own working tree is never mutated — the loop's edits land only inside
 the worktree, which `dispatch` retains so a human can inspect/land the result.
 
 Dispatch is **serial** in v1 and forwards a **per-loop** `--cost-ceiling` to each
-`loop.py` run (it does not aggregate a whole-pass ceiling — that is 011-04's
-`run` verb). `gh` / `git` / `gate.py` / `loop.py` are **subprocess** calls, never
-imported (the 011-01/02 dependency-free invariant). `gate.py` / `loop.py` resolve
-to their sibling-skill paths, overridable via `SERVO_HEARTBEAT_GATE_PY` /
+`loop.py` run. Slice 011-04 adds `run`, which composes `discover` then dispatches
+under one **whole-heartbeat** ceiling: outcomes recorded during that heartbeat
+pass count against the pass, each loop receives only the remaining budget, and
+the heartbeat stops before the next candidate once the ceiling is spent.
+`gh` / `git` / `gate.py` / `loop.py` are **subprocess** calls, never imported (the
+011-01/02 dependency-free invariant). `gate.py` / `loop.py` resolve to their
+sibling-skill paths, overridable via `SERVO_HEARTBEAT_GATE_PY` /
 `SERVO_HEARTBEAT_LOOP_PY` (the established `SERVO_*` test-hook idiom) so tests
 inject deterministic stand-ins and never make a live `claude -p` call.
 
@@ -69,22 +72,27 @@ Usage:
     python3 heartbeat.py dispatch <target> [--cost-ceiling <usd>]
                                            [--max-iterations <n>]
                                            [--max-candidates <n>]
+    python3 heartbeat.py run <target> [--cost-ceiling <usd>]
+                                      [--max-iterations <n>]
+                                      [--max-candidates <n>]
 
 Both artifacts are written atomically — full payload to `<name>.tmp`, then
 `os.replace` onto the final path (ADR-0004's house discipline for `.servo/`
 state files) — so a SIGTERM/crash mid-write can never leave a torn artifact.
-Closed `{0, 2}` exit contract for ALL THREE verbs: 0 = completed OK (for
+Closed `{0, 2}` exit contract for ALL FOUR verbs: 0 = completed OK (for
 `discover`, zero or more findings incl. all-sources-skipped and the
 lock-contended no-op; for `status`, read OK incl. an empty/absent inbox; for
 `dispatch`, the pass completed — **including** when individual loops scored below
 threshold (recorded `tried`) or hit per-candidate env-errors, and including the
-empty-candidate no-op and the lock-contended back-off); 2 = environment error
-that prevents the operation (`target_missing` / `target_not_directory` /
-`triage_dir_unwritable`, a `flock` `OSError`; `status` / `dispatch` also exit 2
-on a `schema_version_unsupported` inbox; `dispatch` additionally exits 2 on a
+empty-candidate no-op and the lock-contended back-off; for `run`, the same
+dispatch outcomes plus budget halts); 2 = environment error that prevents the
+operation (`target_missing` / `target_not_directory` / `triage_dir_unwritable`,
+a `flock` `OSError`; `status` / `dispatch` also exit 2 on a
+`schema_version_unsupported` inbox; `dispatch` additionally exits 2 on a
 **pass-level** error — refuse-without-oracle per the gate preflight, or an
-unreadable inbox). There is **no exit 1** — no verb gates (a below-threshold loop
-is a recorded *outcome*, not a dispatch error).
+unreadable inbox; `run` exits 2 when `discover` exits 2 or when the dispatch
+preflight refuses). There is **no exit 1** — no verb gates (a below-threshold
+loop is a recorded *outcome*, not a dispatch error).
 """
 
 from __future__ import annotations
@@ -227,6 +235,13 @@ _ORACLE_STATUS_PASS = "pass"
 # could not be isolated / provisioned / scored, or whose `loop.py` exited without
 # a parseable summary (AC6). Mirrors loop.py / gate.py's `STATUS_ENV_ERROR`.
 OUTCOME_ENV_ERROR = "env_error"
+
+# Slice 011-04: `heartbeat.py run` uses one whole-pass ceiling, not dispatch's
+# per-loop forwarding. Match loop.py's public default ($2) but apply it ONCE to
+# the heartbeat pass so `run` never silently becomes N× spend. The floor mirrors
+# loop.py's `MIN_BUDGET_FLOOR_USD`: below this, spawning another loop is noise.
+DEFAULT_HEARTBEAT_COST_CEILING_USD = 2.0
+MIN_HEARTBEAT_BUDGET_FLOOR_USD = 0.01
 
 # Persistent advisory-lock target for the read-merge-write (AC8, ADR-0010). A
 # SEPARATE file from inbox.jsonl — `os.replace` swaps the inbox inode, so a lock
@@ -1638,6 +1653,63 @@ def _outcome_from_summary(summary: dict) -> dict:
     }
 
 
+def _outcome_cost_usd(outcome: object) -> float:
+    """Return a non-negative `outcome.cost_usd` value, tolerating hand edits."""
+    if not isinstance(outcome, dict):
+        return 0.0
+    raw = outcome.get("cost_usd", 0.0)
+    try:
+        cost = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(cost, 0.0)
+
+
+def _parse_iso_utc(value: object) -> Optional[datetime]:
+    """Parse a human-editable ISO stamp to UTC; malformed values are ignored."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _outcome_dispatched_at(outcome: object) -> Optional[datetime]:
+    """Return `outcome.dispatched_at` as UTC when it is parseable."""
+    if not isinstance(outcome, dict):
+        return None
+    return _parse_iso_utc(outcome.get("dispatched_at"))
+
+
+def _spent_cost_usd(
+    records: list[dict], *, since: Optional[datetime] = None,
+) -> float:
+    """Sum ADR-0010 `outcome.cost_usd` values, optionally for one pass only."""
+    total = 0.0
+    for record in records:
+        outcome = record.get("outcome")
+        if since is not None:
+            dispatched_at = _outcome_dispatched_at(outcome)
+            if dispatched_at is None or dispatched_at < since:
+                continue
+        total += _outcome_cost_usd(outcome)
+    return total
+
+
+def _remaining_heartbeat_budget(ceiling: float, spent: float) -> float:
+    """Remaining whole-heartbeat budget, floored at zero for display/forwarding."""
+    return max(float(ceiling) - float(spent), 0.0)
+
+
+def _heartbeat_budget_exhausted(ceiling: float, spent: float) -> bool:
+    """True when spawning another loop would violate the whole-pass ceiling."""
+    return _remaining_heartbeat_budget(ceiling, spent) < MIN_HEARTBEAT_BUDGET_FLOOR_USD
+
+
 def _dispatch_one(
     target: Path, finding: dict, dispatch_dir: Path, *,
     cost_ceiling: Optional[float], max_iterations: Optional[int],
@@ -1713,6 +1785,8 @@ def run_dispatch(
     cost_ceiling: Optional[float] = None,
     max_iterations: Optional[int] = None,
     max_candidates: Optional[int] = None,
+    whole_cost_ceiling: Optional[float] = None,
+    whole_cost_since: Optional[datetime] = None,
 ) -> int:
     """Oracle-gated, serial dispatch of the actionable-open candidate set (011-03).
 
@@ -1722,9 +1796,12 @@ def run_dispatch(
     candidates left `open`) → under 011-02's advisory `flock` (AC8; lock-contended
     → back off, exit 0) re-read the inbox, cap the set (AC9), and dispatch each
     candidate SERIALLY (AC9): isolate → provision → verify → loop (AC3-6),
-    recording each outcome back through an atomic write (AC7/AC8). Closed `{0, 2}`
-    exit (AC10): 2 only on a pass-level env error; 0 in every other case,
-    including below-threshold loops and per-candidate env-errors.
+    recording each outcome back through an atomic write (AC7/AC8). When
+    `whole_cost_ceiling` is set (011-04 `run`), current-pass inbox spend is
+    summed and each loop receives the remaining whole-pass budget. Closed
+    `{0, 2}` exit (AC10/011-04 AC8): 2 only on a pass-level env error; 0 in
+    every other case, including below-threshold loops, per-candidate env-errors,
+    and budget halts.
     """
     # ---- Env preconditions (pass-level exit 2) -----------------------------
     if not target.exists():
@@ -1752,6 +1829,15 @@ def run_dispatch(
             f"no actionable open candidates in {jsonl_path}; nothing to dispatch"
         )
         return EXIT_OK
+    if whole_cost_ceiling is not None:
+        spent = _spent_cost_usd(records, since=whole_cost_since)
+        if _heartbeat_budget_exhausted(whole_cost_ceiling, spent):
+            _emit_breadcrumb(
+                "whole-heartbeat cost ceiling reached before dispatch: "
+                f"spent ${spent:.2f} / ${whole_cost_ceiling:.2f}; leaving "
+                f"{len(candidates)} candidate{'' if len(candidates) == 1 else 's'} open"
+            )
+            return EXIT_OK
 
     # ---- Oracle preflight — refuse-without-oracle (AC2, Guardrail #3) -------
     # BEFORE any worktree or loop: defer to gate.py's refusal taxonomy. A refusal
@@ -1801,15 +1887,29 @@ def run_dispatch(
                 else candidates[: max(0, max_candidates)]
             )
             deferred = len(candidates) - len(capped)
+            spent = _spent_cost_usd(locked_records, since=whole_cost_since)
             index = {
                 str(r.get("finding_id")): i for i, r in enumerate(locked_records)
             }
             processed = 0
             env_errors = 0
+            budget_halted = False
+            budget_deferred = 0
             for finding in capped:
+                loop_cost_ceiling = cost_ceiling
+                if whole_cost_ceiling is not None:
+                    if _heartbeat_budget_exhausted(whole_cost_ceiling, spent):
+                        budget_halted = True
+                        budget_deferred = len(capped) - processed
+                        break
+                    remaining = _remaining_heartbeat_budget(whole_cost_ceiling, spent)
+                    loop_cost_ceiling = (
+                        remaining if cost_ceiling is None
+                        else min(cost_ceiling, remaining)
+                    )
                 outcome = _dispatch_one(
                     target, finding, dispatch_dir,
-                    cost_ceiling=cost_ceiling, max_iterations=max_iterations,
+                    cost_ceiling=loop_cost_ceiling, max_iterations=max_iterations,
                 )
                 new_status = (
                     STATUS_PASSED
@@ -1835,6 +1935,7 @@ def run_dispatch(
                     )
                     return EXIT_ENV_ERROR
                 processed += 1
+                spent += _outcome_cost_usd(outcome)
                 if outcome["oracle_status"] == OUTCOME_ENV_ERROR:
                     env_errors += 1
     except OSError as exc:
@@ -1851,10 +1952,45 @@ def run_dispatch(
     _emit_breadcrumb(
         f"processed {processed} candidate{'' if processed == 1 else 's'} serially"
         + (f" ({env_errors} env-error, no loop run)" if env_errors else "")
+        + (
+            "; whole-heartbeat cost ceiling reached "
+            f"(spent ${spent:.2f} / ${whole_cost_ceiling:.2f}); "
+            f"{budget_deferred} left open"
+            if whole_cost_ceiling is not None and budget_halted else ""
+        )
         + (f"; {deferred} deferred (--max-candidates)" if deferred else "")
         + f"; outcomes recorded → {jsonl_path}"
     )
     return EXIT_OK
+
+
+def run_heartbeat(
+    target: Path, *,
+    cost_ceiling: float = DEFAULT_HEARTBEAT_COST_CEILING_USD,
+    max_iterations: Optional[int] = None,
+    max_candidates: Optional[int] = None,
+) -> int:
+    """Run one full heartbeat: discover, then dispatch under one whole-pass ceiling.
+
+    `discover` owns read-only signal refresh and triage merge. If it cannot write
+    the inbox, `run` stops immediately with that rc=2. Dispatch then reuses the
+    011-03 pipeline with `whole_cost_ceiling` enabled: outcomes recorded during
+    this pass count against the pass, and each loop receives only the remaining
+    budget. Discovery currently costs $0; when a future LLM triage assist exists,
+    its cost should be recorded in the same spine before dispatch.
+    """
+    run_started_at = datetime.now(timezone.utc)
+    discover_rc = run_discover(target)
+    if discover_rc != EXIT_OK:
+        return discover_rc
+    return run_dispatch(
+        target,
+        cost_ceiling=None,
+        max_iterations=max_iterations,
+        max_candidates=max_candidates,
+        whole_cost_ceiling=cost_ceiling,
+        whole_cost_since=run_started_at,
+    )
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -1868,8 +2004,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             "the house pattern; `discover` (read-only signal discovery → triage "
             "inbox state spine), `status` (read-only read-back), and `dispatch` "
             "(oracle-gated, isolated-worktree loop dispatch of the actionable-open "
-            "candidate set) ship. `run` (discover → dispatch under one whole-pass "
-            "ceiling) is a later slice (011-04)."
+            "candidate set) ship. `run` composes discover → dispatch under one "
+            "whole-pass ceiling."
         ),
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -1978,7 +2114,61 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
 
+    run_parser = subparsers.add_parser(
+        "run",
+        help=(
+            "One scheduled heartbeat pass: discover, then dispatch actionable-open "
+            "findings under a single whole-pass cost ceiling."
+        ),
+        description=(
+            "Runs discovery first, then dispatches through the existing oracle "
+            "preflight → isolated worktree → loop.py path while enforcing ONE "
+            "heartbeat-level cost ceiling. Outcomes recorded during this pass "
+            "count against the pass; each loop receives only the remaining "
+            "budget as its --cost-ceiling. Closed {0,2} exit: 0 for completed "
+            "passes, including budget halts; 2 for discovery or pass-level "
+            "dispatch env errors."
+        ),
+    )
+    run_parser.add_argument(
+        "target",
+        type=Path,
+        help="Path to the servo-scaffolded target project.",
+    )
+    run_parser.add_argument(
+        "--cost-ceiling",
+        type=float,
+        default=DEFAULT_HEARTBEAT_COST_CEILING_USD,
+        metavar="USD",
+        help=(
+            "Whole-heartbeat cost ceiling in USD. Default "
+            f"${DEFAULT_HEARTBEAT_COST_CEILING_USD:g}; must be > 0."
+        ),
+    )
+    run_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Max iterations forwarded to each loop.py run (omitted → loop.py default).",
+    )
+    run_parser.add_argument(
+        "--max-candidates",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Cap how many candidates are considered in this run; any beyond the "
+            "cap stay `open` for the next pass."
+        ),
+    )
+
     args = parser.parse_args(argv)
+
+    if args.command == "dispatch" and args.cost_ceiling is not None and args.cost_ceiling < 0:
+        parser.error("dispatch --cost-ceiling must be >= 0")
+    if args.command == "run" and args.cost_ceiling <= 0:
+        parser.error("run --cost-ceiling must be > 0")
 
     if args.command == "discover":
         return run_discover(args.target.resolve())
@@ -1986,6 +2176,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_status(args.target.resolve(), as_json=args.as_json)
     if args.command == "dispatch":
         return run_dispatch(
+            args.target.resolve(),
+            cost_ceiling=args.cost_ceiling,
+            max_iterations=args.max_iterations,
+            max_candidates=args.max_candidates,
+        )
+    if args.command == "run":
+        return run_heartbeat(
             args.target.resolve(),
             cost_ceiling=args.cost_ceiling,
             max_iterations=args.max_iterations,

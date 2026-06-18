@@ -46,6 +46,16 @@ Slice 011-03 (candidate-dispatch) acceptance criteria:
     AC10 → DispatchExitContractTests + DispatchReadOnlyByteSnapshotTests +
            DependencyFreeTests (extended)
 
+Slice 011-04 (heartbeat-cost-ceiling) acceptance criteria:
+    AC1  → HeartbeatRunCostCeilingTests
+    AC2  → HeartbeatRunCostCeilingTests
+    AC3  → HeartbeatRunCostCeilingTests
+    AC4  → HeartbeatRunCostCeilingTests
+    AC5  → HeartbeatRunCostCeilingTests
+    AC6  → HeartbeatRunCostCeilingTests
+    AC7  → SerialDispatchTests (existing dispatch per-loop meaning)
+    AC8  → HeartbeatRunCostCeilingTests
+
 The 011-03 dispatch harness uses a REAL git repo per test (a fresh `git init`
 target with a committed oracle.sh, so `git worktree add` exercises the real
 nested-`.servo/dispatch/` path A1) and the REAL `gate.py` (run against a
@@ -2380,6 +2390,41 @@ def _run_dispatch(
     return subprocess.run(argv, capture_output=True, text=True, env=env)
 
 
+def _run_run(
+    target: Path, *,
+    bindir: Optional[Path] = None,
+    loop_py: Optional[Path] = None,
+    gate_py: Optional[Path] = None,
+    cost_ceiling: Optional[float] = None,
+    max_iterations: Optional[int] = None,
+    max_candidates: Optional[int] = None,
+    path: Optional[str] = None,
+    extra_env: Optional[dict] = None,
+) -> subprocess.CompletedProcess:
+    """Invoke `heartbeat.py run <target>` with mock gh + real git by default."""
+    env = dict(os.environ)
+    if path is not None:
+        env["PATH"] = path
+    elif bindir is not None:
+        env["PATH"] = f"{bindir}:{SYSTEM_PATH}"
+    else:
+        env["PATH"] = SYSTEM_PATH
+    if loop_py is not None:
+        env["SERVO_HEARTBEAT_LOOP_PY"] = str(loop_py)
+    if gate_py is not None:
+        env["SERVO_HEARTBEAT_GATE_PY"] = str(gate_py)
+    if extra_env:
+        env.update(extra_env)
+    argv = [sys.executable, str(HEARTBEAT), "run", str(target)]
+    if cost_ceiling is not None:
+        argv += ["--cost-ceiling", str(cost_ceiling)]
+    if max_iterations is not None:
+        argv += ["--max-iterations", str(max_iterations)]
+    if max_candidates is not None:
+        argv += ["--max-candidates", str(max_candidates)]
+    return subprocess.run(argv, capture_output=True, text=True, env=env)
+
+
 def _loop_log(log_path: Path) -> list:
     """Parse the mock loop's argv log (one JSON record per invocation, in order)."""
     if not log_path.exists():
@@ -3138,6 +3183,107 @@ class SerialDispatchTests(unittest.TestCase):
             rec = _finding_by_id(self.target, fid)
             self.assertEqual(rec["status"], "open")
             self.assertEqual(rec["attempts"], 0)
+
+
+# ===========================================================================
+# 011-04 — heartbeat-level cost ceiling (`run` = discover → dispatch)
+# ===========================================================================
+
+
+class HeartbeatRunCostCeilingTests(unittest.TestCase):
+    """011-04 — run composes discovery + dispatch under one pass ceiling."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-run-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.bindir = self.root / "bin"
+        _make_mock_gh(self.bindir)
+        self.loop_log = self.root / "loop.log"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _loop(self, **kw):
+        return _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log, **kw)
+
+    def _open_actionable_after_run(self) -> list:
+        return [
+            r for r in _read_jsonl(_triage_dir(self.target) / "inbox.jsonl")
+            if r.get("status") == "open" and r.get("actionable")
+        ]
+
+    def test_run_discovers_then_dispatches_with_remaining_budget(self):
+        loop_py = self._loop(default={"status": "pass", "cost": 0.25})
+        res = _run_run(
+            self.target, bindir=self.bindir, loop_py=loop_py,
+            cost_ceiling=0.75, max_candidates=2,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 2, "run must discover candidates then dispatch them")
+        self.assertEqual(_loop_flag(log[0], "--cost-ceiling"), "0.75")
+        self.assertEqual(_loop_flag(log[1], "--cost-ceiling"), "0.5")
+
+    def test_historical_outcome_cost_does_not_drain_fresh_run_budget(self):
+        prior = _v2_record(
+            finding_id="priorcost0000001",
+            status="passed",
+            attempts=1,
+            actionable=False,
+            outcome={
+                "run_id": "old-run",
+                "oracle_status": "pass",
+                "oracle_composite": 0.9,
+                "cost_usd": 1.25,
+                "dispatched_at": "2026-06-01T00:00:00+00:00",
+            },
+        )
+        _write_inbox(self.target, [prior])
+        loop_py = self._loop(default={"status": "pass", "cost": 0.1})
+        res = _run_run(
+            self.target, bindir=self.bindir, loop_py=loop_py,
+            cost_ceiling=2.0, max_candidates=1,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 1)
+        self.assertEqual(_loop_flag(log[0], "--cost-ceiling"), "2")
+
+    def test_remaining_budget_floor_halts_before_next_candidate(self):
+        loop_py = self._loop(default={"status": "below_threshold", "cost": 0.995})
+        res = _run_run(
+            self.target, bindir=self.bindir, loop_py=loop_py,
+            cost_ceiling=1.0, max_candidates=2,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("whole-heartbeat cost ceiling reached", res.stderr)
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 1)
+        self.assertEqual(_loop_flag(log[0], "--cost-ceiling"), "1")
+        self.assertGreater(len(self._open_actionable_after_run()), 0,
+                           "budget halt must leave fresh candidates open")
+
+    def test_overshoot_halts_before_next_candidate(self):
+        loop_py = self._loop(default={"status": "below_threshold", "cost": 1.25})
+        res = _run_run(
+            self.target, bindir=self.bindir, loop_py=loop_py,
+            cost_ceiling=1.0, max_candidates=3,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("whole-heartbeat cost ceiling reached", res.stderr)
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 1, "overshoot is detected between serial candidates")
+        self.assertEqual(_loop_flag(log[0], "--cost-ceiling"), "1")
+        self.assertGreater(len(self._open_actionable_after_run()), 0,
+                           "remaining candidates stay open for the next heartbeat")
+
+    def test_discovery_env_error_prevents_dispatch(self):
+        missing = self.root / "missing"
+        loop_py = self._loop(default={"status": "pass", "cost": 0.1})
+        res = _run_run(missing, bindir=self.bindir, loop_py=loop_py)
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(_loop_log(self.loop_log), [])
 
 
 # ===========================================================================
