@@ -19,6 +19,7 @@
 - [ADR-0010: Triage-inbox state-file schema & dedupe identity](adr-0010-triage-inbox-schema.md) — The `/servo:heartbeat` triage inbox (`.servo/triage/inbox.jsonl`) as append-and-update cross-run state: `schema_version: 2`; the ratified `finding_id` fingerprint (CI = `workflowName+headBranch`, issue = `number`, commit = `sha`); a *sticky* `open`/`tried`/`passed`/`skipped` lifecycle kept separate from a *recomputed* `actionable` verdict and an *immutable* `provenance` trust marker (Guardrail #4); one uniform merge + retention rule (keep live-or-lifecycle-bearing, evict stale `open`) that bounds growth across all sources; and `flock` double-fire safety. Reciprocal to ADR-0004; crystallizes spec 011-02. (2026-06-15, Accepted)
 - [ADR-0011: Host-native phase hints stay advisory under servo's oracle authority](adr-0011-host-native-phase-hints.md) — Servo may consume host-native planning / implementation modes as adapter hints for planning, running, and evaluating loops, but `gate.py`, `oracle.sh`, run state, and triage state remain the authoritative control surfaces. (2026-06-17, Proposed)
 - [ADR-0012: Heartbeat uses one whole-pass cost ceiling](adr-0012-heartbeat-whole-pass-cost-ceiling.md) — `heartbeat.py run` applies one heartbeat-level budget across discovery and all dispatched loops in the current pass, leaving remaining candidates open when the budget is spent. (2026-06-18, Accepted)
+- [ADR-0013: Servo availability breadcrumb](adr-0013-servo-available-breadcrumb.md) — Servo writes a best-effort host-neutral marker at `${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json` so jig can cheaply detect "servo probably available" without Claude-specific plugin registries or subprocesses. (2026-06-18, Accepted)
 
 ## Pending
 
@@ -28,7 +29,8 @@ regardless of which candidate fires first). `0005` is Accepted (the
 eval-oracle-component ADR), `0009` is Accepted (the design-fidelity-eval
 recipe), `0010` is Accepted (triage-inbox-schema), `0011` is reserved
 (Proposed) by the host-native phase hints ADR, and `0012` is Accepted
-(heartbeat whole-pass cost ceiling), so the next free number is `0013`:
+(heartbeat whole-pass cost ceiling), and `0013` is Accepted (servo availability
+breadcrumb), so the next free number is `0014`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 

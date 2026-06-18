@@ -19,12 +19,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 SCAFFOLD_INIT_DIR = REPO_ROOT / "skills" / "scaffold-init"
+OLD_XDG_STATE_HOME = None
+TEST_STATE_HOME = None
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import scaffold_runtime  # noqa: E402
@@ -40,6 +42,22 @@ SKILL_PREFIX = SCAFFOLD_CFG["skill_prefix"]
 AGENT_PREFIX = SCAFFOLD_CFG["agent_prefix"]
 RUNTIME_ROOT = SCAFFOLD_CFG["runtime_root"]
 MANAGED_MARKER = SCAFFOLD_CFG["managed_marker"]
+
+
+def setUpModule():
+    global OLD_XDG_STATE_HOME, TEST_STATE_HOME
+    OLD_XDG_STATE_HOME = os.environ.get("XDG_STATE_HOME")
+    TEST_STATE_HOME = Path(tempfile.mkdtemp(prefix="servo-state-home-"))
+    os.environ["XDG_STATE_HOME"] = str(TEST_STATE_HOME)
+
+
+def tearDownModule():
+    if OLD_XDG_STATE_HOME is None:
+        os.environ.pop("XDG_STATE_HOME", None)
+    else:
+        os.environ["XDG_STATE_HOME"] = OLD_XDG_STATE_HOME
+    if TEST_STATE_HOME is not None:
+        shutil.rmtree(TEST_STATE_HOME, ignore_errors=True)
 
 
 def _new_target() -> Path:
@@ -166,6 +184,62 @@ class ScaffoldManifestTests(unittest.TestCase):
             sorted(self.manifest["templates"]),
             sorted(CONTRACT["required"]["templates"]),
         )
+
+
+class AvailabilityBreadcrumbTests(unittest.TestCase):
+    """ADR-0013: runtime scaffold writes the servo availability marker."""
+
+    def test_scaffold_runtime_writes_availability_marker(self):
+        target = _new_target()
+        state_home = target / "state"
+        self.addCleanup(shutil.rmtree, target, True)
+        old_state_home = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = str(state_home)
+        self.addCleanup(
+            lambda: (
+                os.environ.__setitem__("XDG_STATE_HOME", old_state_home)
+                if old_state_home is not None
+                else os.environ.pop("XDG_STATE_HOME", None)
+            )
+        )
+
+        scaffold_runtime.scaffold_runtime(target)
+
+        marker = state_home / "servo" / "available.json"
+        self.assertTrue(marker.is_file(), "availability marker was not written")
+        payload = json.loads(marker.read_text())
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["plugin_name"], "servo")
+        self.assertEqual(payload["source_kind"], "scaffold-runtime")
+        self.assertEqual(Path(payload["source_path"]), REPO_ROOT)
+        self.assertEqual(payload["source_version"], PLUGIN_VERSION)
+        self.assertRegex(
+            payload["updated_at"],
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+        )
+
+    def test_marker_write_failure_warns_without_failing_scaffold(self):
+        target = _new_target()
+        self.addCleanup(shutil.rmtree, target, True)
+        blocked_state_home = target / "state-file"
+        blocked_state_home.write_text("not a directory")
+        old_state_home = os.environ.get("XDG_STATE_HOME")
+        os.environ["XDG_STATE_HOME"] = str(blocked_state_home)
+        self.addCleanup(
+            lambda: (
+                os.environ.__setitem__("XDG_STATE_HOME", old_state_home)
+                if old_state_home is not None
+                else os.environ.pop("XDG_STATE_HOME", None)
+            )
+        )
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            manifest = scaffold_runtime.scaffold_runtime(target)
+
+        self.assertEqual(manifest["source_version"], PLUGIN_VERSION)
+        self.assertIn("could not write availability marker", stderr.getvalue())
+        self.assertTrue((target / RUNTIME_ROOT / "scaffold-install.json").is_file())
 
 
 class IdempotencyTests(unittest.TestCase):

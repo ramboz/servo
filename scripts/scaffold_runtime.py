@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -54,6 +55,38 @@ def source_root() -> Path:
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def availability_marker_path() -> Path:
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home).expanduser() / "servo" / "available.json"
+    return Path.home() / ".local" / "state" / "servo" / "available.json"
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def write_availability_marker(src: Path, source_kind: str) -> None:
+    payload = {
+        "schema_version": 1,
+        "plugin_name": "servo",
+        "source_kind": source_kind,
+        "source_path": str(src.resolve()),
+        "source_version": plugin_version(src),
+        "updated_at": iso_now(),
+    }
+    try:
+        _write_json_atomic(availability_marker_path(), payload)
+    except OSError as exc:
+        print(
+            f"servo: could not write availability marker: {exc}",
+            file=sys.stderr,
+        )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -238,6 +271,7 @@ def scaffold_runtime(target: Path | str) -> dict[str, Any]:
     manifest_path = target_path / runtime_root / MANIFEST_NAME
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    write_availability_marker(src, "scaffold-runtime")
     return manifest
 
 

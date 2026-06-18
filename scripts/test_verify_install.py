@@ -9,15 +9,19 @@ or with pytest once installed:
 
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = REPO_ROOT / "scripts"
+OLD_XDG_STATE_HOME = None
+TEST_STATE_HOME = None
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import scaffold_runtime  # noqa: E402
@@ -34,6 +38,22 @@ RUNTIME_ROOT = SCAFFOLD_CFG["runtime_root"]
 PLUGIN_VERSION = json.loads(
     (REPO_ROOT / ".claude-plugin" / "plugin.json").read_text()
 )["version"]
+
+
+def setUpModule():
+    global OLD_XDG_STATE_HOME, TEST_STATE_HOME
+    OLD_XDG_STATE_HOME = os.environ.get("XDG_STATE_HOME")
+    TEST_STATE_HOME = Path(tempfile.mkdtemp(prefix="servo-state-home-"))
+    os.environ["XDG_STATE_HOME"] = str(TEST_STATE_HOME)
+
+
+def tearDownModule():
+    if OLD_XDG_STATE_HOME is None:
+        os.environ.pop("XDG_STATE_HOME", None)
+    else:
+        os.environ["XDG_STATE_HOME"] = OLD_XDG_STATE_HOME
+    if TEST_STATE_HOME is not None:
+        shutil.rmtree(TEST_STATE_HOME, ignore_errors=True)
 
 
 def _copy_required_file(src: Path, dst: Path) -> None:
@@ -241,6 +261,60 @@ class CliTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status"], "pass")
         self.assertEqual(payload["plugin_name"], "servo")
+
+    def test_successful_plugin_verification_writes_availability_marker(self):
+        tmpdir = Path(tempfile.mkdtemp(prefix="servo-verify-install-"))
+        try:
+            root = _make_valid_plugin_copy(tmpdir)
+            state_home = tmpdir / "state"
+            old_state_home = os.environ.get("XDG_STATE_HOME")
+            os.environ["XDG_STATE_HOME"] = str(state_home)
+            try:
+                out = io.StringIO()
+                rc = verify_install.run_plugin(root, json_output=True, out=out)
+            finally:
+                if old_state_home is not None:
+                    os.environ["XDG_STATE_HOME"] = old_state_home
+                else:
+                    os.environ.pop("XDG_STATE_HOME", None)
+
+            self.assertEqual(rc, 0, out.getvalue())
+            marker = state_home / "servo" / "available.json"
+            self.assertTrue(marker.is_file(), "availability marker was not written")
+            payload = json.loads(marker.read_text())
+            self.assertEqual(payload["schema_version"], 1)
+            self.assertEqual(payload["plugin_name"], "servo")
+            self.assertEqual(payload["source_kind"], "verify-plugin")
+            self.assertEqual(Path(payload["source_path"]), root.resolve())
+            self.assertEqual(payload["source_version"], PLUGIN_VERSION)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_marker_write_failure_warns_without_failing_verification(self):
+        tmpdir = Path(tempfile.mkdtemp(prefix="servo-verify-install-"))
+        try:
+            root = _make_valid_plugin_copy(tmpdir)
+            blocked_state_home = tmpdir / "state-file"
+            blocked_state_home.write_text("not a directory")
+            old_state_home = os.environ.get("XDG_STATE_HOME")
+            os.environ["XDG_STATE_HOME"] = str(blocked_state_home)
+            try:
+                out = io.StringIO()
+                stderr = io.StringIO()
+                with redirect_stderr(stderr):
+                    rc = verify_install.run_plugin(root, json_output=True, out=out)
+            finally:
+                if old_state_home is not None:
+                    os.environ["XDG_STATE_HOME"] = old_state_home
+                else:
+                    os.environ.pop("XDG_STATE_HOME", None)
+
+            self.assertEqual(rc, 0, out.getvalue())
+            payload = json.loads(out.getvalue())
+            self.assertEqual(payload["status"], "pass")
+            self.assertIn("could not write availability marker", stderr.getvalue())
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def test_main_plugin_json_failure_exit(self):
         tmpdir = Path(tempfile.mkdtemp(prefix="servo-verify-install-"))

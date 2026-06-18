@@ -20,12 +20,35 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAFFOLD = REPO_ROOT / "skills" / "scaffold-init" / "scaffold.py"
+OLD_XDG_STATE_HOME = None
+TEST_STATE_HOME = None
+PLUGIN_VERSION = json.loads((REPO_ROOT / ".claude-plugin" / "plugin.json").read_text())[
+    "version"
+]
 
 
-def run_scaffold(target, *extra_args):
+def setUpModule():
+    global OLD_XDG_STATE_HOME, TEST_STATE_HOME
+    OLD_XDG_STATE_HOME = os.environ.get("XDG_STATE_HOME")
+    TEST_STATE_HOME = Path(tempfile.mkdtemp(prefix="servo-state-home-"))
+    os.environ["XDG_STATE_HOME"] = str(TEST_STATE_HOME)
+
+
+def tearDownModule():
+    if OLD_XDG_STATE_HOME is None:
+        os.environ.pop("XDG_STATE_HOME", None)
+    else:
+        os.environ["XDG_STATE_HOME"] = OLD_XDG_STATE_HOME
+    if TEST_STATE_HOME is not None:
+        shutil.rmtree(TEST_STATE_HOME, ignore_errors=True)
+
+
+def run_scaffold(target, *extra_args, extra_env=None):
     """Invoke scaffold.py against a target directory."""
     env = os.environ.copy()
     env["CLAUDE_PLUGIN_ROOT"] = str(REPO_ROOT)
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(SCAFFOLD), str(target), *extra_args],
         capture_output=True,
@@ -79,6 +102,53 @@ class GreenfieldScaffoldTests(unittest.TestCase):
                          {"tests": False, "lint": False, "ci": False, "language": None})
         self.assertEqual(manifest["components"], [])
         self.assertRegex(manifest["timestamp"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+
+
+class AvailabilityBreadcrumbTests(unittest.TestCase):
+    """ADR-0013: source-mode scaffold-init writes the servo availability marker."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-test-")
+        self.target = Path(self.tmpdir) / "demo-project"
+        self.target.mkdir()
+        self.state_home = Path(self.tmpdir) / "state"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_scaffold_init_writes_availability_marker(self):
+        result = run_scaffold(
+            self.target,
+            extra_env={"XDG_STATE_HOME": str(self.state_home)},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        marker = self.state_home / "servo" / "available.json"
+        self.assertTrue(marker.is_file(), "availability marker was not written")
+        payload = json.loads(marker.read_text())
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["plugin_name"], "servo")
+        self.assertEqual(payload["source_kind"], "scaffold-init")
+        self.assertEqual(Path(payload["source_path"]), REPO_ROOT)
+        self.assertEqual(payload["source_version"], PLUGIN_VERSION)
+        self.assertRegex(
+            payload["updated_at"],
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+        )
+
+    def test_marker_write_failure_warns_without_failing_install(self):
+        blocked_state_home = Path(self.tmpdir) / "state-file"
+        blocked_state_home.write_text("not a directory")
+
+        result = run_scaffold(
+            self.target,
+            extra_env={"XDG_STATE_HOME": str(blocked_state_home)},
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("could not write availability marker", result.stderr)
+        self.assertTrue((self.target / "oracle.sh").is_file())
+        self.assertTrue((self.target / ".servo" / "install.json").is_file())
 
 
 class RefuseExistingOracleTests(unittest.TestCase):

@@ -11,11 +11,13 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import os
 import re
 import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from json import JSONDecodeError
 from pathlib import Path, PureWindowsPath
 from typing import Any, Iterable, TextIO
@@ -25,6 +27,43 @@ CONTRACT_SCHEMA_VERSION = 1
 CONTRACT_PATH = Path(".claude-plugin") / "install-contract.json"
 PLUGIN_MANIFEST_PATH = Path(".claude-plugin") / "plugin.json"
 MARKETPLACE_PATH = Path(".claude-plugin") / "marketplace.json"
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def availability_marker_path() -> Path:
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home).expanduser() / "servo" / "available.json"
+    return Path.home() / ".local" / "state" / "servo" / "available.json"
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def write_availability_marker(root: Path | str, source_kind: str, source_version: str) -> None:
+    root_path = Path(root).resolve()
+    payload = {
+        "schema_version": 1,
+        "plugin_name": "servo",
+        "source_kind": source_kind,
+        "source_path": str(root_path),
+        "source_version": source_version,
+        "updated_at": iso_now(),
+    }
+    try:
+        _write_json_atomic(availability_marker_path(), payload)
+    except OSError as exc:
+        print(
+            f"servo: could not write availability marker: {exc}",
+            file=sys.stderr,
+        )
 
 
 @dataclass(frozen=True)
@@ -839,6 +878,8 @@ def run_plugin(root: Path | str, *, json_output: bool = False, out: TextIO | Non
     if out is None:
         out = sys.stdout
     result = verify_plugin(root)
+    if result.ok and result.version:
+        write_availability_marker(root, "verify-plugin", result.version)
     if json_output:
         print(json.dumps(result.to_json(), sort_keys=True), file=out)
     else:

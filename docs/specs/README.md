@@ -64,6 +64,7 @@
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-01 - phase-hint contract | DEFERRED |  |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | DEFERRED |  |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | DEFERRED |  |
+| [014-servo-available-breadcrumb](014-servo-available-breadcrumb/spec.md) | 014-01 - breadcrumb marker writers | **DONE** |  |
 
 ## Deferred slices
 

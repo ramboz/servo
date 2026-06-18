@@ -55,7 +55,11 @@ the `servo-`prefixed runtime into a target's `.claude/`. The single repo
 verification command `scripts/verify_install_surfaces.sh` runs the plugin
 verifier plus the install-surface test suites and is wired into CI on push and
 pull request. See the README's "Installing servo" section for the
-user-facing chooser.
+user-facing chooser. Runtime install/scaffold paths also refresh the
+best-effort servo availability breadcrumb at
+`${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json`, per
+[ADR-0013](decisions/adr-0013-servo-available-breadcrumb.md), so sibling tools
+can cheaply detect that servo has been observed on the machine.
 
 ## Skill split
 
@@ -304,10 +308,11 @@ emits the paste-ready `/goal` prompt with a portable relative gate command.
 | [ADR-0008](decisions/adr-0008-loop-on-autonomy-primitives.md) | Accepted | Rebase agent-loop orchestration onto Claude Code's autonomy primitives (`/goal`, `/background`, Routines); servo keeps only the deterministic guardrail + oracle layer and retains the external loop driver as the portable path for hook-restricted / non-Claude-Code hosts. Hard constraint: `/goal`'s transcript-only judge never replaces `oracle.sh`. |
 | [ADR-0009](decisions/adr-0009-design-fidelity-eval-recipe.md) | Accepted | Design-fidelity as a first-class eval recipe (`/servo:design-eval`): compiles "does the built UI match the mockup?" into a frozen `score_design_fidelity` oracle component (pinned vision model, n-sampled, confidence lower bound), riding ADR-0005's frozen-eval contract. |
 | [ADR-0010](decisions/adr-0010-triage-inbox-schema.md) | Accepted | Triage-inbox state-file schema & dedupe identity (spec 011): `schema_version: 2`; ratified `finding_id`; sticky `status` lifecycle separate from a recomputed `actionable` verdict + immutable `provenance` marker (Guardrail #4); one uniform merge + retention rule; `flock` double-fire safety; reserves `outcome.cost_usd` for 011-04. Reciprocal to ADR-0004. |
+| [ADR-0013](decisions/adr-0013-servo-available-breadcrumb.md) | Accepted | Servo writes a best-effort user-state availability marker at `${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json` so jig can detect "servo probably available" via a cheap filesystem check, without Claude-specific registries or subprocesses. |
 
 ### Pending (ADR candidates)
 
-Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0011`) regardless of which candidate fires first. (ADR-0010's inbox-schema "Runtime artifacts" prose is finalized to the shipped `schema_version: 2` shape above; the Decisions-table status flips Proposed → Accepted at slice 011-02 close-out.)
+Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0014`) regardless of which candidate fires first.
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
 

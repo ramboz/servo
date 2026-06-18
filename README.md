@@ -48,7 +48,10 @@ Servo has **two different things called "install"** — keep them separate:
 The runtime install has **three surfaces**, all validated by one data-driven
 contract (`.claude-plugin/install-contract.json`) and one verifier
 (`scripts/verify_install.py`). Pick by how much you want servo coupled to a
-shared checkout:
+shared checkout. Runtime install/scaffold paths refresh a best-effort
+availability marker at `${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json`
+so sibling tools can cheaply detect that servo has been observed on the
+machine.
 
 | Surface | Use when | Coupled to source checkout? |
 |---|---|---|
@@ -66,6 +69,9 @@ structurally installable before trusting it:
 ```bash
 python3 scripts/verify_install.py plugin .
 ```
+
+Successful plugin verification refreshes the servo availability marker at
+`${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json`.
 
 ### Release zip install
 

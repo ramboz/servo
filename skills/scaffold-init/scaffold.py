@@ -85,6 +85,70 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _availability_marker_path() -> Path:
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home).expanduser() / "servo" / "available.json"
+    return Path.home() / ".local" / "state" / "servo" / "available.json"
+
+
+def _plugin_manifest_version(root: Path) -> str | None:
+    manifest = root / ".claude-plugin" / "plugin.json"
+    if not manifest.is_file():
+        return None
+    try:
+        payload = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"servo: could not read plugin version for availability marker: {exc}",
+            file=sys.stderr,
+        )
+        return None
+    version = payload.get("version")
+    if isinstance(version, str) and version:
+        return version
+    print(
+        "servo: plugin manifest missing version; skipping availability marker",
+        file=sys.stderr,
+    )
+    return None
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    os.replace(tmp, path)
+
+
+def _write_availability_marker(source_kind: str) -> None:
+    """Best-effort ADR-0013 marker for source/release plugin-root runs.
+
+    Vendored project-local scaffold-init helpers deliberately skip this marker:
+    they may only be usable inside one target project, while the global marker
+    means "servo has been observed as an installable runtime on this machine."
+    """
+    root = plugin_root()
+    version = _plugin_manifest_version(root)
+    if version is None:
+        return
+    payload = {
+        "schema_version": 1,
+        "plugin_name": "servo",
+        "source_kind": source_kind,
+        "source_path": str(root),
+        "source_version": version,
+        "updated_at": iso_now(),
+    }
+    try:
+        _write_json_atomic(_availability_marker_path(), payload)
+    except OSError as exc:
+        print(
+            f"servo: could not write availability marker: {exc}",
+            file=sys.stderr,
+        )
+
+
 # ---------------------------------------------------------------------------
 # Signal detection
 # ---------------------------------------------------------------------------
@@ -454,6 +518,8 @@ def install(target: Path, *, force: bool) -> None:
     # overwrites — `--force` re-scaffold yields a fresh file, no merge logic.
     refinement_dst = target / ".servo" / "refinement-todo.md"
     refinement_dst.write_text(_render_refinement_todo(audit))
+
+    _write_availability_marker("scaffold-init")
 
 
 def detect_audit(target: Path) -> dict:
