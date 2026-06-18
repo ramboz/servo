@@ -19,6 +19,10 @@
       {
         "name": "oracle-hook",
         "files": ["SKILL.md", "hook.py"]
+      },
+      {
+        "name": "heartbeat",
+        "files": ["SKILL.md", "heartbeat.py"]
       }
     ],
     "agents": ["runner", "judge"],

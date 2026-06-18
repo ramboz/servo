@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [001, 002, 003]
 last_verified:
 ---
@@ -17,15 +17,10 @@ last_verified:
 > **Tier-2** surface — explicit opt-in only — because it lets a *schedule*,
 > not a human, decide what servo works on.
 
-> **Status: DRAFT.** Per the authoring decision (2026-06-12), this spec is
-> reviewable at the **overview level** now, and slice **011-01 is fleshed to
-> implementation-ready ACs** (it is the spike that validates the whole shape).
-> Slices **011-02..05 are goals-only** in the slice index below — their
-> acceptance criteria want grounding against (a) the spike's findings and (b) a
-> real project that wants scheduled discovery, and are deliberately not pinned
-> yet. Re-open a goals-only slice by SPIDR-splitting it into its own
-> `slice-NN-*.md` file and transitioning it to `READY_FOR_REVIEW`. **Stop point:
-> this is queued for plan review, not implementation.**
+> **Status: DONE.** All five slices have landed. The final capstone
+> (`011-05`) ships the `/servo:heartbeat` skill surface, install-contract
+> registration, scheduler recipes, and deterministic dogfood for the real
+> discover -> triage -> preflight -> worktree -> loop -> record chain.
 
 ## Why this spec
 
@@ -235,11 +230,11 @@ capability, not a prerequisite for "discovery works."
 
 | Slice | Title | Goal | State |
 |---|---|---|---|
-| 011-01 | discover-and-inbox | **Spike-shaped, implementation-ready.** `heartbeat.py discover <target>` does a **read-only** probe of CI failures (`gh`), open issues (`gh`), and recent commits (`git`), and writes findings to `<target>/.servo/triage/inbox.jsonl` + a generated `inbox.md` view. Validates the scheduled-read-only-discovery→inbox assumption end-to-end. | Implementation-ready |
-| 011-02 | triage-state-spine | The inbox becomes the **state spine**: a stable `finding_id` fingerprint dedupes across runs; a status lifecycle (`open`→`tried`→`passed`/`skipped`) is tracked; `heartbeat.py status` reads it back. The next heartbeat **resumes** — already-passed/tried findings are not re-surfaced as new work. | Goal only |
-| 011-03 | candidate-dispatch | Each **actionable, `open`** finding becomes a candidate: `gate.py` oracle **preflight (refuse-without-oracle)** → an **isolated git worktree** → `loop.py` (spec 003) → the outcome (`tried` + final oracle status, or `passed`) is recorded back to the inbox. Nothing spawns a loop without passing the oracle. (Seam: `race.py` (005) as an alternate dispatch target when it lands.) | Goal only |
-| 011-04 | heartbeat-cost-ceiling | A **heartbeat-level** hard cost ceiling bounds *discovery (any LLM assist) + the sum of all dispatched loops* — **not** per-loop. `heartbeat.py run` = discover → dispatch under this one ceiling; **fail-closed** halt of the whole pass leaves remaining findings `open` for the next run. Distinct from `loop.py`'s per-run ceiling (003-02). | RECONCILED |
-| 011-05 | skill-and-dogfood | `/servo:heartbeat` SKILL.md — **Tier-2 explicit-opt-in** framing, the read-only-discovery promise, the whole-heartbeat-ceiling warning up front, the refusal table, and the **Routine-wiring recipe** (cron / CI `schedule:` / scheduled agent). Plus an end-to-end dogfood driving the real discover → triage → preflight → worktree → loop → record chain on a fixture target. | Goal only |
+| 011-01 | discover-and-inbox | **Spike-shaped, implementation-ready.** `heartbeat.py discover <target>` does a **read-only** probe of CI failures (`gh`), open issues (`gh`), and recent commits (`git`), and writes findings to `<target>/.servo/triage/inbox.jsonl` + a generated `inbox.md` view. Validates the scheduled-read-only-discovery→inbox assumption end-to-end. | DONE |
+| 011-02 | triage-state-spine | The inbox becomes the **state spine**: a stable `finding_id` fingerprint dedupes across runs; a status lifecycle (`open`→`tried`→`passed`/`skipped`) is tracked; `heartbeat.py status` reads it back. The next heartbeat **resumes** — already-passed/tried findings are not re-surfaced as new work. | DONE |
+| 011-03 | candidate-dispatch | Each **actionable, `open`** finding becomes a candidate: `gate.py` oracle **preflight (refuse-without-oracle)** → an **isolated git worktree** → `loop.py` (spec 003) → the outcome (`tried` + final oracle status, or `passed`) is recorded back to the inbox. Nothing spawns a loop without passing the oracle. (Seam: `race.py` (005) as an alternate dispatch target when it lands.) | DONE |
+| 011-04 | heartbeat-cost-ceiling | A **heartbeat-level** hard cost ceiling bounds *discovery (any LLM assist) + the sum of all dispatched loops* — **not** per-loop. `heartbeat.py run` = discover → dispatch under this one ceiling; **fail-closed** halt of the whole pass leaves remaining findings `open` for the next run. Distinct from `loop.py`'s per-run ceiling (003-02). | DONE |
+| 011-05 | skill-and-dogfood | `/servo:heartbeat` SKILL.md — **Tier-2 explicit-opt-in** framing, the read-only-discovery promise, the whole-heartbeat-ceiling warning up front, the refusal table, and the **Routine-wiring recipe** (cron / CI `schedule:` / scheduled agent). Plus an end-to-end dogfood driving the real discover → triage → preflight → worktree → loop → record chain on a fixture target. | DONE |
 
 Five slices, sized to the spec 001 / 002 / 003 cadence. The vertical-value rule
 holds — after every slice the heartbeat is end-to-end usable at its current
@@ -248,53 +243,50 @@ capability.
 ## Slices
 
 - [011-01 — discover-and-inbox](slice-01-discover-and-inbox.md) — **DONE**
-- [011-02 — triage-state-spine](slice-02-triage-state-spine.md) — *goals-only DRAFT stub; ACs pinned at SPIDR-split*
-- [011-03 — candidate-dispatch](slice-03-candidate-dispatch.md) — *goals-only DRAFT stub*
-- [011-04 — heartbeat-cost-ceiling](slice-04-heartbeat-cost-ceiling.md) — **RECONCILED**
-- [011-05 — skill-and-dogfood](slice-05-skill-and-dogfood.md) — *goals-only DRAFT stub*
+- [011-02 — triage-state-spine](slice-02-triage-state-spine.md) — **DONE**
+- [011-03 — candidate-dispatch](slice-03-candidate-dispatch.md) — **DONE**
+- [011-04 — heartbeat-cost-ceiling](slice-04-heartbeat-cost-ceiling.md) — **DONE**
+- [011-05 — skill-and-dogfood](slice-05-skill-and-dogfood.md) — **DONE**
 
 ## Spec-level Definition of Done (forward-looking)
 
-- [ ] All five slices DONE — each reviewed by `jig:reviewer` subagent.
-- [ ] End-to-end dogfood (011-05): a fixture target with a scaffolded oracle is
+- [x] All five slices DONE — each reviewed with durable review evidence.
+- [x] End-to-end dogfood (011-05): a fixture target with a scaffolded oracle is
       put through one full `heartbeat.py run` — discovery enumerates seeded
       signals, an actionable finding is dispatched through the oracle preflight
       into a worktree loop, the inbox records the outcome, and the
       whole-heartbeat ceiling halts a deliberately over-budget pass with
       remaining findings left `open`.
-- [ ] `<target>/.servo/triage/` is **reserved in `.gitignore`** alongside
+- [x] `<target>/.servo/triage/` is **reserved in `.gitignore`** alongside
       `runs/` and `races/` (resolves the architecture.md "reserved paths" note;
       see the open refinement-todo "Scaffold-init does not write `<target>/.gitignore`").
-- [ ] `docs/architecture.md` reflects the **shipped** surface. *Registered at
+- [x] `docs/architecture.md` reflects the **shipped** surface. *Registered at
       spec authoring (2026-06-12):* the skill-split row, the Tier-2 classification,
       the project-vs-core split row, the reserved `.servo/triage/` runtime-artifact
       path, and the triage-inbox-schema ADR candidate. *Finalized at close-out:*
       the Runtime-artifacts inbox schema once slice 011-02 pins the `finding_id` +
       status contract (and its ADR is Accepted).
-- [ ] [README.md](../../../README.md) skills table: the `/servo:heartbeat` row
+- [x] [README.md](../../../README.md) skills table: the `/servo:heartbeat` row
       reads **DONE** (registered as **DRAFT** at spec authoring).
-- [ ] [docs/product-vision.md](../../product-vision.md) backlog #7 + the
+- [x] [docs/product-vision.md](../../product-vision.md) backlog #7 + the
       schedule-triggered design principle reflect the shipped surface.
-- [ ] ADR(s) recorded (see candidates below).
-- [ ] [docs/specs/README.md](../README.md) status board reflects final state
+- [x] ADR(s) recorded (see candidates below).
+- [x] [docs/specs/README.md](../README.md) status board reflects final state
       (via `workflow.py status-board`).
 
-## ADR candidates
+## ADRs recorded
 
-Two hard-to-reverse decisions this spec is likely to force (next free number is
-**0008**; numbers are hints, not reservations):
-
-- **Triage-inbox state-file schema + dedupe identity.** Reciprocal to
+- **[ADR-0010](../../decisions/adr-0010-triage-inbox-schema.md):
+  Triage-inbox state-file schema + dedupe identity.** Reciprocal to
   [ADR-0004](../../decisions/adr-0004-session-state-file-format.md) (the per-run
   `state.json`). The inbox is append-and-update cross-run state; its
   `finding_id` fingerprint scheme (what makes two discoveries "the same finding"
   across runs) and its status lifecycle are a contract later tooling reads, and
-  changing them after data exists is migration-shaped. Crystallizes at 011-02.
-- **Heartbeat-level vs per-loop cost-ceiling semantics.** Whether the ceiling is
-  whole-pass (this spec's position) or per-loop, and how a partially-spent
-  heartbeat resumes, is a guardrail contract a footgun depends on (the $2→$10
-  surprise). Could fold into the schema ADR or stand alone. Crystallizes at
-  011-04. (Shares DNA with spec 005's per-variant-vs-per-race open question.)
+  changing them after data exists is migration-shaped. Recorded at 011-02.
+- **[ADR-0012](../../decisions/adr-0012-heartbeat-whole-pass-cost-ceiling.md):
+  Heartbeat-level vs per-loop cost-ceiling semantics.** `heartbeat.py run` uses
+  one whole-pass ceiling while manual `dispatch --cost-ceiling` keeps its
+  per-loop meaning. Recorded at 011-04.
 
 ## Open questions (not yet ADR-worthy)
 

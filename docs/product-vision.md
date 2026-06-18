@@ -52,7 +52,7 @@ The same scars, every project. Servo encodes the scaffolding so the dev sets wei
 4. **`/servo:spec-oracle`** — compile a spec/slice into a reviewable, deterministic evidence overlay on top of the baseline oracle. *Spec 006 — DONE.*
 5. **`/servo:oracle-hook`** — Claude Code hook installer (idempotent install / uninstall / status). *Spec 004 — DONE.*
 6. **`/servo:variant-race`** — N-worktree parallel race with quality-gate scoring and winner selection. *Future spec.*
-7. **`/servo:heartbeat`** — Routine-triggered, read-only discovery pass over project signals (CI failures, open issues, recent commits) → servo-owned triage inbox → oracle-gated dispatch of each actionable finding into an isolated worktree loop, under one whole-heartbeat cost ceiling. The scheduled **front-end** that surfaces work; servo's middle/tail (loop / oracle / race / state) consume what it queues. *Spec 011 — DRAFT (overview ready for review).*
+7. **`/servo:heartbeat`** — Routine-triggered, read-only discovery pass over project signals (CI failures, open issues, recent commits) → servo-owned triage inbox → oracle-gated dispatch of each actionable finding into an isolated worktree loop, under one whole-heartbeat cost ceiling. The scheduled **front-end** that surfaces work; servo's middle/tail (loop / oracle / race / state) consume what it queues. *Spec 011 — DONE.*
 
 ## MVP scope
 

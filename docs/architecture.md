@@ -141,7 +141,7 @@ Servo ships two fresh agents — `runner.md` and `judge.md` — rather than reus
 
 Current state: both runner and judge are **placeholders**. Full prompts are authored alongside the specs that need them (spec 003 needs `runner` + `judge`; spec 005 reuses `judge`).
 
-## Runtime artifacts (when later specs land)
+## Runtime artifacts
 
 Runtime and spec-overlay skills produce these at the *target* project
 (not in servo's plugin repo):

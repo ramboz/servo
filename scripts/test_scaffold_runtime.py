@@ -419,6 +419,8 @@ ILLUSTRATIVE_COMMANDS = {
     "loop.py": "needs a live `claude` binary and burns real cost per iteration",
     "hook.py": "install/uninstall mutate settings.json against an already-scaffolded "
     "oracle.sh + .servo/install.json; not a bare-scaffold smoke command",
+    "heartbeat.py": "needs scheduler credentials and an already-scaffolded oracle for "
+    "dispatch/run; not a bare-scaffold smoke command",
 }
 # helper basename -> list of (argv-after-helper) that the test executes
 RUNNABLE_COMMAND_ARGS = {

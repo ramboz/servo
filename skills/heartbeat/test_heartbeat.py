@@ -56,6 +56,10 @@ Slice 011-04 (heartbeat-cost-ceiling) acceptance criteria:
     AC7  → SerialDispatchTests (existing dispatch per-loop meaning)
     AC8  → HeartbeatRunCostCeilingTests
 
+Slice 011-05 (skill-and-dogfood) acceptance criteria:
+    AC7  → HeartbeatDogfoodTests
+    AC8  → HeartbeatDogfoodTests
+
 The 011-03 dispatch harness uses a REAL git repo per test (a fresh `git init`
 target with a committed oracle.sh, so `git worktree add` exercises the real
 nested-`.servo/dispatch/` path A1) and the REAL `gate.py` (run against a
@@ -3284,6 +3288,125 @@ class HeartbeatRunCostCeilingTests(unittest.TestCase):
         res = _run_run(missing, bindir=self.bindir, loop_py=loop_py)
         self.assertEqual(res.returncode, 2)
         self.assertEqual(_loop_log(self.loop_log), [])
+
+
+# ===========================================================================
+# 011-05 — skill capstone dogfood
+# ===========================================================================
+
+
+class HeartbeatDogfoodTests(unittest.TestCase):
+    """011-05 — prove the real discover -> dispatch -> record chain."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-dogfood-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.bindir = self.root / "bin"
+        self.loop_log = self.root / "loop.log"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _mock_gh_for_ci_findings(self, count: int) -> None:
+        runs = []
+        for idx in range(count):
+            runs.append({
+                "attempt": 1,
+                "conclusion": "failure",
+                "createdAt": f"2026-06-1{idx}T09:00:00Z",
+                "databaseId": 900 + idx,
+                "displayTitle": f"dogfood failure {idx}",
+                "event": "push",
+                "headBranch": "main",
+                "headSha": f"{idx:012d}",
+                "name": "CI",
+                "number": 40 + idx,
+                "startedAt": f"2026-06-1{idx}T09:00:05Z",
+                "status": "completed",
+                "updatedAt": f"2026-06-1{idx}T09:05:00Z",
+                "url": f"https://github.test/o/r/actions/runs/{900 + idx}",
+                "workflowDatabaseId": 700 + idx,
+                "workflowName": f"Dogfood {idx}",
+            })
+        _make_mock_gh(
+            self.bindir,
+            run_list_json=json.dumps(runs),
+            issue_list_json="[]",
+        )
+
+    def _loop(self, **kw):
+        return _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log, **kw)
+
+    def test_run_happy_path_uses_real_chain_and_records_passed_outcome(self):
+        self._mock_gh_for_ci_findings(1)
+        loop_py = self._loop(default={
+            "status": "pass",
+            "composite": 0.95,
+            "cost": 0.10,
+            "run_id": "dogfood-pass",
+        })
+        res = _run_run(
+            self.target,
+            bindir=self.bindir,
+            loop_py=loop_py,
+            cost_ceiling=1.0,
+            max_candidates=1,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 1, "dogfood should dispatch exactly one candidate")
+        fid = log[0]["fid"]
+        worktree = self.target / ".servo" / "dispatch" / fid
+        self.assertTrue(worktree.is_dir(), "dogfood must create the real dispatch worktree")
+        listing = _git_cmd(self.target, "worktree", "list", "--porcelain").stdout
+        self.assertIn(f"servo/heartbeat/{fid}", listing)
+
+        prompt = _loop_prompt(log[0])
+        self.assertIn("UNTRUSTED DATA", prompt)
+        self.assertIn(">>> BEGIN UNTRUSTED FINDING DATA", prompt)
+        self.assertIn("<<< END UNTRUSTED FINDING DATA", prompt)
+        self.assertIn("dogfood failure 0", prompt)
+
+        rec = _finding_by_id(self.target, fid)
+        self.assertEqual(rec["schema_version"], 2)
+        self.assertEqual(rec["source"], "ci")
+        self.assertEqual(rec["status"], "passed")
+        self.assertEqual(rec["attempts"], 1)
+        self.assertEqual(
+            list(rec["outcome"].keys()),
+            ["run_id", "oracle_status", "oracle_composite", "cost_usd", "dispatched_at"],
+        )
+        self.assertEqual(rec["outcome"]["run_id"], "dogfood-pass")
+        self.assertEqual(rec["outcome"]["oracle_status"], "pass")
+
+    def test_run_budget_halt_leaves_remaining_findings_open(self):
+        self._mock_gh_for_ci_findings(3)
+        loop_py = self._loop(default={
+            "status": "below_threshold",
+            "composite": 0.20,
+            "cost": 1.25,
+            "run_id": "dogfood-budget",
+        })
+        res = _run_run(
+            self.target,
+            bindir=self.bindir,
+            loop_py=loop_py,
+            cost_ceiling=1.0,
+            max_candidates=3,
+        )
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("whole-heartbeat cost ceiling reached", res.stderr)
+        self.assertEqual(len(_loop_log(self.loop_log)), 1)
+        remaining = [
+            r for r in _read_jsonl(_triage_dir(self.target) / "inbox.jsonl")
+            if r.get("source") == "ci" and r.get("status") == "open" and r.get("actionable")
+        ]
+        self.assertGreaterEqual(
+            len(remaining), 1,
+            "budget halt must leave undispatched actionable findings open",
+        )
 
 
 # ===========================================================================
