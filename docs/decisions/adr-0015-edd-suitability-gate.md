@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-06-26
 deciders: ramboz
 supersedes:
@@ -10,7 +10,7 @@ superseded-by:
 
 ## Status
 
-Proposed
+Accepted (2026-06-27)
 
 ## Context
 
