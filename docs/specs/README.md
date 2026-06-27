@@ -7,11 +7,34 @@
 > A `DEFERRED` slice is parked with a `**Resolution trigger:**` line and
 > re-opens by transitioning back to `DRAFT`.
 >
-> **This table is generated** — run
-> `workflow.py status-board .` after a `workflow.py transition`; do not
-> hand-edit slice rows (the Notes column is preserved across regen, so
-> curate Notes freely). Planned specs + the jig-gap inventory live in
+> **The Active + Deferred tables are generated** by `workflow.py status-board .`,
+> which reads each slice file's frontmatter `status:` and preserves this
+> preamble + the Notes column across regen. Do not hand-edit slice rows; curate
+> Notes freely. Two environment caveats: use the **file-per-slice-aware** jig
+> copy at
+> `…/marketplaces/local-desktop-app-uploads/jig/skills/spec-workflow/workflow.py`
+> — the older `…/marketplaces/jig/…` copy predates file-per-slice and
+> regenerates an **empty** board — and run it under **Python ≥ 3.10** (the
+> system `python3` here is 3.9; use `python3.13`).
+>
+> DRAFT / scope-capture specs (no slice files yet) carry no generated rows, so
+> they're indexed under **Draft & planned specs** below — kept in this preamble
+> so regen preserves it. Full descriptions + the jig-gap inventory live in
 > [ROADMAP.md](ROADMAP.md).
+
+## Draft & planned specs
+
+> Specs with no slice files yet (DRAFT scope-capture, parked behind a grounding
+> consumer). Thin index — detail lives in [ROADMAP.md](ROADMAP.md). Kept as a
+> bulleted list (not a table) so `status-board` regen preserves it as preamble.
+
+- **[005-variant-race](005-variant-race/spec.md)** — DRAFT (parked). Phase 1 (Run): best-of-N worktree race; an optimization, not an EDD prerequisite.
+- **[008-eval-authoring](008-eval-authoring/spec.md)** — DRAFT (parked). Phase 2 (Compile): human-in-the-loop frozen-eval authoring front-end (ADR-0005).
+- **[012-design-eval](012-design-eval/spec.md)** — DRAFT. Phase 2 (Compile): frozen UI design-fidelity eval component ([ADR-0009](../decisions/adr-0009-design-fidelity-eval-recipe.md)).
+- **[015-edd-suitability](015-edd-suitability/spec.md)** — DRAFT (parked). Phase 2 (Compile): EDD suitability gate + missing-evidence ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md)).
+- **[016-execution-planner](016-execution-planner/spec.md)** — DRAFT (parked). Phase 2 (Compile): execution-plan Compile→Run handoff artifact ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)).
+- **[017-evaluation-intelligence](017-evaluation-intelligence/spec.md)** — DRAFT (parked). Phase 3: convergence / oracle-debug / adaptive-planning / explainability / cost umbrella.
+- **[018-continuous-evaluation](018-continuous-evaluation/spec.md)** — DRAFT (parked). Phase 4: repo monitoring / auto-recompilation / regression execution (extends 011).
 
 ## Active specs
 
