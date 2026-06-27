@@ -1,29 +1,32 @@
 # servo
 
-> A Claude Code plugin that scaffolds closed-loop, unattended agent operations into existing projects.
+> A Claude Code plugin that **compiles engineering intent into executable evaluation** — an Evaluation-Driven Development engine.
 
-**servo** (noun): a closed-loop control system — measures a signal, compares it to a target, and adjusts until they match.
+**servo** (noun): a closed-loop control system — measures a signal, compares it to a target, and adjusts until they match. That control loop is exactly what servo automates over *engineering evaluation*: compile the target (the oracle), measure the implementation against it, and iterate until they converge.
 
 ## Why servo exists
 
-[jig](https://github.com/ramboz/jig) handles **supervised** spec-driven development: a human reviews each slice before the next one starts. Past that boundary lies a different practice — **unattended agent loops** scored against an oracle, hooks that grade every `Stop`, and worktree races that pick the best of N parallel attempts.
+[jig](https://github.com/ramboz/jig) handles **supervised** spec-driven development: a human reviews each slice before the next one starts. Jig owns **engineering intent** — understanding problems, designing solutions, writing specs. Servo owns the next thing: **engineering evaluation**. Given a spec, it decides whether the work suits Evaluation-Driven Development, **compiles the spec into an executable oracle + evidence + execution plan**, and runs an implementation against that compiled evaluation until it converges.
 
-Those patterns share a different risk profile, maturity, and audience from jig's surface — they spawn N parallel agents, install hooks that fire every `Stop`, race worktrees that cost real money. Bundling them into jig would silently expand jig's scope. Servo is the **autonomous sibling** that keeps the contract explicit: installing servo means crossing the line into unattended operation.
+The autonomous loop people associate with this — agent loops scored against an oracle, hooks that grade every `Stop`, worktree races — is **one consumer** of the compiled evaluation, not the headline. Evaluation is the source of truth; execution is an optimization process against it. Those execution surfaces carry a different risk profile, maturity, and audience from jig's: they spawn N parallel agents, install hooks, race worktrees that cost real money. Bundling them into jig would silently expand its scope. Servo is the **evaluation-owning sibling** that keeps the contract explicit. See [ADR-0014](docs/decisions/adr-0014-evaluation-compiler.md).
 
 ## What it does
 
-Servo's primary entry point is a **scaffolder**, not a runtime. It probes the target project's signals (tests, lint, CI, language, project size) and drops a tailored set of artifacts — `oracle.sh`, agent-loop driver, hook installer, race driver — that reflect what the project actually has, instead of a generic stub the dev has to rewrite.
+Servo has two phases ([architecture](docs/architecture.md#two-phases-servo-compile-and-servo-run)):
 
-| Skill | Role | Status |
-|---|---|---|
-| `/servo:scaffold-init` | Probe target signals; drop tailored oracle (+ optional tier-1/2 artifacts) | Spec 001 — **DONE** |
-| `/servo:quality-gate` | Run the scaffolded oracle; normalized exit codes | Spec 002 — **DONE** |
-| `/servo:agent-loop` | Headless iteration driver with iteration cap, cost ceiling, checkpoint/resume, plateau detection, subagent dispatch; ADR-0008 rebase adds a `/goal`-driven driver, host-scope routing, detached (`--background`) + Routine-ready (`--emit-routine-prompt`) unattended runs | Spec 003 — **DONE** |
-| `/servo:oracle-hook` | Claude Code hook installer (idempotent install / uninstall / status); meta-judge `Stop` hook scores each turn via the oracle and blocks below threshold | Spec 004 — **DONE** |
-| `/servo:variant-race` | N-worktree parallel race with oracle scoring and winner selection | Future spec |
-| `/servo:spec-oracle` | Compile a spec/slice into a reviewable evidence overlay: AC mapping, deterministic checks, negative controls, and an installable oracle component | Spec 006 — **DONE** |
-| `/servo:heartbeat` | Routine-triggered, read-only discovery over project signals → triage inbox → oracle-gated dispatch of each actionable finding into an isolated worktree loop, under one whole-heartbeat cost ceiling (the scheduled front-end) | Spec 011 — **DONE** |
-| `/servo:design-eval` | Author a frozen UI design-fidelity eval component: capture app-vs-mockup screenshots, judge with a pinned vision model (n-sampled, lower-bound), freeze the definition, install a `score_design_fidelity` component into `oracle.sh` | Spec 012 — **DRAFT** |
+- **Servo Compile** — turn a spec into executable evaluation. Its primary entry point is a **scaffolder**, not a runtime: it probes the target project's signals (tests, lint, CI, language, project size) and drops a tailored `oracle.sh` (plus optional execution artifacts) that reflects what the project actually has, instead of a generic stub the dev rewrites. `/servo:spec-oracle` goes further, compiling a spec's acceptance criteria into a reviewable evidence overlay.
+- **Servo Run** — execute an implementation against the compiled evaluation until convergence: the portable agent loop, per-`Stop` oracle hooks, worktree races, and scheduled dispatch. The execution loop is an *interchangeable runtime*, one stage of Run.
+
+| Skill | Phase | Role | Status |
+|---|---|---|---|
+| `/servo:scaffold-init` | Compile | Probe target signals; drop tailored oracle (+ optional tier-1/2 artifacts) | Spec 001 — **DONE** |
+| `/servo:spec-oracle` | Compile | Compile a spec/slice into a reviewable evidence overlay: AC mapping, deterministic checks, negative controls, and an installable oracle component | Spec 006 — **DONE** |
+| `/servo:quality-gate` | Run | Run the scaffolded oracle; normalized exit codes | Spec 002 — **DONE** |
+| `/servo:agent-loop` | Run | Headless iteration driver (the portable execution loop) with iteration cap, cost ceiling, checkpoint/resume, plateau detection, subagent dispatch; ADR-0008 rebase adds a `/goal`-driven driver, host-scope routing, detached (`--background`) + Routine-ready (`--emit-routine-prompt`) unattended runs | Spec 003 — **DONE** |
+| `/servo:oracle-hook` | Run | Claude Code hook installer (idempotent install / uninstall / status); meta-judge `Stop` hook scores each turn via the oracle and blocks below threshold | Spec 004 — **DONE** |
+| `/servo:variant-race` | Run | N-worktree parallel race with oracle scoring and winner selection | Future spec |
+| `/servo:heartbeat` | Compile + Run | Routine-triggered, read-only discovery over project signals → triage inbox → oracle-gated dispatch of each actionable finding into an isolated worktree loop, under one whole-heartbeat cost ceiling (the scheduled front-end) | Spec 011 — **DONE** |
+| `/servo:design-eval` | Compile | Author a frozen UI design-fidelity eval component: capture app-vs-mockup screenshots, judge with a pinned vision model (n-sampled, lower-bound), freeze the definition, install a `score_design_fidelity` component into `oracle.sh` | Spec 012 — **DRAFT** |
 
 ## Relationship to jig
 
@@ -191,7 +194,7 @@ These codes are stable across servo's runtime skills — `/servo:quality-gate`, 
 
 ## Design philosophy
 
-> Scaffold first, runtime later. Per-project, signal-aware artifacts — never generic stubs.
+> Compile evaluation first, run against it later. Per-project, signal-aware artifacts — never generic stubs. Evaluation is the source of truth; the loop optimizes toward it.
 
 - Composite oracle score that reflects available signals (tests, lint, coverage, CI, seeded-issues)
 - Hard guardrails on loops: iteration cap, cost ceiling, refuse on dirty tree, refuse without an oracle

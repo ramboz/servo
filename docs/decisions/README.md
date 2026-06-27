@@ -20,6 +20,9 @@
 - [ADR-0011: Host-native phase hints stay advisory under servo's oracle authority](adr-0011-host-native-phase-hints.md) — Servo may consume host-native planning / implementation modes as adapter hints for planning, running, and evaluating loops, but `gate.py`, `oracle.sh`, run state, and triage state remain the authoritative control surfaces. (2026-06-17, Proposed)
 - [ADR-0012: Heartbeat uses one whole-pass cost ceiling](adr-0012-heartbeat-whole-pass-cost-ceiling.md) — `heartbeat.py run` applies one heartbeat-level budget across discovery and all dispatched loops in the current pass, leaving remaining candidates open when the budget is spent. (2026-06-18, Accepted)
 - [ADR-0013: Servo availability breadcrumb](adr-0013-servo-available-breadcrumb.md) — Servo writes a best-effort host-neutral marker at `${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json` so jig can cheaply detect "servo probably available" without Claude-specific plugin registries or subprocesses. (2026-06-18, Accepted)
+- [ADR-0014: Servo as an evaluation compiler — the EDD Compile/Run split](adr-0014-evaluation-compiler.md) — Reframes servo as an **Evaluation-Driven Development engine**: it compiles engineering intent into executable evaluation, and the autonomous execution loop is one consumer of the compiled model. Makes the two-phase **Servo Compile** (spec → evidence/evaluation model + oracle + execution plan) / **Servo Run** (execute to convergence) split a first-class architectural concept, and widens ADR-0005's narrow "EDD" to the product philosophy (the frozen-eval sense becomes a special case). Framing only — no contract, guardrail, or behavior change. (2026-06-26, Proposed)
+- [ADR-0015: EDD suitability analysis is a fail-closed gate, not a score](adr-0015-edd-suitability-gate.md) — The first Servo Compile step decides whether work suits EDD and identifies missing evidence, emitting a closed three-state **suitability verdict** (`suitable` / `needs_evidence` / `unsuitable`) that *gates* the pipeline. Fail-closed (indeterminate ⇒ not `suitable`), a gate not a threshold (no "close enough" auto-proceed), and the per-finding precondition at the heartbeat dispatch boundary. Anchors spec 015; mirrors ADR-0002's closed-taxonomy posture. (2026-06-26, Proposed)
+- [ADR-0016: The execution plan is the Compile→Run handoff artifact](adr-0016-execution-plan-artifact.md) — Servo Compile emits a durable, reviewable **execution plan** at `<target>/.servo/plans/<spec-id>/plan.json` that Servo Run consumes — making "Execution Planning" a real stage with an output instead of a bag of CLI flags. References (not copies) the oracle + spec-oracle overlay, is human-editable before Run, and **cannot loosen a hard guardrail past its safe ceiling** (clamped, never honored). Reciprocal to ADR-0004 (plan vs outcome); opt-in (no plan ⇒ today's behavior). Anchors spec 016. (2026-06-26, Proposed)
 
 ## Pending
 
@@ -28,9 +31,12 @@ not reservations — the next accepted ADR claims the next free number
 regardless of which candidate fires first). `0005` is Accepted (the
 eval-oracle-component ADR), `0009` is Accepted (the design-fidelity-eval
 recipe), `0010` is Accepted (triage-inbox-schema), `0011` is reserved
-(Proposed) by the host-native phase hints ADR, and `0012` is Accepted
-(heartbeat whole-pass cost ceiling), and `0013` is Accepted (servo availability
-breadcrumb), so the next free number is `0014`:
+(Proposed) by the host-native phase hints ADR, `0012` is Accepted
+(heartbeat whole-pass cost ceiling), `0013` is Accepted (servo availability
+breadcrumb), `0014` is reserved (Proposed) by the evaluation-compiler /
+EDD reframe ADR, and `0015`/`0016` are reserved (Proposed) by the EDD
+suitability gate and the execution-plan artifact ADRs, so the next free number
+is `0017`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 

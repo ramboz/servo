@@ -1,11 +1,57 @@
 ---
 status: DRAFT
-last_verified:
+last_verified: 2026-06-26
 ---
 
 # Architecture: servo
 
 > Status: Draft — evolves as specs land.
+
+## Two phases: Servo Compile and Servo Run
+
+Servo is an **Evaluation-Driven Development engine**: it compiles an engineering
+specification into executable evaluation, then runs an implementation against that
+evaluation until convergence. The two phases are a first-class architectural
+concept ([ADR-0014](decisions/adr-0014-evaluation-compiler.md)); the portable
+execution loop is **one stage inside Servo Run**, not the product.
+
+```text
+            ┌──────────────────── Servo Compile ─────────────────────┐  ┌────────── Servo Run ──────────┐
+Specification → EDD Suitability → Evidence Compilation → Evaluation Model
+            → Oracle Synthesis → Execution Planning → Execution Loop → Evaluation Report
+```
+
+- **Servo Compile** — spec → evidence model + evaluation model + oracle +
+  execution plan.
+- **Servo Run** — compiled artifacts → implementation + evaluation/convergence
+  reports.
+
+Every skill belongs to a phase:
+
+| Phase | Skill | Role |
+|---|---|---|
+| **Compile** | `/servo:edd-suitability` (015, planned) | EDD suitability gate + missing-evidence — the first Compile step ([ADR-0015](decisions/adr-0015-edd-suitability-gate.md)) |
+| **Compile** | `/servo:scaffold-init` (001) | Oracle synthesis from detected signals |
+| **Compile** | `/servo:spec-oracle` (006) | Compile a spec/slice into an AC-mapped evidence overlay |
+| **Compile** | `/servo:design-eval` (012) | Compile UI-vs-mockup intent into a frozen eval component |
+| **Compile** | `/servo:eval-authoring` (008, parked) | Human-in-the-loop authoring of a frozen eval component |
+| **Compile** | `/servo:execution-plan` (016, planned) | Compile the execution plan — the Compile→Run handoff ([ADR-0016](decisions/adr-0016-execution-plan-artifact.md)) |
+| **Compile** | `/servo:heartbeat` *discovery* (011) | Read-only discovery + dispatch planning over project signals |
+| **Run** | `/servo:quality-gate` (002) | Execute the compiled oracle; normalized exit codes |
+| **Run** | `/servo:agent-loop` (003) | The portable execution loop (an interchangeable runtime) |
+| **Run** | `/servo:oracle-hook` (004) | Per-`Stop` evaluation + structured retry hint |
+| **Run** | `/servo:variant-race` (005, future) | Best-of-N execution against the oracle |
+| **Run** | `/servo:heartbeat` *dispatch* (011) | Oracle-gated dispatch of each finding into a worktree loop |
+
+Two later tiers ride on top of these phases: **Evaluation Intelligence** (spec
+017 — convergence analysis, oracle debugging, adaptive planning, explainability,
+cost optimization) reasons *about* the compiled evaluation, and **Continuous
+Evaluation** (spec 018 — repository monitoring, automatic recompilation,
+regression execution) runs the pipeline on a schedule. Both are scope-captured,
+not yet built; see [the roadmap](specs/ROADMAP.md).
+
+The mechanics below — contracts, guardrails, runtime artifacts — are unchanged by
+this framing; they are the *implementation* of these two phases.
 
 ## Shape
 
@@ -63,17 +109,20 @@ can cheaply detect that servo has been observed on the machine.
 
 ## Skill split
 
-Servo is **scaffolder-first, runtime second**. The runtime skills all presuppose artifacts the scaffolder dropped into the target.
+Servo is **Compile-first, Run-second**: the Servo Run skills all presuppose the
+compiled evaluation artifacts that the Servo Compile skills (chiefly the
+scaffolder) dropped into the target. The Phase column ties each skill back to the
+[two-phase model](#two-phases-servo-compile-and-servo-run).
 
-| Skill | Role | Spec |
-|---|---|---|
-| `/servo:scaffold-init` | Probe → Q&A → tailored install of `oracle.sh` (+ optional agent-loop/hook/race stubs) | 001 |
-| `/servo:quality-gate` | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes | 002 |
-| `/servo:agent-loop` | Headless iteration driver | 003 |
-| `/servo:oracle-hook` | Claude Code hook installer | 004 |
-| `/servo:variant-race` | N-worktree parallel race | future |
-| `/servo:spec-oracle` | Compile a spec/slice into AC-mapped deterministic checks and an oracle overlay | 006 |
-| `/servo:heartbeat` | Routine-triggered read-only discovery → triage inbox → oracle-gated dispatch (the scheduled **front-end**) | 011 |
+| Skill | Phase | Role | Spec |
+|---|---|---|---|
+| `/servo:scaffold-init` | Compile | Probe → Q&A → tailored install of `oracle.sh` (+ optional agent-loop/hook/race stubs) | 001 |
+| `/servo:spec-oracle` | Compile | Compile a spec/slice into AC-mapped deterministic checks and an oracle overlay | 006 |
+| `/servo:quality-gate` | Run | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes | 002 |
+| `/servo:agent-loop` | Run | Headless iteration driver (the portable execution loop) | 003 |
+| `/servo:oracle-hook` | Run | Claude Code hook installer | 004 |
+| `/servo:variant-race` | Run | N-worktree parallel race | future |
+| `/servo:heartbeat` | Compile + Run | Routine-triggered read-only discovery → triage inbox → oracle-gated dispatch (the scheduled **front-end**) | 011 |
 
 ## Project vs servo-core split
 
@@ -219,6 +268,12 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 
 ## Agent-loop guardrails
 
+> **Servo Run stage.** The agent-loop is the portable execution loop — one stage
+> of Servo Run (see [Two phases](#two-phases-servo-compile-and-servo-run)). It
+> optimizes an implementation against the *already-compiled* evaluation; it does
+> not decide what to evaluate. The guardrails below are what make that runtime
+> safe to fire-and-forget.
+
 Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own.
 
 | Guardrail | Mechanism | Default | Disable | Terminal reason |
@@ -309,10 +364,13 @@ emits the paste-ready `/goal` prompt with a portable relative gate command.
 | [ADR-0009](decisions/adr-0009-design-fidelity-eval-recipe.md) | Accepted | Design-fidelity as a first-class eval recipe (`/servo:design-eval`): compiles "does the built UI match the mockup?" into a frozen `score_design_fidelity` oracle component (pinned vision model, n-sampled, confidence lower bound), riding ADR-0005's frozen-eval contract. |
 | [ADR-0010](decisions/adr-0010-triage-inbox-schema.md) | Accepted | Triage-inbox state-file schema & dedupe identity (spec 011): `schema_version: 2`; ratified `finding_id`; sticky `status` lifecycle separate from a recomputed `actionable` verdict + immutable `provenance` marker (Guardrail #4); one uniform merge + retention rule; `flock` double-fire safety; reserves `outcome.cost_usd` for 011-04. Reciprocal to ADR-0004. |
 | [ADR-0013](decisions/adr-0013-servo-available-breadcrumb.md) | Accepted | Servo writes a best-effort user-state availability marker at `${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json` so jig can detect "servo probably available" via a cheap filesystem check, without Claude-specific registries or subprocesses. |
+| [ADR-0014](decisions/adr-0014-evaluation-compiler.md) | Proposed | Servo is an Evaluation-Driven Development engine — it compiles intent into executable evaluation, and the autonomous loop is one consumer. Makes the **Servo Compile** / **Servo Run** split first-class and widens ADR-0005's narrow "EDD" to the product philosophy. Framing only — no contract or behavior change. |
+| [ADR-0015](decisions/adr-0015-edd-suitability-gate.md) | Proposed | The first Servo Compile step is an **EDD suitability analysis** that emits a closed three-state, fail-closed **gate** (`suitable` / `needs_evidence` / `unsuitable`) plus a `missing_evidence` list — not a score. Gates the pipeline (incl. the per-finding heartbeat dispatch boundary) so the loop never optimizes toward an un-evaluable false pass. Anchors spec 015. |
+| [ADR-0016](decisions/adr-0016-execution-plan-artifact.md) | Proposed | Servo Compile emits a durable, reviewable **execution plan** (`.servo/plans/<spec-id>/plan.json`) that Servo Run consumes — making Execution Planning a real stage. References (not copies) the oracle + overlay, is human-editable, and **cannot loosen a brake** (clamped). Reciprocal to ADR-0004 (plan vs outcome); opt-in. Anchors spec 016. |
 
 ### Pending (ADR candidates)
 
-Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0014`) regardless of which candidate fires first.
+Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0017`) regardless of which candidate fires first.
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
 
