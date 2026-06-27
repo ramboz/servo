@@ -74,7 +74,7 @@ For reference, jig's release surface: `pr-title.yml`, `release.yml`
 ## Decision record
 
 This spec implements
-[ADR-0007 — align release with jig](../decisions/adr-0007-align-release-with-jig.md)
+[ADR-0007 — align release with jig](../../decisions/adr-0007-align-release-with-jig.md)
 (adopt release-please + conventional-commit enforcement + squash-merge).
 
 ## Core model

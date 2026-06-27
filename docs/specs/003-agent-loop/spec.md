@@ -258,7 +258,7 @@ found `--max-turns` **is** a real, runtime-enforced flag — merely **hidden fro
 `claude --help`** (confirmed by an acceptance probe vs. a bogus-flag control: it
 halts a run with `error_max_turns` at the cap and binds a `/goal` run). The
 original prose is **preserved above** per
-[ADR-0010](../../decisions/adr-0010-amendment-scope-records-vs-live-prose.md)
+[ADR-0010](../../decisions/adr-0010-triage-inbox-schema.md)
 (closed-spec records are amended, not rewritten); this note is the correction.
 
 **Cross-spec follow-up (not a 003 slice):** repositioning the meta-judge (spec
