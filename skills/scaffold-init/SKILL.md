@@ -1,10 +1,11 @@
 ---
 name: servo:scaffold-init
 description: |
-  Scaffold servo's closed-loop, unattended agent-operations infrastructure
-  into a target project. Probes the target for signals (tests, lint, CI,
-  language) and drops a tailored `oracle.sh`, `.servo/install.json` manifest,
-  and `.servo/refinement-todo.md` deferred-decisions list.
+  Compile a target project's signals into an executable oracle — the first
+  Servo Compile step of servo's Evaluation-Driven Development engine. Probes
+  the target for signals (tests, lint, CI, language) and drops a tailored
+  `oracle.sh`, `.servo/install.json` manifest, and `.servo/refinement-todo.md`
+  deferred-decisions list.
 
   Fire this skill when the user wants to:
 
@@ -29,7 +30,7 @@ description: |
 
 # /servo:scaffold-init
 
-Scaffold servo's Tier-0 closed-loop infrastructure into a target project. End state: the project gains a runnable `oracle.sh`, a machine-readable install manifest, and an explicit list of deferred decisions for the dev to resolve.
+Compile a target project's signals into a runnable Tier-0 oracle — the first **Servo Compile** step (servo is an Evaluation-Driven Development engine; see [docs/product-vision.md](../../docs/product-vision.md)). End state: the project gains a runnable `oracle.sh`, a machine-readable install manifest, and an explicit list of deferred decisions for the dev to resolve.
 
 ## When to use this skill
 
