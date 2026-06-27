@@ -32,7 +32,7 @@ overlays, and eval authoring.
 
 | Spec | Description |
 |---|---|
-| [015-edd-suitability](015-edd-suitability/spec.md) | **DRAFT scope-capture, parked.** The first Compile step: decide whether the work suits EDD and identify missing evidence, emitting a closed three-state, fail-closed **suitability verdict** that gates the pipeline ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md)). Stops the worst unattended failure mode — a meaningless green oracle on un-evaluable work. Likely grounding consumer: the heartbeat refusing un-evaluable findings. |
+| [015-edd-suitability](015-edd-suitability/spec.md) | **DRAFT — SPIDR-split, ready to pick up (2026-06-27).** The first Compile step: decide whether the work suits EDD and identify missing evidence, emitting a closed three-state, fail-closed **suitability verdict** that gates the pipeline ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md), Accepted). Stops the worst unattended failure mode — a meaningless green oracle on un-evaluable work. Grounded against its consumer (the heartbeat refusing un-evaluable findings, 011 DONE); slices 015-01..04 carry full ACs, 015-01 is next. |
 | [001-scaffold-init](001-scaffold-init/spec.md) | **DONE.** Probe a target's signals (tests/lint/CI/language) and synthesize a tailored `oracle.sh` + `.servo/install.json`, signal-aware rather than a generic stub. The MVP. |
 | [006-spec-oracle](006-spec-oracle/spec.md) | **DONE.** Compile a spec/slice into a reviewable, deterministic **evidence overlay**: AC→check mapping, check engine, negative controls, freeze/approval, and an installable `score_spec_oracle_<id>` component. Turns acceptance criteria into runnable evaluation so loops optimize against the *spec*, not just the baseline suite. |
 | [008-eval-authoring](008-eval-authoring/spec.md) | **DRAFT scope-capture, parked.** Human-in-the-loop front-end that turns an eval-able `residual_judgment` AC into an [ADR-0005](../decisions/adr-0005-eval-oracle-component.md) frozen eval component: triage, rubric shaping, statistical reference-set collection, and frozen `n`/`δ`/threshold/judge-model — then hands off to `/servo:spec-oracle`. Activates on the first real EDD spec (same trigger as ADR-0005). |
@@ -97,13 +97,15 @@ on a green full-suite CI; 010 depends on 007 + 009 and implements ADR-0007.
 
 The Compile-phase frontier (Phase 2) is specs **015** (EDD suitability — the
 gate before everything) and **016** (execution planner — the Compile→Run handoff
-artifact); each is anchored by an ADR
+artifact); each is anchored by an accepted ADR
 ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md),
-[ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)) and parked behind a
-grounding consumer, like 005/008. Specs **017** (evaluation intelligence) and
-**018** (continuous evaluation) are umbrella scope-captures for Phases 3 and 4 —
-deliberately broad, expected to split into per-capability specs (with their own
-ADRs) as real use grounds them. None of 015–018 is queued work yet; they record
+[ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)). **015 is now
+SPIDR-split and queued** (grounded 2026-06-27 against the heartbeat consumer —
+slices 015-01..04 carry full ACs); **016 stays parked** behind its grounding
+consumer (heartbeat plan-reuse or 017 adaptive planning), like 005/008. Specs
+**017** (evaluation intelligence) and **018** (continuous evaluation) are umbrella
+scope-captures for Phases 3 and 4 — deliberately broad, expected to split into
+per-capability specs (with their own ADRs) as real use grounds them. They record
 the path from "servo compiles + runs evaluation today" to "servo reasons about
 and continuously runs evaluation."
 

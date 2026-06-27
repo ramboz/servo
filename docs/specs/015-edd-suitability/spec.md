@@ -14,13 +14,12 @@ last_verified:
 > [ADR-0015](../../decisions/adr-0015-edd-suitability-gate.md). Provisional
 > skill: `/servo:edd-suitability`.
 
-> **Status: DRAFT — scope capture, parked.** Recorded as the Compile-phase
-> entry point named by [ADR-0014](../../decisions/adr-0014-evaluation-compiler.md).
-> It activates when a real target needs servo to *refuse* un-evaluable work
-> before spending budget — most concretely, when the heartbeat (011) dispatches
-> work no human chose and an unsuitable finding must be turned away at the
-> boundary. Until then this is captured intent; the slice sketch is pre-SPIDR
-> (goals only, no ACs).
+> **Status: DRAFT — SPIDR-split, grounded, ready to pick up.** Activated
+> 2026-06-27 against its grounding consumer: the **heartbeat (011, DONE)** needs
+> to refuse un-evaluable findings it dispatches on work no human chose. Both
+> anchoring ADRs are Accepted ([ADR-0014](../../decisions/adr-0014-evaluation-compiler.md),
+> [ADR-0015](../../decisions/adr-0015-edd-suitability-gate.md)). Slices 015-01..04
+> below carry full acceptance criteria; 015-01 is the next pick-up.
 
 ## Why this spec
 
@@ -94,17 +93,20 @@ In the heartbeat, the verdict is consulted per finding *before* the 011-03
 oracle-gated dispatch; a non-`suitable` finding is recorded `skipped`, never
 dispatched.
 
-## Provisional slice sketch (pre-SPIDR — not ready for implementation)
+## SPIDR split
 
-> Goals only, no ACs. A grounding consumer (most likely the heartbeat needing to
-> refuse un-evaluable findings) is needed to pin acceptance criteria.
+The work is **Rules-first** (the verdict logic, simple → rich), then a **Path**
+slice (the gate path through to the real heartbeat consumer), then an
+**Interface** slice (the skill surface). No spike: ADR-0015 settled the contract,
+and the consumer (011) is shipped, so the unknowns are pinned. Every slice is
+vertical — each emits or acts on a verdict a user/caller can observe.
 
-| Slice | Title | Goal |
-|---|---|---|
-| 015-01 | verdict-contract | Emit the ADR-0015 verdict JSON from a spec + signals; closed three-state enum; `schema_version`; fail-closed default. Deterministic rule table v1. |
-| 015-02 | missing-evidence | Populate `missing_evidence` with actionable, blocking-flagged items keyed to a closed `kind` taxonomy. |
-| 015-03 | pipeline-gate | Wire the verdict as the Compile precondition + the heartbeat per-finding gate (record `skipped` with `actionable_reason`, no dispatch). |
-| 015-04 | skill-and-explain | `/servo:edd-suitability` surface (human + `--json`), `--explain` rationale, re-run flow; document the rule-table extension point. |
+| Slice | Title | Axis | Goal |
+|---|---|---|---|
+| [015-01](slice-01-verdict-contract.md) | verdict-contract | Rules | Emit the ADR-0015 verdict JSON from a spec + 001 signals + 006 classification; closed three-state enum; `schema_version`; fail-closed default; deterministic rule table v1; standalone `.servo/suitability/<spec-id>.json` artifact. |
+| [015-02](slice-02-missing-evidence.md) | missing-evidence | Rules | Populate `missing_evidence` with actionable, blocking-flagged items keyed to a closed `kind` taxonomy; verdict ⇔ list coherence; re-runnable. |
+| [015-03](slice-03-pipeline-gate.md) | pipeline-gate | Path | Consume the verdict at its grounding consumer: the heartbeat per-finding gate (non-`suitable` ⇒ `skipped` + suitability `actionable_reason`, never dispatched) + the Compile precondition. Fail-closed on an unavailable verdict. Evolves 011-02's `skipped`-is-human-only contract (arch + frame review). |
+| [015-04](slice-04-skill-and-explain.md) | skill-and-explain | Interface | `/servo:edd-suitability` surface (human + `--json`), `--explain` rule trace, re-run dogfood; document the model-assist extension point + waiver posture. Closes spec 015. |
 
 ## Open questions
 
@@ -116,9 +118,10 @@ dispatched.
   mechanism (and its audit trail) — borrow spec-006's waiver posture, or new?
 - **Verdict freshness.** Does the verdict expire when the spec or signals drift
   (links to 018 continuous-evaluation's recompilation trigger)?
-- **Where the artifact lives.** Standalone `.servo/suitability/<spec-id>.json`,
-  or folded into the 016 execution plan as its `suitability_verdict` field
-  (currently referenced there)?
+- ~~**Where the artifact lives.**~~ **Resolved (015-01):** standalone
+  `<target>/.servo/suitability/<spec-id>.json`; ADR-0016's execution plan
+  *references* it rather than copying it. Folding it into the plan is deferred to
+  spec 016.
 
 ## References
 

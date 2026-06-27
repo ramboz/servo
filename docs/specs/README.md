@@ -31,7 +31,6 @@
 - **[005-variant-race](005-variant-race/spec.md)** — DRAFT (parked). Phase 1 (Run): best-of-N worktree race; an optimization, not an EDD prerequisite.
 - **[008-eval-authoring](008-eval-authoring/spec.md)** — DRAFT (parked). Phase 2 (Compile): human-in-the-loop frozen-eval authoring front-end (ADR-0005).
 - **[012-design-eval](012-design-eval/spec.md)** — DRAFT. Phase 2 (Compile): frozen UI design-fidelity eval component ([ADR-0009](../decisions/adr-0009-design-fidelity-eval-recipe.md)).
-- **[015-edd-suitability](015-edd-suitability/spec.md)** — DRAFT (parked). Phase 2 (Compile): EDD suitability gate + missing-evidence ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md)).
 - **[016-execution-planner](016-execution-planner/spec.md)** — DRAFT (parked). Phase 2 (Compile): execution-plan Compile→Run handoff artifact ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)).
 - **[017-evaluation-intelligence](017-evaluation-intelligence/spec.md)** — DRAFT (parked). Phase 3: convergence / oracle-debug / adaptive-planning / explainability / cost umbrella.
 - **[018-continuous-evaluation](018-continuous-evaluation/spec.md)** — DRAFT (parked). Phase 4: repo monitoring / auto-recompilation / regression execution (extends 011).
@@ -88,6 +87,10 @@
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | DEFERRED |  |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | DEFERRED |  |
 | [014-servo-available-breadcrumb](014-servo-available-breadcrumb/spec.md) | 014-01 - breadcrumb marker writers | **DONE** |  |
+| [015-edd-suitability](015-edd-suitability/spec.md) | 015-01 — verdict-contract | DRAFT |  |
+| [015-edd-suitability](015-edd-suitability/spec.md) | 015-02 — missing-evidence | DRAFT |  |
+| [015-edd-suitability](015-edd-suitability/spec.md) | 015-03 — pipeline-gate | DRAFT |  |
+| [015-edd-suitability](015-edd-suitability/spec.md) | 015-04 — skill-and-explain | DRAFT |  |
 
 ## Deferred slices
 
