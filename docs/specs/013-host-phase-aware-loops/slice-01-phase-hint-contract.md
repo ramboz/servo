@@ -1,5 +1,5 @@
 ---
-status: DEFERRED
+status: DRAFT
 dependencies: [adr-0011]
 last_verified:
 ---

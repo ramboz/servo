@@ -84,7 +84,7 @@
 | [011-heartbeat](011-heartbeat/spec.md) | 011-03 — candidate-dispatch | **DONE** | 56 new tests (168 heartbeat total); new `dispatch` verb — the heartbeat's one **execution** edge. Per `actionable AND open` candidate (ordered `discovered_at`,`finding_id`): `gate.py <target>` oracle preflight (refuse-without-oracle refuses the whole pass, defers to gate's taxonomy — Guardrail #3) → fresh isolated git worktree at HEAD on `servo/heartbeat/<fid>` under git-ignored `.servo/dispatch/<fid>/` (**A1 probed**) → provision oracle + `.servo/` minus `{runs,races,triage,dispatch}` → **verify** with `gate.py <worktree>` (incomplete copy → skip) → `loop.py` with an **untrusted-data-framed** prompt (Guardrail #4 — discovered text is DATA, never instructions) → record ADR-0010 `outcome` (`passed` iff `final_oracle_status==pass` else `tried`) via 011-02's locked atomic merge. Serial; per-loop `--cost-ceiling`; `--max-candidates` cap; closed `{0,2}` exit. `gate.py`/`loop.py` subprocessed (env-override test seam, no live `claude -p`). compliance **PASS** + craft/arch **PASS-WITH-NITS** + reconciliation **PASS** (nits → deviation log + refinement-todo); DONE hand-set (ADR-dep gate prose-only, per 011-02). |
 | [011-heartbeat](011-heartbeat/spec.md) | 011-04 — heartbeat-cost-ceiling | **DONE** |  |
 | [011-heartbeat](011-heartbeat/spec.md) | 011-05 — skill-and-dogfood | **DONE** |  |
-| [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-01 - phase-hint contract | DEFERRED |  |
+| [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-01 - phase-hint contract | DRAFT | Re-opened 2026-06-27: resolution trigger satisfied — jig spec 074 host-native-phase-modes landed (DONE, [ADR-0027](../decisions/adr-0027-host-native-phase-modes.md) Accepted 2026-06-21). DoR still needs servo ADR-0011 Accepted (currently Proposed) before implementation |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | DEFERRED |  |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | DEFERRED |  |
 | [014-servo-available-breadcrumb](014-servo-available-breadcrumb/spec.md) | 014-01 - breadcrumb marker writers | **DONE** |  |
@@ -95,6 +95,5 @@
 
 | Spec | Slice | Resolution trigger |
 |------|-------|--------------------|
-| [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-01 - phase-hint contract | Resume when jig lands an accepted host-mode adapter |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | Resume after 013-01 lands and a real caller needs |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | Resume when a second design-eval consumer appears, or |
