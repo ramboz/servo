@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.5.0](https://github.com/ramboz/servo/compare/v0.4.0...v0.5.0) (2026-06-27)
+
+
+### Features
+
+* **heartbeat:** add whole-pass run cost ceiling ([d756de8](https://github.com/ramboz/servo/commit/d756de8f06049e52a603608d0bd816dead835d20))
+* **heartbeat:** candidate-dispatch — oracle-gated isolated-worktree loop dispatch (011-03) ([d50e152](https://github.com/ramboz/servo/commit/d50e15252ad693467fc8f0a8ef5f73cbdba31c15))
+* **heartbeat:** ship heartbeat skill surface ([7c19a69](https://github.com/ramboz/servo/commit/7c19a69e1baa4b712bf856e242d51bb7dce9f7d2))
+* **heartbeat:** triage-state-spine — merge, retention, status verb (011-02) ([e194bab](https://github.com/ramboz/servo/commit/e194bab99474bead2cb2bd9d4bd759fba5590f67))
+* **scaffold:** add servo availability breadcrumb ([a3425b3](https://github.com/ramboz/servo/commit/a3425b32f96f107807575dbde6031e0cb009d463))
+
+
+### Bug Fixes
+
+* **heartbeat:** code event-disqualified CI runs as ci_non_actionable_event ([e725acb](https://github.com/ramboz/servo/commit/e725acba7447199025c411f513ac13a579f23e33))
+
+
+### Documentation
+
+* **decisions:** accept ADR-0005 (eval as a frozen oracle component) ([#11](https://github.com/ramboz/servo/issues/11)) ([ec438b9](https://github.com/ramboz/servo/commit/ec438b97aaf0d35c2613452fc7ddd92b7c714e1d))
+* **refinement-todo:** track reciprocal servo-available breadcrumb for jig slice-land ([1e3a3ad](https://github.com/ramboz/servo/commit/1e3a3adea11dda71499fbef27577ee3a58b125c5))
+* **workflow:** capture host-native phase hint follow-up ([b8503f1](https://github.com/ramboz/servo/commit/b8503f11b24b409d755fe80c2633f4579799baff))
+
 ## [0.4.0](https://github.com/ramboz/servo/compare/v0.3.0...v0.4.0) (2026-06-13)
 
 
