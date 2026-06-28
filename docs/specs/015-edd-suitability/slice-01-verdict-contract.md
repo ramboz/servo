@@ -1,7 +1,7 @@
 ---
-status: DRAFT
-dependencies: [001, 006, adr-0015]
-last_verified:
+status: DONE
+dependencies: [001-03, 006-01, adr-0015]
+last_verified: 2026-06-27
 ---
 
 ## Slice 015-01 — verdict-contract
@@ -88,11 +88,63 @@ project-owned, inspectable artifact. This is the contract every later slice
    `EnvErrorContractTests`.
 
 **DoD:**
-- [ ] All ACs pass; new `test_suitability.py` green; `ruff check .` clean.
-- [ ] Reviewed by the jig compliance + craft passes (record review evidence).
-- [ ] Deviation log produced under this slice heading.
-- [ ] `docs/specs/README.md` regenerated.
+- [x] All ACs pass; new `test_suitability.py` green (24 tests; full suite 1058
+      passed); `ruff check .` clean (pinned 0.15.17).
+- [x] Reviewed by the jig compliance + craft passes (recorded under `reviews/`;
+      craft + reconciliation are maintainer self-reviews — independent craft
+      subagent declined by the maintainer mid-flow).
+- [x] Deviation log produced under this slice heading.
+- [x] `docs/specs/README.md` regenerated.
 
 ### Close-out (post-DONE)
 - [ ] If this is not the spec-closing slice, no primer compression required;
       carry the v1 rule-table location forward in the board Notes for 015-02/03.
+
+### Deviation log (after reconciliation)
+
+Original ACs preserved above; the implementation deviated/extended as follows:
+
+- **`reasons[]` shape.** ADR-0015 illustrates `reasons` as `["..."]` (strings).
+  AC1 asks for "machine codes + human strings," so each entry is a
+  `{"code", "message"}` object instead. Additive, satisfies AC1; consumers that
+  branch on the closed `verdict` enum are unaffected.
+- **`manifest_malformed` reason code.** AC6 names three env-error reasons
+  (`spec_missing` / `manifest_missing` / `plan_unreadable`). The implementation
+  adds `manifest_malformed` for a present-but-unparseable manifest — a sound
+  fail-closed extension (still exit 2, no artifact). Currently exercised only
+  indirectly; an explicit test is deferred to 015-02. (Both review passes flagged
+  this as a Low note, not a defect.)
+- **v1 signal definition.** Only `tests` / `ci` count as a compilable oracle
+  signal; `lint` alone is deliberately insufficient (it becomes a
+  `missing_evidence` item in 015-02). This is an implementation choice beyond the
+  AC's literal text, made explicit in code + a test.
+- **`inputs` block in the artifact.** Beyond ADR-0015's named fields, the
+  artifact carries an `inputs` block (signal echo + `ac_counts`) for auditability
+  and the 015-04 `--explain` view. Additive; does not alter the closed contract.
+- **CLI dispatch nit (fixed in-pass).** The craft pass refactored `main()` from a
+  hand-rolled subcommand check to the standard `add_subparsers` +
+  dispatch-on-`args.command` idiom used by `heartbeat.py` / `gate.py`. No
+  follow-up needed.
+
+### Reconciliation sweep
+
+Drift-prone surfaces checked (`updated` / `no-op` / `deferred`):
+
+- **spec.md open question (artifact location)** — `updated`: resolved to the
+  standalone `.servo/suitability/<spec-id>.json` artifact in this slice.
+- **ADR-0015 contract** — `no-op`: verdict enum, fail-closed default, and
+  "gate-not-score" implemented faithfully; ADR is immutable and unchanged.
+- **001 `install.json` `signals` schema** — `no-op`: read-only consumer; the
+  `{tests, lint, ci, language}` keys were verified against `scaffold.py`.
+- **006 `oracle_plan.py classify` output** — `no-op`: subprocess seam only; the
+  `checks` / `residual_judgment` shape was verified against `oracle_plan.py`.
+- **015-02 / 015-03 boundaries** — `no-op`: `missing_evidence` left empty; no
+  caller wired (gating is 015-03).
+- **`docs/specs/README.md` board** — `deferred`: regenerated at DONE close-out.
+- **Install-contract / `/servo:edd-suitability` skill surface (007)** —
+  `deferred`: the SKILL.md + install-contract entry are slice 015-04; this slice
+  ships the helper only.
+
+**Architecture impact:** none — a new standalone skill helper with no caller; no
+module boundary or public contract changed, so no ADR (implements the existing
+ADR-0015).

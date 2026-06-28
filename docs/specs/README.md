@@ -87,7 +87,7 @@
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | DEFERRED |  |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | DEFERRED |  |
 | [014-servo-available-breadcrumb](014-servo-available-breadcrumb/spec.md) | 014-01 - breadcrumb marker writers | **DONE** |  |
-| [015-edd-suitability](015-edd-suitability/spec.md) | 015-01 — verdict-contract | DRAFT |  |
+| [015-edd-suitability](015-edd-suitability/spec.md) | 015-01 — verdict-contract | **DONE** |  |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-02 — missing-evidence | DRAFT |  |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-03 — pipeline-gate | DRAFT |  |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-04 — skill-and-explain | DRAFT |  |
