@@ -369,6 +369,20 @@ class EnvErrorContractTests(unittest.TestCase):
             res = _run_cli(target, spec, oracle_plan=plan)
             self.assertIn(res.returncode, (0, 2))
 
+    def test_manifest_malformed_when_install_json_unparseable(self):
+        # 015-01 deviation log deferred an explicit test for the
+        # `manifest_malformed` reason (present-but-unparseable manifest).
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root, SIG_TESTS)
+            (target / ".servo" / "install.json").write_text("{ not json ]")
+            spec = _make_spec(root)
+            plan = _stub_oracle_plan(root, n_checks=1, n_residual=0)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 2)
+            self.assertIn("manifest_malformed", res.stderr)
+            self.assertFalse(_artifact_path(target).exists())
+
 
 # --------------------------------------------------------------------------
 # End-to-end against the REAL oracle_plan classifier (no stub)
@@ -389,6 +403,186 @@ class RealClassifierIntegrationTests(unittest.TestCase):
             self.assertEqual(res.returncode, 0, res.stderr)
             art = json.loads(_artifact_path(target).read_text())
             self.assertIn(art["verdict"], VERDICTS)
+
+
+# ==========================================================================
+# Slice 015-02 — missing-evidence
+# ==========================================================================
+
+# Inputs that drive each needs_evidence path (the only verdict with a
+# load-bearing missing_evidence list).
+#   - SIG_NONE + evaluable ACs   -> evaluable_acs_no_signal   (missing signal)
+#   - SIG_CI   + no evaluable ACs-> signal_without_evaluable_acs (missing ACs)
+#   - SIG_NONE + no ACs at all   -> no_evidence_no_acs        (both gaps)
+_NEEDS_EVIDENCE_CASES = (
+    (SIG_NONE, 3, 0),   # evaluable ACs, no signal
+    (SIG_CI, 0, 2),     # signal, no evaluable ACs
+    (SIG_NONE, 0, 0),   # nothing at all
+    (SIG_LINT_ONLY, 2, 0),  # evaluable ACs, lint-only (insufficient signal)
+)
+
+
+# --------------------------------------------------------------------------
+# AC1 — closed `kind` taxonomy
+# --------------------------------------------------------------------------
+
+class MissingEvidenceKindTaxonomyTests(unittest.TestCase):
+    def test_module_exposes_closed_taxonomy(self):
+        self.assertEqual(
+            suitability.MISSING_EVIDENCE_KINDS,
+            ("tests", "lint", "ci", "oracle_signal", "reference_set"),
+        )
+
+    def test_every_emitted_kind_is_in_the_closed_set(self):
+        allowed = set(suitability.MISSING_EVIDENCE_KINDS)
+        for sig, n_eval, n_res in _NEEDS_EVIDENCE_CASES:
+            out = suitability.decide(sig, n_evaluable=n_eval, n_residual=n_res)
+            self.assertEqual(out["verdict"], "needs_evidence",
+                             f"{sig} {n_eval} {n_res}")
+            for item in out["missing_evidence"]:
+                self.assertIn(item["kind"], allowed,
+                              f"open-string kind {item['kind']!r} emitted")
+
+    def test_no_open_string_kind_even_with_odd_signals(self):
+        # An unknown signal key must not leak through as a missing_evidence kind.
+        odd = {"tests": False, "ci": False, "lint": False, "weird": True}
+        out = suitability.decide(odd, n_evaluable=1, n_residual=0)
+        for item in out["missing_evidence"]:
+            self.assertIn(item["kind"], set(suitability.MISSING_EVIDENCE_KINDS))
+
+
+# --------------------------------------------------------------------------
+# AC2 — actionable, blocking-flagged items
+# --------------------------------------------------------------------------
+
+class MissingEvidenceItemShapeTests(unittest.TestCase):
+    def test_each_item_has_kind_detail_blocking(self):
+        for sig, n_eval, n_res in _NEEDS_EVIDENCE_CASES:
+            out = suitability.decide(sig, n_evaluable=n_eval, n_residual=n_res)
+            self.assertTrue(out["missing_evidence"])
+            for item in out["missing_evidence"]:
+                self.assertEqual(set(item), {"kind", "detail", "blocking"})
+                self.assertIsInstance(item["detail"], str)
+                self.assertTrue(item["detail"].strip())
+                self.assertIsInstance(item["blocking"], bool)
+
+    def test_detail_is_actionable_next_step(self):
+        # Every item names a concrete action, not a vague "needs more".
+        out = suitability.decide(SIG_NONE, n_evaluable=0, n_residual=0)
+        for item in out["missing_evidence"]:
+            self.assertIn("add", item["detail"].lower(),
+                          f"non-actionable detail: {item['detail']!r}")
+
+    def test_blocking_flag_marks_the_causing_gap(self):
+        # Missing-signal case: the oracle_signal gap is blocking; the lint nudge
+        # is not.
+        out = suitability.decide(SIG_NONE, n_evaluable=2, n_residual=0)
+        by_kind = {it["kind"]: it for it in out["missing_evidence"]}
+        self.assertTrue(by_kind["oracle_signal"]["blocking"])
+        self.assertFalse(by_kind["lint"]["blocking"])
+
+
+# --------------------------------------------------------------------------
+# AC3 — verdict ⇔ list coherence
+# --------------------------------------------------------------------------
+
+class VerdictEvidenceCoherenceTests(unittest.TestCase):
+    def test_needs_evidence_has_at_least_one_blocking_item(self):
+        for sig, n_eval, n_res in _NEEDS_EVIDENCE_CASES:
+            out = suitability.decide(sig, n_evaluable=n_eval, n_residual=n_res)
+            blocking = [it for it in out["missing_evidence"] if it["blocking"]]
+            self.assertTrue(blocking, f"{sig} {n_eval} {n_res} had no blocker")
+
+    def test_suitable_has_empty_missing_evidence(self):
+        out = suitability.decide(SIG_TESTS, n_evaluable=2, n_residual=0)
+        self.assertEqual(out["verdict"], "suitable")
+        self.assertEqual(out["missing_evidence"], [])
+
+    def test_unsuitable_has_empty_missing_evidence(self):
+        # All-residual, no-signal -> unsuitable; not a fixable evidence list.
+        out = suitability.decide(SIG_NONE, n_evaluable=0, n_residual=4)
+        self.assertEqual(out["verdict"], "unsuitable")
+        self.assertEqual(out["missing_evidence"], [])
+
+    def test_blocking_kinds_reflected_in_top_level_reasons(self):
+        # Structural check: every blocking item contributes a dedicated
+        # `missing_<kind>` reason code (stronger than a prose substring match).
+        for sig, n_eval, n_res in _NEEDS_EVIDENCE_CASES:
+            out = suitability.decide(sig, n_evaluable=n_eval, n_residual=n_res)
+            reason_codes = {r["code"] for r in out["reasons"]}
+            for item in out["missing_evidence"]:
+                if item["blocking"]:
+                    self.assertIn(f"missing_{item['kind']}", reason_codes,
+                                  f"blocking kind {item['kind']} not in reasons")
+
+    def test_non_blocking_kinds_not_forced_into_reasons(self):
+        # Advisory (blocking=False) items must NOT manufacture a reason code —
+        # only blocking gaps are reflected, so reasons stay aligned with cause.
+        out = suitability.decide(SIG_NONE, n_evaluable=2, n_residual=0)
+        reason_codes = {r["code"] for r in out["reasons"]}
+        self.assertNotIn("missing_lint", reason_codes)
+        self.assertNotIn("missing_tests", reason_codes)
+
+
+# --------------------------------------------------------------------------
+# AC4 — deterministic + re-runnable
+# --------------------------------------------------------------------------
+
+class MissingEvidenceRerunTests(unittest.TestCase):
+    def test_same_inputs_yield_same_list(self):
+        a = suitability.decide(SIG_NONE, n_evaluable=0, n_residual=0)
+        b = suitability.decide(SIG_NONE, n_evaluable=0, n_residual=0)
+        self.assertEqual(a["missing_evidence"], b["missing_evidence"])
+
+    def test_stable_order_is_taxonomy_then_detail(self):
+        out = suitability.decide(SIG_NONE, n_evaluable=0, n_residual=0)
+        kinds = [it["kind"] for it in out["missing_evidence"]]
+        rank = {k: i for i, k in enumerate(suitability.MISSING_EVIDENCE_KINDS)}
+        pairs = [
+            (rank[it["kind"]], it["detail"]) for it in out["missing_evidence"]
+        ]
+        self.assertEqual(pairs, sorted(pairs))
+        # Sanity: taxonomy order places tests before reference_set.
+        self.assertLess(kinds.index("tests"), kinds.index("reference_set"))
+
+    def test_closing_the_gap_removes_item_and_flips_verdict(self):
+        # No-signal target with evaluable ACs -> needs_evidence + a blocking
+        # oracle_signal item. Add a test signal, re-analyze -> suitable, empty.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root, SIG_NONE)
+            spec = _make_spec(root)
+            plan = _stub_oracle_plan(root, n_checks=2, n_residual=0)
+            _run_cli(target, spec, oracle_plan=plan)
+            before = json.loads(_artifact_path(target).read_text())
+            self.assertEqual(before["verdict"], "needs_evidence")
+            kinds = {it["kind"] for it in before["missing_evidence"]}
+            self.assertIn("oracle_signal", kinds)
+
+            # Close the gap: the target now has a test signal.
+            (target / ".servo" / "install.json").write_text(json.dumps(
+                {"schema_version": 1, "signals": SIG_TESTS,
+                 "components": [], "weights": {}}
+            ))
+            _run_cli(target, spec, oracle_plan=plan)
+            after = json.loads(_artifact_path(target).read_text())
+            self.assertEqual(after["verdict"], "suitable")
+            self.assertEqual(after["missing_evidence"], [])
+
+    def test_cli_artifact_carries_missing_evidence_for_needs_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root, SIG_NONE)
+            spec = _make_spec(root)
+            plan = _stub_oracle_plan(root, n_checks=3, n_residual=0)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target).read_text())
+            self.assertEqual(art["verdict"], "needs_evidence")
+            self.assertTrue(art["missing_evidence"])
+            self.assertTrue(
+                any(it["blocking"] for it in art["missing_evidence"])
+            )
 
 
 if __name__ == "__main__":

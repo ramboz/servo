@@ -1,7 +1,7 @@
 ---
-status: DRAFT
+status: DONE
 dependencies: [015-01]
-last_verified:
+last_verified: 2026-06-27
 ---
 
 ## Slice 015-02 — missing-evidence
@@ -59,11 +59,61 @@ gap, why it blocks, and how to close it.
    re-analysis loop ADR-0015 names. *Test:* `MissingEvidenceRerunTests`.
 
 **DoD:**
-- [ ] All ACs pass; `test_suitability.py` extended; `ruff check .` clean.
-- [ ] Reviewed by the jig compliance + craft passes (record review evidence).
-- [ ] Deviation log produced under this slice heading.
-- [ ] `docs/specs/README.md` regenerated.
+- [x] All ACs pass; `test_suitability.py` extended (40 tests; full suite green —
+      1073 before the in-pass coherence-test strengthening); `ruff check .` clean
+      (pinned 0.15.17).
+- [x] Reviewed by the jig compliance + craft passes (recorded under `reviews/`;
+      compliance ran as an independent subagent (pass), craft is a maintainer
+      self-review (pass) — provenance noted in the craft file).
+- [x] Deviation log produced under this slice heading.
+- [x] `docs/specs/README.md` regenerated.
 
 ### Close-out (post-DONE)
-- [ ] Carry the closed `kind` taxonomy forward in the board Notes so 015-03's
+- [x] Carry the closed `kind` taxonomy forward in the board Notes so 015-03's
       heartbeat reason mapping stays in sync.
+
+### Deviation log (after reconciliation)
+
+Original ACs preserved above; the implementation deviated/extended as follows:
+
+- **`oracle_signal` umbrella + advisory `tests`/`ci` sub-items (AC1/AC2).** For
+  the missing-signal case the analyzer emits a single *blocking* `oracle_signal`
+  item plus *advisory* (`blocking: false`) `tests` and `ci` how-to items, rather
+  than marking each specific signal blocking. Rationale: only **one** compilable
+  signal is required, so the abstract `oracle_signal` is the honest blocking gap
+  and the specific items are the concrete fix. All five taxonomy kinds are
+  exercised in v1 (`lint` advisory; `reference_set` blocking when there are no
+  evaluable ACs).
+- **Blocking kinds reflected via appended `reasons` entries (AC3).** Coherence
+  is made structural: `decide()` appends a `{"code": "missing_<kind>",
+  "message": detail}` reason per blocking item alongside the fired-rule reason.
+  Additive to 015-01's single-reason shape; consumers branching on the closed
+  `verdict` enum are unaffected.
+- **`unsuitable` carries an empty list.** Per the slice boundary, the list is
+  load-bearing only for `needs_evidence`; both `suitable` and `unsuitable` carry
+  an empty `missing_evidence`. An `unsuitable` spec's gap (all-residual ACs) is
+  not closable by acquiring evidence, so emitting "add tests" would mislead.
+- **`manifest_malformed` explicit test added.** Closes the test gap 015-01's
+  deviation log deferred to this slice (a present-but-unparseable
+  `install.json` ⇒ exit 2, no artifact).
+
+### Reconciliation sweep
+
+Drift-prone surfaces checked (`updated` / `no-op` / `deferred`):
+
+- **015-01 verdict artifact contract** — `updated`: `missing_evidence` is now
+  populated for `needs_evidence` (was reserved-empty); `needs_evidence` reasons
+  gain appended `missing_*` entries. Additive; the `suitable`-path reasons and
+  the closed `verdict` enum are unchanged (015-01's 24 tests still pass).
+- **ADR-0015 `missing_evidence` shape** — `no-op`: `{kind, detail, blocking}`
+  implemented faithfully; the `kind` set is drawn from the ADR's examples and
+  pinned closed.
+- **001 `install.json` `signals` schema** — `no-op`: still a read-only consumer;
+  the `lint` key (already echoed in `inputs`) now also drives an advisory item.
+- **015-03 boundary** — `no-op`: no caller wired. Acting on the list (heartbeat
+  records `skipped`; Compile halts) stays 015-03.
+- **`docs/specs/README.md` board** — `deferred`: regenerated at DONE close-out.
+
+**Architecture impact:** none — extends an existing standalone skill helper; no
+module boundary or public contract changed (implements ADR-0015's
+`missing_evidence`), so no ADR.

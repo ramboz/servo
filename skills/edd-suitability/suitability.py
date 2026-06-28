@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-servo edd-suitability — slice 015-01 (verdict-contract).
+servo edd-suitability — slices 015-01 (verdict-contract) + 015-02
+(missing-evidence).
 
 The first step of Servo Compile: decide whether an engineering spec is suitable
 for Evaluation-Driven Development, emitting the ADR-0015 **suitability verdict** —
 a closed three-state gate (`suitable` / `needs_evidence` / `unsuitable`), not a
-score.
+score. For a `needs_evidence` verdict the artifact carries an actionable
+`missing_evidence` checklist keyed to a closed `kind` taxonomy (015-02).
 
 Usage
 -----
@@ -56,8 +58,15 @@ DEFAULT_ORACLE_PLAN = (
 
 # Only tests / CI count as a compilable "oracle signal" in v1. Lint alone is a
 # weak code-quality signal — not sufficient on its own to call work EDD-evaluable
-# (it surfaces as a missing_evidence item in 015-02 instead).
+# (it surfaces as a missing_evidence item below).
 _SIGNAL_KEYS = ("tests", "ci")
+
+# Closed `kind` taxonomy for missing_evidence items (slice 015-02), mirroring
+# ADR-0002's closed-`reason` posture. An input that maps to no known kind is
+# never emitted as an open string — the set is extended only by a deliberate
+# schema bump. The tuple order is also the stable display order (ADR-0015
+# re-runnability): items sort by (taxonomy index, detail).
+MISSING_EVIDENCE_KINDS = ("tests", "lint", "ci", "oracle_signal", "reference_set")
 
 
 class EnvError(Exception):
@@ -76,13 +85,72 @@ def iso_now() -> str:
 # Decision — pure, deterministic, ordered first-match rule table
 # ---------------------------------------------------------------------------
 
+def _missing_evidence(signals: dict, *, has_signal: bool,
+                      n_evaluable: int) -> list:
+    """Deterministic, actionable `missing_evidence` items (slice 015-02).
+
+    Pure: no IO, no clock. Every item points at a *concrete absent input* (never
+    a vague "needs more") and carries the closed `{kind, detail, blocking}`
+    shape. ``blocking=True`` marks the gap that *caused* the `needs_evidence`
+    verdict; ``blocking=False`` items are how-to / quality nudges. Items are
+    returned in the stable order ADR-0015 requires (taxonomy index, then detail)
+    so re-analysis over unchanged inputs is byte-stable.
+    """
+    items: list = []
+    if not has_signal:
+        items.append({
+            "kind": "oracle_signal",
+            "detail": "no test or CI signal detected in .servo/install.json; "
+                      "add a test command or CI workflow so the oracle has a "
+                      "deterministic gate to evaluate against",
+            "blocking": True,
+        })
+        items.append({
+            "kind": "tests",
+            "detail": "no test signal detected; add a test command (e.g. a "
+                      "test runner target) so the oracle has a deterministic "
+                      "gate",
+            "blocking": False,
+        })
+        items.append({
+            "kind": "ci",
+            "detail": "no CI signal detected; add a CI workflow that runs the "
+                      "project's checks so the oracle has a reproducible gate",
+            "blocking": False,
+        })
+    if not bool(signals.get("lint")):
+        items.append({
+            "kind": "lint",
+            "detail": "no lint signal detected; adding one strengthens the "
+                      "oracle but is not required for suitability on its own",
+            "blocking": False,
+        })
+    if n_evaluable == 0:
+        items.append({
+            "kind": "reference_set",
+            "detail": "no evaluable acceptance criteria detected; add at least "
+                      "one deterministically-checkable AC (or a reference set) "
+                      "so the oracle has something to gate on",
+            "blocking": True,
+        })
+    kind_rank = {k: i for i, k in enumerate(MISSING_EVIDENCE_KINDS)}
+    items.sort(key=lambda it: (kind_rank[it["kind"]], it["detail"]))
+    return items
+
+
 def decide(signals: dict, *, n_evaluable: int, n_residual: int) -> dict:
-    """Return ``{"verdict": ..., "reasons": [{"code", "message"}]}``.
+    """Return ``{"verdict", "reasons": [...], "missing_evidence": [...]}``.
 
     Pure: no IO, no clock. The only `suitable` path requires BOTH an evaluable
     AC and a compilable signal; everything else is fail-closed (a non-`suitable`
     verdict). The table is ordered and first-match — exactly one rule fires and
     names itself in `reasons`.
+
+    The `missing_evidence` list is load-bearing only for `needs_evidence`: a
+    `suitable` or `unsuitable` verdict carries an empty list (an unsuitable spec
+    is not fixable by acquiring evidence). For `needs_evidence`, every blocking
+    item's `kind` is also reflected back into `reasons` so the verdict and the
+    list can never disagree (slice 015-02 AC3).
     """
     has_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)
     facts = (
@@ -131,9 +199,26 @@ def decide(signals: dict, *, n_evaluable: int, n_residual: int) -> dict:
 
     for matched, verdict, code, message in rules:
         if matched:
+            reasons = [{"code": code, "message": f"{message} ({facts})"}]
+            missing = (
+                _missing_evidence(
+                    signals, has_signal=has_signal, n_evaluable=n_evaluable
+                )
+                if verdict == "needs_evidence"
+                else []
+            )
+            # Reflect each blocking gap's kind into `reasons` so a consumer
+            # reading the top-level reasons sees the same gaps as the list.
+            for item in missing:
+                if item["blocking"]:
+                    reasons.append({
+                        "code": f"missing_{item['kind']}",
+                        "message": item["detail"],
+                    })
             return {
                 "verdict": verdict,
-                "reasons": [{"code": code, "message": f"{message} ({facts})"}],
+                "reasons": reasons,
+                "missing_evidence": missing,
             }
     # Unreachable: the last rule's predicate is True.
     raise AssertionError("rule table is not exhaustive")  # pragma: no cover
@@ -229,8 +314,9 @@ def analyze(target: Path, spec_path: Path, *, oracle_plan_path: Path) -> tuple:
         "schema_version": SCHEMA_VERSION,
         "verdict": decision["verdict"],
         "reasons": decision["reasons"],
-        # Reserved here (always empty); populated by slice 015-02.
-        "missing_evidence": [],
+        # Load-bearing for `needs_evidence`; empty for suitable/unsuitable
+        # (slice 015-02).
+        "missing_evidence": decision["missing_evidence"],
         "spec_id": spec_id,
         "analyzed_at": iso_now(),
         # Echoed inputs for auditability / the 015-04 `--explain` view.
