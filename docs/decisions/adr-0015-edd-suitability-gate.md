@@ -157,3 +157,33 @@ verdict; an `unsuitable`/`needs_evidence` finding in the heartbeat is recorded
 - [Spec 006 — spec-oracle](../specs/006-spec-oracle/spec.md) — AC classification
   the analysis consults; [Spec 015 — edd-suitability](../specs/015-edd-suitability/spec.md)
   — the consumer.
+
+## Amendments
+
+### 2026-06-28 — heartbeat per-finding gate blocked on a finding→spec linkage
+
+The "It gates, including at the heartbeat boundary" decision above said a
+heartbeat finding that is `unsuitable` / `needs_evidence` is recorded `skipped`
+rather than dispatched, framing the suitability verdict as the "upstream sibling"
+of the oracle preflight. Implementing that in spec **015-03 (pipeline-gate)**
+surfaced a gap this ADR did not foresee: **the verdict is spec-centric, but a
+heartbeat finding is spec-less.**
+
+Spec 015's analyzer (015-01/02) derives its verdict from a spec's **AC
+classification** (`oracle_plan.py classify` over a `spec.md`) plus the target's
+signals. A heartbeat finding (CI failure / open issue / recent commit) carries
+**no spec and no ACs** — it is framed directly as a `loop.py --prompt`. There is
+nothing to pass to `suitability.py analyze --spec`, so the fail-closed rule would
+record **every** finding `skipped` (`suitability_unavailable`) and the heartbeat
+would dispatch nothing. A gate that refuses all work is an off switch, not a
+gate.
+
+**Effective status:** the **closed three-state gate, fail-closed default, and
+`missing_evidence` contract remain in force** and are shipped (015-01/02). What is
+**deferred** is the *heartbeat application* of the verdict: it requires a
+**finding→spec linkage** (and a finding-shaped suitability input) that does not
+yet exist. The **Compile-precondition application** likewise awaits a real Servo
+Compile entry point (spec 016, execution-planner). Spec **015-03 is DEFERRED**
+with that resolution trigger; this ADR is **not superseded** — only its heartbeat
+*timing/mechanism* is corrected. Re-open the heartbeat mapping when a finding can
+name (or synthesize) the spec its verdict is computed over.

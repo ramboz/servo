@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: DEFERRED
 dependencies: [015-01, 015-02, 011, adr-0015, adr-0010]
 arch_review: true
 frame_review: true
@@ -24,6 +24,41 @@ refused at the boundary, before any budget is spent.
 > inserts a gate **between** candidate selection (`actionable AND open`) and the
 > `gate.py` oracle preflight in `heartbeat.py`. Landing/merging a worktree result
 > stays out of scope (as in 011-03).
+
+**Resolution trigger:** Re-open when **either** (a) spec 016 (execution-planner)
+lands a **Servo Compile entry point** that AC5's precondition can actually gate,
+**or** (b) a **finding→spec linkage** (and a finding-shaped suitability input) is
+specced for the heartbeat — so a heartbeat finding can map to a verdict the
+analyzer can produce.
+
+> **⚠️ DEFERRED 2026-06-28 (pre-implementation frame-critique).** Both of this
+> slice's grounding consumers are missing today, so it cannot be implemented
+> faithfully:
+>
+> 1. **Heartbeat per-finding gate (AC1–4, AC6) is incoherent for spec-less
+>    findings.** The 015-01/02 verdict is *spec-centric*: `decide()` keys off AC
+>    classification (`oracle_plan.py classify` over a `spec.md`). A heartbeat
+>    finding (CI / issue / commit — [`heartbeat.py:638`](../../../skills/heartbeat/heartbeat.py),
+>    framed directly as a `loop.py --prompt` at
+>    [`heartbeat.py:1537`](../../../skills/heartbeat/heartbeat.py)) carries **no
+>    spec and no ACs**. There is nothing to pass to
+>    `suitability.py analyze --spec`, so AC4 (fail-closed on an unavailable
+>    verdict) would fire for *every* finding → every finding recorded `skipped`
+>    with `suitability_unavailable` → the heartbeat dispatches **nothing, ever**.
+>    A gate that refuses all work is an off switch, not a gate. No finding→spec
+>    linkage exists anywhere in the repo (grep-verified).
+> 2. **Compile precondition (AC5) has no Compile to gate.** There is no Servo
+>    Compile entry point implemented (`/servo:compile` / `run_compile` absent);
+>    the `/servo:edd-suitability → Compile` handoff is the unbuilt skill (015-04)
+>    feeding the unbuilt planner (016, DRAFT/parked). Gating a phase that doesn't
+>    exist is not a vertical slice.
+>
+> The 015 spec.md activated this slice "against its grounding consumer: the
+> heartbeat (011, DONE)"; the frame-critique shows 011 being *done* doesn't make
+> it able to *consume* a spec-centric verdict for spec-less findings. ADR-0015's
+> heartbeat-mapping claim is amended accordingly (see its `## Amendments`). The
+> verdict + evidence artifact (015-01/02) is shipped and inspectable; only its
+> *gating wiring* is parked.
 
 **DoR:**
 - ✅ **015-01 + 015-02 DONE** — `suitability.py analyze <target> --spec <path>`
