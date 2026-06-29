@@ -66,6 +66,13 @@ the verdict gates the **Servo Compile** entry (Compile proceeds only on
 keeps its own `gate.py` oracle preflight (heartbeat findings are spec-less, so the
 spec-centric verdict has no input there).
 
+This is a **host / Compile-phase tool**, like `/servo:spec-oracle` (whose
+`oracle_plan.py` it consults) — it runs from the full servo plugin against a
+target, and is **not** vendored into a scaffolded target's unattended runtime
+(the heartbeat/loop never invoke it). It needs the spec-006 `oracle_plan.py`
+sibling present; in the plugin that is the adjacent skill, or point
+`SERVO_SUITABILITY_ORACLE_PLAN` at a copy.
+
 ## Q&A before analyzing
 
 Before running, confirm:

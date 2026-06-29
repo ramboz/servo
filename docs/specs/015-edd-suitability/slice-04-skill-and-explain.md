@@ -138,3 +138,26 @@ Drift-prone surfaces checked (`updated` / `no-op` / `deferred`):
 **Architecture impact:** none — adds a skill surface + CLI output modes over the
 existing 015-01/02 engine; no module boundary or public contract changed, so no
 ADR (implements the existing ADR-0015 / ADR-0018).
+
+### Follow-up resolution (post-DONE, 2026-06-29)
+
+The compliance review's Medium finding (the scaffold-mode `oracle_plan` gap) was
+resolved by **reverting** this slice's `required.skills` addition. Diagnosis:
+**no vendored runtime skill invokes `suitability.py`** (the heartbeat/loop never
+do — ADR-0018), and its Compile-phase sibling/dependency `spec-oracle` is itself
+deliberately absent from `required.skills`. So suitability is a **host /
+Compile-phase tool like `spec-oracle`, not part of the scaffolded unattended
+runtime** — vendoring it created a broken cross-skill dependency
+(`oracle_plan.py` is not vendored, so a scaffolded `suitability.py` could not
+resolve it).
+
+Resolution (the correct third option vs the follow-up's a/b framing): **do not
+vendor it.** Removed `edd-suitability` from `install-contract.json`
+`required.skills`; reverted the `scripts/test_scaffold_runtime.py` ILLUSTRATIVE
+classification (no longer scanned); added a SKILL.md note that it is host /
+plugin-mode tooling. `/servo:edd-suitability` is still surfaced as a plugin skill
+(Claude Code discovers `skills/*/SKILL.md` independent of servo's install
+contract), and `suitability.py` still ships in the release zip (`include:
+skills/`). The latent install-contract limitation this exposed — there is no
+"verify-present-but-don't-vendor" tier, so `spec-oracle` / `design-eval` /
+`edd-suitability` get no presence check — is pre-existing and left as-is.

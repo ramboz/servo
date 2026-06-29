@@ -495,8 +495,6 @@ ILLUSTRATIVE_COMMANDS = {
     "oracle.sh + .servo/install.json; not a bare-scaffold smoke command",
     "heartbeat.py": "needs scheduler credentials and an already-scaffolded oracle for "
     "dispatch/run; not a bare-scaffold smoke command",
-    "suitability.py": "needs spec-006's oracle_plan.py classifier (a sibling skill) "
-    "plus a spec path to judge; not a bare-scaffold smoke command",
 }
 # helper basename -> list of (argv-after-helper) that the test executes
 RUNNABLE_COMMAND_ARGS = {

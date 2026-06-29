@@ -15,6 +15,7 @@ Run via unittest or pytest:
     python3 -m pytest skills/edd-suitability/test_skill_surface.py -q
 """
 
+import importlib.util
 import json
 import os
 import re
@@ -28,12 +29,20 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SKILL_MD = REPO_ROOT / "skills" / "edd-suitability" / "SKILL.md"
 SUITABILITY = REPO_ROOT / "skills" / "edd-suitability" / "suitability.py"
 REAL_ORACLE_PLAN = REPO_ROOT / "skills" / "spec-oracle" / "oracle_plan.py"
+INSTALL_CONTRACT = REPO_ROOT / ".claude-plugin" / "install-contract.json"
 EXAMPLE_RERUN = (
     REPO_ROOT / "skills" / "edd-suitability" / "examples"
     / "needs-evidence-then-suitable.md"
 )
 
 VERDICTS = {"suitable", "needs_evidence", "unsuitable"}
+
+
+def _load_suitability():
+    spec = importlib.util.spec_from_file_location("suitability", SUITABILITY)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _skill_text() -> str:
@@ -268,6 +277,43 @@ class ExtensionPointDocTests(unittest.TestCase):
         collapsed = " ".join(body.split())
         self.assertIn("approval posture", collapsed)
         self.assertEqual(collapsed.count("not built here"), 2)  # extension + waiver
+
+
+# ---------------------------------------------------------------------------
+# Host / Compile-phase tooling contract (015-04 follow-up resolution)
+# ---------------------------------------------------------------------------
+
+class HostToolingContractTests(unittest.TestCase):
+    """suitability is a host/Compile-phase tool like spec-oracle — NOT vendored
+    into scaffolded targets. Re-adding it to `required.skills` reintroduces the
+    broken scaffold-mode dependency (spec-006's `oracle_plan.py` is not vendored),
+    so these tests pin the decision against silent regression.
+    """
+
+    def test_plugin_layout_resolves_the_oracle_plan_sibling(self):
+        # In the plugin layout, suitability.py's DEFAULT_ORACLE_PLAN must point at
+        # a real oracle_plan.py — the dependency it subprocesses.
+        mod = _load_suitability()
+        self.assertTrue(
+            Path(mod.DEFAULT_ORACLE_PLAN).is_file(),
+            f"DEFAULT_ORACLE_PLAN does not resolve: {mod.DEFAULT_ORACLE_PLAN}",
+        )
+        self.assertEqual(Path(mod.DEFAULT_ORACLE_PLAN), REAL_ORACLE_PLAN)
+
+    def test_edd_suitability_is_not_in_required_skills(self):
+        # Host/Compile-phase tooling (like spec-oracle) is intentionally absent
+        # from the scaffold-vendored runtime surface. See slice 015-04's
+        # "Follow-up resolution".
+        contract = json.loads(INSTALL_CONTRACT.read_text())
+        names = {s["name"] for s in contract["required"]["skills"]}
+        self.assertNotIn("edd-suitability", names)
+        # Sanity: its Compile-phase sibling is also absent (the matched pair).
+        self.assertNotIn("spec-oracle", names)
+
+    def test_skill_md_marks_it_host_plugin_mode_tooling(self):
+        body = " ".join(_skill_text().split())
+        self.assertIn("host / Compile-phase tool", body)
+        self.assertIn("not** vendored", body)
 
 
 if __name__ == "__main__":
