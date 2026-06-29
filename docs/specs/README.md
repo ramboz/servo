@@ -91,6 +91,7 @@
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-02 — missing-evidence | **DONE** | Closed `kind` taxonomy v1: `tests` &#124; `lint` &#124; `ci` &#124; `oracle_signal` &#124; `reference_set`. `missing_evidence` load-bearing only for `needs_evidence` (empty for suitable/unsuitable); blocking gaps (`oracle_signal`, `reference_set`) each emit a paired `missing_<kind>` reason — **015-03 maps these to the heartbeat `skipped` `actionable_reason`**. 40 tests; review PASS |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-03 — pipeline-gate | DEFERRED |  |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-04 — skill-and-explain | DRAFT |  |
+| [015-edd-suitability](015-edd-suitability/spec.md) | 🔬 015-05 — suitability-at-the-boundary (spike) | DRAFT |  |
 
 ## Deferred slices
 
