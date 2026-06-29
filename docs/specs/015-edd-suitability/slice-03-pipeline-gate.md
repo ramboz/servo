@@ -1,154 +1,77 @@
 ---
 status: DEFERRED
-dependencies: [015-01, 015-02, 011, adr-0015, adr-0010]
-arch_review: true
-frame_review: true
+dependencies: [015-01, 015-02, 016, adr-0015, adr-0018]
 last_verified:
 ---
 
-## Slice 015-03 — pipeline-gate
+## Slice 015-03 — compile-precondition (re-scoped)
 
-**Goal:** Make the verdict a **gate**, at its grounding consumer. The heartbeat
-(011, DONE) consults the suitability verdict **per finding**, *before* the 011-03
-oracle-gated dispatch: a non-`suitable` finding is recorded `skipped` with a
-machine `actionable_reason` and is **never dispatched** into a worktree loop. The
-same verdict is also the Servo Compile precondition (Compile proceeds only on
-`suitable`). This is the slice that turns ADR-0015 from a document into a refusal
-the unattended system actually performs — the worst failure mode (a meaningless
-green oracle on un-evaluable work, dispatched on work *no human chose*) is
-refused at the boundary, before any budget is spent.
+**Goal:** Make the verdict a **gate at the Servo Compile boundary**: the Compile
+entry path proceeds only on a `suitable` verdict; a `needs_evidence` /
+`unsuitable` verdict **halts Compile** and surfaces `reasons` + `missing_evidence`
+as the actionable next step (no oracle synthesis, no run). This turns ADR-0015
+from a document into a refusal the system performs — at the one boundary where the
+verdict has the input it needs (a real spec with ACs).
 
-> **Boundary with 015-01 / 015-02 and 011-03.** 015-01/02 *produce* the verdict +
-> evidence list; this slice *consumes* them at two call sites. It does **not**
-> change candidate *fingerprinting*, retention, or the oracle preflight — it
-> inserts a gate **between** candidate selection (`actionable AND open`) and the
-> `gate.py` oracle preflight in `heartbeat.py`. Landing/merging a worktree result
-> stays out of scope (as in 011-03).
+> **Re-scoped 2026-06-28 by [ADR-0018](../../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md)
+> (Accepted), on the [015-05](slice-05-suitability-boundary-spike.md) spike.** The
+> original slice also wired the verdict into the **heartbeat per-finding dispatch
+> gate**. The spike measured that to be incoherent: the verdict is spec-centric
+> but heartbeat findings are spec-less (ephemeral-spec synthesis → `needs_evidence`
+> for 36/36 findings, an off switch; 0/3 actionable findings carry a recoverable
+> spec; the heartbeat already gates evaluability via `gate.py`). So the **heartbeat
+> gate is retired** — the heartbeat keeps `gate.py`, and **011-02's human-only
+> `skipped` contract stands unchanged** (no inbox-contract evolution, no new
+> automated `skipped` setter; the old assumptions A1/A2 are moot). A finding-shaped
+> evaluability check, if ever wanted, is deferred to spec 018. Only the **Compile
+> precondition** remains in scope here.
 
-**Resolution trigger:** Re-open when **either** (a) spec 016 (execution-planner)
-lands a **Servo Compile entry point** that AC5's precondition can actually gate,
-**or** (b) a **finding→spec linkage** (and a finding-shaped suitability input) is
-specced for the heartbeat — so a heartbeat finding can map to a verdict the
-analyzer can produce.
+**Resolution trigger:** Re-open when spec **016 (execution-planner)** lands a
+**Servo Compile entry point** (the `/servo:edd-suitability → Compile` handoff /
+plan build) that this precondition can gate. Until a Compile entry exists, gating
+a phase that isn't implemented is not a vertical slice.
 
-> **⚠️ DEFERRED 2026-06-28 (pre-implementation frame-critique).** Both of this
-> slice's grounding consumers are missing today, so it cannot be implemented
-> faithfully:
->
-> 1. **Heartbeat per-finding gate (AC1–4, AC6) is incoherent for spec-less
->    findings.** The 015-01/02 verdict is *spec-centric*: `decide()` keys off AC
->    classification (`oracle_plan.py classify` over a `spec.md`). A heartbeat
->    finding (CI / issue / commit — [`heartbeat.py:638`](../../../skills/heartbeat/heartbeat.py),
->    framed directly as a `loop.py --prompt` at
->    [`heartbeat.py:1537`](../../../skills/heartbeat/heartbeat.py)) carries **no
->    spec and no ACs**. There is nothing to pass to
->    `suitability.py analyze --spec`, so AC4 (fail-closed on an unavailable
->    verdict) would fire for *every* finding → every finding recorded `skipped`
->    with `suitability_unavailable` → the heartbeat dispatches **nothing, ever**.
->    A gate that refuses all work is an off switch, not a gate. No finding→spec
->    linkage exists anywhere in the repo (grep-verified).
-> 2. **Compile precondition (AC5) has no Compile to gate.** There is no Servo
->    Compile entry point implemented (`/servo:compile` / `run_compile` absent);
->    the `/servo:edd-suitability → Compile` handoff is the unbuilt skill (015-04)
->    feeding the unbuilt planner (016, DRAFT/parked). Gating a phase that doesn't
->    exist is not a vertical slice.
->
-> The 015 spec.md activated this slice "against its grounding consumer: the
-> heartbeat (011, DONE)"; the frame-critique shows 011 being *done* doesn't make
-> it able to *consume* a spec-centric verdict for spec-less findings. ADR-0015's
-> heartbeat-mapping claim is amended accordingly (see its `## Amendments`). The
-> verdict + evidence artifact (015-01/02) is shipped and inspectable; only its
-> *gating wiring* is parked.
+> **⚠️ Still DEFERRED.** ADR-0018 resolved *what* 015-03 should be (Compile-only),
+> but its one consumer — a Servo Compile entry point — does not exist yet (016 is
+> DRAFT/parked). The verdict + evidence artifact (015-01/02) ships and is
+> inspectable; only its Compile-gating wiring waits on 016.
 
 **DoR:**
 - ✅ **015-01 + 015-02 DONE** — `suitability.py analyze <target> --spec <path>`
   emits the verdict + populated `missing_evidence` at
-  `<target>/.servo/suitability/<spec-id>.json`; subprocessed (never imported),
-  mirroring 011-03's `gate.py` / `loop.py` seam (`SERVO_HEARTBEAT_*` env hook).
-- ✅ **011 DONE** — `heartbeat.py` selects the candidate set = `actionable == true
-  AND status == "open"` (ordered `discovered_at`, `finding_id`) at the dispatch
-  call site; the locked (`fcntl.flock`) + atomic (`tmp` + `os.replace`) merge
-  writes `status` / `actionable_reason`; `STATUS_SKIPPED = "skipped"` and the
-  `actionable_reason` machine-code convention (`REASON_*`) already exist
-  ([`heartbeat.py`](../../../skills/heartbeat/heartbeat.py) L153-189). The gate
-  inserts at the candidate-selection → oracle-preflight seam.
-- ✅ **ADR-0015 Accepted** — explicitly sanctions the heartbeat mapping: a
-  `unsuitable` / `needs_evidence` finding is "recorded back to the triage inbox
-  (mapping naturally onto the existing `skipped` lifecycle with an
-  `actionable_reason`) rather than spawning a loop."
-- ✅ **ADR-0010 Accepted** — the `skipped` status + `actionable_reason` field are
-  the recorded surface this slice writes through.
+  `<target>/.servo/suitability/<spec-id>.json`; subprocessed (never imported).
+- ✅ **ADR-0018 Accepted** — fixes the scope to the Compile precondition only.
+- ⏳ **016 Compile entry point** — the consumer this precondition gates. **Not yet
+  present** (the resolution trigger).
 
-## Assumptions
+**Acceptance Criteria (re-scoped):**
 
-- **A1 (load-bearing) — `skipped` becomes auto-settable.** 011-02 recorded
-  `skipped` as **human-only** ("`skipped` is never auto-set"). This slice makes
-  the suitability gate the **first automated setter** of `skipped`, which
-  ADR-0015 sanctions but 011-02's prose predates. Treated as a contract
-  *evolution*, not a contradiction: reconciliation must amend the 011-02 record
-  (closed-spec drift, ADR-0010 amendment policy) to read "human-only **except**
-  the ADR-0015 suitability gate," and the new reason codes must be visibly
-  suitability-scoped so a reviewer can tell a gate-`skipped` from a human-`skipped`.
-  *To verify at implementation:* re-read the exact 011-02 invariant in
-  `heartbeat.py` + `test_heartbeat.py` and confirm no test asserts "no automated
-  skipped writer exists" (which would need updating, not bypassing).
-- **A2 — new reason codes, not a reused one.** The gate writes new
-  `actionable_reason` machine codes (`suitability_unsuitable` /
-  `suitability_needs_evidence`) rather than overloading an existing CI/issue
-  reason, so triage stays auditable. *To verify:* the `REASON_*` set has no
-  collision.
+1. **Compile precondition.** The Compile entry path (the documented
+   `/servo:edd-suitability` → Compile handoff, owned by 016) proceeds only on a
+   `suitable` verdict; a non-`suitable` verdict halts Compile and surfaces
+   `reasons` + `missing_evidence` as the next step (no oracle synthesis, no run).
+   *Test:* `CompilePreconditionTests`.
 
-**Acceptance Criteria:**
+2. **Fail-closed on an unavailable verdict.** If `suitability.py` cannot produce a
+   verdict (exit 2 / no artifact / unparseable) for the spec, Compile **does not
+   proceed** — an unavailable verdict is treated as non-`suitable`. A broken
+   analyzer never opens the Compile gate. *Test:* `CompileGateFailClosedTests`.
 
-1. **Per-finding gate before dispatch.** For each candidate (`actionable AND
-   open`), `heartbeat.py` consults the suitability verdict for that finding's spec
-   **before** the 011-03 oracle preflight / worktree creation. A `suitable`
-   verdict proceeds to the existing dispatch path unchanged; a non-`suitable`
-   verdict is gated out (AC2). The insertion changes neither candidate
-   fingerprinting nor retention. *Test:* `SuitabilityGateOrderingTests`.
+3. **Boundary stays honest.** `heartbeat.py` does **not** import or subprocess
+   `suitability.py` — the verdict is a Compile-phase gate only (ADR-0018). *Test:*
+   a regression assertion that the heartbeat has no suitability dependency.
 
-2. **Non-`suitable` ⇒ `skipped`, never dispatched.** A finding whose verdict is
-   `unsuitable` or `needs_evidence` is recorded `status = "skipped"` with
-   `actionable_reason ∈ {suitability_unsuitable, suitability_needs_evidence}`
-   through 011-02's locked atomic merge, and **no worktree is created and no
-   `loop.py` runs** for it. The finding leaves the candidate set on the next pass
-   (resume discipline). *Test:* `SuitabilityGateSkipTests`.
-
-3. **`skipped` provenance is auditable (A1/A2).** A suitability-`skipped` finding
-   is distinguishable from a human-`skipped` one by its suitability-scoped
-   `actionable_reason`; the `inbox.md` render shows the reason so a reviewer sees
-   *why* it was turned away. No existing `REASON_*` code is overloaded. *Test:*
-   `SkipProvenanceTests`.
-
-4. **Fail-closed on an unavailable verdict.** If `suitability.py` cannot produce a
-   verdict (exit 2 / no artifact / unparseable), the finding is **not** dispatched
-   — it is treated as non-`suitable` and recorded `skipped` with a distinct
-   `suitability_unavailable` reason (refuse, don't optimistically dispatch). A
-   broken suitability analyzer never opens the dispatch gate. *Test:*
-   `SuitabilityGateFailClosedTests`.
-
-5. **Compile precondition.** The Compile entry path (the documented
-   `/servo:edd-suitability` → Compile handoff) proceeds only on a `suitable`
-   verdict; a non-`suitable` verdict halts Compile and surfaces `reasons` +
-   `missing_evidence` as the next step (no oracle synthesis, no run). *Test:*
-   `CompilePreconditionTests`.
-
-6. **Spine-safe + idempotent.** The `skipped` write reuses 011-02's
-   `flock` + `tmp` + `os.replace` discipline (no torn inbox under a concurrent
-   `discover`); re-running the gate on an already-`skipped` finding is a no-op
-   (it is no longer `open`, so not a candidate). *Test:* `GateSpineSafetyTests`.
+> **Retired by ADR-0018 (were AC1–4, AC6):** per-finding heartbeat gate before
+> dispatch; non-`suitable` ⇒ `skipped` + suitability `actionable_reason`; `skipped`
+> provenance; heartbeat fail-closed; spine-safe `skipped` write. These assumed a
+> finding→spec linkage that does not exist; the heartbeat keeps `gate.py`.
 
 **DoD:**
-- [ ] All ACs pass; `test_heartbeat.py` + `test_suitability.py` extended;
-      `ruff check .` clean.
-- [ ] Reviewed by jig compliance + craft + **arch** passes (arch: inbox-contract
-      change); record review evidence.
+- [ ] AC1–3 pass; tests added; `ruff check .` clean.
+- [ ] Reviewed by jig compliance + craft passes; record review evidence.
 - [ ] Deviation log produced under this slice heading.
-- [ ] **Reconciliation: amend the 011-02 record** for the `skipped` human-only →
-      gate-settable evolution (ADR-0010 amendment policy), and sweep
-      `heartbeat.py` SKILL.md for the same prose.
 - [ ] `docs/specs/README.md` regenerated.
 
 ### Close-out (post-DONE)
-- [ ] Migrate the suitability `actionable_reason` codes into the board Notes /
-      memory so the heartbeat reason taxonomy stays discoverable.
+- [ ] Confirm the heartbeat-boundary decision (ADR-0018) is reflected wherever the
+      Compile→Run handoff is documented.

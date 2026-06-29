@@ -104,18 +104,20 @@ acts on a verdict a user/caller can observe.
 > settled the *contract*, and the consumer (011) is shipped, so the unknowns are
 > pinned." 015-03's pre-implementation frame-critique falsified this: 011 being
 > *shipped* doesn't make it *able to consume* a spec-centric verdict for
-> spec-less findings (see [015-03](slice-03-pipeline-gate.md), DEFERRED, and
-> [ADR-0015 § Amendments](../../decisions/adr-0015-edd-suitability-gate.md)). The
-> S axis was needed after all — a **spike (015-05)** now resolves the
-> heartbeat-boundary unknown with data before 015-03 is re-scoped or re-opened.
+> spec-less findings. The S axis was needed after all — **spike 015-05** resolved
+> the heartbeat-boundary unknown with data and landed
+> [ADR-0018](../../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md):
+> **suitability gates Compile, not the heartbeat.** 015-03 is re-scoped to the
+> Compile precondition (heartbeat gate retired); the heartbeat keeps `gate.py` and
+> 011-02's `skipped` invariant is preserved.
 
 | Slice | Title | Axis | Goal |
 |---|---|---|---|
 | [015-01](slice-01-verdict-contract.md) | verdict-contract | Rules | Emit the ADR-0015 verdict JSON from a spec + 001 signals + 006 classification; closed three-state enum; `schema_version`; fail-closed default; deterministic rule table v1; standalone `.servo/suitability/<spec-id>.json` artifact. **DONE.** |
 | [015-02](slice-02-missing-evidence.md) | missing-evidence | Rules | Populate `missing_evidence` with actionable, blocking-flagged items keyed to a closed `kind` taxonomy; verdict ⇔ list coherence; re-runnable. **DONE.** |
-| [015-03](slice-03-pipeline-gate.md) | pipeline-gate | Path | Consume the verdict at its grounding consumer: the heartbeat per-finding gate (non-`suitable` ⇒ `skipped` + suitability `actionable_reason`, never dispatched) + the Compile precondition. **DEFERRED** (frame-critique: findings are spec-less; no Compile entry exists) pending the 015-05 spike. |
+| [015-03](slice-03-pipeline-gate.md) | compile-precondition | Path | **Re-scoped (ADR-0018):** gate the **Servo Compile** entry on a `suitable` verdict (halt + surface `reasons`/`missing_evidence` otherwise); fail-closed on an unavailable verdict. Heartbeat per-finding gate **retired**. **DEFERRED** pending spec 016's Compile entry. |
 | [015-04](slice-04-skill-and-explain.md) | skill-and-explain | Interface | `/servo:edd-suitability` surface (human + `--json`), `--explain` rule trace, re-run dogfood; document the model-assist extension point + waiver posture. Closes spec 015. |
-| [015-05](slice-05-suitability-boundary-spike.md) | suitability-at-the-boundary | **Spike** | Resolve with data whether the verdict has a coherent per-finding form at the heartbeat (and which finding→verdict bridge) or is Compile-phase-only; land an ADR; set 015-03's disposition. |
+| [015-05](slice-05-suitability-boundary-spike.md) | suitability-at-the-boundary | **Spike** | **DONE.** Resolved with data (36 real findings) that suitability is Compile-phase-only, not a heartbeat gate; landed [ADR-0018](../../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md) + re-scoped 015-03. |
 
 ## Open questions
 

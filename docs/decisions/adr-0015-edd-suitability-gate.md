@@ -187,3 +187,16 @@ Compile entry point (spec 016, execution-planner). Spec **015-03 is DEFERRED**
 with that resolution trigger; this ADR is **not superseded** — only its heartbeat
 *timing/mechanism* is corrected. Re-open the heartbeat mapping when a finding can
 name (or synthesize) the spec its verdict is computed over.
+
+### 2026-06-28 — resolved by ADR-0018: suitability gates Compile, not the heartbeat
+
+The 2026-06-28 deferral above is now **resolved**. The spec **015-05** spike
+measured the bridges against 36 real findings: ephemeral-spec synthesis
+degenerates to `needs_evidence` for 36/36 (an off switch), 0/3 actionable
+findings carry a recoverable spec, and the heartbeat already gates evaluability
+via `gate.py`. [ADR-0018](adr-0018-suitability-gates-compile-not-heartbeat.md)
+(Accepted 2026-06-28) **narrows this ADR's heartbeat clause**: the verdict gates
+the **Compile precondition only**; the heartbeat does not consult it and keeps
+`gate.py` as its evaluability gate, so 011-02's human-only `skipped` invariant
+stands (no inbox-contract change). The verdict contract this ADR defines (closed
+three-state gate, fail-closed, `missing_evidence`) is otherwise unchanged.
