@@ -90,7 +90,7 @@
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-01 — verdict-contract | **DONE** |  |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-02 — missing-evidence | **DONE** | Closed `kind` taxonomy v1: `tests` &#124; `lint` &#124; `ci` &#124; `oracle_signal` &#124; `reference_set`. `missing_evidence` load-bearing only for `needs_evidence` (empty for suitable/unsuitable); blocking gaps (`oracle_signal`, `reference_set`) each emit a paired `missing_<kind>` reason. 40 tests; review PASS. (Consumed at the **Compile** gate per ADR-0018 — not the heartbeat.) |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-03 — compile-precondition (re-scoped) | DEFERRED |  |
-| [015-edd-suitability](015-edd-suitability/spec.md) | 015-04 — skill-and-explain | DRAFT |  |
+| [015-edd-suitability](015-edd-suitability/spec.md) | 015-04 — skill-and-explain | **DONE** | `/servo:edd-suitability` SKILL.md + CLI output modes: human default, `--json` (full ADR-0015 verdict), `--explain` (ordered first-match rule trace, stdout-only — never persisted). `_rule_table()` shared by `decide()`/`build_trace()`. Real-classifier dogfood (`examples/needs-evidence-then-suitable.md`) proves the `needs_evidence→suitable` flip. Registered in install-contract (illustrative in scaffold mode). 14 surface tests; compliance subagent PASS. Model-assist + waiver = documented seams, not built. **Follow-up:** scaffolded `suitability.py` can't resolve `oracle_plan` (spec-oracle not vendored). |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 🔬 015-05 — suitability-at-the-boundary (spike) | **DONE** |  |
 
 ## Deferred slices

@@ -11,7 +11,14 @@ score. For a `needs_evidence` verdict the artifact carries an actionable
 
 Usage
 -----
-    python3 suitability.py analyze <target> --spec <spec-path>
+    python3 suitability.py analyze <target> --spec <spec-path> [--json] [--explain]
+
+Default output is a concise human summary (the verdict + each blocking
+`missing_evidence` item); `--json` emits the full ADR-0015 verdict JSON; and
+`--explain` shows the ordered rule trace — which rules were evaluated, which
+fired, and the inputs they keyed on — so a verdict is debuggable without reading
+the rule-table source. The persisted artifact is always the clean ADR-0015 shape;
+`--explain` adds the trace as a stdout-only view, never to the file.
 
 Reads the target's detected signals (`<target>/.servo/install.json`, from spec
 001) and the spec's AC classification (via spec 006's `oracle_plan.py classify`,
@@ -138,29 +145,22 @@ def _missing_evidence(signals: dict, *, has_signal: bool,
     return items
 
 
-def decide(signals: dict, *, n_evaluable: int, n_residual: int) -> dict:
-    """Return ``{"verdict", "reasons": [...], "missing_evidence": [...]}``.
-
-    Pure: no IO, no clock. The only `suitable` path requires BOTH an evaluable
-    AC and a compilable signal; everything else is fail-closed (a non-`suitable`
-    verdict). The table is ordered and first-match — exactly one rule fires and
-    names itself in `reasons`.
-
-    The `missing_evidence` list is load-bearing only for `needs_evidence`: a
-    `suitable` or `unsuitable` verdict carries an empty list (an unsuitable spec
-    is not fixable by acquiring evidence). For `needs_evidence`, every blocking
-    item's `kind` is also reflected back into `reasons` so the verdict and the
-    list can never disagree (slice 015-02 AC3).
-    """
-    has_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)
-    facts = (
+def _facts(n_evaluable: int, n_residual: int, has_signal: bool) -> str:
+    return (
         f"{n_evaluable} evaluable AC(s), {n_residual} residual AC(s), "
         f"{'a test/CI signal' if has_signal else 'no test/CI signal'}"
     )
 
-    # (predicate, verdict, code, message) — ordered, first match wins. The final
-    # rule's predicate is True: the fail-closed catch-all (ADR-0015).
-    rules = [
+
+def _rule_table(n_evaluable: int, n_residual: int, has_signal: bool) -> list:
+    """The ordered, first-match suitability rule table (ADR-0015 / 015-01).
+
+    Returns ``[(matched, verdict, code, message), ...]``. The final rule's
+    predicate is ``True`` — the fail-closed catch-all. Shared by `decide()`
+    (which takes the first match) and `build_trace()` (which renders every rule
+    for `--explain`), so the table is defined exactly once.
+    """
+    return [
         (
             n_evaluable >= 1 and has_signal,
             "suitable",
@@ -196,6 +196,60 @@ def decide(signals: dict, *, n_evaluable: int, n_residual: int) -> dict:
             "test/CI signal, then re-analyze",
         ),
     ]
+
+
+def build_trace(signals: dict, *, n_evaluable: int, n_residual: int) -> dict:
+    """Ordered rule trace for `--explain` (slice 015-04 AC3).
+
+    Renders every rule in table order with its boolean predicate and marks the
+    single rule that `decide()` would act on (`decided: true` — the first match).
+    Pure; carries the inputs the rules keyed on so a verdict is debuggable
+    without reading the rule-table source.
+    """
+    has_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)
+    rules = _rule_table(n_evaluable, n_residual, has_signal)
+    rendered = []
+    decided = False
+    for matched, verdict, code, _message in rules:
+        is_decision = bool(matched) and not decided
+        if is_decision:
+            decided = True
+        rendered.append({
+            "code": code,
+            "verdict": verdict,
+            "matched": bool(matched),
+            "decided": is_decision,
+        })
+    return {
+        "inputs": {
+            "n_evaluable": n_evaluable,
+            "n_residual": n_residual,
+            "has_signal": has_signal,
+            "signals": {
+                k: signals.get(k) for k in ("tests", "lint", "ci", "language")
+            },
+        },
+        "rules": rendered,
+    }
+
+
+def decide(signals: dict, *, n_evaluable: int, n_residual: int) -> dict:
+    """Return ``{"verdict", "reasons": [...], "missing_evidence": [...]}``.
+
+    Pure: no IO, no clock. The only `suitable` path requires BOTH an evaluable
+    AC and a compilable signal; everything else is fail-closed (a non-`suitable`
+    verdict). The table is ordered and first-match — exactly one rule fires and
+    names itself in `reasons`.
+
+    The `missing_evidence` list is load-bearing only for `needs_evidence`: a
+    `suitable` or `unsuitable` verdict carries an empty list (an unsuitable spec
+    is not fixable by acquiring evidence). For `needs_evidence`, every blocking
+    item's `kind` is also reflected back into `reasons` so the verdict and the
+    list can never disagree (slice 015-02 AC3).
+    """
+    has_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)
+    facts = _facts(n_evaluable, n_residual, has_signal)
+    rules = _rule_table(n_evaluable, n_residual, has_signal)
 
     for matched, verdict, code, message in rules:
         if matched:
@@ -342,6 +396,69 @@ def write_artifact(target: Path, spec_id: str, artifact: dict) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Rendering — human summary + `--explain` rule trace (slice 015-04)
+# ---------------------------------------------------------------------------
+
+_VERDICT_HEADLINE = {
+    "suitable": "SUITABLE — EDD-shaped with compilable evidence; ready to compile",
+    "needs_evidence": "NEEDS_EVIDENCE — EDD-shaped but missing blocking evidence",
+    "unsuitable": "UNSUITABLE — not EDD-shaped (success is human-residual)",
+}
+
+
+def render_human(artifact: dict, out_path: Path) -> str:
+    """A concise human summary: the verdict + one line per *blocking* gap.
+
+    Non-blocking advisory items are summarized as a count (the actionable next
+    step is the blocking set). A `needs_evidence` verdict ends with the re-run
+    hint ADR-0015 names.
+    """
+    verdict = artifact["verdict"]
+    lines = [
+        f"servo: {artifact['spec_id']} — "
+        f"{_VERDICT_HEADLINE.get(verdict, verdict)}"
+    ]
+    missing = artifact.get("missing_evidence", [])
+    blocking = [it for it in missing if it.get("blocking")]
+    advisory = [it for it in missing if not it.get("blocking")]
+    if verdict == "needs_evidence":
+        for it in blocking:
+            lines.append(f"  ✗ blocking [{it['kind']}] {it['detail']}")
+        if advisory:
+            lines.append(
+                f"  · plus {len(advisory)} advisory item"
+                f"{'' if len(advisory) == 1 else 's'} (run --json to see them)"
+            )
+        lines.append(
+            "  → acquire the blocking evidence above, then re-run "
+            "`analyze` — the verdict flips to `suitable` once the gaps close."
+        )
+    elif verdict == "unsuitable":
+        for reason in artifact.get("reasons", []):
+            lines.append(f"  · {reason['message']}")
+        lines.append("  → route to a human / jig; this is not EDD-shaped.")
+    lines.append(f"  artifact → {out_path}")
+    return "\n".join(lines)
+
+
+def render_trace(trace: dict) -> str:
+    """Render the ordered rule trace (`--explain`) as a human-readable block."""
+    inp = trace["inputs"]
+    lines = [
+        "  rule trace (ordered, first-match):",
+        f"    inputs: evaluable={inp['n_evaluable']} residual={inp['n_residual']} "
+        f"has_signal={inp['has_signal']} "
+        f"(tests={inp['signals'].get('tests')} ci={inp['signals'].get('ci')} "
+        f"lint={inp['signals'].get('lint')})",
+    ]
+    for r in trace["rules"]:
+        mark = "✓ DECIDED" if r["decided"] else ("·  matched" if r["matched"]
+                                                 else "   ——")
+        lines.append(f"    [{mark}] {r['code']} → {r['verdict']}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -357,14 +474,33 @@ def _run_analyze(args: argparse.Namespace) -> int:
             target, spec_path, oracle_plan_path=oracle_plan_path
         )
     except EnvError as exc:
+        # Env errors stay on stderr + exit 2 regardless of --json (no artifact,
+        # no torn output) — the closed ADR-0002 contract from 015-01.
         print(f"servo: {exc.reason}: {exc}", file=sys.stderr)
         return 2
 
     out_path = write_artifact(target, spec_id, artifact)
-    print(
-        f"servo: suitability verdict for {spec_id}: "
-        f"{artifact['verdict']} -> {out_path}"
-    )
+
+    trace = None
+    if args.explain:
+        inputs = artifact["inputs"]["ac_counts"]
+        trace = build_trace(
+            artifact["inputs"]["signals"],
+            n_evaluable=inputs["evaluable"],
+            n_residual=inputs["residual"],
+        )
+
+    if args.json:
+        # The persisted artifact stays the clean ADR-0015 shape; --explain adds
+        # the trace as a stdout-only view (a superset), never to the file.
+        payload = dict(artifact)
+        if trace is not None:
+            payload["rule_trace"] = trace
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        print(render_human(artifact, out_path))
+        if trace is not None:
+            print(render_trace(trace))
     return 0
 
 
@@ -380,6 +516,14 @@ def main(argv: list | None = None) -> int:
     analyze_p.add_argument("target", help="target project directory")
     analyze_p.add_argument(
         "--spec", dest="spec", required=True, help="path to the spec.md to judge"
+    )
+    analyze_p.add_argument(
+        "--json", action="store_true",
+        help="emit the full ADR-0015 verdict JSON (default: a human summary)",
+    )
+    analyze_p.add_argument(
+        "--explain", action="store_true",
+        help="show the ordered rule trace (which rules fired and why)",
     )
 
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)

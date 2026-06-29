@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [001, 006]
 last_verified:
 ---
@@ -14,12 +14,17 @@ last_verified:
 > [ADR-0015](../../decisions/adr-0015-edd-suitability-gate.md). Provisional
 > skill: `/servo:edd-suitability`.
 
-> **Status: DRAFT — SPIDR-split, grounded, ready to pick up.** Activated
-> 2026-06-27 against its grounding consumer: the **heartbeat (011, DONE)** needs
-> to refuse un-evaluable findings it dispatches on work no human chose. Both
-> anchoring ADRs are Accepted ([ADR-0014](../../decisions/adr-0014-evaluation-compiler.md),
-> [ADR-0015](../../decisions/adr-0015-edd-suitability-gate.md)). Slices 015-01..04
-> below carry full acceptance criteria; 015-01 is the next pick-up.
+> **Status: DONE (with 015-03 deferred).** 2026-06-29: the analyzer + evidence
+> list + skill surface ship (015-01/02/04 DONE); the 015-05 spike landed
+> [ADR-0018](../../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md)
+> — **suitability gates Compile, not the heartbeat** — and re-scoped **015-03**
+> (the Compile precondition) to **DEFERRED pending spec 016's Compile entry**. The
+> spec re-activates when 015-03 re-opens. **Reconciliation note:** Goal 4 and the
+> Core model below still describe the original *heartbeat* per-finding gate; that
+> mapping is **retired** by ADR-0018 (heartbeat findings are spec-less) — read
+> them as the Compile-gate now. Both anchoring ADRs remain Accepted
+> ([ADR-0014](../../decisions/adr-0014-evaluation-compiler.md),
+> [ADR-0015](../../decisions/adr-0015-edd-suitability-gate.md)).
 
 ## Why this spec
 

@@ -23,6 +23,10 @@
       {
         "name": "heartbeat",
         "files": ["SKILL.md", "heartbeat.py"]
+      },
+      {
+        "name": "edd-suitability",
+        "files": ["SKILL.md", "suitability.py"]
       }
     ],
     "agents": ["runner", "judge"],
