@@ -24,6 +24,7 @@ portable loop, oracle execution, and the agent abstraction.
 | [003-agent-loop](003-agent-loop/spec.md) | **DONE.** The portable execution loop: headless iteration under hard guardrails (iteration cap, cost ceiling, context-fill refusal, plateau detection, refuse-on-dirty-tree), checkpoint/resume state, and the [ADR-0008](../decisions/adr-0008-loop-on-autonomy-primitives.md) rebase onto `/goal` + host-scope routing. An *interchangeable runtime* — one stage of Servo Run, not the product. |
 | [004-oracle-hook](004-oracle-hook/spec.md) | **DONE.** Claude Code hook installer (idempotent install/uninstall/status). Installs a **meta-judge `Stop` hook** that grades every assistant turn against the scaffolded oracle and feeds back a **structured retry hint** (block + reason) — the deterministic replacement for ad-hoc transcript-regex scans. Fails **open** so a broken oracle never traps a session. |
 | [005-variant-race](005-variant-race/spec.md) | **DRAFT scope-capture, parked.** N-worktree parallel race with quality-gate scoring and winner selection — best-of-N against the oracle. Owns worktree-race coordination, variant-lease management, and winner promotion (the unattended cousin of jig's parallel-spec-number reservation). An **optimization, not an EDD prerequisite**; activates when a real target shows single-shot loop convergence is the bottleneck. |
+| [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | **DRAFT — 013-01 DONE (2026-07-01); 013-02/03 DEFERRED.** Lets servo consume host-native planning/implementation modes (Claude Plan Mode, Codex approval modes) as **advisory phase hints** (`plan`/`run`/`evaluate`/`triage`) layered on top of — never replacing — `gate.py`, `oracle.sh`, run state, triage state, and frozen eval ledgers ([ADR-0011](../decisions/adr-0011-host-native-phase-hints.md), Accepted). 013-01 shipped the docs-only contract (`docs/architecture.md` § Host-native phase hints); 013-02 (agent-loop adapter hints) and 013-03 (design-eval/heartbeat guidance) stay parked behind a real host-adapter caller. |
 
 ## Phase 2 — Evaluation Compilation *(Servo Compile; in progress)*
 
@@ -32,12 +33,12 @@ overlays, and eval authoring.
 
 | Spec | Description |
 |---|---|
-| [015-edd-suitability](015-edd-suitability/spec.md) | **DRAFT — SPIDR-split, ready to pick up (2026-06-27).** The first Compile step: decide whether the work suits EDD and identify missing evidence, emitting a closed three-state, fail-closed **suitability verdict** that gates the pipeline ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md), Accepted). Stops the worst unattended failure mode — a meaningless green oracle on un-evaluable work. Grounded against its consumer (the heartbeat refusing un-evaluable findings, 011 DONE); slices 015-01..04 carry full ACs, 015-01 is next. |
+| [015-edd-suitability](015-edd-suitability/spec.md) | **DONE (2026-06-30).** The first Compile step: decide whether the work suits EDD and identify missing evidence, emitting a closed three-state, fail-closed **suitability verdict** ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md), Accepted). Ships `/servo:edd-suitability` with `--json`/`--explain`. Gates **Servo Compile**, not the heartbeat — [ADR-0018](../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md) narrowed the original two-call-site design after a 36-finding spike (015-05) showed the heartbeat's spec-less findings degenerate to `needs_evidence` for every candidate; the heartbeat keeps gating evaluability via `gate.py` instead. |
 | [001-scaffold-init](001-scaffold-init/spec.md) | **DONE.** Probe a target's signals (tests/lint/CI/language) and synthesize a tailored `oracle.sh` + `.servo/install.json`, signal-aware rather than a generic stub. The MVP. |
 | [006-spec-oracle](006-spec-oracle/spec.md) | **DONE.** Compile a spec/slice into a reviewable, deterministic **evidence overlay**: AC→check mapping, check engine, negative controls, freeze/approval, and an installable `score_spec_oracle_<id>` component. Turns acceptance criteria into runnable evaluation so loops optimize against the *spec*, not just the baseline suite. |
 | [008-eval-authoring](008-eval-authoring/spec.md) | **DRAFT scope-capture, parked.** Human-in-the-loop front-end that turns an eval-able `residual_judgment` AC into an [ADR-0005](../decisions/adr-0005-eval-oracle-component.md) frozen eval component: triage, rubric shaping, statistical reference-set collection, and frozen `n`/`δ`/threshold/judge-model — then hands off to `/servo:spec-oracle`. Activates on the first real EDD spec (same trigger as ADR-0005). |
 | [012-design-eval](012-design-eval/spec.md) | **DRAFT.** Compile UI-vs-mockup intent into a frozen `score_design_fidelity` oracle component (pinned vision model, n-sampled, confidence lower bound), riding ADR-0005's frozen-eval contract ([ADR-0009](../decisions/adr-0009-design-fidelity-eval-recipe.md)). The non-deterministic sibling of the deterministic component templates. |
-| [016-execution-planner](016-execution-planner/spec.md) | **DRAFT scope-capture, parked.** The last Compile step: compile a durable, reviewable **execution plan** (`.servo/plans/<spec-id>/plan.json`) that Servo Run consumes ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)) — making "Execution Planning" a real stage instead of a bag of CLI flags. Reciprocal to the per-run `state.json`; clamps but never loosens a brake. Likely grounding consumer: heartbeat plan-reuse or 017 adaptive planning. |
+| [016-execution-planner](016-execution-planner/spec.md) | **DRAFT — 016-01 DONE (2026-06-30); 016-02..04 DEFERRED.** The last Compile step: compile a durable, reviewable **execution plan** (`.servo/plans/<spec-id>/plan.json`) that Servo Run consumes ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md), Accepted) — making "Execution Planning" a real stage instead of a bag of CLI flags. `execution_plan.py compile` emits the plan (references-not-copies the suitability verdict/oracle/overlay) and enforces the `suitable`-only Compile gate — the mechanism 015-03 builds its full ACs on. Reciprocal to the per-run `state.json`; clamps but never loosens a brake. 016-02..04 (Run consuming the plan, clamp/review, skill surface) stay parked behind a real Compile→Run consumer. |
 
 ## Phase 3 — Evaluation Intelligence *(scope-captured; seeds shipped)*
 
@@ -95,14 +96,20 @@ validated before the rest was committed. The cross-cutting platform specs run
 independently: 009 is CI hygiene — run it before 010 so release automation gates
 on a green full-suite CI; 010 depends on 007 + 009 and implements ADR-0007.
 
-The Compile-phase frontier (Phase 2) is specs **015** (EDD suitability — the
+The Compile-phase frontier (Phase 2) was specs **015** (EDD suitability — the
 gate before everything) and **016** (execution planner — the Compile→Run handoff
 artifact); each is anchored by an accepted ADR
 ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md),
 [ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)). **015 is now
-SPIDR-split and queued** (grounded 2026-06-27 against the heartbeat consumer —
-slices 015-01..04 carry full ACs); **016 stays parked** behind its grounding
-consumer (heartbeat plan-reuse or 017 adaptive planning), like 005/008. Specs
+DONE** (closed 2026-06-30; a pre-implementation spike, 015-05, narrowed its
+scope to gating Compile rather than the heartbeat — [ADR-0018](../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md));
+**016-01 (plan-emit) landed 2026-06-30** and, as a side effect, gave 015-03 the
+Compile-gate mechanism it needed to close too. **016-02..04 stay parked**
+behind their grounding consumer (a real Compile→Run reading the plan), like
+005/008. **013** (host-phase-aware loops) followed the same pattern on
+2026-07-01: its contract-defining first slice (013-01) shipped once
+[ADR-0011](../decisions/adr-0011-host-native-phase-hints.md) was accepted,
+while 013-02/03 stay parked behind a real host-adapter caller. Specs
 **017** (evaluation intelligence) and **018** (continuous evaluation) are umbrella
 scope-captures for Phases 3 and 4 — deliberately broad, expected to split into
 per-capability specs (with their own ADRs) as real use grounds them. They record
