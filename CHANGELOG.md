@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/ramboz/servo/compare/v0.5.0...v0.5.1) (2026-07-01)
+
+
+### Bug Fixes
+
+* **python:** baseline servo against Python 3.9 (ADR-0020) ([726e410](https://github.com/ramboz/servo/commit/726e410d9cbc72d513919a105034df24b9dc2ad7))
+* **scaffold:** detect Node's built-in test runner (node --test) ([d068b68](https://github.com/ramboz/servo/commit/d068b68524a932f6ce8969e9a8bd21ecbf768553))
+
 ## [0.5.0](https://github.com/ramboz/servo/compare/v0.4.0...v0.5.0) (2026-07-01)
 
 
