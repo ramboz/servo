@@ -101,7 +101,12 @@ def _require_suitable(target: Path, spec_id: str) -> str:
     """Enforce the `suitable`-only precondition; return the relative ref path.
 
     Raises EnvError(`suitability_missing` / `suitability_malformed` /
-    `suitability_not_suitable`). This is the 015-03 Compile gate.
+    `suitability_not_suitable`). This is the 015-03 Servo Compile gate: Compile
+    proceeds only on `suitable`; every other case (missing / unparseable /
+    `needs_evidence` / `unsuitable`) is fail-closed (an unavailable verdict is
+    treated as non-`suitable`, 015-03 AC2). On a non-`suitable` verdict the refusal
+    **surfaces the verdict's `reasons` + `missing_evidence`** as the actionable next
+    step (015-03 AC1) rather than a bare code.
     """
     rel = f".servo/suitability/{spec_id}.json"
     path = target / ".servo" / "suitability" / f"{spec_id}.json"
@@ -122,10 +127,41 @@ def _require_suitable(target: Path, spec_id: str) -> str:
     if verdict != "suitable":
         raise EnvError(
             "suitability_not_suitable",
-            f"suitability verdict is {verdict!r}, not 'suitable'; Compile does "
-            f"not proceed. Resolve the missing evidence and re-analyze.",
+            _format_refusal(data if isinstance(data, dict) else {}, verdict),
         )
     return rel
+
+
+def _format_refusal(data: dict, verdict) -> str:
+    """Build the Compile-refusal message surfacing `reasons` + `missing_evidence`.
+
+    The actionable next step for a non-`suitable` verdict (015-03 AC1): list every
+    `reasons` entry and every `missing_evidence` item (with its blocking flag) from
+    the 015 verdict artifact, then the re-analyze instruction — so a caller sees
+    *why* Compile refused and *what to acquire*, not just a code.
+    """
+    lines = [
+        f"suitability verdict is {verdict!r}, not 'suitable'; Servo Compile does "
+        f"not proceed."
+    ]
+    reasons = data.get("reasons") or []
+    if reasons:
+        lines.append("reasons:")
+        for r in reasons:
+            if isinstance(r, dict):
+                lines.append(f"  - [{r.get('code', '')}] {r.get('message', '')}")
+    missing = data.get("missing_evidence") or []
+    if missing:
+        lines.append("missing_evidence:")
+        for m in missing:
+            if isinstance(m, dict):
+                flag = " (blocking)" if m.get("blocking") else ""
+                lines.append(f"  - [{m.get('kind', '')}] {m.get('detail', '')}{flag}")
+    lines.append(
+        "Acquire the missing evidence and re-run `/servo:edd-suitability analyze`, "
+        "then re-compile."
+    )
+    return "\n".join(lines)
 
 
 def _load_oracle(target: Path) -> dict:

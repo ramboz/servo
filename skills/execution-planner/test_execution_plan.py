@@ -29,6 +29,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EXECUTION_PLAN = REPO_ROOT / "skills" / "execution-planner" / "execution_plan.py"
+HEARTBEAT_PY = REPO_ROOT / "skills" / "heartbeat" / "heartbeat.py"
 
 SPEC_ID = "016-execution-planner"
 
@@ -99,15 +100,16 @@ def _make_spec(root: Path, spec_id: str = SPEC_ID) -> Path:
 
 
 def _write_suitability(target: Path, verdict: str = "suitable",
-                       spec_id: str = SPEC_ID) -> Path:
+                       spec_id: str = SPEC_ID, reasons: list | None = None,
+                       missing_evidence: list | None = None) -> Path:
     out = target / ".servo" / "suitability"
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{spec_id}.json"
     path.write_text(json.dumps({
         "schema_version": 1,
         "verdict": verdict,
-        "reasons": [{"code": "x", "message": "y"}],
-        "missing_evidence": [],
+        "reasons": reasons if reasons is not None else [{"code": "x", "message": "y"}],
+        "missing_evidence": missing_evidence if missing_evidence is not None else [],
         "spec_id": spec_id,
         "analyzed_at": "2026-06-30T00:00:00Z",
     }, indent=2) + "\n")
@@ -384,6 +386,84 @@ class PlanRecompileIdempotentTests(unittest.TestCase):
             second.pop("compiled_at")
             self.assertEqual(first, second)
             self.assertEqual(second["provenance"], "compiled")
+
+
+# ==========================================================================
+# Slice 015-03 (compile-precondition) — the verdict as a Servo Compile gate.
+# The gate MECHANISM ships in 016-01 (refuse unless suitable); 015-03 adds the
+# enrichment: surface reasons + missing_evidence on refusal (AC1), explicit
+# fail-closed-on-unavailable (AC2), and the heartbeat-boundary regression (AC3).
+# ==========================================================================
+
+class CompilePreconditionTests(unittest.TestCase):
+    """015-03 AC1 — Compile proceeds only on `suitable`; a non-`suitable`
+    verdict halts Compile and surfaces `reasons` + `missing_evidence`."""
+
+    def test_suitable_proceeds(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target, _, _ = _compile_ok(root)
+            self.assertTrue(_plan_path(target).exists())
+
+    def test_non_suitable_surfaces_reasons_and_missing_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(
+                target, "needs_evidence",
+                reasons=[{"code": "evaluable_acs_no_signal",
+                          "message": "evaluable ACs but no test/CI signal"}],
+                missing_evidence=[{"kind": "oracle_signal",
+                                   "detail": "add a test command or CI workflow",
+                                   "blocking": True}],
+            )
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 2)
+            self.assertFalse(_plan_path(target).exists())
+            # the actionable next step is surfaced, not just a bare code
+            self.assertIn("evaluable_acs_no_signal", res.stderr)
+            self.assertIn("add a test command or CI workflow", res.stderr)
+            self.assertIn("oracle_signal", res.stderr)
+            self.assertIn("blocking", res.stderr)
+            self.assertIn("re-run", res.stderr.lower())
+
+
+class CompileGateFailClosedTests(unittest.TestCase):
+    """015-03 AC2 — an unavailable verdict (missing / unparseable) is treated as
+    non-`suitable`; a broken analyzer never opens the Compile gate."""
+
+    def test_missing_verdict_does_not_proceed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)  # no suitability artifact
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 2)
+            self.assertIn("suitability_missing", res.stderr)
+            self.assertFalse(_plan_path(target).exists())
+
+    def test_unparseable_verdict_does_not_proceed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            suit_dir = target / ".servo" / "suitability"
+            suit_dir.mkdir(parents=True, exist_ok=True)
+            (suit_dir / f"{SPEC_ID}.json").write_text("{not json")
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 2)
+            self.assertIn("suitability_malformed", res.stderr)
+            self.assertFalse(_plan_path(target).exists())
+
+
+class BoundaryHonestyTests(unittest.TestCase):
+    """015-03 AC3 — the verdict is a Compile-phase gate ONLY. The heartbeat must
+    not import or subprocess suitability (ADR-0018: findings are spec-less)."""
+
+    def test_heartbeat_has_no_suitability_dependency(self):
+        source = HEARTBEAT_PY.read_text().lower()
+        self.assertNotIn("suitability", source)
 
 
 if __name__ == "__main__":

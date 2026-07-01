@@ -1,7 +1,7 @@
 ---
-status: DEFERRED
-dependencies: [015-01, 015-02, 016, adr-0015, adr-0018]
-last_verified:
+status: DONE
+dependencies: [015-01, 015-02, 016-01, adr-0015, adr-0018]
+last_verified: 2026-06-30
 ---
 
 ## Slice 015-03 — compile-precondition (re-scoped)
@@ -31,15 +31,15 @@ verdict has the input it needs (a real spec with ACs).
 plan build) that this precondition can gate. Until a Compile entry exists, gating
 a phase that isn't implemented is not a vertical slice.
 
-> **⚠️ Still DEFERRED — but the trigger is now MET (2026-06-30).** Spec
+> **✅ Re-opened IN_PROGRESS 2026-06-30 — trigger met.** Spec
 > [016-01](../016-execution-planner/slice-01-plan-emit.md) landed the Servo Compile
-> entry point (`execution_plan.py compile`), which **enforces the `suitable`-only
-> gate** (refuses to emit a plan on a non-`suitable`/absent verdict) — the gate
-> *mechanism* AC1 needs. What remains for 015-03 is the **enrichment**: surface the
-> full `reasons` + `missing_evidence` list on refusal (016-01 prints a generic
-> message), add the fail-closed-on-unavailable test (AC2), and the
-> heartbeat-has-no-suitability regression assertion (AC3). This is a small
-> ready-to-pick-up follow-up — **re-open to DRAFT when scheduled.**
+> entry point (`execution_plan.py compile`), which already **enforces the
+> `suitable`-only gate**. This slice adds the remaining **enrichment** on top of
+> that helper: surface the full `reasons` + `missing_evidence` list on refusal
+> (AC1), the explicit fail-closed-on-unavailable tests (AC2), and the
+> heartbeat-has-no-suitability-dependency regression assertion (AC3). Implementation
+> surface: `skills/execution-planner/execution_plan.py` (+ `test_execution_plan.py`)
+> — the Compile boundary lives there, which is exactly why 015-03 waited on 016.
 
 **DoR:**
 - ✅ **015-01 + 015-02 DONE** — `suitability.py analyze <target> --spec <path>`
@@ -74,11 +74,29 @@ a phase that isn't implemented is not a vertical slice.
 > finding→spec linkage that does not exist; the heartbeat keeps `gate.py`.
 
 **DoD:**
-- [ ] AC1–3 pass; tests added; `ruff check .` clean.
-- [ ] Reviewed by jig compliance + craft passes; record review evidence.
-- [ ] Deviation log produced under this slice heading.
-- [ ] `docs/specs/README.md` regenerated.
+- [x] AC1–3 pass; tests added (5, in `test_execution_plan.py`); `ruff check .`
+      clean (0.15.17).
+- [x] Reviewed by jig compliance + craft passes (maintainer self-review; recorded
+      under `reviews/slice-03-{compliance,craft,reconciliation}.md`).
+- [x] Deviation log produced under this slice heading (below).
+- [x] `docs/specs/README.md` hand-updated (machinery not vendored); 015-03 moved to
+      DONE and out of the Deferred-slices table.
 
 ### Close-out (post-DONE)
-- [ ] Confirm the heartbeat-boundary decision (ADR-0018) is reflected wherever the
-      Compile→Run handoff is documented.
+- [x] ADR-0018's Compile-only boundary is reflected in the `execution_plan.py`
+      docstring + the `BoundaryHonestyTests` regression guard.
+
+### Deviation log (after reconciliation)
+
+Original (re-scoped) ACs preserved above; the implementation deviated as follows:
+
+- **Implementation surface is spec 016's helper, not a new 015 file.** The Compile
+  boundary lives in `skills/execution-planner/execution_plan.py` (016-01), so
+  015-03's enrichment (`_format_refusal` surfacing `reasons` + `missing_evidence`)
+  and its three AC tests (`CompilePreconditionTests`, `CompileGateFailClosedTests`,
+  `BoundaryHonestyTests`) live in `execution_plan.py` / `test_execution_plan.py` —
+  exactly the cross-spec dependency that deferred 015-03 until 016 existed.
+- **Gate mechanism vs enrichment split.** The `suitable`-only refusal itself
+  shipped with 016-01 (AC3 of that slice); 015-03 adds only the *actionable
+  message* + the fail-closed and boundary regression tests. No new exit code, no
+  schema change — the enrichment is stderr-text only.
