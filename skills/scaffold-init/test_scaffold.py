@@ -688,6 +688,16 @@ class JigFallbackTests(unittest.TestCase):
             "package.json", '{"devDependencies": {"jest": "*"}}', "jest"
         )
 
+    def test_node_test(self):
+        # Node's built-in runner ships no dependency to key off — the signal
+        # lives in a package.json script (`node --test`). Regression: this
+        # used to fall through every dep-based detector and report no tests.
+        self._scaffold_with(
+            "package.json",
+            '{"name": "demo", "scripts": {"test": "node --test test/*.test.js"}}',
+            "node_test",
+        )
+
     def test_cargo(self):
         self._scaffold_with("Cargo.toml", '[package]\nname = "x"\n', "cargo")
 
@@ -883,6 +893,72 @@ class TemplatesRootPluginModeTests(unittest.TestCase):
         os.environ.pop("CLAUDE_PLUGIN_ROOT", None)
         text = self.scaffold_mod._load_template()
         self.assertIn("{{COMPONENTS_LIST}}", text)
+
+
+class NodeTestDetectionTests(unittest.TestCase):
+    """Detector gap regression: `node --test` declared in a package.json
+    script is a real, runnable test signal even though Node's built-in runner
+    ships no dependency. `signals.tests` must be True and the oracle must carry
+    a runnable `score_node_test` block."""
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO_ROOT / "skills" / "scaffold-init"))
+        import scaffold as scaffold_mod  # noqa: E402
+        self.scaffold_mod = scaffold_mod
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-nodetest-")
+        self.target = Path(self.tmpdir) / "demo"
+        self.target.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _write_pkg(self, scripts: dict):
+        (self.target / "package.json").write_text(
+            json.dumps({"name": "demo", "scripts": scripts}) + "\n"
+        )
+
+    def test_detects_bare_node_test(self):
+        self._write_pkg({"test": "node --test"})
+        self.assertTrue(self.scaffold_mod._detect_node_test(self.target))
+
+    def test_detects_node_test_with_glob_and_env_prefix(self):
+        self._write_pkg(
+            {"test": "NODE_OPTIONS=--enable-source-maps node --test .agents/scripts/test/*.test.js"}
+        )
+        self.assertTrue(self.scaffold_mod._detect_node_test(self.target))
+
+    def test_detects_in_non_test_script(self):
+        self._write_pkg({"check": "node --test src/**/*.test.js"})
+        self.assertTrue(self.scaffold_mod._detect_node_test(self.target))
+
+    def test_no_false_positive_on_test_lookalike_flag(self):
+        # `--test-only` is a distinct flag on a non-node tool — must not match.
+        self._write_pkg({"lint": "eslint --test-only ."})
+        self.assertFalse(self.scaffold_mod._detect_node_test(self.target))
+
+    def test_no_false_positive_without_node(self):
+        self._write_pkg({"test": "vitest run --test"})
+        self.assertFalse(self.scaffold_mod._detect_node_test(self.target))
+
+    def test_no_package_json(self):
+        self.assertFalse(self.scaffold_mod._detect_node_test(self.target))
+
+    def test_signals_report_tests_true(self):
+        self._write_pkg({"test": "node --test test/*.test.js"})
+        payload = self.scaffold_mod.detect_signals(self.target)
+        self.assertTrue(payload["signals"]["tests"])
+        self.assertIn("node_test", payload["components"])
+
+    def test_oracle_carries_runnable_node_test_block(self):
+        self._write_pkg({"test": "node --test test/*.test.js"})
+        result = run_scaffold(self.target)
+        self.assertEqual(result.returncode, 0, f"scaffold failed: {result.stderr}")
+        oracle = (self.target / "oracle.sh").read_text()
+        self.assertIn("score_node_test", oracle)
+        self.assertIn("# SEED:start node_test", oracle)
+        self.assertIn("# SEED:end node_test", oracle)
+        self.assertRegex(oracle, r'"node_test:[0-9.]+"',
+                         "COMPONENTS missing node_test entry")
 
 
 if __name__ == "__main__":

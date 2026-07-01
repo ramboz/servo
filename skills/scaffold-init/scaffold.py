@@ -44,6 +44,7 @@ DEFAULT_WEIGHTS = {
     "pytest": 1.0,
     "vitest": 1.0,
     "jest": 1.0,
+    "node_test": 1.0,
     "cargo": 1.0,
     "go": 1.0,
     "eslint": 0.5,
@@ -51,7 +52,7 @@ DEFAULT_WEIGHTS = {
 }
 
 # Component classification for the manifest's `signals` summary.
-TEST_COMPONENTS = {"pytest", "vitest", "jest", "cargo", "go"}
+TEST_COMPONENTS = {"pytest", "vitest", "jest", "node_test", "cargo", "go"}
 LINT_COMPONENTS = {"eslint", "ruff"}
 
 
@@ -209,6 +210,38 @@ def _detect_jest(target: Path) -> bool:
     return (target / "jest.config.js").exists() or (target / "jest.config.ts").exists()
 
 
+def _script_invokes_node_test(cmd: str) -> bool:
+    """True if a package.json script string invokes Node's built-in runner.
+
+    Matches an invocation of the `node` binary carrying the boolean `--test`
+    flag anywhere in the (possibly `&&`-chained, env-prefixed) command, e.g.
+    `node --test`, `NODE_OPTIONS=… node --test glob`, `/usr/bin/node --test`.
+    The exact-token check on `--test` avoids false positives like
+    `eslint --test-only`.
+    """
+    tokens = cmd.split()
+    if "--test" not in tokens:
+        return False
+    return any(tok == "node" or tok.endswith("/node") for tok in tokens)
+
+
+def _detect_node_test(target: Path) -> bool:
+    """Node's built-in test runner (`node --test`) declared in a package.json
+    script. Unlike vitest/jest it ships with Node itself, so there is no
+    dependency to key off — the signal lives in the `scripts` block.
+    """
+    pkg = _read_package_json(target)
+    if not pkg:
+        return False
+    scripts = pkg.get("scripts")
+    if not isinstance(scripts, dict):
+        return False
+    return any(
+        isinstance(cmd, str) and _script_invokes_node_test(cmd)
+        for cmd in scripts.values()
+    )
+
+
 def _detect_eslint(target: Path) -> bool:
     candidates = [
         ".eslintrc.json", ".eslintrc.js", ".eslintrc.cjs",
@@ -235,6 +268,7 @@ BUILTIN_DETECTORS = {
     "pytest": _detect_pytest,
     "vitest": _detect_vitest,
     "jest": _detect_jest,
+    "node_test": _detect_node_test,
     "cargo": _detect_cargo,
     "go": _detect_go,
     "eslint": _detect_eslint,
@@ -310,7 +344,7 @@ def detect_signals(target: Path) -> dict:
     # Enumerate built-in test-framework matches first so ambiguity stays
     # measurable independently of which detector ran.
     builtin_test_frameworks = [
-        name for name in ("pytest", "vitest", "jest", "cargo", "go")
+        name for name in ("pytest", "vitest", "jest", "node_test", "cargo", "go")
         if BUILTIN_DETECTORS[name](target)
     ]
 
