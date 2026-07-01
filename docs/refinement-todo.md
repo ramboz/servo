@@ -454,7 +454,13 @@ and join wrapped lines.
 **Surfaced by:** slice 013-01 implementation (`workflow.py status-board .`
 regen during reconciliation, 2026-07-01). Reproduced **twice** in the same
 session — a second `status-board` run re-blanked the same cells after the
-first hand-fix, confirming this is deterministic, not a fluke.
+first hand-fix, confirming this is deterministic, not a fluke. **Reproduced a
+third time** in a separate session the same day, SPIDR-splitting spec 008's
+deferred slices (008-01..04): the same regen re-blanked 016-02/03/04's cells
+*again* (label mismatch) and re-truncated 013-02/03's (line-wrap), plus left
+008's own new rows blank (same label-mismatch cause — 008's slice files use
+the same `**DEFERRED — resolution trigger:**` phrasing). Hand-restored all
+of it a third time.
 
 ---
 
@@ -487,3 +493,37 @@ further-work before rolling up — TBD, not decided here.
 **Surfaced by:** slice 013-01 reconciliation review (2026-07-01) — first
 caught on spec 016 by an independent reconciliation-review pass, then
 confirmed to also hit spec 013 itself when 013-01 transitioned to `DONE`.
+
+---
+
+## `adr.py index` regenerates worse descriptions than this repo's hand-curated ones
+
+**Deferred:** `docs/decisions/README.md`'s `## Index` section is hand-curated —
+each bullet is a carefully written one-sentence summary of the ADR's actual
+decision. `adr.py index` regenerates that entire section by extracting the
+first paragraph of each ADR's `## Context` (truncated at the first
+sentence-ending punctuation). For ADRs whose Context opens with scene-setting
+prose rather than a self-contained summary sentence, this produces a strictly
+worse description than what was already there — several came back
+`(untitled)` / `((unknown))` (title/date extraction failing entirely), others
+came back a technically-accurate but decision-free opening sentence (e.g.
+ADR-0012 → "Spec 011 turns servo into a scheduled front-end: ..." instead of
+the existing "`heartbeat.py run` applies one heartbeat-level budget ...").
+Same root cause as the status-board Deferred-table bug above: an automated
+regenerator whose extraction heuristic doesn't match this repo's actual
+hand-authored content shape, and blindly overwrites curated prose that was
+better than what it produces.
+
+**Resolution trigger:** First time someone runs `adr.py index` expecting only
+a new bullet to be appended, and doesn't diff the result carefully before
+committing — this session (2026-07-01, adding ADR-0019) caught it only via a
+full `git diff` review and reverted, hand-inserting the one new bullet
+instead. Fix options: don't run `adr.py index` on a repo with pre-existing
+hand-curated entries (append by hand instead, as done here going forward);
+or fix the jig-side extractor to prefer an existing bullet's description over
+its own Context-paragraph extraction when one is already present for that
+ADR number.
+
+**Surfaced by:** this session, ADR-0019 authoring (`adr.py index
+docs/decisions`, 2026-07-01) — full-index diff showed 17 of 18 pre-existing
+entries degraded, one to a completely different unrelated description.

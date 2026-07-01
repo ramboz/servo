@@ -1,6 +1,6 @@
 ---
 status: DRAFT
-dependencies: [006]
+dependencies: [006, adr-0019]
 last_verified:
 ---
 
@@ -17,9 +17,13 @@ last_verified:
 > **Status: DRAFT — scope capture, parked.** Recorded ahead of its first
 > consumer, exactly like ADR-0005. It activates when the first real
 > non-deterministic (EDD) servo spec exists — the same demand trigger as
-> ADR-0005 and jig ADR-0019 ("integrate on signal"). Until then this is
-> captured intent, not queued work, and the slice sketch below is
-> pre-SPIDR (no ACs yet, deliberately).
+> ADR-0005 and jig's own ADR-0019 ("integrate on signal", in the jig repo —
+> not to be confused with servo's [ADR-0019](../../decisions/adr-0019-eval-authoring-servo-owned.md)
+> below, an unrelated number reused across the two projects' independent ADR
+> series). Until then this is captured intent, not queued work. The slices
+> below (008-01..04) are fleshed to name a resolution trigger each, mirroring
+> spec 016's deferred slices — deliberately without concrete ACs, since
+> authoring those now would guess at a boundary only a real consumer can pin.
 
 ## Why this spec
 
@@ -86,8 +90,10 @@ the eval and helps collect the reference work, then emits something
   set. The author owns the truth.
 - **No eval for deterministic ACs.** Those stay in spec 006's deterministic
   check families — this skill only touches the eval-able residual subset.
-- **Does not resolve the jig-vs-servo authoring-home question** (see Open
-  questions) — that needs its own ADR once a real case forces the call.
+- **No jig-side authoring step.** [ADR-0019](../../decisions/adr-0019-eval-authoring-servo-owned.md)
+  settled the jig-vs-servo authoring-home question: this skill's mechanism and
+  guided-authoring flow are entirely servo-owned, the same shape as
+  `/servo:design-eval` (ADR-0009). Jig's role stays attest-only, unchanged.
 
 ## Core model
 
@@ -110,29 +116,36 @@ spec ACs
 008 is the only human-in-the-loop authoring stage; everything downstream is the
 ADR-0005 contract operating mechanically on what 008 produced.
 
-## Provisional slice sketch (pre-SPIDR — not ready for implementation)
+## SPIDR split
 
-> Goals only, no ACs. A real EDD spec is needed to ground acceptance criteria;
-> until then this just bounds scope.
+**Path-first**: the pipeline in "Core model" above is a sequential dependency
+chain (triage → rubric → dataset → frozen params/emit), so the natural split
+is by stage, same axis 016 used for its Compile→Run chain. No Spike: ADR-0005
+already settled the eval-component contract these slices author into, and
+ADR-0019 already settled that all four stay servo-only with no jig-side step.
 
-| Slice | Title | Goal |
-|---|---|---|
-| 008-01 | residual-triage | From a spec-006 plan, classify each `residual_judgment` AC as eval-able vs human-residual, with rationale. No dataset work yet. |
-| 008-02 | rubric-shaping | Turn an eval-able AC into a concrete rubric + judge prompt the author reviews. |
-| 008-03 | reference-set | Scaffold + grow the dataset (seed from spec examples/edge cases; minimum-size guidance); the big lift. |
-| 008-04 | frozen-params-and-emit | Set `n`/`δ`/threshold/model with defaults; emit the ADR-0005-shaped definition for `/servo:spec-oracle` to compile. |
+Unlike 016-01 (pinnable from ADR-0016's schema alone, independent of a
+consumer), none of 008-01..04 are consumer-independent: even 008-01's triage
+rule operates on spec 006's stable `residual_judgment` schema today, but
+committing to a concrete eval-able/human-residual boundary without a real AC
+to triage would still be a guess. All four stay `DEFERRED` — this is prep
+work (naming the resolution trigger per slice), not a decision to build any
+of them now.
+
+| Slice | Title | Axis | Status | Goal |
+|---|---|---|---|---|
+| [008-01](slice-01-residual-triage.md) | residual-triage | Path | DEFERRED | From a spec-006 plan, classify each `residual_judgment` AC as eval-able vs human-residual, with rationale. Trigger: a real `residual_judgment` AC a human wants scored. |
+| [008-02](slice-02-rubric-shaping.md) | rubric-shaping | Path | DEFERRED | Turn an eval-able AC into a concrete rubric + judge prompt the author reviews. Trigger: 008-01 DONE. |
+| [008-03](slice-03-reference-set.md) | reference-set | Path | DEFERRED | Scaffold + grow the dataset (seed from spec examples/edge cases; minimum-size guidance); the big lift. Trigger: 008-02 DONE. |
+| [008-04](slice-04-frozen-params-and-emit.md) | frozen-params-and-emit | Path | DEFERRED | Set `n`/`δ`/threshold/model with defaults; emit the ADR-0005-shaped definition for `/servo:spec-oracle` to compile. Trigger: 008-01..03 DONE. |
 
 ## Open questions
 
-- **Where does authoring live — jig or servo?** Shaping evaluable ACs is
-  spec-*authoring*-time, which is jig's territory (sibling to `/jig:clarify`;
-  jig's research note 05 already names a deferred `eval-harness` skill). But the
-  dataset, frozen params, and emitted artifact are servo-runtime concerns that
-  match `/servo:spec-oracle`. Likely outcome: a split — jig helps author the
-  evaluable AC + rubric intent; servo collects the reference set, sets frozen
-  params, and emits — mirroring the attest-only boundary of jig ADR-0019/0022
-  (jig authors, servo runs). **This split is itself ADR-worthy** and should be
-  decided when the first EDD spec forces it, not here.
+- ~~**Where does authoring live — jig or servo?**~~ — RESOLVED 2026-07-01 by
+  [ADR-0019](../../decisions/adr-0019-eval-authoring-servo-owned.md): entirely
+  servo-owned, one guided skill (mechanism + authoring flow), same shape as
+  `/servo:design-eval` (ADR-0009). Jig's role stays attest-only
+  (jig's own ADR-0019/ADR-0022, in the jig repo), unchanged. No split.
 - **Minimum viable dataset size**, and how to seed it (spec examples? existing
   fixtures? sampled production logs?).
 - **Ground-truthed vs reference-free evals** — does the skill support both
@@ -147,9 +160,19 @@ ADR-0005 contract operating mechanically on what 008 produced.
 
 - [ADR-0005 — eval as a frozen oracle component](../../decisions/adr-0005-eval-oracle-component.md)
   — the contract this skill authors into.
+- [ADR-0009 — design-fidelity as a first-class eval recipe](../../decisions/adr-0009-design-fidelity-eval-recipe.md)
+  — the precedent servo's ADR-0019 (below) generalizes: one servo skill owns
+  mechanism + guided authoring for the sibling path into ADR-0005's contract.
+- [ADR-0019 — eval authoring stays entirely servo-owned](../../decisions/adr-0019-eval-authoring-servo-owned.md)
+  (servo's own ADR series) — resolves this spec's former jig-vs-servo open
+  question; grounds why 008-01..04 have no jig-side authoring step.
 - [Spec 006 — spec-oracle](../006-spec-oracle/spec.md) — the upstream classifier
   (the `residual_judgment` bucket) and the compiler this hands off to.
-- jig **ADR-0022 (pluggable oracle boundary)** / **ADR-0019 (refactor workflow)**
-  and jig's research note 05 (eval-driven development; the deferred
-  `eval-harness` skill) — prior art and the attest-only boundary that shapes the
-  jig-vs-servo open question.
+- [Spec 012 — design-eval](../012-design-eval/spec.md) — the shipped sibling
+  ADR-0019's decision mirrors the shape of.
+- jig's own **ADR-0022 (pluggable oracle boundary)** / **ADR-0019 (refactor
+  workflow)** in the jig repo — an unrelated number reused across the two
+  projects' independent ADR series; the attest-only boundary ADR-0019 (servo)
+  keeps unchanged. jig's research note 05 (eval-driven development; the
+  deferred `eval-harness` skill) is prior art but not this spec's concern
+  post-ADR-0019.
