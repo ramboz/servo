@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.5.0](https://github.com/ramboz/servo/compare/v0.4.0...v0.5.0) (2026-07-01)
+
+
+### Features
+
+* **docs:** host-native phase-hint contract (013-01) ([3133be3](https://github.com/ramboz/servo/commit/3133be3bcd1cbfcd0995cd119b5d77b27932af9a))
+* **execution-planner:** compile ADR-0016 execution plan (016-01) ([e05a4c4](https://github.com/ramboz/servo/commit/e05a4c4069c394bc927e8d211b385361bed06eb4))
+* **execution-planner:** surface reasons + missing_evidence at the Compile gate (015-03) ([fe7b8d7](https://github.com/ramboz/servo/commit/fe7b8d728234f85ee5d2a45201ce8c266a8b7442))
+* **heartbeat:** add whole-pass run cost ceiling ([d756de8](https://github.com/ramboz/servo/commit/d756de8f06049e52a603608d0bd816dead835d20))
+* **heartbeat:** candidate-dispatch — oracle-gated isolated-worktree loop dispatch (011-03) ([d50e152](https://github.com/ramboz/servo/commit/d50e15252ad693467fc8f0a8ef5f73cbdba31c15))
+* **heartbeat:** ship heartbeat skill surface ([7c19a69](https://github.com/ramboz/servo/commit/7c19a69e1baa4b712bf856e242d51bb7dce9f7d2))
+* **heartbeat:** triage-state-spine — merge, retention, status verb (011-02) ([e194bab](https://github.com/ramboz/servo/commit/e194bab99474bead2cb2bd9d4bd759fba5590f67))
+* **scaffold:** add servo availability breadcrumb ([a3425b3](https://github.com/ramboz/servo/commit/a3425b32f96f107807575dbde6031e0cb009d463))
+* **suitability:** /servo:edd-suitability skill surface + --json/--explain (015-04) ([db03d46](https://github.com/ramboz/servo/commit/db03d4641b6a563e15620e2be9e318992b575c3e))
+* **suitability:** add EDD suitability verdict analyzer (015-01) ([fd542d6](https://github.com/ramboz/servo/commit/fd542d608e6414fb3dd8665d201e52a485c6e761))
+* **suitability:** populate missing_evidence with closed-taxonomy items (015-02) ([af57986](https://github.com/ramboz/servo/commit/af57986a0bf3509f77e4e65542d035d966516f69))
+
+
+### Bug Fixes
+
+* **heartbeat:** code event-disqualified CI runs as ci_non_actionable_event ([e725acb](https://github.com/ramboz/servo/commit/e725acba7447199025c411f513ac13a579f23e33))
+* **suitability:** keep edd-suitability host-only, not scaffold-vendored (015-04 follow-up) ([bd03813](https://github.com/ramboz/servo/commit/bd0381347f5db324c1f0f3d6968ffa94f338f3a4))
+
+
+### Documentation
+
+* **decisions:** accept ADR-0005 (eval as a frozen oracle component) ([#11](https://github.com/ramboz/servo/issues/11)) ([ec438b9](https://github.com/ramboz/servo/commit/ec438b97aaf0d35c2613452fc7ddd92b7c714e1d))
+* **decisions:** accept ADR-0011 (host-native phase hints) ([716e2da](https://github.com/ramboz/servo/commit/716e2da815713d69a0c7927494e585948542a138))
+* **decisions:** accept ADR-0019 (eval authoring stays entirely servo-owned) ([a908a26](https://github.com/ramboz/servo/commit/a908a264d2c7e83b6c142ea4cd7fbfb04d961294))
+* **decisions:** ADR-0017 (Proposed) — conformance scores + trend ledger half ([8fcba7c](https://github.com/ramboz/servo/commit/8fcba7c7a531a4796915928bde7c9bcadb93545d))
+* **decisions:** ADR-0018 — suitability gates Compile, not the heartbeat (015-05 spike) ([d7562e0](https://github.com/ramboz/servo/commit/d7562e0fa92be4c467165ed589df65a804140ce9))
+* **decisions:** reserve adr-0019-eval-authoring-servo-owned ([316139b](https://github.com/ramboz/servo/commit/316139b62d762c7371ac249839ac9f7279dd15a2))
+* **refinement-todo:** track reciprocal servo-available breadcrumb for jig slice-land ([1e3a3ad](https://github.com/ramboz/servo/commit/1e3a3adea11dda71499fbef27577ee3a58b125c5))
+* **workflow:** capture host-native phase hint follow-up ([b8503f1](https://github.com/ramboz/servo/commit/b8503f11b24b409d755fe80c2633f4579799baff))
+
 ## [0.4.0](https://github.com/ramboz/servo/compare/v0.3.0...v0.4.0) (2026-06-13)
 
 
