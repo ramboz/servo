@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-06-26
 deciders: ramboz
 supersedes:
@@ -10,7 +10,9 @@ superseded-by:
 
 ## Status
 
-Proposed
+Accepted (2026-06-30)
+
+_Refined 2026-06-30 before acceptance, on review against [ADR-0018](adr-0018-suitability-gates-compile-not-heartbeat.md): (1) the plan's consumer is **Compile → Run for a real spec**, not the heartbeat — heartbeat findings are spec-less, so a per-`spec-id` plan does not serve them (the same spec-less-finding fact ADR-0018 established); (2) the plan **references** the suitability artifact by identity rather than **inlining** the verdict string, per this ADR's own reference-don't-copy principle._
 
 ## Context
 
@@ -31,9 +33,16 @@ the heartbeat dispatcher) passes `--prompt`, `--cost-ceiling`, `--max-iterations
 ([ADR-0004](adr-0004-session-state-file-format.md)) records what *happened*, not
 what was *planned*. That means "Execution Planning" — a named stage in the
 pipeline — produces nothing durable, and the Compile→Run boundary is a bag of CLI
-flags rather than an artifact. The heartbeat re-derives dispatch parameters each
-pass; spec 016 (execution-planner) and 017 (adaptive planning) would have nothing
-to read or rewrite.
+flags rather than an artifact. A spec compiled today cannot be re-run
+reproducibly, and spec 017 (adaptive planning) would have nothing to read or
+rewrite.
+
+The plan's consumer is **Compile → Run for a real spec** — a spec with ACs, an
+oracle, and a suitability verdict. It is deliberately *not* the heartbeat:
+[ADR-0018](adr-0018-suitability-gates-compile-not-heartbeat.md) established that
+heartbeat findings are spec-less (a CI failure / issue / commit carries no
+`spec-id`), so a plan keyed by `spec-id` has nothing to bind to at the dispatch
+boundary. Heartbeat plan-reuse is therefore out of scope here (see Decision).
 
 We need the execution plan to be a **first-class, durable artifact** that Servo
 Run consumes — the reciprocal of `state.json` (plan vs outcome), in the same
@@ -55,7 +64,7 @@ artifact, and Servo Run consumes it. The plan is the durable Compile→Run hando
   "schema_version": 1,
   "spec_id": "...",
   "compiled_at": "<ISO8601>",
-  "suitability_verdict": "suitable",
+  "suitability_ref": ".servo/suitability/<spec-id>.json",
   "oracle": {"path": "oracle.sh", "components": ["..."], "threshold": 0.5},
   "evaluation_model": {"spec_oracle_id": "...", "ac_count": 7, "residual": 1},
   "budget": {"max_iterations": 5, "cost_ceiling_usd": 2.0,
@@ -66,11 +75,17 @@ artifact, and Servo Run consumes it. The plan is the durable Compile→Run hando
 }
 ```
 
-The plan references the other Compile artifacts (oracle path, spec-oracle id) by
-identity rather than copying them — same discipline as ADR-0004 referencing the
-Claude session by `session_id`. It is **reviewable and editable**: a human can
-inspect or adjust the plan (`provenance: human_edited`) before Run consumes it,
-the same approval posture as the spec-oracle freeze (006-04).
+The plan references the other Compile artifacts — oracle path, spec-oracle id,
+and the **suitability verdict** (`.servo/suitability/<spec-id>.json`, spec 015) —
+by identity rather than copying them, same discipline as ADR-0004 referencing the
+Claude session by `session_id`. Referencing the suitability artifact (not copying
+its `verdict` string into the plan) keeps a single source of truth: the verdict
+cannot go stale relative to a re-analysis, and the reference is the natural seam
+for the Compile precondition (spec 015-03) — Compile emits a plan only for a
+`suitable` verdict, so the presence of a `plan.json` already implies a `suitable`
+reference. It is **reviewable and editable**: a human can inspect or adjust the
+plan (`provenance: human_edited`) before Run consumes it, the same approval
+posture as the spec-oracle freeze (006-04).
 
 ### Run consumes the plan; it does not replace the brakes
 
@@ -96,8 +111,7 @@ the git-ignored `.servo/`.
 
 - "Execution Planning" becomes a real stage with a durable, reviewable output.
 - The Compile→Run boundary is an artifact, not a flag bag — adaptive planning
-  (017) has something to rewrite; the heartbeat has something to reuse across
-  passes; runs become reproducible from a plan.
+  (017) has something to rewrite, and a run becomes reproducible from its plan.
 - Reuses the established writer-owned, versioned, git-ignored `.servo/` pattern;
   no new trust model.
 
@@ -132,9 +146,11 @@ the git-ignored `.servo/`.
 ## Verification
 
 To be established by spec 016. At minimum: a compiled `plan.json` carries
-`schema_version` and references (not copies) the oracle + spec-oracle; Run with no
-plan is byte-for-byte today's behavior; a plan ceiling above the safe bound is
-clamped, not honored; `.servo/plans/` is git-ignored.
+`schema_version` and references (not copies) the oracle + spec-oracle + the
+suitability artifact; Run with no plan is byte-for-byte today's behavior; a plan
+ceiling above the safe bound is clamped, not honored; `.servo/plans/` is
+git-ignored. Heartbeat plan-reuse is explicitly **not** in scope (findings are
+spec-less; ADR-0018).
 
 ## References
 
@@ -144,6 +160,11 @@ clamped, not honored; `.servo/plans/` is git-ignored.
   *outcome* artifact; same writer-owned filesystem contract.
 - [ADR-0008](adr-0008-loop-on-autonomy-primitives.md) / [ADR-0011](adr-0011-host-native-phase-hints.md)
   — the brakes the plan cannot loosen; the oracle stays the authority.
+- [ADR-0018](adr-0018-suitability-gates-compile-not-heartbeat.md) — establishes
+  that heartbeat findings are spec-less, which scopes the plan's consumer to
+  Compile→Run for a real spec (not the heartbeat).
+- [Spec 015 — edd-suitability](../specs/015-edd-suitability/spec.md) — the
+  suitability artifact the plan references by identity.
 - [Spec 016 — execution-planner](../specs/016-execution-planner/spec.md) — the
   producer; [Spec 017 — evaluation-intelligence](../specs/017-evaluation-intelligence/spec.md)
   — the adaptive-planning consumer that rewrites it.
