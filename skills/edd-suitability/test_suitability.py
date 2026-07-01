@@ -24,6 +24,8 @@ depends on oracle_plan's classifier behavior; one end-to-end test uses the real
 classifier.
 """
 
+from __future__ import annotations
+
 import importlib.util
 import json
 import os

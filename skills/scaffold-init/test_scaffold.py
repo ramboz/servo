@@ -261,6 +261,7 @@ class DependencyFreeTests(unittest.TestCase):
         # Crude but adequate: every `import X` / `from X import` line targets a stdlib module.
         import re
         stdlib_top_levels = {
+            "__future__",
             "argparse", "json", "os", "re", "subprocess", "sys", "stat",
             "shutil", "pathlib", "dataclasses", "datetime", "typing",
             "collections", "itertools", "functools", "tempfile", "io",

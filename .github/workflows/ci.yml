@@ -12,7 +12,15 @@ name: CI
 #
 # Replaces the slice-007-05 verify.yml, which ran only the install-surfaces
 # gate and never exercised the skill suites. The matrix floor mirrors
-# pyproject's requires-python (>=3.11); 3.11 + 3.12 is jig parity.
+# pyproject's requires-python (>=3.9) per ADR-0020: servo's helpers run on the
+# adopter's python3, which on default macOS (Command Line Tools) is 3.9.6, so
+# the supported floor is verified here — not just on modern interpreters. Keep
+# `X | None` behind `from __future__ import annotations` and avoid 3.10-only
+# runtime APIs (e.g. zip(strict=)) so the 3.9 leg stays green; `ruff
+# target-version=py39` is the static backstop. `actions/setup-python` no longer
+# ships the exact 3.9.6 patch for current hosted runners, so we pin the 3.9
+# MINOR and let it resolve the latest 3.9.x — patch releases don't change
+# language/stdlib compat.
 #
 # The `on:` key is quoted to dodge the YAML 1.1 truthy-`on` coercion.
 
@@ -26,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.9", "3.11", "3.12"]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

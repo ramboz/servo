@@ -3,6 +3,12 @@
 # contributors run. The ruleset mirrors jig (the sibling plugin) so the two
 # projects' lint floors read the same way.
 line-length = 100
+# ADR-0020: Python 3.9 is servo's supported floor. `target-version = py39` is the
+# static backstop — it flags 3.10+ syntax (bare PEP 604 unions outside
+# `from __future__ import annotations`, `zip(strict=)`, `match`, …) so a
+# regression is caught even before the 3.9 CI leg runs. The 3.9 matrix job is
+# the load-bearing guard; this is the cheap early signal.
+target-version = "py39"
 
 [lint]
 select = ["F", "E", "W", "I", "B"]

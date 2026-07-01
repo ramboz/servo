@@ -7,6 +7,8 @@ or with unittest discovery:
     python3 -m unittest discover -s scripts -p 'test_*.py'
 """
 
+from __future__ import annotations
+
 import io
 import json
 import shutil

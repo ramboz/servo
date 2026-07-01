@@ -15,7 +15,7 @@ Honesty (servo ADR-0005 / ADR-0006):
 - the *definition* is frozen and hashed; the *sampled scores* are not — that is
   the whole point of the n-sample lower bound.
 
-Python 3.10+ standard library only (servo constraint).
+Python 3.9+ standard library only (servo constraint, ADR-0020).
 """
 from __future__ import annotations
 

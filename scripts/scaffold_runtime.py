@@ -16,7 +16,7 @@ contract and must not change. The install contract
 Usage:
     python3 scripts/scaffold_runtime.py <target>
 
-stdlib-only, Python 3.10+.
+stdlib-only, Python 3.9+ (ADR-0020).
 """
 
 from __future__ import annotations

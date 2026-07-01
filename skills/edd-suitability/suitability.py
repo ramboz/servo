@@ -45,6 +45,8 @@ Exit codes (ADR-0002 closed contract)
 Never exits 1; never leaves a torn artifact.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

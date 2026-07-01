@@ -38,6 +38,8 @@ reason and a suggested human review path (AC4).
 Python stdlib only.
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json

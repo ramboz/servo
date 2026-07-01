@@ -23,6 +23,8 @@ flag is supplied. The flag wins on conflict (clarify Q2 + slice 002-04 DoR).
 Future slices add SKILL.md surface (002-05).
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

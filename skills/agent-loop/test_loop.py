@@ -735,6 +735,7 @@ class DependencyFreeTests(unittest.TestCase):
     def test_no_third_party_imports(self):
         text = LOOP.read_text()
         stdlib_top_levels = {
+            "__future__",
             "argparse", "json", "os", "re", "subprocess", "sys", "stat",
             "shutil", "pathlib", "dataclasses", "datetime", "typing",
             "collections", "itertools", "functools", "tempfile", "io",
@@ -1365,7 +1366,7 @@ class PerIterationBudgetCapTests(unittest.TestCase):
             for argv in invocations
         ]
         # Strictly monotonic decreasing.
-        for prev, curr in zip(budgets, budgets[1:], strict=False):
+        for prev, curr in zip(budgets, budgets[1:]):
             self.assertGreater(prev, curr, f"budgets={budgets}")
         # First iter sees the full ceiling.
         self.assertAlmostEqual(budgets[0], 2.00, places=6)
@@ -1566,7 +1567,7 @@ class CumulativeCostPerIterationTests(unittest.TestCase):
         ]
         self.assertEqual(len(per_iter), 3)
         running = 0.0
-        for line, expected_cost in zip(per_iter, costs, strict=False):
+        for line, expected_cost in zip(per_iter, costs):
             running += expected_cost
             self.assertIn("cost_usd", line)
             self.assertIn("cumulative_cost_usd", line)

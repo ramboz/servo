@@ -26,6 +26,7 @@
 - [ADR-0017: Conformance scores + trend ledger — servo decorates the jig conformance graph](adr-0017-conformance-scores-ledger.md) — The **servo half** of a paired decision (jig **ADR-0032** owns the conformance-graph topology). When an LLM builds a UI incrementally from a canonical design, the work must be locally scoped but globally convergent; servo writes per-node **fidelity scores** (the frozen `/servo:design-eval` verdict jig attests) + a **convergence trend ledger** (gap-to-canonical over design versions) onto the jig graph, while jig owns the deterministic topology/coverage. Reuses ADR-0005/0009; attest-only boundary unchanged. Recorded ahead of a committed consumer; demand-gated. (2026-06-27, Proposed)
 - [ADR-0018: EDD suitability gates Compile, not the heartbeat](adr-0018-suitability-gates-compile-not-heartbeat.md) — **Narrows ADR-0015.** A pre-impl frame-critique + the **015-05 spike** (36 real findings) showed the suitability verdict is spec-centric but heartbeat findings are spec-less: ephemeral-spec synthesis degenerates to `needs_evidence` for 36/36 (an off switch), 0/3 actionable findings carry a recoverable spec, and the heartbeat already gates evaluability via `gate.py`. So the verdict gates **Compile only**; the heartbeat keeps `gate.py` and **011-02's human-only `skipped` stands** (no inbox-contract change). 015-03 re-scoped to the Compile precondition (deferred pending 016); a finding-shaped check is deferred to 018. (2026-06-28, Accepted)
 - [ADR-0019: Eval authoring stays entirely servo-owned](adr-0019-eval-authoring-servo-owned.md) — Spec 008's eval-authoring workflow (triage, rubric-shaping, reference-set collection, frozen `n`/`δ`/threshold/judge-model) is entirely servo's job, shipped as one guided skill — the same shape as `/servo:design-eval` (ADR-0009). Jig's role stays attest-only, unchanged; no split authoring step. Resolves spec 008's former jig-vs-servo open question. (2026-07-01, Accepted)
+- [ADR-0020: Minimum supported Python is 3.9](adr-0020-python-39-floor.md) — Servo's helpers run on the adopter's `python3`, which on default macOS (Command Line Tools) is 3.9.6, but a 3.10+ floor (bare PEP 604 `X | None`, `zip(strict=)`) had crept in silently — CI only tested 3.11/3.12 and `requires-python` said `>=3.11`, so shipped helpers crashed with an opaque `TypeError` on import. Adopts jig **ADR-0030**'s resolution: 3.9 is the floor, PEP 604 unions go behind `from __future__ import annotations`, no 3.10+ runtime APIs without a shim/gate, servo stays zero-dependency. Enforced by a `3.9` CI matrix leg (load-bearing) + `ruff target-version=py39` (static backstop). (2026-07-01, Accepted)
 
 ## Pending
 
@@ -40,8 +41,9 @@ breadcrumb), `0014` is Accepted (the evaluation-compiler / EDD reframe
 ADR), `0015` is Accepted (the EDD suitability gate), and `0016` is Accepted
 (the execution-plan artifact ADR), `0017` is reserved (Proposed)
 by the conformance-scores ledger ADR, `0018` is Accepted (suitability gates
-Compile, not the heartbeat), and `0019` is Accepted (eval authoring stays
-entirely servo-owned), so the next free number is `0020`:
+Compile, not the heartbeat), `0019` is Accepted (eval authoring stays
+entirely servo-owned), and `0020` is Accepted (minimum supported Python is
+3.9), so the next free number is `0021`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 

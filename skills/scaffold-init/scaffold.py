@@ -18,6 +18,8 @@ subprocess) when present at `${CLAUDE_PLUGIN_ROOT}/jig/skills/tdd-loop/tdd.py`,
 falling back to the built-in detector below.
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import os

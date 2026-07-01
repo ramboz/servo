@@ -1,13 +1,14 @@
 [project]
 # Servo is a Claude Code plugin, not a pip package: there is no [build-system]
 # and nothing builds this file. This table exists only to declare the supported
-# Python floor (spec 009-01 AC3) — the CI matrix tests every version from this
-# floor up (3.11, 3.12). The canonical version lives in
-# .claude-plugin/plugin.json, so version is left dynamic here to avoid a second
-# source of truth.
+# Python floor — the CI matrix tests every version from this floor up
+# (3.9, 3.11, 3.12). Per ADR-0020 the floor is Python 3.9: servo's helpers run
+# on the adopter's `python3`, which on default macOS (Command Line Tools) is
+# 3.9.6. The canonical version lives in .claude-plugin/plugin.json, so version
+# is left dynamic here to avoid a second source of truth.
 name = "servo"
 dynamic = ["version"]
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 
 [tool.pytest.ini_options]
 testpaths = ["skills", "scripts"]

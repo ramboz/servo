@@ -7,6 +7,8 @@ or directly:
     python3 skills/quality-gate/test_gate.py
 """
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -222,6 +224,7 @@ class DependencyFreeTests(unittest.TestCase):
     def test_no_third_party_imports(self):
         text = GATE.read_text()
         stdlib_top_levels = {
+            "__future__",
             "argparse", "json", "os", "re", "subprocess", "sys", "stat",
             "shutil", "pathlib", "dataclasses", "datetime", "typing",
             "collections", "itertools", "functools", "tempfile", "io",

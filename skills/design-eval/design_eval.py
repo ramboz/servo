@@ -14,7 +14,7 @@ Subcommands:
   install <target>       splice score_design_fidelity into oracle.sh + manifest
   uninstall <target>     remove it (keeps the frozen artifacts)
 
-Python 3.10+ standard library only.
+Python 3.9+ standard library only (ADR-0020).
 """
 from __future__ import annotations
 
