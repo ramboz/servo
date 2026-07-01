@@ -25,6 +25,7 @@
 - [ADR-0016: The execution plan is the Compile→Run handoff artifact](adr-0016-execution-plan-artifact.md) — Servo Compile emits a durable, reviewable **execution plan** at `<target>/.servo/plans/<spec-id>/plan.json` that Servo Run consumes — making "Execution Planning" a real stage with an output instead of a bag of CLI flags. References (not copies) the oracle + spec-oracle overlay + the suitability verdict (015), is human-editable before Run, and **cannot loosen a hard guardrail past its safe ceiling** (clamped, never honored). Consumer scoped to Compile→Run for a real spec — *not* the heartbeat (findings are spec-less, ADR-0018). Reciprocal to ADR-0004 (plan vs outcome); opt-in (no plan ⇒ today's behavior). Anchors spec 016. (2026-06-26, Accepted 2026-06-30)
 - [ADR-0017: Conformance scores + trend ledger — servo decorates the jig conformance graph](adr-0017-conformance-scores-ledger.md) — The **servo half** of a paired decision (jig **ADR-0032** owns the conformance-graph topology). When an LLM builds a UI incrementally from a canonical design, the work must be locally scoped but globally convergent; servo writes per-node **fidelity scores** (the frozen `/servo:design-eval` verdict jig attests) + a **convergence trend ledger** (gap-to-canonical over design versions) onto the jig graph, while jig owns the deterministic topology/coverage. Reuses ADR-0005/0009; attest-only boundary unchanged. Recorded ahead of a committed consumer; demand-gated. (2026-06-27, Proposed)
 - [ADR-0018: EDD suitability gates Compile, not the heartbeat](adr-0018-suitability-gates-compile-not-heartbeat.md) — **Narrows ADR-0015.** A pre-impl frame-critique + the **015-05 spike** (36 real findings) showed the suitability verdict is spec-centric but heartbeat findings are spec-less: ephemeral-spec synthesis degenerates to `needs_evidence` for 36/36 (an off switch), 0/3 actionable findings carry a recoverable spec, and the heartbeat already gates evaluability via `gate.py`. So the verdict gates **Compile only**; the heartbeat keeps `gate.py` and **011-02's human-only `skipped` stands** (no inbox-contract change). 015-03 re-scoped to the Compile precondition (deferred pending 016); a finding-shaped check is deferred to 018. (2026-06-28, Accepted)
+- [ADR-0019: Eval authoring stays entirely servo-owned](adr-0019-eval-authoring-servo-owned.md) — Spec 008's eval-authoring workflow (triage, rubric-shaping, reference-set collection, frozen `n`/`δ`/threshold/judge-model) is entirely servo's job, shipped as one guided skill — the same shape as `/servo:design-eval` (ADR-0009). Jig's role stays attest-only, unchanged; no split authoring step. Resolves spec 008's former jig-vs-servo open question. (2026-07-01, Accepted)
 
 ## Pending
 
@@ -38,8 +39,9 @@ recipe), `0010` is Accepted (triage-inbox-schema), `0011` is Accepted
 breadcrumb), `0014` is Accepted (the evaluation-compiler / EDD reframe
 ADR), `0015` is Accepted (the EDD suitability gate), and `0016` is Accepted
 (the execution-plan artifact ADR), `0017` is reserved (Proposed)
-by the conformance-scores ledger ADR, and `0018` is Accepted (suitability gates
-Compile, not the heartbeat), so the next free number is `0019`:
+by the conformance-scores ledger ADR, `0018` is Accepted (suitability gates
+Compile, not the heartbeat), and `0019` is Accepted (eval authoring stays
+entirely servo-owned), so the next free number is `0020`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 
