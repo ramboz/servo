@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+"""
+servo execution-planner — slice 016-01 (plan-emit).
+
+The last step of Servo Compile: assemble the
+[ADR-0016](../../docs/decisions/adr-0016-execution-plan-artifact.md) **execution
+plan** and write it to `<target>/.servo/plans/<spec-id>/plan.json`. The plan is
+the durable Compile→Run handoff artifact — the reciprocal of the per-run
+`state.json` (ADR-0004): a *plan*, not an *outcome*.
+
+Usage
+-----
+    python3 execution_plan.py compile <target> --spec <spec-path>
+
+The plan **references** (never copies) the other Compile artifacts:
+  - the suitability verdict (`.servo/suitability/<spec-id>.json`, spec 015) via a
+    relative `suitability_ref` path — not the inlined verdict string, so it cannot
+    go stale relative to a re-analysis;
+  - the oracle (`oracle.sh`, spec 001) by path, with its component list (from
+    `.servo/install.json`) and threshold (parsed from `oracle.sh`);
+  - the spec-oracle overlay (spec 006) by id + AC counts, when one is installed
+    (`null` for a baseline-oracle-only target).
+
+The `budget` block records `loop.py`'s public defaults — the planned, safe budget.
+Clamping a hand-edited over-ceiling value is slice 016-03 (not here).
+
+The `suitable`-only precondition
+--------------------------------
+Per ADR-0016 a `plan.json` exists **only** for a `suitable` suitability verdict, so
+`compile` refuses (exit 2) when the verdict is missing or is
+`needs_evidence`/`unsuitable`. This refusal *is* the Servo Compile precondition
+that spec 015-03 (re-scoped, deferred pending 016) describes — enforced here at the
+one boundary where a real spec + verdict exist.
+
+Exit codes (ADR-0002 closed contract)
+-------------------------------------
+    0  plan emitted
+    2  environment error (missing spec / missing-or-malformed manifest / missing
+       oracle / missing suitability artifact / non-`suitable` verdict); a
+       structured reason is printed to stderr and no plan is written.
+
+Never exits 1; never leaves a torn artifact.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+SCHEMA_VERSION = 1
+
+# loop.py public budget defaults (003 / ADR-0008) — the plan's source of truth.
+# Duplicated as constants (never imported — the dependency-free skill invariant,
+# cf. heartbeat.py's DEFAULT_HEARTBEAT_COST_CEILING_USD mirroring loop.py). The
+# plan records the *planned* safe budget; no value exceeds the guardrail bound.
+# Clamping a hand-edited over-ceiling value is slice 016-03.
+BUDGET_MAX_ITERATIONS = 5
+BUDGET_COST_CEILING_USD = 2.0
+BUDGET_CONTEXT_FILL_THRESHOLD = 0.75
+BUDGET_PLATEAU_WINDOW = 3
+
+# loop.py's default driver (003-07 flipped the default to `auto`).
+DEFAULT_DRIVER = "auto"
+
+# oracle.sh threshold fallback when the `THRESHOLD=` default cannot be parsed —
+# scaffold-init's `DEFAULT_THRESHOLD` (001).
+DEFAULT_ORACLE_THRESHOLD = 0.5
+# Matches the scaffolded `THRESHOLD="${THRESHOLD:-0.5}"` line (001 oracle template).
+_THRESHOLD_RE = re.compile(r"THRESHOLD:-\s*([0-9]*\.?[0-9]+)")
+
+# Atomic-write staging suffix (mirrors suitability.py / loop.py).
+TMP_PREFIX = "."
+TMP_SUFFIX = ".tmp"
+
+
+class EnvError(Exception):
+    """An environment error mapped to a closed `reason` + exit 2."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _spec_id_from_path(spec_path: Path) -> str:
+    """spec_id = the spec file's parent directory name (006/015 convention)."""
+    return spec_path.parent.name
+
+
+# ---------------------------------------------------------------------------
+# Inputs — suitability verdict (015), oracle + manifest (001), overlay (006)
+# ---------------------------------------------------------------------------
+
+def _require_suitable(target: Path, spec_id: str) -> str:
+    """Enforce the `suitable`-only precondition; return the relative ref path.
+
+    Raises EnvError(`suitability_missing` / `suitability_malformed` /
+    `suitability_not_suitable`). This is the 015-03 Compile gate.
+    """
+    rel = f".servo/suitability/{spec_id}.json"
+    path = target / ".servo" / "suitability" / f"{spec_id}.json"
+    if not path.is_file():
+        raise EnvError(
+            "suitability_missing",
+            f"no suitability verdict at {path}; run /servo:edd-suitability "
+            f"analyze {target} --spec <spec> first",
+        )
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        raise EnvError(
+            "suitability_malformed",
+            f"suitability verdict is not readable JSON: {exc}",
+        ) from exc
+    verdict = data.get("verdict") if isinstance(data, dict) else None
+    if verdict != "suitable":
+        raise EnvError(
+            "suitability_not_suitable",
+            f"suitability verdict is {verdict!r}, not 'suitable'; Compile does "
+            f"not proceed. Resolve the missing evidence and re-analyze.",
+        )
+    return rel
+
+
+def _load_oracle(target: Path) -> dict:
+    """Build the plan's `oracle` block from `install.json` + `oracle.sh`.
+
+    Raises EnvError(`manifest_missing` / `manifest_malformed` / `oracle_missing`).
+    References the oracle by path; reads components from the manifest and the
+    threshold from `oracle.sh` (fallback `DEFAULT_ORACLE_THRESHOLD`).
+    """
+    manifest = target / ".servo" / "install.json"
+    if not manifest.is_file():
+        raise EnvError(
+            "manifest_missing",
+            f".servo/install.json not found at {target}; run "
+            f"/servo:scaffold-init first",
+        )
+    try:
+        data = json.loads(manifest.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        raise EnvError(
+            "manifest_malformed", f".servo/install.json is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(data, dict) or not isinstance(data.get("components"), list):
+        raise EnvError(
+            "manifest_malformed",
+            ".servo/install.json has no 'components' list",
+        )
+    oracle_sh = target / "oracle.sh"
+    if not oracle_sh.is_file():
+        raise EnvError(
+            "oracle_missing",
+            f"oracle.sh not found at {target}; run /servo:scaffold-init first",
+        )
+    return {
+        "path": "oracle.sh",
+        "components": list(data["components"]),
+        "threshold": _parse_threshold(oracle_sh),
+    }
+
+
+def _parse_threshold(oracle_sh: Path) -> float:
+    """Parse the `THRESHOLD=` default from `oracle.sh`; fallback to the default."""
+    try:
+        text = oracle_sh.read_text()
+    except OSError:
+        return DEFAULT_ORACLE_THRESHOLD
+    match = _THRESHOLD_RE.search(text)
+    if not match:
+        return DEFAULT_ORACLE_THRESHOLD
+    try:
+        return float(match.group(1))
+    except ValueError:  # pragma: no cover - regex already constrains the shape
+        return DEFAULT_ORACLE_THRESHOLD
+
+
+def _load_evaluation_model(target: Path, spec_id: str):
+    """Build the `evaluation_model` block from the 006 overlay, or `None`.
+
+    References the overlay by `spec_oracle_id` + AC counts (never the check
+    bodies). A baseline-oracle-only target (no overlay) yields `None` — ADR-0016:
+    a plan exists even without a spec-oracle.
+    """
+    checks_json = target / ".servo" / "spec-oracles" / spec_id / "checks.json"
+    if not checks_json.is_file():
+        return None
+    try:
+        plan = json.loads(checks_json.read_text())
+    except (json.JSONDecodeError, OSError):
+        # A present-but-unreadable overlay is treated as absent rather than
+        # failing the whole compile — the overlay is an optional enrichment.
+        return None
+    if not isinstance(plan, dict):
+        return None
+    return {
+        "spec_oracle_id": plan.get("spec_id") or spec_id,
+        "ac_count": len(plan.get("checks", []) or []),
+        "residual": len(plan.get("residual_judgment", []) or []),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Compile + persistence
+# ---------------------------------------------------------------------------
+
+def compile_plan(target: Path, spec_path: Path) -> tuple:
+    """Assemble the execution plan. Returns ``(spec_id, plan_dict)``.
+
+    Raises EnvError before any artifact is written (the caller persists only on
+    success, so a failed compile never leaves a torn plan).
+    """
+    if not spec_path.is_file():
+        raise EnvError("spec_missing", f"spec not found: {spec_path}")
+
+    spec_id = _spec_id_from_path(spec_path)
+
+    # The suitable-only precondition (015-03 gate) comes first.
+    suitability_ref = _require_suitable(target, spec_id)
+    oracle = _load_oracle(target)
+    evaluation_model = _load_evaluation_model(target, spec_id)
+
+    # Key insertion order is load-bearing (ADR-0016 schema order): schema_version
+    # first (mirrors every servo artifact), then identity, then the referenced
+    # models, then the planning knobs, then provenance.
+    plan = {
+        "schema_version": SCHEMA_VERSION,
+        "spec_id": spec_id,
+        "compiled_at": iso_now(),
+        "suitability_ref": suitability_ref,
+        "oracle": oracle,
+        "evaluation_model": evaluation_model,
+        "budget": {
+            "max_iterations": BUDGET_MAX_ITERATIONS,
+            "cost_ceiling_usd": BUDGET_COST_CEILING_USD,
+            "context_fill_threshold": BUDGET_CONTEXT_FILL_THRESHOLD,
+            "plateau_window": BUDGET_PLATEAU_WINDOW,
+        },
+        "driver": DEFAULT_DRIVER,
+        "prompt_ref": str(spec_path),
+        "provenance": "compiled",
+    }
+    return spec_id, plan
+
+
+def write_plan(target: Path, spec_id: str, plan: dict) -> Path:
+    """Atomically write the plan; return its path.
+
+    Written under the git-ignored `.servo/plans/<spec-id>/` (covered by the
+    existing `.servo/` ignore rule). Insertion order preserved (no `sort_keys`).
+    """
+    out_dir = target / ".servo" / "plans" / spec_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "plan.json"
+    tmp = out_dir / f"{TMP_PREFIX}plan.json{TMP_SUFFIX}"
+    tmp.write_text(json.dumps(plan, indent=2) + "\n")
+    os.replace(tmp, out_path)
+    return out_path
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def _run_compile(args: argparse.Namespace) -> int:
+    target = Path(args.target).resolve()
+    spec_path = Path(args.spec).resolve()
+    try:
+        spec_id, plan = compile_plan(target, spec_path)
+    except EnvError as exc:
+        print(f"servo: {exc.reason}: {exc}", file=sys.stderr)
+        return 2
+    out_path = write_plan(target, spec_id, plan)
+    print(f"servo: execution plan for {spec_id} compiled -> {out_path}")
+    return 0
+
+
+def main(argv: list | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="execution_plan.py",
+        description="servo execution-planner — the ADR-0016 Compile→Run handoff.",
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+    compile_p = sub.add_parser(
+        "compile", help="compile the ADR-0016 execution plan for a spec"
+    )
+    compile_p.add_argument("target", help="target project directory")
+    compile_p.add_argument(
+        "--spec", dest="spec", required=True, help="path to the spec.md to plan"
+    )
+
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    if args.command == "compile":
+        return _run_compile(args)
+    parser.error(f"unknown command: {args.command}")  # pragma: no cover
+    return 2  # pragma: no cover
+
+
+if __name__ == "__main__":
+    sys.exit(main())

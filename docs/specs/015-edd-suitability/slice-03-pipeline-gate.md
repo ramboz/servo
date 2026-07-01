@@ -31,18 +31,25 @@ verdict has the input it needs (a real spec with ACs).
 plan build) that this precondition can gate. Until a Compile entry exists, gating
 a phase that isn't implemented is not a vertical slice.
 
-> **⚠️ Still DEFERRED.** ADR-0018 resolved *what* 015-03 should be (Compile-only),
-> but its one consumer — a Servo Compile entry point — does not exist yet (016 is
-> DRAFT/parked). The verdict + evidence artifact (015-01/02) ships and is
-> inspectable; only its Compile-gating wiring waits on 016.
+> **⚠️ Still DEFERRED — but the trigger is now MET (2026-06-30).** Spec
+> [016-01](../016-execution-planner/slice-01-plan-emit.md) landed the Servo Compile
+> entry point (`execution_plan.py compile`), which **enforces the `suitable`-only
+> gate** (refuses to emit a plan on a non-`suitable`/absent verdict) — the gate
+> *mechanism* AC1 needs. What remains for 015-03 is the **enrichment**: surface the
+> full `reasons` + `missing_evidence` list on refusal (016-01 prints a generic
+> message), add the fail-closed-on-unavailable test (AC2), and the
+> heartbeat-has-no-suitability regression assertion (AC3). This is a small
+> ready-to-pick-up follow-up — **re-open to DRAFT when scheduled.**
 
 **DoR:**
 - ✅ **015-01 + 015-02 DONE** — `suitability.py analyze <target> --spec <path>`
   emits the verdict + populated `missing_evidence` at
   `<target>/.servo/suitability/<spec-id>.json`; subprocessed (never imported).
 - ✅ **ADR-0018 Accepted** — fixes the scope to the Compile precondition only.
-- ⏳ **016 Compile entry point** — the consumer this precondition gates. **Not yet
-  present** (the resolution trigger).
+- ✅ **016 Compile entry point** — `execution_plan.py compile` (016-01, DONE
+  2026-06-30) is the consumer this precondition gates; it already enforces the
+  `suitable`-only refusal. Trigger MET — remaining 015-03 work is enrichment
+  (surface `missing_evidence`, AC2/AC3 tests).
 
 **Acceptance Criteria (re-scoped):**
 

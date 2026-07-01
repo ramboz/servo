@@ -31,7 +31,6 @@
 - **[005-variant-race](005-variant-race/spec.md)** — DRAFT (parked). Phase 1 (Run): best-of-N worktree race; an optimization, not an EDD prerequisite.
 - **[008-eval-authoring](008-eval-authoring/spec.md)** — DRAFT (parked). Phase 2 (Compile): human-in-the-loop frozen-eval authoring front-end (ADR-0005).
 - **[012-design-eval](012-design-eval/spec.md)** — DRAFT. Phase 2 (Compile): frozen UI design-fidelity eval component ([ADR-0009](../decisions/adr-0009-design-fidelity-eval-recipe.md)).
-- **[016-execution-planner](016-execution-planner/spec.md)** — DRAFT (parked). Phase 2 (Compile): execution-plan Compile→Run handoff artifact ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)).
 - **[017-evaluation-intelligence](017-evaluation-intelligence/spec.md)** — DRAFT (parked). Phase 3: convergence / oracle-debug / adaptive-planning / explainability / cost umbrella.
 - **[018-continuous-evaluation](018-continuous-evaluation/spec.md)** — DRAFT (parked). Phase 4: repo monitoring / auto-recompilation / regression execution (extends 011).
 
@@ -92,6 +91,10 @@
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-03 — compile-precondition (re-scoped) | DEFERRED |  |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-04 — skill-and-explain | **DONE** | `/servo:edd-suitability` SKILL.md + CLI output modes: human default, `--json` (full ADR-0015 verdict), `--explain` (ordered first-match rule trace, stdout-only — never persisted). `_rule_table()` shared by `decide()`/`build_trace()`. Real-classifier dogfood (`examples/needs-evidence-then-suitable.md`) proves the `needs_evidence→suitable` flip. Registered in install-contract (illustrative in scaffold mode). 14 surface tests; compliance subagent PASS. Model-assist + waiver = documented seams, not built. **Follow-up:** scaffolded `suitability.py` can't resolve `oracle_plan` (spec-oracle not vendored). |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 🔬 015-05 — suitability-at-the-boundary (spike) | **DONE** |  |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-01 — plan-emit | **DONE** | 19 tests; `execution_plan.py compile` → `.servo/plans/<spec-id>/plan.json` ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)); references-not-copies (`suitability_ref`); budget = loop.py defaults; emits **only on a `suitable` verdict** — landed the 015-03 Compile-gate *mechanism* (015-03 trigger met, full ACs still open). Added reasons `oracle_missing` + `suitability_malformed`. |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume | DEFERRED |  |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review | DEFERRED |  |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface | DEFERRED |  |
 
 ## Deferred slices
 
@@ -102,3 +105,6 @@
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | Resume after 013-01 lands and a real caller needs |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | Resume when a second design-eval consumer appears, or |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-03 — compile-precondition (re-scoped) | Re-open when spec **016 (execution-planner)** lands a |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume | 016-01 DONE + first real Compile→Run reads the plan |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review | 016-02 DONE (a read-seam exists to clamp) |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface | 016-01..03 DONE |

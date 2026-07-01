@@ -13,13 +13,18 @@ last_verified:
 > [ADR-0016](../../decisions/adr-0016-execution-plan-artifact.md). Provisional
 > skill: `/servo:execution-plan`.
 
-> **Status: DRAFT — scope capture, parked.** Recorded as the stage that makes
-> "Execution Planning" (named in
-> [ADR-0014](../../decisions/adr-0014-evaluation-compiler.md)) produce something
-> durable instead of a bag of CLI flags. It activates when a consumer needs to
-> *read or rewrite* the plan — the heartbeat reusing dispatch parameters across
-> passes, or 017's adaptive planning. Until then this is captured intent; the
-> slice sketch is pre-SPIDR (goals only, no ACs).
+> **Status: DRAFT — 016-01 DONE + landed (2026-06-30); 016-02..04 DEFERRED.**
+> Activated once [ADR-0016](../../decisions/adr-0016-execution-plan-artifact.md)
+> was Accepted (2026-06-30). The plan's consumer is **Compile → Run for a real
+> spec** — *not* the heartbeat, whose findings are spec-less
+> ([ADR-0018](../../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md)).
+> **[016-01](slice-01-plan-emit.md) (plan-emit) is DONE** — `execution_plan.py
+> compile` emits `.servo/plans/<spec-id>/plan.json` (19 tests; suite green). Its
+> `suitable`-only precondition landed the Compile-gate *mechanism* that the
+> deferred [015-03](../015-edd-suitability/slice-03-pipeline-gate.md) will build its
+> full ACs on. **016-02..04 stay DEFERRED** pending a grounding consumer (Run
+> reading the plan), so their ACs are pinned by a real read-seam rather than
+> guessed.
 
 ## Why this spec
 
@@ -91,17 +96,21 @@ The Compile→Run handoff the plan makes durable:
 `plan.json` (Compile, stable) and `state.json` (Run, per-iteration outcome) are
 reciprocal — plan vs result.
 
-## Provisional slice sketch (pre-SPIDR — not ready for implementation)
+## SPIDR split
 
-> Goals only, no ACs. A grounding consumer (heartbeat reuse or 017 adaptive
-> planning) is needed to pin acceptance criteria.
+**Path-first** (the artifact and its Compile-boundary gate), then a **Path** slice
+(Run consuming it), then **Rules** (clamping/review), then **Interface** (the skill
+surface). No spike: ADR-0016 settled the contract. Only 016-01 is
+consumer-independent and pinnable from the schema today; 016-02..04 wait for a
+grounding consumer to pin ACs (the 015 lesson — a parked slice gets a resolution
+trigger, not guessed ACs).
 
-| Slice | Title | Goal |
-|---|---|---|
-| 016-01 | plan-emit | Compile `plan.json` from suitability + oracle + overlay + budget/driver/prompt; ADR-0016 schema; references not copies; `schema_version`; git-ignored `.servo/plans/`. |
-| 016-02 | run-consume | `loop.py` / dispatcher read defaults from a present plan; no plan ⇒ today's behavior unchanged. |
-| 016-03 | clamp-and-review | Clamp over-ceiling budgets to the safe bound; support `human_edited` provenance + a review/approve step before Run. |
-| 016-04 | skill-and-heartbeat | `/servo:execution-plan` surface; heartbeat reuses a plan across passes instead of re-deriving flags. |
+| Slice | Title | Axis | Status | Goal |
+|---|---|---|---|---|
+| [016-01](slice-01-plan-emit.md) | plan-emit | Path | **DONE** | Compile `plan.json` from suitability verdict + oracle + overlay + budget/driver/prompt; ADR-0016 schema; **references not copies** (`suitability_ref`, not an inlined verdict); `schema_version`; git-ignored `.servo/plans/`; emits **only on a `suitable` verdict** (the 015-03 Compile gate). |
+| [016-02](slice-02-run-consume.md) | run-consume | Path | DEFERRED | `loop.py` / dispatcher read defaults from a present plan; no plan ⇒ today's behavior unchanged. Trigger: first real Compile→Run reading the plan. |
+| [016-03](slice-03-clamp-and-review.md) | clamp-and-review | Rules | DEFERRED | Clamp over-ceiling budgets to the safe bound; `human_edited` provenance + review/approve before Run. Trigger: 016-02 DONE. |
+| [016-04](slice-04-skill-surface.md) | skill-surface | Interface | DEFERRED | `/servo:execution-plan` surface + install-contract entry. (Heartbeat plan-reuse dropped — ADR-0018.) Trigger: 016-01..03 DONE. |
 
 ## Open questions
 
@@ -110,8 +119,11 @@ reciprocal — plan vs result.
   005) may be needed.
 - **Plan/overlay/state naming.** Three "plan"-ish things now (execution **plan**,
   spec-oracle **plan.md**, run **state**); keep the docs disambiguation tight.
-- **Where the suitability verdict lives** — inline in `plan.json` (current
-  ADR-0016 `suitability_verdict` field) or a standalone artifact 015 owns.
+- ~~**Where the suitability verdict lives** — inline in `plan.json` or a
+  standalone artifact 015 owns.~~ **Resolved (ADR-0016, refined 2026-06-30):** the
+  plan **references** 015's standalone `.servo/suitability/<spec-id>.json` via
+  `suitability_ref` (reference, not copy), so the verdict can't go stale relative
+  to a re-analysis.
 - **Variant-race interaction (005).** Does each variant get its own plan, or one
   plan with N executions? Decide when 005 activates.
 
