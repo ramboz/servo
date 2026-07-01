@@ -1,12 +1,17 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-06-17
 deciders: ramboz
 supersedes:
 superseded-by:
+last_verified: 2026-07-01
 ---
 
 # ADR-0011: Host-native phase hints stay advisory under servo's oracle authority
+
+## Status
+
+Accepted (2026-07-01)
 
 ## Context
 
