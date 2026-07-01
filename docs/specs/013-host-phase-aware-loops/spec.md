@@ -1,7 +1,7 @@
 ---
 status: DRAFT
 dependencies: [003, 006, 012]
-last_verified: 2026-06-17
+last_verified: 2026-07-01
 ---
 
 # Spec 013 - host-phase-aware servo loops
@@ -10,6 +10,15 @@ last_verified: 2026-06-17
 > let servo consume host-native planning / implementation phases as advisory
 > hints while keeping `gate.py`, `oracle.sh`, run state, triage state, and
 > frozen eval ledgers authoritative.
+
+> **Status: DRAFT — [013-01](slice-01-phase-hint-contract.md) (phase-hint
+> contract) is DONE (2026-07-01); 013-02/03 stay `DEFERRED`.** Mirrors
+> [spec 016](../016-execution-planner/spec.md)'s convention: the umbrella
+> spec keeps `status: DRAFT` rather than mechanically rolling up to `DONE`
+> (jig's derivation rule would otherwise treat "every non-`DEFERRED` slice
+> is `DONE`" as spec-complete) because two of three slices are still
+> genuinely parked behind a grounding consumer — see each slice's own
+> `**Resolution trigger:**`.
 
 ## Overview
 

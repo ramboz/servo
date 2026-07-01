@@ -425,3 +425,65 @@ future upgrade slice).
 **Resolution trigger:** (1) First time a stale `inbox.md` confuses a reviewer — have `dispatch` regenerate `inbox.md` (needs a small `_render_markdown` tweak for a non-discovery "Updated at" header, since dispatch has no per-source discovery health to report). (2) First time a legitimately-edited-but-uncommitted oracle should be scored — decide whether dispatch passes `--allow-dirty` for the worktree it provisioned (the dirt is its own intentional provisioning) or requires a committed oracle.
 
 **Surfaced by:** slice 011-03 implementation (deviation log).
+
+---
+
+## `workflow.py status-board`'s deferred-slice trigger extractor mis-handles this repo's prose
+
+**Deferred:** `docs/specs/README.md`'s `## Deferred slices` table sources its
+"Resolution trigger" column from slice-file prose, and the extractor has two
+distinct failure modes against servo's actual slice files: (1) it only matches
+the literal `**Resolution trigger:**` label — several 016-execution-planner
+slices (016-02/03/04) use `**DEFERRED — resolution trigger:**` instead, so a
+regen silently **blanks** those cells; (2) even with a matching label, it
+appears to capture only the **first physical line** of a wrapped multi-line
+paragraph — 013-02 and 013-03's trigger prose wraps across 3 lines each and
+was found **truncated mid-sentence** in committed `README.md` (predating this
+session, so a prior regen already hit this). Same root symptom (the Deferred
+table is not a faithful copy of the source prose) as the already-known
+Notes-column pipe-dropping bug, but on a different table and via two different
+mechanisms (label mismatch vs. line-wrap truncation).
+
+**Resolution trigger:** First time this bites someone who doesn't notice the
+blank/truncated cells before committing (this session caught and hand-restored
+both — see slice 013-01's deviation log). Fix options: normalize all servo
+slice files onto the plain single-paragraph `**Resolution trigger:**` label
+(no line wraps), or fix the jig-side extractor to match both label phrasings
+and join wrapped lines.
+
+**Surfaced by:** slice 013-01 implementation (`workflow.py status-board .`
+regen during reconciliation, 2026-07-01). Reproduced **twice** in the same
+session — a second `status-board` run re-blanked the same cells after the
+first hand-fix, confirming this is deterministic, not a fluke.
+
+---
+
+## `workflow.py`'s spec-status rollup ignores a `DEFERRED` sibling's human intent
+
+**Deferred:** Per `spec-workflow`'s documented rule, a spec's frontmatter
+`status:` derives to `DONE` when *every non-`DEFERRED`* slice is `DONE` —
+`DEFERRED` slices are excluded from the computation. For an umbrella spec
+where only the first slice has landed and the rest are deliberately parked
+behind a grounding consumer (specs **013** and **016**, both hit this in the
+same session), that derivation is mechanically correct but reads as false:
+`transition <slice> DONE` and `status-board` both silently flip the *spec's*
+`status:` frontmatter to `DONE` even though the spec's own prose banner says
+"DRAFT — N-01 DONE, N-02..NN DEFERRED" and the spec is nowhere near closed.
+Reproduced deterministically — reverting the frontmatter by hand does not
+stick; the next `transition` or `status-board` run re-flips it.
+
+**Resolution trigger:** First time someone reads `status: DONE` on a
+mostly-parked umbrella spec's frontmatter and takes it at face value (e.g. a
+dependency-gate check, or a human skimming `spec.md` without reading the
+prose banner). Current workaround (specs 013, 016): keep a hand-written
+`> **Status: DRAFT — ...**` banner immediately under the H1 as the
+authoritative human-readable statement, and re-revert the frontmatter to
+`DRAFT` after every `transition`/`status-board` run that touches that spec.
+Real fix needs a jig-side decision: either add a slice-level opt-out (e.g. a
+`rollup: false` spec frontmatter flag) or change the derivation to require
+*all* slices (including `DEFERRED` ones) to be `DONE`/`DEFERRED`-with-no-
+further-work before rolling up — TBD, not decided here.
+
+**Surfaced by:** slice 013-01 reconciliation review (2026-07-01) — first
+caught on spec 016 by an independent reconciliation-review pass, then
+confirmed to also hit spec 013 itself when 013-01 transitioned to `DONE`.

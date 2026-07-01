@@ -14,6 +14,13 @@ last_verified: 2026-06-12
 > `score_design_fidelity` component into the project's `oracle.sh` so the
 > agent-loop can iterate a UI toward its mockup and the quality-gate can attest
 > the result.
+>
+> A host `evaluate` phase hint (see
+> [Host-native phase hints](../../architecture.md#host-native-phase-hints-spec-013),
+> [ADR-0011](../../decisions/adr-0011-host-native-phase-hints.md)) may help a
+> human shape a rubric or screen set before this runs, but the fidelity score
+> always comes from the frozen `score_design_fidelity` component — never a
+> host transcript.
 
 ## Why this spec
 

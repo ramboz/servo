@@ -32,8 +32,8 @@ ADR candidates (numbers are *hints* of the next likely allocation order,
 not reservations — the next accepted ADR claims the next free number
 regardless of which candidate fires first). `0005` is Accepted (the
 eval-oracle-component ADR), `0009` is Accepted (the design-fidelity-eval
-recipe), `0010` is Accepted (triage-inbox-schema), `0011` is reserved
-(Proposed) by the host-native phase hints ADR, `0012` is Accepted
+recipe), `0010` is Accepted (triage-inbox-schema), `0011` is Accepted
+(host-native phase hints), `0012` is Accepted
 (heartbeat whole-pass cost ceiling), `0013` is Accepted (servo availability
 breadcrumb), `0014` is Accepted (the evaluation-compiler / EDD reframe
 ADR), `0015` is Accepted (the EDD suitability gate), and `0016` is Accepted

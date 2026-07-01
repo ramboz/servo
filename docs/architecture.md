@@ -1,6 +1,6 @@
 ---
 status: DRAFT
-last_verified: 2026-06-26
+last_verified: 2026-07-01
 ---
 
 # Architecture: servo
@@ -204,6 +204,9 @@ Runtime and spec-overlay skills produce these at the *target* project
 - `<target>/.claude/skills/servo-quality-gate/gate.py` — a **vendored, clone-portable copy** of servo's `gate.py`, written by the agent-loop driver's preflight (slice 003-07, [ADR-0008](decisions/adr-0008-loop-on-autonomy-primitives.md) V4). The goal/Routine driver runs the oracle through this relative path (and the meta-judge install — [`hook.py:_resolve_gate_py`](../skills/oracle-hook/hook.py) — already prefers it), so the oracle resolves *relative to `$CLAUDE_PROJECT_DIR`* after a clone instead of baking servo's absolute install path (which would fail open in a clone). Vendoring is idempotent — a byte-identical copy is left untouched; a stale or absent copy is (re)written. The loop (external-driver) path keeps using servo's own in-repo `gate.py`. (Untracked in the target by design — see the dirty-tree note below.)
 - `<target>/.servo/races/<race-id>/` — per-variant scores and metadata from `/servo:variant-race`.
 - `<target>/.servo/triage/inbox.jsonl` (+ a generated `inbox.md` view) — the **triage inbox** from `/servo:heartbeat` (spec 011): the scheduled-discovery state spine, schema governed by [ADR-0010](decisions/adr-0010-triage-inbox-schema.md) (reciprocal to [ADR-0004](decisions/adr-0004-session-state-file-format.md)). One JSONL record per finding, `schema_version: 2`, in three volatility classes: **immutable** (`finding_id` — a stable `sha256(...)[:16]` fingerprint, `source`, `provenance` `first_party`/`contributor`, `discovered_at` first-seen), **sticky** (`status` `open`/`tried`/`passed`/`skipped`, `attempts`, `outcome`), **volatile** (`title`, `detail`, `evidence`, `last_seen_at`, `actionable`, `actionable_reason`). Re-running `discover` **merges** by `finding_id` (preserve immutable+sticky, refresh volatile) rather than overwriting, so the next heartbeat resumes; a uniform retention rule evicts unseen `open` findings while retaining lifecycle-bearing (`tried`/`passed`/`skipped`) ones. A `fcntl.flock` on a separate persistent `.inbox.lock` guards a double-fired Routine. The read-only `discover` pass writes here and **nowhere else** in the target (atomic `.tmp` + `os.replace`); the read-only `heartbeat.py status` verb reads it back (human or `--json`); oracle-gated dispatch (011-03) records each candidate's `outcome` back to it.
+  A `triage` phase hint (see [Host-native phase hints](#host-native-phase-hints-spec-013))
+  may help summarize candidates before dispatch; it never replaces the
+  `actionable AND open` + oracle-preflight gate below.
 - `<target>/.servo/dispatch/<finding_id>/` — per-candidate **dispatch worktree** from `/servo:heartbeat dispatch` (slice 011-03), beside `runs/` / `races/` / `triage/` under the git-ignored `.servo/`. This is the heartbeat's **one execution edge**: for each `actionable AND open` finding, `dispatch` runs a `gate.py <target> --json` oracle preflight (refuse-without-oracle refuses the whole pass, ADR-0002 taxonomy — Guardrail #3), then creates a **fresh linked git worktree** of the target at HEAD on a dedicated branch `servo/heartbeat/<finding_id>`, **provisions** the oracle into it (copies `oracle.sh` + all of `.servo/` *except* the volatile/recursive dirs `runs`/`races`/`triage`/`dispatch` — because `.servo/` is git-ignored the HEAD checkout carries neither the manifest nor any `.servo/`-resident oracle sidecars), **verifies** the provisioned worktree with `gate.py <worktree> --json` (an `exit 2` records a per-candidate env-error and skips — never scores a broken oracle), and dispatches `loop.py <worktree>` (spec 003) with an **untrusted-data-framed** prompt (discovered text is labelled, delimited DATA, never instructions — Guardrail #4; `loop.py` does not sanitize `--prompt`, so the dispatcher owns the framing). The loop's edits land only inside the worktree — the target's own working tree is **never** mutated. **Heartbeat composes the loop; the loop stays trigger-agnostic** (the spec-003 boundary): `loop.py` is invoked per candidate exactly as a human would invoke it, and the dispatch target is kept pluggable so `race.py` (spec 005) can slot in later. The outcome (`{run_id, oracle_status, oracle_composite, cost_usd, dispatched_at}` — the ADR-0010-reserved shape; `attempts += 1`; `status = passed` iff the loop's `final_oracle_status == pass`, else `tried`) is recorded back to `triage/inbox.jsonl` through 011-02's locked (`fcntl.flock`) atomic (`.tmp` + `os.replace`) merge. Dispatch is **serial** in v1 and forwards a **per-loop** `--cost-ceiling` (not a whole-pass ceiling — that is 011-04's `run` verb); the worktree is **retained** (v1) so a human can inspect/land the result (GC/retention is a deferred follow-up — see `docs/refinement-todo.md`). Closed `{0,2}` exit: `2` only on a pass-level env error (target missing/not-a-dir, refuse-without-oracle, unreadable/unsupported-schema inbox); `0` otherwise, including below-threshold loops (recorded `tried`) and per-candidate env-errors.
 - `<target>/.servo/spec-oracles/<spec-id>/` — spec-specific evidence overlay from `/servo:spec-oracle` (specs 006-01..03). Contents: `plan.md` (human-reviewable AC→check map) and `checks.json` (machine plan) from the planner (006-01); `checks.py` (a self-contained copy of the stdlib check engine, 006-02) and `oracle.sh.fragment` (the generated `# SEED:start spec_oracle_<id>` / `# SEED:end spec_oracle_<id>` block) from the overlay compiler (006-03); and append-only `ledger.jsonl` (one JSONL evidence record per AC per run, stamped with a run `ts`). Install splices the fragment into `<target>/oracle.sh` as an ordinary component — a `score_spec_oracle_<id>` function plus a `COMPONENTS` entry — so `gate.py` / `loop.py` score it with **no special-casing**: the component returns the composite check score, or rc=2 if any check env-errors. The overlay is project-owned and reviewable before `/servo:agent-loop` consumes it; uninstall removes the component but keeps the artifacts. Before the loop may score it the overlay must be **approved**, and the installed component runs the engine with `--enforce-freeze` — see *Spec-oracle freeze & approval* below.
 
@@ -272,7 +275,9 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 > of Servo Run (see [Two phases](#two-phases-servo-compile-and-servo-run)). It
 > optimizes an implementation against the *already-compiled* evaluation; it does
 > not decide what to evaluate. The guardrails below are what make that runtime
-> safe to fire-and-forget.
+> safe to fire-and-forget. A host-native `plan`/`run` phase hint may shape the
+> prompt before/during a loop, but never these guardrails — see
+> [Host-native phase hints](#host-native-phase-hints-spec-013).
 
 Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own.
 
@@ -349,6 +354,65 @@ from the web/desktop app, not the CLI (no `routine` / `schedule` subcommand);
 `loop.py --emit-routine-prompt` makes a target Routine-ready (vendors `gate.py`) and
 emits the paste-ready `/goal` prompt with a portable relative gate command.
 
+## Host-native phase hints (spec 013)
+
+> **Advisory only — parked, docs-first.** [ADR-0011](decisions/adr-0011-host-native-phase-hints.md)
+> (Accepted) settles the contract; [spec 013](specs/013-host-phase-aware-loops/spec.md)
+> is where any runtime code lands, and its first slice (013-01) is this section.
+> No runtime behavior changes yet.
+
+Host tools (Claude Code, Codex) are gaining native planning / implementation
+modes. Servo may consume them, but only as **advisory adapter hints** layered
+on top of its existing authority surfaces — never as a replacement for them.
+
+**The vocabulary is small and host-neutral:** `plan`, `run`, `evaluate`, and
+`triage`. These name *intent* a host adapter can render into its own local
+concept; they are not a new servo lifecycle, state machine, or CLI verb family.
+
+**Authority is unchanged.** Regardless of which phase hint a host reports:
+
+- `gate.py` + the project-owned `oracle.sh` remain the only pass / fail /
+  env-error authority (see [Quality-gate JSON contract](#quality-gate-json-contract)).
+- `<target>/.servo/runs/<run-id>/state.json` (agent-loop, [ADR-0004](decisions/adr-0004-session-state-file-format.md)),
+  `<target>/.servo/triage/inbox.jsonl` (heartbeat, [ADR-0010](decisions/adr-0010-triage-inbox-schema.md)),
+  and any frozen eval ledger ([ADR-0005](decisions/adr-0005-eval-oracle-component.md))
+  remain the durable, canonical record — a host's reported mode is never
+  serialized into these as workflow truth.
+- Design-eval's fidelity score still comes only from the frozen
+  `score_design_fidelity` component ([ADR-0009](decisions/adr-0009-design-fidelity-eval-recipe.md)),
+  never a host "evaluate mode" transcript.
+- Heartbeat dispatch still requires `actionable AND open`, the oracle
+  preflight, and cost ceilings ([ADR-0010](decisions/adr-0010-triage-inbox-schema.md),
+  [ADR-0012](decisions/adr-0012-heartbeat-whole-pass-cost-ceiling.md)) — a
+  `triage` hint may help summarize candidates, never substitute for the gate.
+
+**Status: 013-01 (this section) is the only implemented slice; 013-02/03 stay
+`DEFERRED`** behind a real adapter-hint consumer — see [spec 013](specs/013-host-phase-aware-loops/spec.md).
+
+**Missing or unsupported host-mode surfaces degrade gracefully.** If a host
+can't select or observe a native phase, servo keeps running with the existing
+prompt and loop behavior. That is a no-op, never an `env_error` — the same
+posture as the context-fill gate's fail-open-on-unreadable-signal design
+(see [Agent-loop guardrails](#agent-loop-guardrails)).
+
+**Current host surfaces (re-verified 2026-07-01, per ADR-0011's verification
+requirement — re-check before any code consumes them):**
+
+| Host | Surface | Maps to |
+|---|---|---|
+| Claude Code | Plan Mode (Shift+Tab twice) — drafts a plan, no edits/commands/commits until approved | `plan` |
+| Claude Code | Routines (`/schedule`, cloud-scheduled/webhook/repo-event) — already servo's ADR-0008/ADR-0012 scheduling primitive | `run` / `triage` |
+| Codex CLI | `read-only` approval mode — browses and proposes, no changes until approved | `plan` |
+| Codex CLI | `auto` approval mode (default) — reads/edits/runs inside the working dir | `run` |
+
+Neither host exposes a distinct "evaluate" or "triage" mode — those intents
+stay servo-side (`gate.py`, heartbeat), which is exactly ADR-0011's point:
+the vocabulary belongs to servo, hosts only render it.
+
+**See also:** [Agent-loop guardrails](#agent-loop-guardrails) (`run`),
+[heartbeat triage inbox](#runtime-artifacts) (`triage`), and
+[spec 012 design-eval](specs/012-design-eval/spec.md) (`evaluate`).
+
 ## Decisions
 
 | ADR | Status | Captures |
@@ -363,6 +427,7 @@ emits the paste-ready `/goal` prompt with a portable relative gate command.
 | [ADR-0008](decisions/adr-0008-loop-on-autonomy-primitives.md) | Accepted | Rebase agent-loop orchestration onto Claude Code's autonomy primitives (`/goal`, `/background`, Routines); servo keeps only the deterministic guardrail + oracle layer and retains the external loop driver as the portable path for hook-restricted / non-Claude-Code hosts. Hard constraint: `/goal`'s transcript-only judge never replaces `oracle.sh`. |
 | [ADR-0009](decisions/adr-0009-design-fidelity-eval-recipe.md) | Accepted | Design-fidelity as a first-class eval recipe (`/servo:design-eval`): compiles "does the built UI match the mockup?" into a frozen `score_design_fidelity` oracle component (pinned vision model, n-sampled, confidence lower bound), riding ADR-0005's frozen-eval contract. |
 | [ADR-0010](decisions/adr-0010-triage-inbox-schema.md) | Accepted | Triage-inbox state-file schema & dedupe identity (spec 011): `schema_version: 2`; ratified `finding_id`; sticky `status` lifecycle separate from a recomputed `actionable` verdict + immutable `provenance` marker (Guardrail #4); one uniform merge + retention rule; `flock` double-fire safety; reserves `outcome.cost_usd` for 011-04. Reciprocal to ADR-0004. |
+| [ADR-0011](decisions/adr-0011-host-native-phase-hints.md) | Accepted | Host-native planning/implementation modes (Claude Plan Mode, Codex approval modes) may shape prompts and dispatch as **advisory phase hints** (`plan`/`run`/`evaluate`/`triage`); `gate.py`, `oracle.sh`, run state, triage state, and frozen eval ledgers stay authoritative. Missing host-mode support degrades to today's behavior, never `env_error`. Anchors spec 013 (013-01 landed as this docs contract; 013-02/03 parked). |
 | [ADR-0013](decisions/adr-0013-servo-available-breadcrumb.md) | Accepted | Servo writes a best-effort user-state availability marker at `${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json` so jig can detect "servo probably available" via a cheap filesystem check, without Claude-specific registries or subprocesses. |
 | [ADR-0014](decisions/adr-0014-evaluation-compiler.md) | Proposed | Servo is an Evaluation-Driven Development engine — it compiles intent into executable evaluation, and the autonomous loop is one consumer. Makes the **Servo Compile** / **Servo Run** split first-class and widens ADR-0005's narrow "EDD" to the product philosophy. Framing only — no contract or behavior change. |
 | [ADR-0015](decisions/adr-0015-edd-suitability-gate.md) | Proposed | The first Servo Compile step is an **EDD suitability analysis** that emits a closed three-state, fail-closed **gate** (`suitable` / `needs_evidence` / `unsuitable`) plus a `missing_evidence` list — not a score. Gates the pipeline (incl. the per-finding heartbeat dispatch boundary) so the loop never optimizes toward an un-evaluable false pass. Anchors spec 015. |
