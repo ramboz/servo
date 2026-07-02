@@ -20,8 +20,10 @@ Pure classification logic (AC1/AC2/AC6) is also imported directly for
 fast unit assertions.
 """
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -621,6 +623,82 @@ class MultilineRegressionTests(unittest.TestCase):
             "006-01 yielded zero deterministic checks — multi-line AC "
             "truncation regression?",
         )
+
+
+# Bug 003: a bold-label note between the AC header and the numbered list.
+AC_BOLD_NOTE_SPEC = """# Spec 300 — preamble note
+
+## Slice 300-01 — note
+
+**Acceptance Criteria:**
+
+**Note:** these criteria are provisional and may change.
+
+1. **Exists.** `oracle.sh` exists in the target.
+2. **Text.** The README contains the string "servo".
+"""
+
+# ACs followed by a sibling DoD list — the DoD must still be bounded out.
+AC_WITH_DOD_SPEC = """# Spec 301 — dod bound
+
+## Slice 301-01 — dod
+
+**Acceptance Criteria:**
+
+1. **Exists.** `oracle.sh` exists in the target.
+2. **Text.** The README contains the string "servo".
+
+**Definition of Done:**
+
+1. All tests pass.
+2. Lint is clean.
+"""
+
+# A present-but-empty AC section (header, then a real heading before any item).
+AC_EMPTY_SECTION_SPEC = """# Spec 302 — empty
+
+## Slice 302-01 — empty
+
+**Acceptance Criteria:**
+
+## Notes
+
+1. This is not an acceptance criterion.
+"""
+
+
+class ACPreambleToleranceTests(unittest.TestCase):
+    """Bug 003 — interstitial bold-label tolerance + non-silent empty section.
+
+    A bold pseudo-heading label (`**Note:** …`) between the AC header and the
+    first numbered item must not zero the section (it is interstitial prose, not
+    a sibling section), while a real sibling list that FOLLOWS the ACs (a DoD)
+    must still be bounded out. A present AC section that yields zero items must
+    warn on stderr rather than silently returning 0.
+    """
+
+    def test_bold_label_note_before_first_item_still_yields_acs(self):
+        result = op.extract_acs(AC_BOLD_NOTE_SPEC)
+        self.assertEqual(len(result), 2, "bold-label note must not zero the ACs")
+        self.assertIn("oracle.sh", result[0]["statement"])
+
+    def test_dod_after_acs_is_still_bounded(self):
+        # The DoD's own numbered list must NOT be swept into the ACs.
+        result = op.extract_acs(AC_WITH_DOD_SPEC)
+        self.assertEqual(len(result), 2)
+        statements = " ".join(ac["statement"] for ac in result)
+        self.assertNotIn("tests pass", statements.lower())
+
+    def test_empty_ac_section_warns_not_silent(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec = Path(d) / "spec.md"
+            spec.write_text(AC_EMPTY_SECTION_SPEC)
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                plan = op.classify_only(spec, "302-empty")
+            self.assertEqual(len(plan["checks"]), 0)
+            self.assertEqual(len(plan["residual_judgment"]), 0)
+            self.assertIn("0 acceptance criteria", buf.getvalue().lower())
 
 
 if __name__ == "__main__":

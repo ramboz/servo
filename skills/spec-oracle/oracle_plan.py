@@ -137,6 +137,12 @@ def extract_acs(source_text: str, spec_id: str | None = None) -> list:
     acs = []
 
     in_ac_section = False
+    # Count of AC items collected since the current section opener. A bold
+    # pseudo-heading label only *closes* the section once at least one item has
+    # been seen; a bold label *before* the first item (e.g. a "**Note:** …"
+    # rationale between the header and the numbered list) is interstitial prose,
+    # not a sibling section, and must not zero the ACs (bug 003).
+    items_in_section = 0
     # Per-(scope) counter so numbering restarts for each slice's AC block and
     # is independent of the literal numbers in the source (which may repeat).
     counters: dict = {}
@@ -159,13 +165,19 @@ def extract_acs(source_text: str, spec_id: str | None = None) -> list:
             # An "Acceptance Criteria" heading or bold label opens a section.
             flush()
             in_ac_section = True
+            items_in_section = 0
             continue
 
         if _HEADING_RE.match(line) or _BOLD_LABEL_RE.match(line):
-            # Any other heading or bold pseudo-heading label closes the
-            # section. The opener above is checked first, so it is unaffected.
-            flush()
-            in_ac_section = False
+            # A real heading always closes the section. A bold pseudo-heading
+            # label closes it too — but only once ≥1 AC item has been collected
+            # (so a "**Note:** …" line between the header and the first numbered
+            # item is treated as interstitial prose, not a section terminator;
+            # bug 003). The opener above is checked first, so it is unaffected.
+            closes = _HEADING_RE.match(line) is not None or items_in_section > 0
+            if closes:
+                flush()
+                in_ac_section = False
             continue
 
         if not in_ac_section:
@@ -178,6 +190,7 @@ def extract_acs(source_text: str, spec_id: str | None = None) -> list:
             slice_id = _slice_id_for_line(lines, idx)
             scope = slice_id if slice_id is not None else (spec_id or "SPEC")
             counters[scope] = counters.get(scope, 0) + 1
+            items_in_section += 1
             pending = {
                 "scope": scope,
                 "n": counters[scope],
@@ -196,6 +209,32 @@ def extract_acs(source_text: str, spec_id: str | None = None) -> list:
 
     flush()  # finalize the last AC at end of input
     return acs
+
+
+def _has_ac_section(source_text: str) -> bool:
+    """True when the source has an 'Acceptance Criteria' section opener."""
+    return any(
+        _AC_OPENER_RE.match(line) for line in source_text.splitlines()
+    )
+
+
+def _warn_if_empty_ac_section(source_text: str, plan: dict,
+                              resolved_id: str) -> None:
+    """Bug 003: never *silently* yield 0 ACs from a present AC section.
+
+    If the source has an 'Acceptance Criteria' opener but nothing parsed, warn
+    on stderr (loud, not silent) so a downstream `needs_evidence` verdict is not
+    mistaken for a genuinely AC-less spec. Written to stderr only, so it never
+    pollutes the classify JSON on stdout.
+    """
+    if plan["checks"] or plan["residual_judgment"]:
+        return
+    if _has_ac_section(source_text):
+        sys.stderr.write(
+            f"warning: spec {resolved_id} has an 'Acceptance Criteria' section "
+            "but 0 acceptance criteria parsed — check for a stray heading or "
+            "bold label between the header and the numbered list.\n"
+        )
 
 
 def _statement_text(raw: str) -> str:
@@ -493,6 +532,7 @@ def plan_target(target: Path, spec_path: Path, spec_id: str | None,
         source_spec_path=source_spec_path or str(spec_path),
         source_hash=source_hash,
     )
+    _warn_if_empty_ac_section(source_text, plan, resolved_id)
 
     out_dir = target / ".servo" / "spec-oracles" / resolved_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -513,12 +553,14 @@ def classify_only(spec_path: Path, spec_id: str | None,
     source_text = source_bytes.decode("utf-8", errors="replace")
     source_hash = "sha256:" + hashlib.sha256(source_bytes).hexdigest()
     resolved_id = spec_id or _spec_id_from_path(spec_path)
-    return build_plan(
+    plan = build_plan(
         source_text,
         spec_id=resolved_id,
         source_spec_path=source_spec_path or str(spec_path),
         source_hash=source_hash,
     )
+    _warn_if_empty_ac_section(source_text, plan, resolved_id)
+    return plan
 
 
 # ---------------------------------------------------------------------------
