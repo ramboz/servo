@@ -32,7 +32,6 @@
 - **[012-design-eval](012-design-eval/spec.md)** — DRAFT. Phase 2 (Compile): frozen UI design-fidelity eval component ([ADR-0009](../decisions/adr-0009-design-fidelity-eval-recipe.md)).
 - **[017-evaluation-intelligence](017-evaluation-intelligence/spec.md)** — DRAFT (parked). Phase 3: convergence / oracle-debug / adaptive-planning / explainability / cost umbrella.
 - **[018-continuous-evaluation](018-continuous-evaluation/spec.md)** — DRAFT (parked). Phase 4: repo monitoring / auto-recompilation / regression execution (extends 011).
-- **[019-compile-core-simplification](019-compile-core-simplification/spec.md)** — DRAFT (proposed). Simplify + decouple the Compile core from external dogfood findings: freeze against parsed ACs ([ADR-0022](../decisions/adr-0022-freeze-against-parsed-acs.md)), co-locate artifacts + de-dup `checks.py` ([ADR-0023](../decisions/adr-0023-colocate-durable-spec-oracle-artifacts.md)), unify AC analysis, oracle-first agent-loop ([ADR-0021](../decisions/adr-0021-oracle-first-agent-loop-optional-consumer.md)).
 
 ## Active specs
 
@@ -99,6 +98,11 @@
 | [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume | DEFERRED |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review | DEFERRED |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface | DEFERRED |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-01 — freeze-parsed-acs | **DONE** |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-02 — colocate-artifacts | **DONE** |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-03 — behavioral-ac-recall | **DONE** |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-04 — oracle-as-a-service-docs | **DONE** |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-05 — single-component-oracle | **DONE** |  |
 
 ## Deferred slices
 

@@ -33,6 +33,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -585,6 +586,122 @@ class MissingEvidenceRerunTests(unittest.TestCase):
             self.assertTrue(
                 any(it["blocking"] for it in art["missing_evidence"])
             )
+
+
+# ==========================================================================
+# Slice 019-03 — shared-pipeline behavioral-AC recall + single-source guard
+# ==========================================================================
+
+# One unambiguous evaluable AC (`file_presence`) as a control, plus one
+# behavioral/negative-phrasing AC that only classifies as evaluable after the
+# 019-03 recall fix (oracle_plan.py::_classify_family rule 7b).
+_SPEC_WITH_BEHAVIORAL_AC = (
+    "# Spec 900\n\n## Acceptance Criteria\n\n"
+    "1. The output file exists at the path.\n"
+    "2. The lint check fails when a disallowed import is introduced.\n"
+)
+
+
+class SharedPipelineSuitabilityIntegrationTests(unittest.TestCase):
+    """AC2 — extends `RealClassifierIntegrationTests`: because
+    `suitability.py::_classify` delegates to the real `oracle_plan.py
+    classify`, the same behavioral AC that reclassifies from
+    `residual_judgment` to `checks` (AC1) increases `n_evaluable` in the
+    suitability verdict, not just the spec-oracle plan."""
+
+    def test_behavioral_ac_counted_as_evaluable_by_real_classifier(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root, SIG_TESTS)
+            spec = _make_spec(root, _SPEC_WITH_BEHAVIORAL_AC)
+            res = _run_cli(target, spec, oracle_plan=REAL_ORACLE_PLAN)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target).read_text())
+            counts = art["inputs"]["ac_counts"]
+            # Both ACs are evaluable: the file-presence control AND the
+            # behavioral AC (the pre-019-03 classifier would have counted
+            # only 1 evaluable + 1 residual here).
+            self.assertEqual(counts["evaluable"], 2, art)
+            self.assertEqual(counts["residual"], 0, art)
+            self.assertEqual(art["verdict"], "suitable")
+
+    def test_real_classifier_via_oracle_plan_module_agrees(self):
+        # Direct cross-check against oracle_plan's own classify_only, to
+        # pin the exact mechanism (not just the end-to-end count above).
+        oracle_plan_spec = importlib.util.spec_from_file_location(
+            "oracle_plan", REAL_ORACLE_PLAN)
+        oracle_plan = importlib.util.module_from_spec(oracle_plan_spec)
+        oracle_plan_spec.loader.exec_module(oracle_plan)
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            spec = _make_spec(root, _SPEC_WITH_BEHAVIORAL_AC)
+            plan = oracle_plan.classify_only(spec, None)
+            self.assertEqual(len(plan["checks"]), 2)
+            self.assertEqual(len(plan["residual_judgment"]), 0)
+
+
+class NoDuplicateACParserTests(unittest.TestCase):
+    """AC3 — regression guard: `suitability.py::_classify` must genuinely
+    invoke `oracle_plan.py`'s `classify` entrypoint via subprocess, not a
+    private/duplicate parser. If a future edit forks the two back apart
+    (re-implements AC parsing/classification inside suitability.py instead of
+    delegating), this test fails CI immediately."""
+
+    def test_classify_subprocess_targets_oracle_plan_by_default(self):
+        # The default env-unset path resolves to oracle_plan.py, not some
+        # other script or an inline parser.
+        self.assertEqual(
+            suitability.DEFAULT_ORACLE_PLAN.name, "oracle_plan.py",
+            "suitability.py's default classifier target must be oracle_plan.py",
+        )
+        self.assertTrue(
+            suitability.DEFAULT_ORACLE_PLAN.is_file(),
+            f"{suitability.DEFAULT_ORACLE_PLAN} does not exist",
+        )
+
+    def test_classify_invokes_the_given_oracle_plan_path_via_subprocess(self):
+        # Spy on subprocess.run to confirm _classify's argv actually names
+        # the oracle_plan_path argument's script — no private parser is
+        # consulted instead. A fake path is used to prove wiring, not a
+        # real classification (no need to run the real script for this AC).
+        calls = []
+        real_run = subprocess.run
+
+        def spy(args, **kwargs):
+            calls.append(args)
+            return real_run(args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            spec = _make_spec(root)
+            plan = _stub_oracle_plan(root, n_checks=1, n_residual=0)
+            with unittest.mock.patch("subprocess.run", side_effect=spy):
+                result = suitability._classify(spec, plan)
+
+        self.assertTrue(calls, "suitability._classify must call subprocess.run")
+        argv = calls[0]
+        self.assertEqual(
+            Path(argv[1]).name, plan.name,
+            "the subprocess argv's script must be the oracle_plan_path passed in "
+            "(the single shared classify entrypoint), not a hardcoded/private path",
+        )
+        self.assertIn("classify", argv, "must invoke oracle_plan's `classify` subcommand")
+        self.assertEqual(len(result["checks"]), 1)
+
+    def test_module_defines_no_private_ac_family_classifier(self):
+        # suitability.py must not define its own `_classify_family` /
+        # `classify_acs` — that logic lives exactly once, in oracle_plan.py.
+        self.assertFalse(
+            hasattr(suitability, "_classify_family"),
+            "suitability.py must not define a private _classify_family — "
+            "it must delegate to oracle_plan.py's classify entrypoint",
+        )
+        self.assertFalse(
+            hasattr(suitability, "classify_acs"),
+            "suitability.py must not define a private classify_acs — "
+            "it must delegate to oracle_plan.py's classify entrypoint",
+        )
 
 
 if __name__ == "__main__":

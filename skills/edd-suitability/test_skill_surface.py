@@ -316,5 +316,53 @@ class HostToolingContractTests(unittest.TestCase):
         self.assertIn("not** vendored", body)
 
 
+# ---------------------------------------------------------------------------
+# Shared AC grammar documentation (slice 019-03 AC5)
+# ---------------------------------------------------------------------------
+
+SPEC_ORACLE_SKILL_MD = REPO_ROOT / "skills" / "spec-oracle" / "SKILL.md"
+
+
+class SharedACGrammarDocsTests(unittest.TestCase):
+    """AC5 — a short grammar reference (header shape, tolerated preamble,
+    negative-behavior keyword families, residual-judgment catch-all) lives
+    once, canonically, in spec-oracle's SKILL.md, and edd-suitability's
+    SKILL.md cross-references that same source rather than restating it."""
+
+    def test_spec_oracle_skill_md_has_grammar_section(self):
+        text = SPEC_ORACLE_SKILL_MD.read_text()
+        self.assertIn("Shared AC grammar", text)
+        body = " ".join(text.split()).lower()
+        # Header shape / preamble tolerance (Bug 003).
+        self.assertIn("header shape", body)
+        self.assertIn("interstitial prose", body)
+        # Negative-behavior keyword families (this slice).
+        self.assertIn("negative-behavior", body)
+        for phrasing in ("fails when", "is excluded", "is never"):
+            self.assertIn(phrasing, body)
+        # Residual-judgment catch-all.
+        self.assertIn("residual-judgment catch-all", body)
+
+    def test_edd_suitability_cross_references_the_same_source(self):
+        text = _skill_text()
+        self.assertIn(
+            "../spec-oracle/SKILL.md", text,
+            "edd-suitability's SKILL.md should cross-reference spec-oracle's "
+            "SKILL.md as the canonical grammar source",
+        )
+        body = " ".join(text.split()).lower()
+        self.assertIn("shared ac grammar", body)
+        self.assertIn("one** ac-parsing pipeline", body)
+
+    def test_both_skills_name_the_same_pipeline_functions(self):
+        # Both docs should name the actual pipeline entrypoints so the
+        # cross-reference is concrete, not just a vague pointer.
+        spec_oracle_text = SPEC_ORACLE_SKILL_MD.read_text()
+        self.assertIn("extract_acs", spec_oracle_text)
+        self.assertIn("_classify_family", spec_oracle_text)
+        suitability_text = _skill_text()
+        self.assertIn("oracle_plan.py classify", suitability_text)
+
+
 if __name__ == "__main__":
     unittest.main()

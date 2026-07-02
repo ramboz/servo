@@ -7,9 +7,10 @@ or via pytest:
     uvx pytest skills/spec-oracle/test_oracle_plan.py -q
 
 The planner is read-only over the *source spec* and writes only under
-`<target>/.servo/spec-oracles/<spec-id>/`. Classification is deterministic
-(keyword/regex), so the dogfood fixtures below are stable and offline; no
-LLM or network call is involved.
+`<spec_path.parent>/oracle/<spec-id>/` (ADR-0023, slice 019-02 — resolved
+relative to the spec's own directory, not the target's `.servo/`).
+Classification is deterministic (keyword/regex), so the dogfood fixtures
+below are stable and offline; no LLM or network call is involved.
 
 Test idiom mirrors `skills/quality-gate/test_gate.py`:
   - `unittest.TestCase` classes (collected by pytest),
@@ -358,7 +359,9 @@ class PlanOutputTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _out_dir(self) -> Path:
-        return self.target / ".servo" / "spec-oracles" / "099-demo"
+        # ADR-0023 (slice 019-02): the plan lives under the spec's own
+        # directory, not <target>/.servo/spec-oracles/<id>/.
+        return self.spec_path.parent / "oracle" / "099-demo"
 
     def test_exit_zero(self):
         self.assertEqual(
@@ -404,7 +407,9 @@ class PlanOutputTests(unittest.TestCase):
         target2.mkdir()
         res = _run_cli(target2, self.spec_path, "--spec-id", "custom-id")
         self.assertEqual(res.returncode, 0, res.stderr)
-        out = target2 / ".servo" / "spec-oracles" / "custom-id"
+        # The oracle dir is spec-relative (ADR-0023), so it lands beside the
+        # spec regardless of which target the CLI was pointed at.
+        out = self.spec_path.parent / "oracle" / "custom-id"
         self.assertTrue((out / "checks.json").exists())
         data = json.loads((out / "checks.json").read_text())
         self.assertEqual(data["spec_id"], "custom-id")
@@ -443,7 +448,7 @@ class ResidualJudgmentTests(unittest.TestCase):
         self.spec_path = _write_spec(
             self.root / "docs" / "specs", "099-demo", SLICE_SPEC)
         _run_cli(self.target, self.spec_path)
-        out = self.target / ".servo" / "spec-oracles" / "099-demo"
+        out = self.spec_path.parent / "oracle" / "099-demo"
         self.data = json.loads((out / "checks.json").read_text())
 
     def tearDown(self):
@@ -477,7 +482,9 @@ class ResidualJudgmentTests(unittest.TestCase):
 
 
 class NoTargetMutationTests(unittest.TestCase):
-    """AC5 — only `.servo/spec-oracles/<id>/` is created; nothing else."""
+    """AC5 (slice 006-01) / ADR-0023 (slice 019-02) — only the spec's own
+    `oracle/<id>/` dir is created; nothing else, and nothing under
+    `<target>/.servo/`."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -496,10 +503,14 @@ class NoTargetMutationTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_only_spec_oracle_dir_added(self):
-        before = _snapshot_tree(self.target)
+        # ADR-0023 (slice 019-02): the planner writes under the spec's own
+        # directory (docs/specs/099-demo/oracle/099-demo/), not
+        # <target>/.servo/spec-oracles/099-demo/. Snapshot the whole root
+        # (not just the target) since the spec dir now lives alongside it.
+        before = _snapshot_tree(self.root)
         res = _run_cli(self.target, self.spec_path)
         self.assertEqual(res.returncode, 0, res.stderr)
-        after = _snapshot_tree(self.target)
+        after = _snapshot_tree(self.root)
 
         # Every pre-existing file must be byte-identical afterwards.
         for path, content in before.items():
@@ -507,15 +518,24 @@ class NoTargetMutationTests(unittest.TestCase):
             self.assertEqual(after[path], content,
                              f"{path} was modified by the planner")
 
-        # Every newly-created path must live under the spec-oracle dir.
-        prefix = os.path.join(".servo", "spec-oracles", "099-demo")
+        # Every newly-created path must live under the spec's own oracle dir.
+        prefix = os.path.join("docs", "specs", "099-demo", "oracle", "099-demo")
         new_paths = set(after) - set(before)
         self.assertTrue(new_paths, "planner wrote nothing")
         for path in new_paths:
             self.assertTrue(
                 path.startswith(prefix),
-                f"planner wrote outside spec-oracle dir: {path}",
+                f"planner wrote outside the spec's oracle dir: {path}",
             )
+
+    def test_nothing_written_under_target_servo_dir(self):
+        # AC4 — `.servo/` gains no new spec-oracle artifacts.
+        before = _snapshot_tree(self.target / ".servo")
+        _run_cli(self.target, self.spec_path)
+        after = _snapshot_tree(self.target / ".servo")
+        self.assertEqual(before, after,
+                         "planner must not write under <target>/.servo/")
+        self.assertFalse((self.target / ".servo" / "spec-oracles").exists())
 
     def test_oracle_sh_untouched(self):
         original = (self.target / "oracle.sh").read_bytes()
@@ -533,6 +553,20 @@ class NoTargetMutationTests(unittest.TestCase):
         _run_cli(self.target, self.spec_path)
         self.assertEqual(self.spec_path.read_bytes(), original,
                          "planner must not rewrite the source spec")
+
+    def test_traversal_spec_id_refused_not_written_outside_spec_dir(self):
+        # ADR-0023 (slice 019-02) craft-review finding: --spec-id reaches
+        # oracle_dir_for_spec (the shared path helper) with no separate
+        # guard in the planner; the helper itself must reject a
+        # path-traversal-shaped id so `plan.mkdir(parents=True)` never
+        # escapes the spec's own oracle directory.
+        before = _snapshot_tree(self.root)
+        res = _run_cli(self.target, self.spec_path,
+                       "--spec-id", "../../../../tmp/evil")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        after = _snapshot_tree(self.root)
+        self.assertEqual(before, after,
+                         "a refused --spec-id must leave no trace on disk")
 
 
 # ===========================================================================
@@ -587,6 +621,11 @@ class DogfoodClassificationTests(unittest.TestCase):
             self.assertFalse(
                 list(root.rglob(".servo")),
                 "classify subcommand must not write artifacts",
+            )
+            # ADR-0023 (slice 019-02): nor the new spec-relative oracle dir.
+            self.assertFalse(
+                (spec_path.parent / "oracle").exists(),
+                "classify subcommand must not write the spec's oracle dir",
             )
 
 
@@ -699,6 +738,162 @@ class ACPreambleToleranceTests(unittest.TestCase):
             self.assertEqual(len(plan["checks"]), 0)
             self.assertEqual(len(plan["residual_judgment"]), 0)
             self.assertIn("0 acceptance criteria", buf.getvalue().lower())
+
+
+# ===========================================================================
+# Slice 019-03 — behavioral / negative-behavior AC recall
+# ===========================================================================
+
+
+class BehavioralNegativeACRecallTests(unittest.TestCase):
+    """AC1 — negative-behavior phrasing recognized as `command`-checkable
+    instead of falling through to `residual_judgment`.
+
+    Narrow, anchored patterns only (Assumption A1): "fails when/if", "is
+    excluded", "does NOT <verb>", "is never / never <verb>" — not bare
+    "not"/"never" anywhere in the statement.
+    """
+
+    def _family(self, statement: str) -> str:
+        return op.classify_one(
+            {"id": "x", "statement": statement, "source_line": 1})["family"]
+
+    def test_fails_when(self):
+        self.assertEqual(
+            self._family("The lint check fails when a stray console.log is left in."),
+            "command")
+
+    def test_fails_if(self):
+        self.assertEqual(
+            self._family("The build fails if the config file is missing."),
+            "command")
+
+    def test_is_excluded_from(self):
+        self.assertEqual(
+            self._family("The dev-only fixture is excluded from the release build."),
+            "command")
+
+    def test_is_excluded_bare(self):
+        self.assertEqual(
+            self._family("The vendored dependency is excluded."),
+            "command")
+
+    def test_is_excluded_does_not_collide_with_archive_inventory(self):
+        # Rule 5 (archive_inventory) triggers on "package" + "excludes" (verb
+        # form); "is excluded" (past participle) is a distinct token and must
+        # not be swept into archive_inventory just because "package" is also
+        # present in the statement.
+        self.assertEqual(
+            self._family(
+                "The dev-only fixture package is excluded from the release "
+                "build."),
+            "command")
+
+    def test_does_not_run(self):
+        self.assertEqual(
+            self._family("The deprecated migration does NOT run in CI anymore."),
+            "command")
+
+    def test_does_not_compile(self):
+        self.assertEqual(
+            self._family("The legacy module does not compile under the new target."),
+            "command")
+
+    def test_does_not_pass(self):
+        self.assertEqual(
+            self._family("The flaky test does not pass on a cold cache."),
+            "command")
+
+    def test_does_not_build(self):
+        self.assertEqual(
+            self._family("The removed widget does not build from the old branch."),
+            "command")
+
+    def test_is_never(self):
+        self.assertEqual(
+            self._family("The staging flag is never enabled in a production build."),
+            "command")
+
+    def test_never_happens(self):
+        self.assertEqual(
+            self._family("A duplicate submission never happens once the lock lands."),
+            "command")
+
+    def test_bare_not_does_not_trigger_family(self):
+        # Assumption A1 guard: bare "not" anywhere must NOT be a trigger — only
+        # the anchored phrasings above are. This statement has no other
+        # deterministic keyword, so it should stay residual_judgment.
+        self.assertEqual(
+            self._family("Zorblax the frobnicator is not particularly happy."),
+            "residual_judgment")
+
+    def test_bare_never_does_not_trigger_family(self):
+        # Same guard for "never" — anchored phrasing only.
+        self.assertEqual(
+            self._family("Zorblax the frobnicator never wibbles quietly."),
+            "residual_judgment")
+
+    def test_existing_family_precedence_preserved_file_presence(self):
+        # "does not exist" must still win file_presence, not the new family.
+        self.assertEqual(
+            self._family("The temp scratch file does not exist after cleanup."),
+            "file_presence")
+
+    def test_existing_family_precedence_preserved_text_invariant(self):
+        # "does not contain" must still win text_invariant, not the new family.
+        self.assertEqual(
+            self._family("The README does not contain the word TODO."),
+            "text_invariant")
+
+    def test_taste_language_still_forced_residual(self):
+        # classify_one's taste override must still win over the new family.
+        entry = op.classify_one({
+            "id": "x", "source_line": 1,
+            "statement": "The copy never feels awkward or fails to read well.",
+        })
+        self.assertEqual(entry["family"], "residual_judgment")
+
+
+# ===========================================================================
+# Slice 019-03 — dogfood-shaped behavioral AC fixture (AC4)
+# ===========================================================================
+
+# A servo-authored fixture matching the *pattern* of the dogfood's reported
+# behavioral/negative-phrasing ACs (spec 019 "Why this spec" + Bug 003's
+# record) — not a copy of any proprietary content.
+SPEC_DOGFOOD_BEHAVIORAL = """# Spec 900 — dogfood-shaped behavioral ACs
+
+## Slice 900-01 — behavioral-shape
+
+**Acceptance Criteria:**
+
+1. The lint check fails when a disallowed import is introduced.
+2. The dev-only fixture data is excluded from the packaged release.
+3. The removed legacy endpoint does NOT run after the migration.
+4. The retired feature flag is never enabled once the cleanup lands.
+"""
+
+
+class DogfoodBehavioralPatternTests(unittest.TestCase):
+    """AC4 — the dogfood's reported behavioral/negative-phrasing AC shape
+    classifies as `checks`, not `residual_judgment`, without hand promotion."""
+
+    def test_all_behavioral_acs_classify_as_checks(self):
+        acs = op.extract_acs(SPEC_DOGFOOD_BEHAVIORAL, spec_id="900-dogfood")
+        self.assertEqual(len(acs), 4)
+        classified = op.classify_acs(acs)
+        for entry in classified:
+            self.assertEqual(
+                entry["family"], "command",
+                f"{entry['id']} ({entry['statement']!r}) fell through to "
+                f"{entry['family']!r}")
+
+    def test_build_plan_has_zero_residual(self):
+        plan = op.build_plan(
+            SPEC_DOGFOOD_BEHAVIORAL, spec_id="900-dogfood",
+            source_spec_path="900-dogfood/spec.md", source_hash="sha256:test")
+        self.assertEqual(len(plan["checks"]), 4)
+        self.assertEqual(len(plan["residual_judgment"]), 0)
 
 
 if __name__ == "__main__":

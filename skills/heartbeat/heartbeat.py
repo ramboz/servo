@@ -212,6 +212,12 @@ HEARTBEAT_BRANCH_PREFIX = "servo/heartbeat/"
 # The post-provision `gate.py <worktree>` verification (AC4) is the completeness
 # self-check — an incomplete copy surfaces as a worktree `exit 2` and the
 # candidate is skipped, never silently mis-scored.
+#
+# Post-ADR-0023 (slice 019-02): this sidecar copy only matters for a
+# *legacy* `.servo/spec-oracles/<id>/` install. A colocated overlay lives
+# under the spec's own (git-tracked) `docs/specs/<spec>/oracle/<id>/`
+# directory, so `git worktree add`'s checkout already reproduces it — no
+# provisioning step needed for the new layout.
 _NON_PROVISIONED_SERVO_DIRS = frozenset({"runs", "races", TRIAGE_DIRNAME, DISPATCH_DIRNAME})
 
 # Sibling-skill resolution for the subprocessed `gate.py` / `loop.py` (never

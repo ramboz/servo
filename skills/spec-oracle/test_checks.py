@@ -1075,12 +1075,14 @@ class FreezeEnforcementTests(_TmpBase):
         res = self._run(cj, "--score-only")
         self.assertEqual(res.returncode, 2)
 
-    def test_source_changed_is_stale(self):
+    def test_source_changed_no_longer_stale(self):
+        # ADR-0022 / slice 019-01: the raw source-file hash no longer gates
+        # the freeze — only the parsed AC set (approved_content_hash) does.
         cj = self._setup_overlay(approval="approved", with_source=True)
         (self.base / "spec.md").write_text("# spec CHANGED\n")
         res = self._run(cj, "--score-only")
-        self.assertEqual(res.returncode, 2)
-        self.assertIn("stale", (res.stderr + res.stdout).lower())
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "1.0")
 
     def test_artifact_modified_refused(self):
         cj = self._setup_overlay(approval="approved")
@@ -1112,6 +1114,223 @@ class FreezeEnforcementTests(_TmpBase):
             capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertEqual(res.stdout.strip(), "1.0")
+
+
+# ===========================================================================
+# Slice 019-01 — freeze-parsed-acs (ADR-0022)
+# ===========================================================================
+
+
+class FreezeSurvivesLivingDocMutationTests(FreezeEnforcementTests):
+    """AC1 — a raw-byte mutation of the source spec (frontmatter rewrite,
+    appended deviation log) no longer trips ``spec_oracle_stale``; only the
+    parsed AC set (``approved_content_hash``) gates the freeze."""
+
+    def test_frontmatter_status_edit_survives_freeze(self):
+        cj = self._setup_overlay(approval="approved", with_source=True)
+        src = self.base / "spec.md"
+        src.write_text(src.read_text().replace("# spec\n", "status: DONE\n# spec\n"))
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "1.0")
+
+    def test_appended_deviation_log_survives_freeze(self):
+        cj = self._setup_overlay(approval="approved", with_source=True)
+        src = self.base / "spec.md"
+        with src.open("a") as fh:
+            fh.write("\n### Deviation log\nnone\n")
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "1.0")
+
+    def test_missing_source_file_does_not_stale(self):
+        cj = self._setup_overlay(approval="approved", with_source=True)
+        (self.base / "spec.md").unlink()
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "1.0")
+
+    def test_no_source_hash_fields_at_all_still_scores(self):
+        cj = self._setup_overlay(approval="approved", with_source=False)
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(res.stdout.strip(), "1.0")
+
+
+class FreezeStillCatchesACEditTests(FreezeEnforcementTests):
+    """AC2 — editing the *text* of an approved AC (or adding/removing one)
+    still trips ``spec_oracle_plan_modified`` via ``approved_content_hash``.
+    Regression guard on existing 006-04 behavior."""
+
+    def test_ac_statement_text_edit_trips_plan_modified(self):
+        cj = self._setup_overlay(approval="approved")
+        plan = json.loads(cj.read_text())
+        plan["checks"][0]["statement"] = "a materially different statement"
+        cj.write_text(json.dumps(plan))
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("modified", (res.stderr + res.stdout).lower())
+
+    def test_added_ac_trips_plan_modified(self):
+        cj = self._setup_overlay(approval="approved")
+        (self.base / "extra.txt").write_text("x")
+        plan = json.loads(cj.read_text())
+        plan["checks"].append({"id": "AC-2", "family": "file_presence",
+                               "path": "extra.txt"})
+        cj.write_text(json.dumps(plan))
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("modified", (res.stderr + res.stdout).lower())
+
+    def test_removed_ac_trips_plan_modified(self):
+        cj = self._setup_overlay(approval="approved")
+        plan = json.loads(cj.read_text())
+        plan["checks"] = []
+        cj.write_text(json.dumps(plan))
+        res = self._run(cj, "--score-only")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("modified", (res.stderr + res.stdout).lower())
+
+
+class PlanContentHashCanonicalizationTests(unittest.TestCase):
+    """AC3 — ``plan_content_hash`` is order-independent over ``checks`` /
+    ``residual_judgment`` and whitespace-normalizes each statement, so
+    reordering ACs or reformatting whitespace does not change the hash, while
+    an actual content edit still does."""
+
+    def _plan(self, checks=None, residual=None) -> dict:
+        return {"checks": checks or [], "residual_judgment": residual or []}
+
+    def test_reordered_checks_same_hash(self):
+        a = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a must exist"}
+        b = {"id": "AC-2", "family": "file_presence", "path": "b.txt",
+             "statement": "b must exist"}
+        h1 = ck.plan_content_hash(self._plan(checks=[a, b]))
+        h2 = ck.plan_content_hash(self._plan(checks=[b, a]))
+        self.assertEqual(h1, h2)
+
+    def test_reordered_residual_judgment_same_hash(self):
+        r1 = {"id": "AC-1", "statement": "first", "reason": "tone"}
+        r2 = {"id": "AC-2", "statement": "second", "reason": "taste"}
+        h1 = ck.plan_content_hash(self._plan(residual=[r1, r2]))
+        h2 = ck.plan_content_hash(self._plan(residual=[r2, r1]))
+        self.assertEqual(h1, h2)
+
+    def test_whitespace_reformatted_statement_same_hash(self):
+        a = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a  must   exist"}
+        b = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a must exist"}
+        h1 = ck.plan_content_hash(self._plan(checks=[a]))
+        h2 = ck.plan_content_hash(self._plan(checks=[b]))
+        self.assertEqual(h1, h2)
+
+    def test_leading_trailing_whitespace_stripped_same_hash(self):
+        a = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "  a must exist  \n"}
+        b = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a must exist"}
+        h1 = ck.plan_content_hash(self._plan(checks=[a]))
+        h2 = ck.plan_content_hash(self._plan(checks=[b]))
+        self.assertEqual(h1, h2)
+
+    def test_content_changed_statement_different_hash(self):
+        a = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a must exist"}
+        b = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a must definitely exist"}
+        h1 = ck.plan_content_hash(self._plan(checks=[a]))
+        h2 = ck.plan_content_hash(self._plan(checks=[b]))
+        self.assertNotEqual(h1, h2)
+
+    def test_added_check_different_hash(self):
+        a = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a must exist"}
+        b = {"id": "AC-2", "family": "file_presence", "path": "b.txt",
+             "statement": "b must exist"}
+        h1 = ck.plan_content_hash(self._plan(checks=[a]))
+        h2 = ck.plan_content_hash(self._plan(checks=[a, b]))
+        self.assertNotEqual(h1, h2)
+
+    def test_non_string_id_does_not_raise(self):
+        # A hand-edited checks.json could carry a non-string id; the sort key
+        # must coerce to str rather than raising from a mixed-type compare.
+        a = {"id": 1, "family": "file_presence", "path": "a.txt",
+             "statement": "a must exist"}
+        b = {"id": "AC-2", "family": "file_presence", "path": "b.txt",
+             "statement": "b must exist"}
+        h1 = ck.plan_content_hash(self._plan(checks=[a, b]))
+        h2 = ck.plan_content_hash(self._plan(checks=[b, a]))
+        self.assertEqual(h1, h2)
+
+
+class ApproveThenFreezeRoundTripTests(unittest.TestCase):
+    """AC4 — ``oracle_overlay.py::approve`` records ``approved_content_hash``
+    over the now-canonicalized ``plan_content_hash``, so a freshly-approved
+    plan is internally consistent with the freeze gate (no false-positive
+    ``spec_oracle_plan_modified`` immediately after approval), even when the
+    on-disk ``checks``/``residual_judgment`` order differs from approval-time
+    order or carries pure whitespace variance."""
+
+    def test_freshly_approved_plan_has_matching_hash(self):
+        a = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a must exist"}
+        b = {"id": "AC-2", "family": "file_presence", "path": "b.txt",
+             "statement": "b must exist"}
+        plan = {"checks": [a, b], "residual_judgment": []}
+        plan["approved_content_hash"] = ck.plan_content_hash(plan)
+        self.assertEqual(ck.plan_content_hash(plan), plan["approved_content_hash"])
+
+    def test_reordered_on_disk_plan_still_matches_approved_hash(self):
+        a = {"id": "AC-1", "family": "file_presence", "path": "a.txt",
+             "statement": "a must exist"}
+        b = {"id": "AC-2", "family": "file_presence", "path": "b.txt",
+             "statement": "b must exist"}
+        plan = {"checks": [a, b], "residual_judgment": []}
+        approved_hash = ck.plan_content_hash(plan)
+        # Simulate the on-disk plan later carrying a different item order
+        # (e.g. a re-numbering elsewhere in the spec) with unchanged content.
+        reordered = {"checks": [b, a], "residual_judgment": [],
+                     "approved_content_hash": approved_hash}
+        self.assertEqual(ck.plan_content_hash(reordered), approved_hash)
+
+    def test_approve_cli_round_trips_through_freeze_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            # A legacy pre-019-02 install (ADR-0023): artifacts under
+            # `.servo/spec-oracles/<id>/` rather than the spec's own oracle
+            # dir. `approve` finds it via the migration read-fallback (AC5) —
+            # `spec_dir` need not exist for this scenario.
+            oracle_dir = base / ".servo" / "spec-oracles" / "demo"
+            oracle_dir.mkdir(parents=True)
+            spec_dir = base / "docs" / "specs" / "demo"
+            (base / "present.txt").write_text("x")
+            plan = {
+                "schema_version": 1, "spec_id": "demo",
+                "checks": [{"id": "AC-1", "family": "file_presence",
+                            "path": "present.txt", "statement": "present"}],
+                "residual_judgment": [],
+                "approval_status": "draft",
+            }
+            (oracle_dir / "checks.json").write_text(json.dumps(plan))
+            (oracle_dir / "checks.py").write_text("# generated engine copy\n")
+            (oracle_dir / "oracle.sh.fragment").write_text(
+                "# SEED:start spec_oracle_demo\n# SEED:end spec_oracle_demo\n")
+
+            overlay_path = REPO_ROOT / "skills" / "spec-oracle" / "oracle_overlay.py"
+            res = subprocess.run(
+                [sys.executable, str(overlay_path), "approve", str(base),
+                 str(spec_dir), "demo"],
+                capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0, res.stderr)
+
+            score_res = subprocess.run(
+                [sys.executable, str(CHECKS_PY), str(oracle_dir / "checks.json"),
+                 "--base-dir", str(base), "--enforce-freeze", "--score-only"],
+                capture_output=True, text=True)
+            self.assertEqual(score_res.returncode, 0, score_res.stderr)
+            self.assertEqual(score_res.stdout.strip(), "1.0")
 
 
 if __name__ == "__main__":

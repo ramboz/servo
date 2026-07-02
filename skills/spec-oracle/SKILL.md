@@ -3,10 +3,10 @@ name: servo:spec-oracle
 description: |
   Compile a spec or slice into a reviewable, project-owned **evidence
   overlay**: map each acceptance criterion to a deterministic check family,
-  write a `plan.md` + `checks.json` under `.servo/spec-oracles/<id>/`, compile
-  the checks into an installable `oracle.sh` component, and freeze it behind an
-  explicit approval so an unattended loop can optimize against the spec's
-  promises instead of a hand-waved single judge.
+  write a `plan.md` + `checks.json` under the spec's own `oracle/<id>/`
+  directory, compile the checks into an installable `oracle.sh` component, and
+  freeze it behind an explicit approval so an unattended loop can optimize
+  against the spec's promises instead of a hand-waved single judge.
 
   Fire this skill when the user wants to:
 
@@ -71,10 +71,10 @@ Before generating anything, confirm:
 ## Workflow
 
 ```bash
-# 1. Plan — read the spec, classify ACs, write a reviewable plan. Read-only over
-#    the target except the spec-oracle dir.
+# 1. Plan — read the spec, classify ACs, write a reviewable plan beside it.
+#    Read-only over the target; writes only under the spec's own oracle dir.
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_plan.py" <target> <spec-path>
-#    → <target>/.servo/spec-oracles/<spec-id>/{plan.md,checks.json}
+#    → <spec-path's directory>/oracle/<spec-id>/{plan.md,checks.json}
 
 # 2. Review plan.md with the user. Deterministic checks are listed; residual
 #    judgment (taste / positioning / "good enough") is surfaced explicitly with
@@ -82,12 +82,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_plan.py" <target> <spec
 #    (command, path, expected, ...) into checks.json as needed.
 
 # 3. Install the overlay as an ordinary oracle.sh component (does not approve).
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" install <target> <spec-id>
+#    <spec-dir> is the spec's own directory (the parent of <spec-path>).
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" install <target> <spec-dir> <spec-id>
+#    By default the fragment references the shared checks.py (no per-overlay
+#    copy). Add --vendor-engine to copy checks.py alongside the plan for the
+#    documented clone-portability case (a Routine/CI without the servo plugin).
 
 # 4. Approve — ONLY on explicit user instruction. Runs each check's negative
 #    control where one is defined (proving it can fail), records source +
 #    artifact hashes, and flips approval_status to approved.
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" approve <target> <spec-id>
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" approve <target> <spec-dir> <spec-id>
 
 # 5. Run it — the overlay is now a normal component; score it with the gate or
 #    let the loop optimize against it.
@@ -96,6 +100,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/quality-gate/gate.py" <target> --json
 # Remove the component without deleting the plan/check artifacts:
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" uninstall <target> <spec-id>
 ```
+
+**Artifact location.** The durable artifacts (`plan.md`, `checks.json`,
+`oracle.sh.fragment`) live under the spec's own directory tree
+(`docs/specs/<spec>/oracle/<slice-id>/`), not `<target>/.servo/` —
+[ADR-0023](../../docs/decisions/adr-0023-colocate-durable-spec-oracle-artifacts.md)
+(slice 019-02). `.servo/` only ever holds run-scoped state. A target with a
+pre-019-02 `.servo/spec-oracles/<id>/` install keeps working via a soft
+read-fallback — no explicit migration step is required.
 
 ## No silent approval
 
@@ -116,6 +128,45 @@ Each AC is classified into one family (or surfaced as residual judgment):
 `archive_inventory` · `markdown_links` · `generated_artifact_command` ·
 `runtime_reference_scan` · `residual_judgment` (explicitly not deterministic in
 v1 — carries a reason + suggested review).
+
+## Shared AC grammar (canonical — slice 019-03)
+
+`oracle_plan.py`'s `extract_acs` + `_classify_family` is the **one** AC-parsing
+and classification pipeline in servo — `/servo:edd-suitability`'s
+`suitability.py` subprocess-delegates to `oracle_plan.py classify` rather than
+parsing ACs itself (see `skills/edd-suitability/SKILL.md`, which points back
+here). Documenting the grammar once, here, keeps both skills' authors and
+consumers aligned on exactly what parses and how it classifies.
+
+**Header shape.** A section opens on an `## Acceptance Criteria` heading (any
+`#` depth) or a bold pseudo-heading label (`**Acceptance Criteria:**`), and
+closes on the next real heading or bold pseudo-heading label — *except* a bold
+label appearing **before** any numbered item has been collected is tolerated
+as interstitial prose (a rationale note between the header and the list), not
+a section terminator (Bug 003). Only `1.`/`2.`/… numbered items inside an open
+section are extracted; a present-but-empty section (header found, zero items
+parsed) warns on stderr rather than silently returning 0 ACs.
+
+**Negative-behavior keyword families (slice 019-03).** Beyond the
+affirmative/structural families above, these anchored phrasings classify as
+`command`-checkable instead of falling through to `residual_judgment`:
+
+| Phrasing | Example |
+|---|---|
+| "X fails when/if Y" | "The lint check fails when a disallowed import is introduced." |
+| "X is excluded [from Y]" | "The dev-only fixture is excluded from the release build." |
+| "X does NOT run/compile/pass/build" | "The deprecated migration does not run in CI anymore." |
+| "X is never Y" / "X never happens" | "The staging flag is never enabled in a production build." |
+
+These are deliberately **narrow and anchored** — a bare "not" or "never"
+anywhere in a statement does *not* trigger the family; only the specific verb
+phrasings above do, so a genuinely `residual_judgment`-appropriate AC (taste,
+positioning) is not swept in as falsely deterministic.
+
+**Residual-judgment catch-all.** Anything matching no deterministic family, or
+carrying taste/positioning language ("tone", "appropriate", "reads well",
+"polished", …), is forced to `residual_judgment` with a `reason` and a
+`suggested_review` path — surfaced, never silently auto-passed.
 
 ## Worked examples
 
@@ -153,7 +204,7 @@ unless the overlay is approved and unmodified. The distinct refusal `reason`s:
 | `reason` | Meaning |
 |---|---|
 | `spec_oracle_unapproved` | `approval_status` is not `approved` (draft) |
-| `spec_oracle_stale` | the source spec changed since approval — re-plan |
+| `spec_oracle_stale` | `approval_status` is explicitly marked `stale` — re-plan |
 | `spec_oracle_artifact_modified` | generated `checks.py` / `oracle.sh.fragment` was edited |
 | `spec_oracle_plan_modified` | the approved checks in `checks.json` were relaxed |
 

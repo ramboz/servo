@@ -153,7 +153,7 @@ bash scripts/verify_install_surfaces.sh
 
 ## The scaffolded `oracle.sh`
 
-`oracle.sh` is a thin bash driver around a list of **components**. Each component is a function that scores its slice of project quality in `[0.0, 1.0]`; the driver computes a weighted average and gates it against `THRESHOLD`.
+`oracle.sh` is a thin bash driver around a list of **components**. Each component is a function that scores its slice of project quality in `[0.0, 1.0]`; the driver compares that score directly against `THRESHOLD` for the common single-component case, or computes a weighted average across components when two or more are registered.
 
 ### Adding a component
 
