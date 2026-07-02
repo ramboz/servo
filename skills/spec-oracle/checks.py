@@ -807,18 +807,43 @@ def exit_code_for(summary: dict) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Freeze controls (slice 006-04). Optional, enabled by --enforce-freeze — the
-# generated oracle component runs with it on, so an unattended loop can only
-# score an overlay that is approved, source-faithful, and unmodified.
+# Freeze controls (slice 006-04, refined 019-01/ADR-0022). Optional, enabled
+# by --enforce-freeze — the generated oracle component runs with it on, so an
+# unattended loop can only score an overlay that is approved, has an
+# unmodified AC set, and unmodified generated artifacts.
 # ---------------------------------------------------------------------------
 
 def _sha256_file(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _canonicalize_ac_item(item: dict) -> dict:
+    """Normalize an AC item's ``statement`` whitespace (ADR-0022): collapse
+    runs of whitespace and strip leading/trailing, so a pure reformat of the
+    source prose does not change the hash."""
+    if "statement" not in item or not isinstance(item["statement"], str):
+        return item
+    return {**item, "statement": " ".join(item["statement"].split())}
+
+
+def _ac_sort_key(item: dict) -> str:
+    """Stable, order-independent sort key over an AC item's ``id`` (of shape
+    ``AC-<scope>-<n>``). Sorting by the id string is sufficient to make the
+    hash independent of file order; it need not sort numerically. Coerced to
+    ``str`` so a hand-edited ``checks.json`` with a non-string ``id`` sorts
+    instead of raising from a mixed-type comparison."""
+    return str(item.get("id", ""))
+
+
 def plan_content_hash(plan: dict) -> str:
     """Hash the *evidence content* of a plan — its ``checks`` and
     ``residual_judgment`` — excluding the mutable approval/provenance fields.
+
+    Canonicalized per ADR-0022 (slice 019-01): the ``checks`` and
+    ``residual_judgment`` lists are sorted by a stable key and each item's
+    ``statement`` whitespace is normalized before hashing, so re-ordering ACs
+    or reformatting whitespace does not change the hash — only an actual
+    content edit does.
 
     A tripwire: relaxing, weakening, or deleting a check after approval changes
     this hash, so the freeze gate refuses. It is NOT adversary-proof — a runner
@@ -828,9 +853,13 @@ def plan_content_hash(plan: dict) -> str:
     runner.md constraint (AC5) and the human approval flow, per ADR-0001's
     filesystem-only trust model. This catches honest drift, like the other
     freeze hashes."""
+    checks = sorted((_canonicalize_ac_item(c) for c in plan.get("checks", [])),
+                    key=_ac_sort_key)
+    residual = sorted(
+        (_canonicalize_ac_item(r) for r in plan.get("residual_judgment", [])),
+        key=_ac_sort_key)
     payload = json.dumps(
-        {"checks": plan.get("checks", []),
-         "residual_judgment": plan.get("residual_judgment", [])},
+        {"checks": checks, "residual_judgment": residual},
         sort_keys=True, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -839,9 +868,15 @@ def freeze_violation(plan: dict, checks_json_path: Path,
                      base_dir: Path) -> Optional[tuple]:
     """Return ``(reason, message)`` if the overlay must be refused, else None.
 
-    Checks, in order: approval state (AC1), source-spec hash (AC2), then
-    generated-artifact hashes (AC3). All violations map to env error (exit 2)
+    Checks, in order: approval state (AC1), generated-artifact hashes (AC3),
+    then the parsed-AC content hash. All violations map to env error (exit 2)
     — the loud "refuse to score" signal — with a distinct ``reason``.
+
+    ADR-0022 (slice 019-01): freezing is against the *parsed AC set*
+    (``approved_content_hash``, below), not the raw source-spec file — a
+    living-document consumer may mutate the source file's bytes (frontmatter,
+    appended prose) across a spec's lifecycle without tripping staleness, as
+    long as the parsed ACs themselves are unchanged.
     """
     status = plan.get("approval_status", "draft")
     if status == "stale":
@@ -851,19 +886,6 @@ def freeze_violation(plan: dict, checks_json_path: Path,
         return ("spec_oracle_unapproved",
                 f"spec-oracle not approved (status={status!r}); "
                 f"approve it before unattended use")
-
-    # AC2 — source spec must hash to what was recorded at plan time.
-    source_path = plan.get("source_spec_path")
-    source_hash = plan.get("source_hash")
-    if source_path and source_hash:
-        src = base_dir / source_path
-        if not src.is_file():
-            return ("spec_oracle_stale",
-                    f"source spec missing: {source_path}; re-plan")
-        if _sha256_file(src) != source_hash:
-            return ("spec_oracle_stale",
-                    f"source spec changed since approval ({source_path}); "
-                    f"re-plan and re-approve")
 
     # AC3 — approved generated artifacts must be byte-identical.
     for name, expected in (plan.get("approved_artifacts") or {}).items():

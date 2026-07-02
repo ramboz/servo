@@ -153,7 +153,7 @@ unless the overlay is approved and unmodified. The distinct refusal `reason`s:
 | `reason` | Meaning |
 |---|---|
 | `spec_oracle_unapproved` | `approval_status` is not `approved` (draft) |
-| `spec_oracle_stale` | the source spec changed since approval — re-plan |
+| `spec_oracle_stale` | `approval_status` is explicitly marked `stale` — re-plan |
 | `spec_oracle_artifact_modified` | generated `checks.py` / `oracle.sh.fragment` was edited |
 | `spec_oracle_plan_modified` | the approved checks in `checks.json` were relaxed |
 

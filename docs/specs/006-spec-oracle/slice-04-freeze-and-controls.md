@@ -119,5 +119,21 @@ the material `checks.json`-integrity gap was closed with the `approved_content_h
 tripwire; the remaining (inherently un-closeable in a filesystem-only model)
 limits are disclosed in the threat model rather than hidden.
 
+## Amendments
+
+- **2026-07-02 (spec 019-01 / ADR-0022):** the "source-spec hash checks" this
+  slice's Goal/AC1 describe were **removed** from `checks.py --enforce-freeze`
+  — the runtime freeze gate now compares only the parsed AC set
+  (`approved_content_hash`), not a live hash of the raw source-spec file. The
+  one-time `approve()` source-hash check (this slice's AC2, at approval time
+  only) is unchanged. Rationale: a living-document spec consumer (jig)
+  mutates the source file's bytes on every lifecycle transition without
+  changing any AC, which made `--enforce-freeze` trip `spec_oracle_stale` on
+  every transition. See [ADR-0022](../../decisions/adr-0022-freeze-against-parsed-acs.md)
+  and [spec 019-01](../019-compile-core-simplification/slice-01-freeze-parsed-acs.md).
+  This record is preserved as historical fact for what 006-04 originally
+  shipped; it no longer describes `--enforce-freeze`'s current behavior for
+  the source-hash portion.
+
 ---
 
