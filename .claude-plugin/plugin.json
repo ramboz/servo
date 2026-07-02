@@ -1,7 +1,7 @@
 {
   "name": "servo",
   "description": "Closed-loop scaffolder for unattended agent operations: oracle scoring, headless agent loops, hooks, and worktree races — tailored to each project's signals.",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "author": {
     "name": "ramboz"
   }

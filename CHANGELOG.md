@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.2](https://github.com/ramboz/servo/compare/v0.5.1...v0.5.2) (2026-07-02)
+
+
+### Documentation
+
+* **bugs:** file bugs 001-003 from external dogfood ([e513aa5](https://github.com/ramboz/servo/commit/e513aa5e9cbaab88b29fd8dde26490d6d015adff))
+* **decisions:** propose ADR-0021/0022/0023 from external dogfood ([676549f](https://github.com/ramboz/servo/commit/676549f39944cd39222182f6b345a26215737f1b))
+* **specs:** draft spec 019 compile-core-simplification ([b6bb055](https://github.com/ramboz/servo/commit/b6bb055e962cdaf6327c3d8efef6136ab1ab5fcd))
+
 ## [0.5.1](https://github.com/ramboz/servo/compare/v0.5.0...v0.5.1) (2026-07-01)
 
 
