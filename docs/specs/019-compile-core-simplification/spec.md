@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
-dependencies: [001, 002, 003, 006, 015, adr-0021, adr-0022, adr-0023]
-last_verified:
+status: DONE
+dependencies: [001-05, 002-05, 003-08, 006-05, 015-04, adr-0021, adr-0022, adr-0023]
+last_verified: 2026-07-02
 ---
 
 # Spec 019 — compile-core-simplification
@@ -13,13 +13,15 @@ last_verified:
 > (freeze against parsed ACs), and [ADR-0023](../../decisions/adr-0023-colocate-durable-spec-oracle-artifacts.md)
 > (co-locate durable artifacts), plus the pure refactors those findings exposed.
 
-> **Status: SPIDR-split (2026-07-02).** All three ADRs are now Accepted. The
-> five vertical slices below have been split into `slice-NN-*.md` files
-> (`docs/specs/019-compile-core-simplification/slice-01..05-*.md`) — this
-> `spec.md` overview retains the original goals/notes as an index; each slice
-> file carries the authoritative ACs, DoR, and grounded implementation notes.
-> Closely related open items are already tracked in `docs/refinement-todo.md`
-> (this repo) and the cwv-workbench dogfood memo.
+> **Status: DONE (2026-07-02).** All three ADRs are Accepted and all five
+> vertical slices (`slice-01..05-*.md` under this directory) are DONE —
+> reviewed (compliance + craft + arch where flagged) and reconciled. This
+> `spec.md` overview retains the original goals/notes as an index; each
+> slice file carries the authoritative ACs, DoR, deviation log, and
+> reconciliation sweep. Two follow-ups surfaced during implementation are
+> tracked in `docs/refinement-todo.md`: execution-planner's (spec 016)
+> still-legacy artifact path, and the freeze gate's unhashed
+> referenced-engine version-skew gap.
 
 ## Why this spec
 
