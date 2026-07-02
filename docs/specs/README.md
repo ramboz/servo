@@ -32,6 +32,7 @@
 - **[012-design-eval](012-design-eval/spec.md)** — DRAFT. Phase 2 (Compile): frozen UI design-fidelity eval component ([ADR-0009](../decisions/adr-0009-design-fidelity-eval-recipe.md)).
 - **[017-evaluation-intelligence](017-evaluation-intelligence/spec.md)** — DRAFT (parked). Phase 3: convergence / oracle-debug / adaptive-planning / explainability / cost umbrella.
 - **[018-continuous-evaluation](018-continuous-evaluation/spec.md)** — DRAFT (parked). Phase 4: repo monitoring / auto-recompilation / regression execution (extends 011).
+- **[019-compile-core-simplification](019-compile-core-simplification/spec.md)** — DRAFT (proposed). Simplify + decouple the Compile core from external dogfood findings: freeze against parsed ACs ([ADR-0022](../decisions/adr-0022-freeze-against-parsed-acs.md)), co-locate artifacts + de-dup `checks.py` ([ADR-0023](../decisions/adr-0023-colocate-durable-spec-oracle-artifacts.md)), unify AC analysis, oracle-first agent-loop ([ADR-0021](../decisions/adr-0021-oracle-first-agent-loop-optional-consumer.md)).
 
 ## Active specs
 
@@ -105,12 +106,12 @@
 
 | Spec | Slice | Resolution trigger |
 |------|-------|--------------------|
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-01 — residual-triage | A real `residual_judgment` AC a human wants scored |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-02 — rubric-shaping | 008-01 DONE |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-03 — reference-set | 008-02 DONE |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-04 — frozen-params-and-emit | 008-01..03 DONE |
-| [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | Resume after 013-01 lands and a real caller needs loop-level phase hints, such as a Codex adapter, a Claude Routine, or a jig generated workflow prompt |
-| [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | Resume when a second design-eval consumer appears, or when heartbeat dispatch starts using host-native phase guidance for real scheduled work |
-| [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume | 016-01 DONE + first real Compile→Run reads the plan |
-| [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review | 016-02 DONE (a read-seam exists to clamp) |
-| [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface | 016-01..03 DONE |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-01 — residual-triage |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-02 — rubric-shaping |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-03 — reference-set |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-04 — frozen-params-and-emit |  |
+| [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | Resume after 013-01 lands and a real caller needs |
+| [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | Resume when a second design-eval consumer appears, or |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume |  |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review |  |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface |  |
