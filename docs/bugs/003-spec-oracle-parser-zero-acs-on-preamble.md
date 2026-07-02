@@ -91,7 +91,10 @@ Known narrow tradeoff: a *genuinely empty* AC section immediately followed by
 another bold-label section (before any AC item) could now sweep that section's
 list. This is a malformed spec (zero criteria) and rare; the warning is the
 backstop for the truly-empty case (opener → heading/EOF). The deeper unification
-of the suitability + spec-oracle AC grammar is spec 019-03 (ADR-0022 family).
+of the suitability + spec-oracle AC grammar is spec 019-03 (part of the spec
+019 "compile-core-simplification" umbrella; not itself an ADR-0022 concern —
+019-03 is the AC-classification-recall slice, 019-01 is the one that
+implements ADR-0022's freeze-against-parsed-ACs decision).
 
 ## Already tried
 
@@ -118,6 +121,11 @@ RED proven against a `git checkout`-restored pre-fix `oracle_plan.py`
 The AC-section grammar is an interface between the spec author (jig) and servo's
 parser; small authoring variations (a rationale note) should not silently zero
 the oracle. Consider a documented, shared AC grammar.
+
+The "documented, shared AC grammar" this bug called for is
+[spec 019 slice 019-03](../specs/019-compile-core-simplification/slice-03-behavioral-ac-recall.md),
+which adds the negative-behavior/behavioral-phrasing recall families and
+documents the grammar in `skills/spec-oracle/SKILL.md`.
 
 ## Main recheck
 

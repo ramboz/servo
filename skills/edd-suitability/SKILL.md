@@ -73,6 +73,14 @@ target, and is **not** vendored into a scaffolded target's unattended runtime
 sibling present; in the plugin that is the adjacent skill, or point
 `SERVO_SUITABILITY_ORACLE_PLAN` at a copy.
 
+**Shared AC grammar.** `suitability.py::_classify` subprocess-delegates to
+`oracle_plan.py classify` for AC extraction/classification — there is **one**
+AC-parsing pipeline in servo, not two (slice 019-03). The grammar (header
+shape, tolerated preamble, negative-behavior keyword families, the
+`residual_judgment` catch-all) is documented once, canonically, in
+[`skills/spec-oracle/SKILL.md`](../spec-oracle/SKILL.md#shared-ac-grammar-canonical--slice-019-03) —
+this skill consumes that same classification rather than re-parsing ACs.
+
 ## Q&A before analyzing
 
 Before running, confirm:

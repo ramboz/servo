@@ -129,6 +129,45 @@ Each AC is classified into one family (or surfaced as residual judgment):
 `runtime_reference_scan` · `residual_judgment` (explicitly not deterministic in
 v1 — carries a reason + suggested review).
 
+## Shared AC grammar (canonical — slice 019-03)
+
+`oracle_plan.py`'s `extract_acs` + `_classify_family` is the **one** AC-parsing
+and classification pipeline in servo — `/servo:edd-suitability`'s
+`suitability.py` subprocess-delegates to `oracle_plan.py classify` rather than
+parsing ACs itself (see `skills/edd-suitability/SKILL.md`, which points back
+here). Documenting the grammar once, here, keeps both skills' authors and
+consumers aligned on exactly what parses and how it classifies.
+
+**Header shape.** A section opens on an `## Acceptance Criteria` heading (any
+`#` depth) or a bold pseudo-heading label (`**Acceptance Criteria:**`), and
+closes on the next real heading or bold pseudo-heading label — *except* a bold
+label appearing **before** any numbered item has been collected is tolerated
+as interstitial prose (a rationale note between the header and the list), not
+a section terminator (Bug 003). Only `1.`/`2.`/… numbered items inside an open
+section are extracted; a present-but-empty section (header found, zero items
+parsed) warns on stderr rather than silently returning 0 ACs.
+
+**Negative-behavior keyword families (slice 019-03).** Beyond the
+affirmative/structural families above, these anchored phrasings classify as
+`command`-checkable instead of falling through to `residual_judgment`:
+
+| Phrasing | Example |
+|---|---|
+| "X fails when/if Y" | "The lint check fails when a disallowed import is introduced." |
+| "X is excluded [from Y]" | "The dev-only fixture is excluded from the release build." |
+| "X does NOT run/compile/pass/build" | "The deprecated migration does not run in CI anymore." |
+| "X is never Y" / "X never happens" | "The staging flag is never enabled in a production build." |
+
+These are deliberately **narrow and anchored** — a bare "not" or "never"
+anywhere in a statement does *not* trigger the family; only the specific verb
+phrasings above do, so a genuinely `residual_judgment`-appropriate AC (taste,
+positioning) is not swept in as falsely deterministic.
+
+**Residual-judgment catch-all.** Anything matching no deterministic family, or
+carrying taste/positioning language ("tone", "appropriate", "reads well",
+"polished", …), is forced to `residual_judgment` with a `reason` and a
+`suggested_review` path — surfaced, never silently auto-passed.
+
 ## Worked examples
 
 Two committed dogfood fixtures under `examples/`, shaped like jig's

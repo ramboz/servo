@@ -740,5 +740,161 @@ class ACPreambleToleranceTests(unittest.TestCase):
             self.assertIn("0 acceptance criteria", buf.getvalue().lower())
 
 
+# ===========================================================================
+# Slice 019-03 — behavioral / negative-behavior AC recall
+# ===========================================================================
+
+
+class BehavioralNegativeACRecallTests(unittest.TestCase):
+    """AC1 — negative-behavior phrasing recognized as `command`-checkable
+    instead of falling through to `residual_judgment`.
+
+    Narrow, anchored patterns only (Assumption A1): "fails when/if", "is
+    excluded", "does NOT <verb>", "is never / never <verb>" — not bare
+    "not"/"never" anywhere in the statement.
+    """
+
+    def _family(self, statement: str) -> str:
+        return op.classify_one(
+            {"id": "x", "statement": statement, "source_line": 1})["family"]
+
+    def test_fails_when(self):
+        self.assertEqual(
+            self._family("The lint check fails when a stray console.log is left in."),
+            "command")
+
+    def test_fails_if(self):
+        self.assertEqual(
+            self._family("The build fails if the config file is missing."),
+            "command")
+
+    def test_is_excluded_from(self):
+        self.assertEqual(
+            self._family("The dev-only fixture is excluded from the release build."),
+            "command")
+
+    def test_is_excluded_bare(self):
+        self.assertEqual(
+            self._family("The vendored dependency is excluded."),
+            "command")
+
+    def test_is_excluded_does_not_collide_with_archive_inventory(self):
+        # Rule 5 (archive_inventory) triggers on "package" + "excludes" (verb
+        # form); "is excluded" (past participle) is a distinct token and must
+        # not be swept into archive_inventory just because "package" is also
+        # present in the statement.
+        self.assertEqual(
+            self._family(
+                "The dev-only fixture package is excluded from the release "
+                "build."),
+            "command")
+
+    def test_does_not_run(self):
+        self.assertEqual(
+            self._family("The deprecated migration does NOT run in CI anymore."),
+            "command")
+
+    def test_does_not_compile(self):
+        self.assertEqual(
+            self._family("The legacy module does not compile under the new target."),
+            "command")
+
+    def test_does_not_pass(self):
+        self.assertEqual(
+            self._family("The flaky test does not pass on a cold cache."),
+            "command")
+
+    def test_does_not_build(self):
+        self.assertEqual(
+            self._family("The removed widget does not build from the old branch."),
+            "command")
+
+    def test_is_never(self):
+        self.assertEqual(
+            self._family("The staging flag is never enabled in a production build."),
+            "command")
+
+    def test_never_happens(self):
+        self.assertEqual(
+            self._family("A duplicate submission never happens once the lock lands."),
+            "command")
+
+    def test_bare_not_does_not_trigger_family(self):
+        # Assumption A1 guard: bare "not" anywhere must NOT be a trigger — only
+        # the anchored phrasings above are. This statement has no other
+        # deterministic keyword, so it should stay residual_judgment.
+        self.assertEqual(
+            self._family("Zorblax the frobnicator is not particularly happy."),
+            "residual_judgment")
+
+    def test_bare_never_does_not_trigger_family(self):
+        # Same guard for "never" — anchored phrasing only.
+        self.assertEqual(
+            self._family("Zorblax the frobnicator never wibbles quietly."),
+            "residual_judgment")
+
+    def test_existing_family_precedence_preserved_file_presence(self):
+        # "does not exist" must still win file_presence, not the new family.
+        self.assertEqual(
+            self._family("The temp scratch file does not exist after cleanup."),
+            "file_presence")
+
+    def test_existing_family_precedence_preserved_text_invariant(self):
+        # "does not contain" must still win text_invariant, not the new family.
+        self.assertEqual(
+            self._family("The README does not contain the word TODO."),
+            "text_invariant")
+
+    def test_taste_language_still_forced_residual(self):
+        # classify_one's taste override must still win over the new family.
+        entry = op.classify_one({
+            "id": "x", "source_line": 1,
+            "statement": "The copy never feels awkward or fails to read well.",
+        })
+        self.assertEqual(entry["family"], "residual_judgment")
+
+
+# ===========================================================================
+# Slice 019-03 — dogfood-shaped behavioral AC fixture (AC4)
+# ===========================================================================
+
+# A servo-authored fixture matching the *pattern* of the dogfood's reported
+# behavioral/negative-phrasing ACs (spec 019 "Why this spec" + Bug 003's
+# record) — not a copy of any proprietary content.
+SPEC_DOGFOOD_BEHAVIORAL = """# Spec 900 — dogfood-shaped behavioral ACs
+
+## Slice 900-01 — behavioral-shape
+
+**Acceptance Criteria:**
+
+1. The lint check fails when a disallowed import is introduced.
+2. The dev-only fixture data is excluded from the packaged release.
+3. The removed legacy endpoint does NOT run after the migration.
+4. The retired feature flag is never enabled once the cleanup lands.
+"""
+
+
+class DogfoodBehavioralPatternTests(unittest.TestCase):
+    """AC4 — the dogfood's reported behavioral/negative-phrasing AC shape
+    classifies as `checks`, not `residual_judgment`, without hand promotion."""
+
+    def test_all_behavioral_acs_classify_as_checks(self):
+        acs = op.extract_acs(SPEC_DOGFOOD_BEHAVIORAL, spec_id="900-dogfood")
+        self.assertEqual(len(acs), 4)
+        classified = op.classify_acs(acs)
+        for entry in classified:
+            self.assertEqual(
+                entry["family"], "command",
+                f"{entry['id']} ({entry['statement']!r}) fell through to "
+                f"{entry['family']!r}")
+
+    def test_build_plan_has_zero_residual(self):
+        plan = op.build_plan(
+            SPEC_DOGFOOD_BEHAVIORAL, spec_id="900-dogfood",
+            source_spec_path="900-dogfood/spec.md", source_hash="sha256:test")
+        self.assertEqual(len(plan["checks"]), 4)
+        self.assertEqual(len(plan["residual_judgment"]), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

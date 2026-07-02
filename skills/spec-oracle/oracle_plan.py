@@ -364,6 +364,26 @@ def _classify_family(statement: str) -> str:
                      or _has_word(t, "0", "zero")))):
         return "command"
 
+    # 7b. command (negative-behavior / behavioral phrasing, slice 019-03).
+    #     "the lint fails when/if X", "X is excluded [from Y]", "X does NOT
+    #     run/compile/pass/build", "X is never Y" / "X never happens". A
+    #     concrete command/assertion still needs to be authored later (this
+    #     rule is about classification recall, not new check primitives) —
+    #     `command` is the closest-fitting existing family. Deliberately
+    #     narrow and anchored (Assumption A1): bare "not"/"never" anywhere in
+    #     the statement must NOT trigger this — only these specific verb
+    #     phrasings do, so a genuinely residual-judgment AC that merely
+    #     contains "not" elsewhere isn't swept in. Placed after the more
+    #     specific structural families (1-6) and the affirmative `command`
+    #     rule above, and *before* `text_invariant`, so an AC already caught
+    #     by "does not exist" (file_presence) or "does not contain"
+    #     (text_invariant) keeps its existing classification (checked first).
+    if (_has(t, "fails when", "fails if")
+            or _has(t, "is excluded")
+            or re.search(r"\bdoes\s+not\s+(run|compile|pass|build)\b", t)
+            or _has(t, "is never", "never happens")):
+        return "command"
+
     # 8. text_invariant — text contains / does not contain a string. Placed
     #    near the end so the structural families above win on overlap.
     #    ("containing" is matched as well as "contains" — "a fragment
