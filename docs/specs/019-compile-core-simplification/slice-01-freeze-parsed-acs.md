@@ -1,5 +1,5 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [006-05, adr-0022]
 last_verified: 2026-07-02
 ---

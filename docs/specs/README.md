@@ -98,7 +98,7 @@
 | [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume | DEFERRED |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review | DEFERRED |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface | DEFERRED |  |
-| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-01 — freeze-parsed-acs | RECONCILED |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-01 — freeze-parsed-acs | **DONE** |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-02 — colocate-artifacts | DRAFT |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-03 — behavioral-ac-recall | DRAFT |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-04 — oracle-as-a-service-docs | **DONE** |  |
