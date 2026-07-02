@@ -1,5 +1,5 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [001-05, 002-05]
 last_verified: 2026-07-02
 frame_review: true
