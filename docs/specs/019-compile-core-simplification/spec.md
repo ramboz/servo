@@ -1,6 +1,6 @@
 ---
 status: DRAFT
-dependencies: [006, 003]
+dependencies: [001, 002, 003, 006, 015, adr-0021, adr-0022, adr-0023]
 last_verified:
 ---
 
@@ -13,10 +13,13 @@ last_verified:
 > (freeze against parsed ACs), and [ADR-0023](../../decisions/adr-0023-colocate-durable-spec-oracle-artifacts.md)
 > (co-locate durable artifacts), plus the pure refactors those findings exposed.
 
-> **Status: DRAFT — proposed from external findings, not yet SPIDR-split.** The
-> vertical slices below carry acceptance criteria; split into `slice-NN-*.md`
-> files once prioritized. Closely related open items are already tracked in
-> `docs/refinement-todo.md` (this repo) and the cwv-workbench dogfood memo.
+> **Status: SPIDR-split (2026-07-02).** All three ADRs are now Accepted. The
+> five vertical slices below have been split into `slice-NN-*.md` files
+> (`docs/specs/019-compile-core-simplification/slice-01..05-*.md`) — this
+> `spec.md` overview retains the original goals/notes as an index; each slice
+> file carries the authoritative ACs, DoR, and grounded implementation notes.
+> Closely related open items are already tracked in `docs/refinement-todo.md`
+> (this repo) and the cwv-workbench dogfood memo.
 
 ## Why this spec
 
