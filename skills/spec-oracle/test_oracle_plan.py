@@ -7,9 +7,10 @@ or via pytest:
     uvx pytest skills/spec-oracle/test_oracle_plan.py -q
 
 The planner is read-only over the *source spec* and writes only under
-`<target>/.servo/spec-oracles/<spec-id>/`. Classification is deterministic
-(keyword/regex), so the dogfood fixtures below are stable and offline; no
-LLM or network call is involved.
+`<spec_path.parent>/oracle/<spec-id>/` (ADR-0023, slice 019-02 — resolved
+relative to the spec's own directory, not the target's `.servo/`).
+Classification is deterministic (keyword/regex), so the dogfood fixtures
+below are stable and offline; no LLM or network call is involved.
 
 Test idiom mirrors `skills/quality-gate/test_gate.py`:
   - `unittest.TestCase` classes (collected by pytest),
@@ -358,7 +359,9 @@ class PlanOutputTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def _out_dir(self) -> Path:
-        return self.target / ".servo" / "spec-oracles" / "099-demo"
+        # ADR-0023 (slice 019-02): the plan lives under the spec's own
+        # directory, not <target>/.servo/spec-oracles/<id>/.
+        return self.spec_path.parent / "oracle" / "099-demo"
 
     def test_exit_zero(self):
         self.assertEqual(
@@ -404,7 +407,9 @@ class PlanOutputTests(unittest.TestCase):
         target2.mkdir()
         res = _run_cli(target2, self.spec_path, "--spec-id", "custom-id")
         self.assertEqual(res.returncode, 0, res.stderr)
-        out = target2 / ".servo" / "spec-oracles" / "custom-id"
+        # The oracle dir is spec-relative (ADR-0023), so it lands beside the
+        # spec regardless of which target the CLI was pointed at.
+        out = self.spec_path.parent / "oracle" / "custom-id"
         self.assertTrue((out / "checks.json").exists())
         data = json.loads((out / "checks.json").read_text())
         self.assertEqual(data["spec_id"], "custom-id")
@@ -443,7 +448,7 @@ class ResidualJudgmentTests(unittest.TestCase):
         self.spec_path = _write_spec(
             self.root / "docs" / "specs", "099-demo", SLICE_SPEC)
         _run_cli(self.target, self.spec_path)
-        out = self.target / ".servo" / "spec-oracles" / "099-demo"
+        out = self.spec_path.parent / "oracle" / "099-demo"
         self.data = json.loads((out / "checks.json").read_text())
 
     def tearDown(self):
@@ -477,7 +482,9 @@ class ResidualJudgmentTests(unittest.TestCase):
 
 
 class NoTargetMutationTests(unittest.TestCase):
-    """AC5 — only `.servo/spec-oracles/<id>/` is created; nothing else."""
+    """AC5 (slice 006-01) / ADR-0023 (slice 019-02) — only the spec's own
+    `oracle/<id>/` dir is created; nothing else, and nothing under
+    `<target>/.servo/`."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -496,10 +503,14 @@ class NoTargetMutationTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_only_spec_oracle_dir_added(self):
-        before = _snapshot_tree(self.target)
+        # ADR-0023 (slice 019-02): the planner writes under the spec's own
+        # directory (docs/specs/099-demo/oracle/099-demo/), not
+        # <target>/.servo/spec-oracles/099-demo/. Snapshot the whole root
+        # (not just the target) since the spec dir now lives alongside it.
+        before = _snapshot_tree(self.root)
         res = _run_cli(self.target, self.spec_path)
         self.assertEqual(res.returncode, 0, res.stderr)
-        after = _snapshot_tree(self.target)
+        after = _snapshot_tree(self.root)
 
         # Every pre-existing file must be byte-identical afterwards.
         for path, content in before.items():
@@ -507,15 +518,24 @@ class NoTargetMutationTests(unittest.TestCase):
             self.assertEqual(after[path], content,
                              f"{path} was modified by the planner")
 
-        # Every newly-created path must live under the spec-oracle dir.
-        prefix = os.path.join(".servo", "spec-oracles", "099-demo")
+        # Every newly-created path must live under the spec's own oracle dir.
+        prefix = os.path.join("docs", "specs", "099-demo", "oracle", "099-demo")
         new_paths = set(after) - set(before)
         self.assertTrue(new_paths, "planner wrote nothing")
         for path in new_paths:
             self.assertTrue(
                 path.startswith(prefix),
-                f"planner wrote outside spec-oracle dir: {path}",
+                f"planner wrote outside the spec's oracle dir: {path}",
             )
+
+    def test_nothing_written_under_target_servo_dir(self):
+        # AC4 — `.servo/` gains no new spec-oracle artifacts.
+        before = _snapshot_tree(self.target / ".servo")
+        _run_cli(self.target, self.spec_path)
+        after = _snapshot_tree(self.target / ".servo")
+        self.assertEqual(before, after,
+                         "planner must not write under <target>/.servo/")
+        self.assertFalse((self.target / ".servo" / "spec-oracles").exists())
 
     def test_oracle_sh_untouched(self):
         original = (self.target / "oracle.sh").read_bytes()
@@ -533,6 +553,20 @@ class NoTargetMutationTests(unittest.TestCase):
         _run_cli(self.target, self.spec_path)
         self.assertEqual(self.spec_path.read_bytes(), original,
                          "planner must not rewrite the source spec")
+
+    def test_traversal_spec_id_refused_not_written_outside_spec_dir(self):
+        # ADR-0023 (slice 019-02) craft-review finding: --spec-id reaches
+        # oracle_dir_for_spec (the shared path helper) with no separate
+        # guard in the planner; the helper itself must reject a
+        # path-traversal-shaped id so `plan.mkdir(parents=True)` never
+        # escapes the spec's own oracle directory.
+        before = _snapshot_tree(self.root)
+        res = _run_cli(self.target, self.spec_path,
+                       "--spec-id", "../../../../tmp/evil")
+        self.assertEqual(res.returncode, 2, res.stdout + res.stderr)
+        after = _snapshot_tree(self.root)
+        self.assertEqual(before, after,
+                         "a refused --spec-id must leave no trace on disk")
 
 
 # ===========================================================================
@@ -587,6 +621,11 @@ class DogfoodClassificationTests(unittest.TestCase):
             self.assertFalse(
                 list(root.rglob(".servo")),
                 "classify subcommand must not write artifacts",
+            )
+            # ADR-0023 (slice 019-02): nor the new spec-relative oracle dir.
+            self.assertFalse(
+                (spec_path.parent / "oracle").exists(),
+                "classify subcommand must not write the spec's oracle dir",
             )
 
 

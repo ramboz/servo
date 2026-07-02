@@ -1298,8 +1298,13 @@ class ApproveThenFreezeRoundTripTests(unittest.TestCase):
     def test_approve_cli_round_trips_through_freeze_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
+            # A legacy pre-019-02 install (ADR-0023): artifacts under
+            # `.servo/spec-oracles/<id>/` rather than the spec's own oracle
+            # dir. `approve` finds it via the migration read-fallback (AC5) —
+            # `spec_dir` need not exist for this scenario.
             oracle_dir = base / ".servo" / "spec-oracles" / "demo"
             oracle_dir.mkdir(parents=True)
+            spec_dir = base / "docs" / "specs" / "demo"
             (base / "present.txt").write_text("x")
             plan = {
                 "schema_version": 1, "spec_id": "demo",
@@ -1315,7 +1320,8 @@ class ApproveThenFreezeRoundTripTests(unittest.TestCase):
 
             overlay_path = REPO_ROOT / "skills" / "spec-oracle" / "oracle_overlay.py"
             res = subprocess.run(
-                [sys.executable, str(overlay_path), "approve", str(base), "demo"],
+                [sys.executable, str(overlay_path), "approve", str(base),
+                 str(spec_dir), "demo"],
                 capture_output=True, text=True)
             self.assertEqual(res.returncode, 0, res.stderr)
 

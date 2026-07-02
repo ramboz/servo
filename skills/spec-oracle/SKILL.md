@@ -3,10 +3,10 @@ name: servo:spec-oracle
 description: |
   Compile a spec or slice into a reviewable, project-owned **evidence
   overlay**: map each acceptance criterion to a deterministic check family,
-  write a `plan.md` + `checks.json` under `.servo/spec-oracles/<id>/`, compile
-  the checks into an installable `oracle.sh` component, and freeze it behind an
-  explicit approval so an unattended loop can optimize against the spec's
-  promises instead of a hand-waved single judge.
+  write a `plan.md` + `checks.json` under the spec's own `oracle/<id>/`
+  directory, compile the checks into an installable `oracle.sh` component, and
+  freeze it behind an explicit approval so an unattended loop can optimize
+  against the spec's promises instead of a hand-waved single judge.
 
   Fire this skill when the user wants to:
 
@@ -71,10 +71,10 @@ Before generating anything, confirm:
 ## Workflow
 
 ```bash
-# 1. Plan — read the spec, classify ACs, write a reviewable plan. Read-only over
-#    the target except the spec-oracle dir.
+# 1. Plan — read the spec, classify ACs, write a reviewable plan beside it.
+#    Read-only over the target; writes only under the spec's own oracle dir.
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_plan.py" <target> <spec-path>
-#    → <target>/.servo/spec-oracles/<spec-id>/{plan.md,checks.json}
+#    → <spec-path's directory>/oracle/<spec-id>/{plan.md,checks.json}
 
 # 2. Review plan.md with the user. Deterministic checks are listed; residual
 #    judgment (taste / positioning / "good enough") is surfaced explicitly with
@@ -82,12 +82,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_plan.py" <target> <spec
 #    (command, path, expected, ...) into checks.json as needed.
 
 # 3. Install the overlay as an ordinary oracle.sh component (does not approve).
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" install <target> <spec-id>
+#    <spec-dir> is the spec's own directory (the parent of <spec-path>).
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" install <target> <spec-dir> <spec-id>
+#    By default the fragment references the shared checks.py (no per-overlay
+#    copy). Add --vendor-engine to copy checks.py alongside the plan for the
+#    documented clone-portability case (a Routine/CI without the servo plugin).
 
 # 4. Approve — ONLY on explicit user instruction. Runs each check's negative
 #    control where one is defined (proving it can fail), records source +
 #    artifact hashes, and flips approval_status to approved.
-python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" approve <target> <spec-id>
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" approve <target> <spec-dir> <spec-id>
 
 # 5. Run it — the overlay is now a normal component; score it with the gate or
 #    let the loop optimize against it.
@@ -96,6 +100,14 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/quality-gate/gate.py" <target> --json
 # Remove the component without deleting the plan/check artifacts:
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" uninstall <target> <spec-id>
 ```
+
+**Artifact location.** The durable artifacts (`plan.md`, `checks.json`,
+`oracle.sh.fragment`) live under the spec's own directory tree
+(`docs/specs/<spec>/oracle/<slice-id>/`), not `<target>/.servo/` —
+[ADR-0023](../../docs/decisions/adr-0023-colocate-durable-spec-oracle-artifacts.md)
+(slice 019-02). `.servo/` only ever holds run-scoped state. A target with a
+pre-019-02 `.servo/spec-oracles/<id>/` install keeps working via a soft
+read-fallback — no explicit migration step is required.
 
 ## No silent approval
 

@@ -1,6 +1,6 @@
 ---
 status: DRAFT
-dependencies: [006, 015]
+dependencies: [006-05, 015-04]
 last_verified:
 frame_review: true
 ---

@@ -1,5 +1,6 @@
 """
-servo spec-oracle — slice 006-03 (oracle-overlay)
+servo spec-oracle — slice 006-03 (oracle-overlay), colocated by slice 019-02
+(ADR-0023: co-locate durable spec-oracle artifacts with the spec)
 
 Compile a checked plan into an *installable oracle component*. The spec-oracle
 becomes an ordinary servo `oracle.sh` component so the existing `gate.py` /
@@ -7,14 +8,16 @@ becomes an ordinary servo `oracle.sh` component so the existing `gate.py` /
 
 Three artifacts/operations:
 
-  generate <target> <spec-id>
-      Write `<target>/.servo/spec-oracles/<id>/oracle.sh.fragment` (a
+  generate <target> <spec-dir> <spec-id> [--vendor-engine]
+      Write `<spec-dir>/oracle/<id>/oracle.sh.fragment` (a
       `# SEED:start spec_oracle_<id>` / `# SEED:end spec_oracle_<id>` block
-      wrapping a `score_spec_oracle_<id>` function) and copy the stdlib check
-      engine `checks.py` alongside the plan, so the overlay is self-contained
-      and project-owned (it does not depend on servo staying installed).
+      wrapping a `score_spec_oracle_<id>` function). By default the fragment
+      *references* the shared, plugin-sibling `checks.py` rather than copying
+      it (ADR-0023 AC3); `--vendor-engine` still copies a private `checks.py`
+      alongside the plan for the documented clone-portability case (a
+      Routine/CI that clones the repo without the servo plugin installed).
 
-  install <target> <spec-id> [--weight W]
+  install <target> <spec-dir> <spec-id> [--weight W] [--vendor-engine]
       generate, then splice the component into `<target>/oracle.sh`: insert the
       SEED block before the driver loop and register `spec_oracle_<id>:W` in the
       COMPONENTS array, without disturbing existing baseline components (AC2).
@@ -22,12 +25,25 @@ Three artifacts/operations:
 
   uninstall <target> <spec-id>
       Remove the SEED block and the COMPONENTS entry from `oracle.sh`, leaving
-      the plan/check artifacts under `.servo/spec-oracles/<id>/` intact (AC6).
+      the plan/check artifacts under the spec's own oracle dir intact (AC6).
 
-The generated `score_spec_oracle_<id>` runs the copied engine in `--score-only`
-mode: it prints the composite check score and returns 2 iff any check
-env-errored (so `oracle.sh` marks the component missing → rc=2, AC3). Each run
-appends evidence to `.servo/spec-oracles/<id>/ledger.jsonl` (AC4).
+The generated `score_spec_oracle_<id>` runs the engine in `--score-only` mode:
+it prints the composite check score and returns 2 iff any check env-errored
+(so `oracle.sh` marks the component missing → rc=2, AC3). Each run appends
+evidence to `<spec-dir>/oracle/<id>/ledger.jsonl` (AC4).
+
+**Artifact location (ADR-0023, slice 019-02).** The durable, spec-bound
+artifacts (`plan.md`, `checks.json`, `oracle.sh.fragment`, and an opt-in
+vendored `checks.py`) live under `<spec_dir>/oracle/<spec_id>/` — resolved
+relative to the *spec's own directory* passed in as `spec_dir`, never the
+target — so a spec and its oracle travel together in git/review. `.servo/`
+under the target retains only run-scoped state (the install manifest, loop
+runs, etc.) — unaffected by this slice. `oracle_dir_for_spec` is the one
+shared path helper (`oracle_plan.py` imports it too, replacing its own former
+independent path construction); it falls back to the legacy
+`<target>/.servo/spec-oracles/<spec_id>/` location when the new spec-relative
+location has no `checks.json` yet, so a pre-019-02 install is not broken
+(AC5 — soft migration, no explicit `migrate` step required).
 
 The `# SEED:` convention and the COMPONENTS array shape are spec 001's
 (`templates/oracle.sh.template`); this module mirrors them rather than vendoring
@@ -56,21 +72,29 @@ _SPEC_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _DRIVER_ANCHOR = r'(?m)^weighted_sum="0"'
 
 # The generated score function. Placeholders are substituted (not f-string /
-# .format) because the body is bash full of braces.
+# .format) because the body is bash full of braces. `__ENGINE__` is the path
+# to checks.py (either the shared plugin-sibling copy or a vendored local
+# one); `__ORACLE_DIR__` is the spec-relative oracle dir (checks.json /
+# ledger always live there, regardless of where the engine is resolved from).
 _FRAGMENT_TEMPLATE = """# SEED:start __NAME__
 __FN__() {
   if ! command -v python3 >/dev/null 2>&1; then
     echo "missing: python3 (spec-oracle __SPEC_ID__)" >&2
     return 2
   fi
-  python3 ".servo/spec-oracles/__SPEC_ID__/checks.py" \\
-    ".servo/spec-oracles/__SPEC_ID__/checks.json" \\
+  python3 "__ENGINE__" \\
+    "__ORACLE_DIR__/checks.json" \\
     --base-dir . \\
-    --ledger ".servo/spec-oracles/__SPEC_ID__/ledger.jsonl" \\
+    --ledger "__ORACLE_DIR__/ledger.jsonl" \\
     --enforce-freeze \\
     --score-only
 }
 # SEED:end __NAME__"""
+
+# The shared check engine, resolved relative to this module (the plugin
+# install), not the target — so a target need not vendor checks.py to score
+# an overlay (ADR-0023 AC3).
+_SHARED_ENGINE_PATH = Path(__file__).resolve().parent / "checks.py"
 
 
 def _validate_spec_id(spec_id: str) -> None:
@@ -96,53 +120,113 @@ def component_name(spec_id: str) -> str:
     return COMPONENT_PREFIX + slug
 
 
-def render_fragment(spec_id: str) -> str:
+def render_fragment(spec_id: str, *, spec_oracle_dir: str,
+                    vendor_engine: bool = False) -> str:
     """Return the `# SEED:start/end` block (the score function) for a spec id.
 
-    Pure: paths are relative to the target root (the oracle runs with the
-    target as cwd, per the gate contract); the directory uses the original
-    spec id, the function/marker name uses the shell-safe component name.
+    ``spec_oracle_dir`` is the oracle dir's path *as written into the bash
+    fragment* — relative to the target root, since the oracle runs with the
+    target as cwd (the gate contract). ``checks.json`` / ``ledger.jsonl``
+    always resolve under it. The check engine resolves to the vendored local
+    copy (``<spec_oracle_dir>/checks.py``) when ``vendor_engine`` is set,
+    else to the shared plugin-sibling ``checks.py`` (ADR-0023 AC3) at its
+    absolute install path.
     """
     name = component_name(spec_id)
+    engine = (f"{spec_oracle_dir}/checks.py" if vendor_engine
+             else str(_SHARED_ENGINE_PATH))
     return (_FRAGMENT_TEMPLATE
             .replace("__NAME__", name)
             .replace("__FN__", "score_" + name)
-            .replace("__SPEC_ID__", spec_id))
+            .replace("__SPEC_ID__", spec_id)
+            .replace("__ENGINE__", engine)
+            .replace("__ORACLE_DIR__", spec_oracle_dir))
 
 
-def _oracle_dir(target: Path, spec_id: str) -> Path:
+def _legacy_oracle_dir(target: Path, spec_id: str) -> Path:
+    """The pre-019-02 artifact location (``<target>/.servo/spec-oracles/<id>/``).
+
+    Retained only as a read-fallback (AC5 migration) — nothing writes here
+    anymore.
+    """
     return target / ".servo" / "spec-oracles" / spec_id
 
 
-def generate(target: Path, spec_id: str) -> dict:
-    """Write the fragment + a self-contained copy of the check engine.
+def oracle_dir_for_spec(spec_dir: Path, spec_id: str, *,
+                        target: Optional[Path] = None) -> Path:
+    """The one shared path helper: where a spec-oracle's durable artifacts
+    live (ADR-0023, slice 019-02).
 
-    Requires the plan (`checks.json`) to already exist under the spec-oracle
-    directory; raises ``FileNotFoundError`` otherwise (nothing to compile).
-    Returns the written paths.
+    Resolves to ``<spec_dir>/oracle/<spec_id>/`` — relative to the spec's own
+    directory, never the target. If that location has no ``checks.json`` yet
+    *and* a ``target`` is supplied with a legacy
+    ``<target>/.servo/spec-oracles/<spec_id>/checks.json`` present, falls back
+    to the legacy location (AC5 — soft migration: a pre-019-02 install keeps
+    working without an explicit migration step). The new location always wins
+    once it has its own plan.
+
+    Validates ``spec_id`` itself (rather than trusting each caller to have
+    done so) — this is the one path-construction chokepoint every caller
+    (this module's own `generate`/`install`/`approve`, and `oracle_plan.py`'s
+    planner) funnels through, so a malformed or path-traversal-shaped
+    ``spec_id`` (e.g. ``../../etc``) is rejected here regardless of which
+    caller reaches it.
     """
     _validate_spec_id(spec_id)
-    oracle_dir = _oracle_dir(target, spec_id)
+    new_dir = spec_dir / "oracle" / spec_id
+    if target is not None and not (new_dir / "checks.json").is_file():
+        legacy_dir = _legacy_oracle_dir(target, spec_id)
+        if (legacy_dir / "checks.json").is_file():
+            return legacy_dir
+    return new_dir
+
+
+def generate(target: Path, spec_dir: Path, spec_id: str, *,
+            vendor_engine: bool = False) -> dict:
+    """Write the fragment (and, opt-in, a vendored copy of the check engine).
+
+    Requires the plan (`checks.json`) to already exist under the spec's
+    oracle directory (or its legacy `.servo/spec-oracles/<id>/` location, AC5);
+    raises ``FileNotFoundError`` otherwise (nothing to compile). Returns the
+    written paths.
+    """
+    _validate_spec_id(spec_id)
+    oracle_dir = oracle_dir_for_spec(spec_dir, spec_id, target=target)
     checks_json = oracle_dir / "checks.json"
     if not checks_json.is_file():
         raise FileNotFoundError(
             f"no plan to compile: {checks_json} not found "
             f"(run the spec-oracle planner first)")
 
+    # The fragment's paths are relative to the target root (oracle.sh runs
+    # with the target as cwd); express the oracle dir that way regardless of
+    # whether it resolved to the new or legacy location.
+    try:
+        rel_oracle_dir = oracle_dir.resolve().relative_to(target.resolve())
+    except ValueError:
+        # The spec dir lives outside the target root — fall back to the
+        # absolute path so the fragment still resolves correctly at runtime.
+        rel_oracle_dir = oracle_dir.resolve()
+
     fragment_path = oracle_dir / "oracle.sh.fragment"
-    fragment_path.write_text(render_fragment(spec_id) + "\n")
+    fragment_path.write_text(
+        render_fragment(spec_id, spec_oracle_dir=str(rel_oracle_dir),
+                        vendor_engine=vendor_engine) + "\n")
 
-    # Copy the engine alongside the plan so the overlay does not depend on the
-    # servo plugin staying installed (project-owned artifact; frozen + hashed
-    # in slice 006-04).
-    engine_src = Path(__file__).resolve().parent / "checks.py"
-    checks_py = oracle_dir / "checks.py"
-    shutil.copyfile(engine_src, checks_py)
+    result = {"fragment": fragment_path}
+    if vendor_engine:
+        # Vendor a private copy alongside the plan for the documented
+        # clone-portability case (a Routine/CI that clones the repo without
+        # the servo plugin installed) — the old default behavior, now opt-in.
+        checks_py = oracle_dir / "checks.py"
+        shutil.copyfile(_SHARED_ENGINE_PATH, checks_py)
+        result["checks_py"] = checks_py
 
-    return {"fragment": fragment_path, "checks_py": checks_py}
+    return result
 
 
-def install(target: Path, spec_id: str, weight: float = DEFAULT_WEIGHT) -> None:
+def install(target: Path, spec_dir: Path, spec_id: str,
+           weight: float = DEFAULT_WEIGHT, *, vendor_engine: bool = False) -> None:
     """Splice the overlay component into ``<target>/oracle.sh``.
 
     Idempotent: an existing SEED block is replaced and its COMPONENTS weight
@@ -155,10 +239,17 @@ def install(target: Path, spec_id: str, weight: float = DEFAULT_WEIGHT) -> None:
         raise FileNotFoundError(
             f"oracle.sh not found: {oracle} (scaffold the target first)")
 
-    generate(target, spec_id)  # fragment + engine copy
+    generate(target, spec_dir, spec_id, vendor_engine=vendor_engine)
+
+    oracle_dir = oracle_dir_for_spec(spec_dir, spec_id, target=target)
+    try:
+        rel_oracle_dir = oracle_dir.resolve().relative_to(target.resolve())
+    except ValueError:
+        rel_oracle_dir = oracle_dir.resolve()
 
     name = component_name(spec_id)
-    fragment = render_fragment(spec_id)
+    fragment = render_fragment(spec_id, spec_oracle_dir=str(rel_oracle_dir),
+                               vendor_engine=vendor_engine)
     text = oracle.read_text()
 
     # 1. SEED block — replace if already present, else insert before the loop.
@@ -197,9 +288,10 @@ def install(target: Path, spec_id: str, weight: float = DEFAULT_WEIGHT) -> None:
 def uninstall(target: Path, spec_id: str) -> None:
     """Remove the overlay component from ``oracle.sh``, keeping the artifacts.
 
-    Deletes the SEED block and the COMPONENTS entry only; the plan, generated
-    `checks.py`, and ledger under `.servo/spec-oracles/<id>/` are preserved so
-    the overlay can be re-installed or inspected (AC6).
+    Deletes the SEED block and the COMPONENTS entry only; the plan, any
+    vendored `checks.py`, and the ledger under the spec's own oracle dir are
+    preserved so the overlay can be re-installed or inspected (AC6). Never
+    touches `.servo/` (AC4).
     """
     _validate_spec_id(spec_id)
     oracle = target / "oracle.sh"
@@ -231,26 +323,27 @@ def _iso_now() -> str:
 def _load_engine():
     """Import the sibling check engine for the negative-control runner."""
     import importlib.util
-    path = Path(__file__).resolve().parent / "checks.py"
-    spec = importlib.util.spec_from_file_location("checks_engine", path)
+    spec = importlib.util.spec_from_file_location(
+        "checks_engine", _SHARED_ENGINE_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def approve(target: Path, spec_id: str) -> dict:
+def approve(target: Path, spec_dir: Path, spec_id: str) -> dict:
     """Freeze the overlay: verify source fidelity, prove every negative control
     can fail, record artifact hashes, and set ``approval_status: approved``.
 
     Refuses (``ValueError``) if the source spec changed since planning (AC2 —
     re-plan, don't approve) or if any check's negative control does not actually
     fail (AC4 — the check is not falsifiable, so it could pass vacuously and let
-    the loop self-grade). The generated `checks.py` / `oracle.sh.fragment` are
-    hashed into ``approved_artifacts`` (AC3); the runtime freeze gate
+    the loop self-grade). ``oracle.sh.fragment`` is always hashed into
+    ``approved_artifacts`` (AC3); a vendored ``checks.py`` is hashed too, only
+    when present (the `--vendor-engine` opt-in). The runtime freeze gate
     (`checks.py --enforce-freeze`) compares against these on every score.
     """
     _validate_spec_id(spec_id)
-    oracle_dir = _oracle_dir(target, spec_id)
+    oracle_dir = oracle_dir_for_spec(spec_dir, spec_id, target=target)
     checks_json = oracle_dir / "checks.json"
     if not checks_json.is_file():
         raise FileNotFoundError(f"no plan to approve: {checks_json}")
@@ -283,14 +376,19 @@ def approve(target: Path, spec_id: str) -> dict:
                     f"(status={evidence.get('status')!r}); the check is not "
                     f"falsifiable — fix the control before approving")
 
-    # 3. Record approved-artifact hashes (AC3); generate/install must run first.
+    # 3. Record approved-artifact hashes (AC3); generate/install must run
+    #    first. `checks.py` is only hashed when vendored (opt-in) — the
+    #    shared plugin-sibling copy is not a per-overlay artifact to pin.
     artifacts = {}
-    for name in ("checks.py", "oracle.sh.fragment"):
-        artifact = oracle_dir / name
-        if not artifact.is_file():
-            raise FileNotFoundError(
-                f"missing generated artifact {name}; run install/generate first")
-        artifacts[name] = _sha256_file(artifact)
+    fragment = oracle_dir / "oracle.sh.fragment"
+    if not fragment.is_file():
+        raise FileNotFoundError(
+            "missing generated artifact oracle.sh.fragment; "
+            "run install/generate first")
+    artifacts["oracle.sh.fragment"] = _sha256_file(fragment)
+    vendored_engine = oracle_dir / "checks.py"
+    if vendored_engine.is_file():
+        artifacts["checks.py"] = _sha256_file(vendored_engine)
 
     plan["approved_artifacts"] = artifacts
     # Tripwire-pin the approved checks themselves (review hardening): the freeze
@@ -312,22 +410,36 @@ def main(argv: Optional[list] = None) -> int:
         description="Install a spec-oracle as an oracle.sh component.",
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for cmd in ("generate", "install", "uninstall", "approve"):
+    for cmd in ("generate", "install", "approve"):
         sp = sub.add_parser(cmd)
         sp.add_argument("target")
+        sp.add_argument("spec_dir")
         sp.add_argument("spec_id")
         if cmd == "install":
             sp.add_argument("--weight", type=float, default=DEFAULT_WEIGHT)
+        if cmd in ("generate", "install"):
+            sp.add_argument("--vendor-engine", dest="vendor_engine",
+                            action="store_true",
+                            help="copy checks.py alongside the plan instead of "
+                                 "referencing the shared plugin-sibling copy "
+                                 "(clone-portability opt-in)")
+    sp = sub.add_parser("uninstall")
+    sp.add_argument("target")
+    sp.add_argument("spec_id")
     args = parser.parse_args(argv)
 
     target = Path(args.target)
     try:
         if args.cmd == "generate":
-            paths = generate(target, args.spec_id)
+            spec_dir = Path(args.spec_dir)
+            paths = generate(target, spec_dir, args.spec_id,
+                             vendor_engine=args.vendor_engine)
             print(f"servo: generated overlay for {args.spec_id} -> "
                   f"{paths['fragment'].parent}")
         elif args.cmd == "install":
-            install(target, args.spec_id, args.weight)
+            spec_dir = Path(args.spec_dir)
+            install(target, spec_dir, args.spec_id, args.weight,
+                   vendor_engine=args.vendor_engine)
             print(f"servo: installed component {component_name(args.spec_id)} "
                   f"into {target / 'oracle.sh'}")
         elif args.cmd == "uninstall":
@@ -335,7 +447,8 @@ def main(argv: Optional[list] = None) -> int:
             print(f"servo: removed component {component_name(args.spec_id)} "
                   f"from {target / 'oracle.sh'} (artifacts kept)")
         elif args.cmd == "approve":
-            approve(target, args.spec_id)
+            spec_dir = Path(args.spec_dir)
+            approve(target, spec_dir, args.spec_id)
             print(f"servo: approved spec-oracle {args.spec_id} "
                   f"(frozen — re-plan to change)")
     except (FileNotFoundError, ValueError) as exc:

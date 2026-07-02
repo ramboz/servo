@@ -1,17 +1,22 @@
 """
-servo spec-oracle — slice 006-01 (evidence-plan)
+servo spec-oracle — slice 006-01 (evidence-plan), colocated by slice 019-02
+(ADR-0023: co-locate durable spec-oracle artifacts with the spec)
 
 Read a spec or slice Markdown file and write a *reviewable evidence plan*
-under `<target>/.servo/spec-oracles/<spec-id>/`: a `plan.md` for humans and
+under `<spec-path's directory>/oracle/<spec-id>/`: a `plan.md` for humans and
 a `checks.json` machine contract that maps each acceptance criterion to a
 check family. This is the planning step only — no checks are executed, no
-oracle is installed, and nothing in the target is mutated outside the
-spec-oracle directory (slice 006-01 ACs 3 and 5).
+oracle is installed, and nothing in the target (or anywhere outside the
+spec's own oracle dir) is mutated (slice 006-01 ACs 3 and 5).
 
 Usage:
     python3 oracle_plan.py <target> <spec-path> [--spec-id ID]
         Write plan.md + checks.json under
-        <target>/.servo/spec-oracles/<spec-id>/. Prints a short summary.
+        <spec-path's directory>/oracle/<spec-id>/. Prints a short summary.
+        `target` is passed through for CLI-shape parity with
+        `oracle_overlay.py` and to resolve a legacy
+        `.servo/spec-oracles/<id>/` install for the migration fallback
+        (ADR-0023, slice 019-02 AC5) — the planner itself never writes there.
 
     python3 oracle_plan.py classify <spec-path> [--spec-id ID]
         Print the classification as JSON to stdout and write nothing — a dry
@@ -42,11 +47,29 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _load_sibling(name: str) -> object:
+    """Import a sibling module by path (this dir is not an importable
+    package — mirrors `oracle_overlay.py::_load_engine` / the test idiom)."""
+    path = Path(__file__).resolve().parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# The one shared path helper for where a spec-oracle's durable artifacts live
+# (ADR-0023, slice 019-02) — `oracle_overlay.py` owns it; imported here rather
+# than recomputed, so the two modules can never drift on the artifact path.
+_oracle_overlay = _load_sibling("oracle_overlay")
+oracle_dir_for_spec = _oracle_overlay.oracle_dir_for_spec
 
 SERVO_VERSION = "0.1.0"
 PLANNER_VERSION = "0.1.0"
@@ -501,10 +524,16 @@ def _render_plan_md(plan: dict) -> str:
 
 def plan_target(target: Path, spec_path: Path, spec_id: str | None,
                 *, source_spec_path: str | None = None) -> dict:
-    """Read the spec and write plan.md + checks.json under the target.
+    """Read the spec and write plan.md + checks.json beside it.
 
-    Returns the checks.json payload. Touches nothing outside
-    ``<target>/.servo/spec-oracles/<spec-id>/`` (AC5).
+    Returns the checks.json payload. Writes under
+    ``<spec_path's directory>/oracle/<spec-id>/`` — resolved relative to the
+    spec's own directory via the shared ``oracle_dir_for_spec`` helper
+    (ADR-0023, slice 019-02) — and touches nothing else (AC5); nothing is
+    written under ``<target>/.servo/`` (AC4). ``target`` is retained for
+    CLI-shape parity with ``oracle_overlay.py`` and so a pre-019-02
+    ``.servo/spec-oracles/<id>/`` install is still found by the migration
+    read-fallback if present (AC5) — otherwise it is unused by the planner.
 
     ``source_spec_path`` is the *display* path recorded verbatim in
     checks.json; the CLI passes the path as the user gave it (typically
@@ -534,7 +563,7 @@ def plan_target(target: Path, spec_path: Path, spec_id: str | None,
     )
     _warn_if_empty_ac_section(source_text, plan, resolved_id)
 
-    out_dir = target / ".servo" / "spec-oracles" / resolved_id
+    out_dir = oracle_dir_for_spec(spec_path.parent, resolved_id, target=target)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "checks.json").write_text(json.dumps(plan, indent=2) + "\n")
     (out_dir / "plan.md").write_text(_render_plan_md(plan))
@@ -582,11 +611,12 @@ def _plan_main(argv: list) -> int:
     try:
         plan = plan_target(target, spec_path, args.spec_id,
                            source_spec_path=args.spec_path)
-    except (FileNotFoundError, NotADirectoryError, IsADirectoryError) as exc:
+    except (FileNotFoundError, NotADirectoryError, IsADirectoryError,
+            ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    out_dir = target / ".servo" / "spec-oracles" / plan["spec_id"]
+    out_dir = oracle_dir_for_spec(spec_path.parent, plan["spec_id"], target=target)
     n_checks = len(plan["checks"])
     n_residual = len(plan["residual_judgment"])
     print(

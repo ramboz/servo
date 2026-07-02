@@ -564,3 +564,76 @@ deliberately out of scope.
 docs) — the slice's grounded doc-gap review found no detection signal exists
 after Bugs 001/002/004 closed the two detectable cases; recorded here rather
 than papered over.
+
+---
+
+## execution-planner's evaluation_model still reads the pre-ADR-0023 spec-oracle path
+
+**Deferred:** Slice 019-02 (ADR-0023) moved a spec-oracle's durable artifacts
+from `<target>/.servo/spec-oracles/<spec-id>/` to the spec's own
+`<spec-dir>/oracle/<spec-id>/`, funneling every in-skill call site through one
+shared `oracle_overlay.py::oracle_dir_for_spec` helper (with a soft
+read-fallback to the legacy location for pre-019-02 installs). `skills/
+execution-planner/execution_plan.py::_load_evaluation_model`
+(spec 016, DONE) independently hardcodes the **old** path
+(`target / ".servo" / "spec-oracles" / spec_id / "checks.json"`) and was not
+swept — it wasn't named in 019-02's original grounding research (only
+`oracle_overlay.py` and `oracle_plan.py` were flagged as call sites).
+
+**Effect:** a spec-oracle planned *after* 019-02 (living at the new location)
+will not be found by `execution_plan.py`, so its `evaluation_model` block
+silently degrades to `null` — the same as a baseline-oracle-only target. This
+is not a hard failure (the function already treats a present-but-unreadable
+overlay as optional enrichment, and the full execution-planner suite still
+passes, since its fixtures fabricate the old path directly), but it is a real
+loss of the `evaluation_model` enrichment for any spec-oracle installed via
+the new (now-default) layout.
+
+**Why not fixed inline in 019-02:** `execution_plan.py`'s own file header
+documents a deliberate "dependency-free skill" invariant (it duplicates
+`loop.py`'s budget constants rather than importing them, mirroring
+`heartbeat.py`) — `skills/execution-planner/` and `skills/spec-oracle/` are
+different skill directories, so importing `oracle_dir_for_spec` across that
+boundary would be a new kind of coupling this skill has so far avoided. The
+correct fix is more likely to **duplicate** the new-path-plus-fallback logic
+locally (matching the existing constant-duplication convention) than to
+import it — a design call that belongs to spec 016, with its own tests, not
+bolted onto spec 019's slice.
+
+**Resolution trigger:** the next time spec 016 (execution-planner) is
+touched, or the first time a real target hits this gap (an
+`evaluation_model: null` where a colocated spec-oracle overlay is actually
+installed) — update `_load_evaluation_model` to resolve both the new and
+legacy locations (duplicating, not importing, `oracle_dir_for_spec`'s logic),
+with a regression test using the new (post-019-02) artifact layout.
+
+**Surfaced by:** spec 019 slice 019-02 (colocate-artifacts, ADR-0023)
+implementation — flagged by the implementer as an out-of-declared-scope
+third call site, confirmed by direct read of `execution_plan.py:222-244`.
+
+---
+
+## Referenced (unvendored) checks.py is not covered by the freeze/approval hash
+
+**Deferred:** ADR-0023 / slice 019-02 made "reference, don't copy" the
+default for `checks.py` (`oracle_overlay.py::render_fragment` points the
+generated fragment at the shared plugin-sibling `checks.py` by absolute
+path, `--vendor-engine` opt-in restores the old copy-and-hash behavior).
+`approve()` (`oracle_overlay.py`) only hashes `checks.py` into
+`approved_artifacts` **when vendored** — the referenced (default) engine is
+never hashed, so a subsequent servo plugin upgrade that changes
+`checks.py`'s behavior silently changes what an *already-approved* oracle
+runs, invisible to the `--enforce-freeze` gate (006-04 / 019-01). This is a
+real, if narrow, version-skew gap in the freeze's threat-model coverage —
+distinct from the artifact/plan tripwires the freeze already covers.
+
+**Resolution trigger:** if this ever causes a real incident (an oracle's
+behavior changing across a servo upgrade without re-approval), or as part of
+a future spec-oracle freeze hardening pass — options include hashing the
+referenced engine's content at approval time too (even though it isn't
+copied), or pinning to a specific servo version string recorded in
+`checks.json`.
+
+**Surfaced by:** spec 019 slice 019-02's arch-review pass — a designed,
+disclosed trade-off of ADR-0023's reference-not-copy default, not a slice
+defect; flagged for future hardening rather than blocking this slice.
