@@ -125,7 +125,10 @@ invocation), sweep every invocation site: `_invoke_claude` AND
 `_invoke_claude_goal`. Bugs 001/002 were correctly scoped to the reported repro,
 but the independent review is what caught the goal-driver residual and closed the
 loop. Same family as bugs 001/002: the `claude -p` result envelope and argv are
-first-class surfaces, in both drivers.
+first-class surfaces, in both drivers. Together, bugs 001/002/004 are the
+refuse-loudly half of
+[spec 019-04](../specs/019-compile-core-simplification/slice-04-oracle-as-a-service-docs.md)
+(ADR-0021); 019-04 verifies this closure and adds the oracle-as-a-service docs.
 
 ## Main recheck
 

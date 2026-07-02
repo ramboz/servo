@@ -167,3 +167,15 @@ assistant: [surfaces the timeout; offers to re-run with --timeout 300 or --timeo
 ## After invocation
 
 The gate is stateless — nothing is written to disk by this skill. If a caller wants per-call logs, that's its job (specs 003 / 005 will own per-iteration / per-variant logging at `<target>/.servo/runs/` and `<target>/.servo/races/`).
+
+## External-driver / bring-your-own-implementer contract
+
+`gate.py` can be invoked **standalone by an external driver** — a CI pipeline, another agent, or a human — as the pass/fail authority over a Compiled oracle, fully independent of `/servo:agent-loop`. This is [ADR-0021](../../docs/decisions/adr-0021-oracle-first-agent-loop-optional-consumer.md)'s **oracle-as-a-service** flow: Compile produces the frozen, reviewable oracle; some driver performs the edits (see [`skills/agent-loop/SKILL.md`'s "Oracle-as-a-service / bring-your-own-implementer"](../agent-loop/SKILL.md#oracle-as-a-service--bring-your-own-implementer) for why the native loop isn't always that driver); `quality-gate` judges.
+
+This already works today with **no new code** — it falls directly out of properties this skill already has:
+
+- **Stateless** (see "After invocation" above) — every call is one self-contained subprocess with no session, no history, and no assumption about who or what made the prior edit. A CI job calling `gate.py` on commit N+1 is indistinguishable from this skill calling it on iteration N+1.
+- **`--json`** — a structured, versioned (`schema_version`) one-line result any external caller can parse without depending on Claude Code's tool-call machinery.
+- **A closed `{0, 1, 2}` exit-code contract** (ADR-0002) — `0` = pass, `1` = below threshold, `2` = environment error — is a plain process exit code, the universal integration point for a CI pipeline (`if`/`&&` on the shell, a CI step's pass/fail), a human's terminal, or another agent's own tool-call result, with no servo-specific client required.
+
+So the recipe for an external driver is: scaffold + freeze with `/servo:scaffold-init`, make your edits with whatever you have, then run `python3 gate.py <target> --json` (or the plain-text form) and branch on the exit code — exactly the invocation shown under "Score a project" / "JSON for a programmatic caller" above, just called by something other than `/servo:agent-loop`.

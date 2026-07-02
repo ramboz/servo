@@ -223,5 +223,66 @@ class AuditExampleTests(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# Slice 019-04 — external-driver / bring-your-own-implementer contract
+# ---------------------------------------------------------------------------
+
+
+class ExternalDriverDocsTests(unittest.TestCase):
+    """`gate.py` documents that it can be invoked standalone by an external
+    driver (CI pipeline, another agent, a human) as the pass/fail authority
+    over a Compiled oracle, independent of agent-loop — pointing at the
+    already-shipped stateless / `--json` / closed-exit-code properties as
+    *why*, and cross-linking back to agent-loop's SKILL.md and ADR-0021."""
+
+    def setUp(self):
+        self.text = _skill_text()
+        self.body = self.text.lower()
+
+    def test_external_driver_section_header_present(self):
+        self.assertIn(
+            "external-driver", self.body,
+            "SKILL.md should have a named external-driver section",
+        )
+
+    def test_named_actors_present(self):
+        # Compile / driver / quality-gate — the three actors of the flow.
+        self.assertIn("compile", self.body)
+        self.assertTrue(
+            "driver" in self.body,
+            "SKILL.md should name a (external) driver as an actor",
+        )
+        self.assertIn("quality-gate", self.body)
+
+    def test_external_caller_examples_named(self):
+        # CI pipeline / another agent / a human — the three example drivers.
+        for phrase in ("ci pipeline", "another agent", "a human"):
+            self.assertIn(
+                phrase, self.body,
+                f"SKILL.md should name {phrase!r} as an example external driver",
+            )
+
+    def test_why_it_already_works_properties_named(self):
+        # The three existing properties that make this work with no new code.
+        self.assertIn("stateless", self.body)
+        self.assertIn("--json", self.text)
+        self.assertTrue(
+            "0, 1, 2" in self.body or "0/1/2" in self.body,
+            "SKILL.md should cite the closed exit-code contract as a reason this works today",
+        )
+
+    def test_links_to_agent_loop_skill(self):
+        self.assertIn(
+            "../agent-loop/SKILL.md", self.text,
+            "SKILL.md should cross-link to skills/agent-loop/SKILL.md",
+        )
+
+    def test_links_to_adr_0021(self):
+        self.assertIn(
+            "adr-0021-oracle-first-agent-loop-optional-consumer.md", self.text,
+            "SKILL.md should cross-link to ADR-0021",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

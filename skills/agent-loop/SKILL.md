@@ -333,3 +333,13 @@ assistant: [surfaces verbatim; the agent (runner/judge) emitted an incompatible 
 The loop persists state at `<target>/.servo/runs/<run-id>/state.json` (per ADR-0004). On a clean iteration cap / cost ceiling / plateau / context-full / oracle pass, the state file holds the final scoreboard for forensic reading or future resume. On SIGINT/SIGTERM, the state file is finalized atomically; resume continues from `iteration_count + 1`.
 
 The loop is **not stateless** — that's the whole point of the slice 003-04 contract. If a caller wants to inspect a run after the fact, point them at `<target>/.servo/runs/<run-id>/state.json`.
+
+## Oracle-as-a-service / bring-your-own-implementer
+
+This skill is **one optional driver**, not a prerequisite for using servo. [ADR-0021](../../docs/decisions/adr-0021-oracle-first-agent-loop-optional-consumer.md) reframes servo as **oracle-first**: `/servo:scaffold-init` + Compile produce a frozen, reviewable oracle, and `/servo:quality-gate` (`gate.py`) is the pass/fail **authority** over it. Any driver may then perform the edits — a human, a CI pipeline, or another agent — and the flow is the same either way:
+
+1. **Compile** — scaffold + freeze the oracle (`/servo:scaffold-init`; spec 001/006).
+2. **Drive** — some implementer edits the target. This skill (`loop.py`) is one such driver — the hand-rolled `--driver loop` and `/goal`-delegated `--driver goal` paths both subprocess `claude -p`. But nothing requires it: a human editing by hand, a CI job running its own script, or another agent (e.g. a jig:implementer working inside a different harness) can drive the edits instead.
+3. **Judge** — `quality-gate` (`gate.py`) scores the result with the closed 0/1/2 exit contract, independent of who or what made the edits.
+
+This mode exists because the native loop **cannot always run** — it shells out to `claude -p`, which needs top-level authentication and edit permissions it cannot obtain when nested inside another agent's sandboxed sub-process (see the refusal table below: `claude_invocation_failed` on an auth failure, and the plateau/`context_full` symptom of denied edit permissions). When that's the case, skip this skill and drive `quality-gate` directly — see [`skills/quality-gate/SKILL.md`'s "External-driver / bring-your-own-implementer contract"](../quality-gate/SKILL.md#external-driver--bring-your-own-implementer-contract) for how to use `gate.py` standalone as the authority. Full context: [ADR-0021](../../docs/decisions/adr-0021-oracle-first-agent-loop-optional-consumer.md).

@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: [001, 002, 003, 006, 015, adr-0021, adr-0022, adr-0023]
 last_verified:
 ---

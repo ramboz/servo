@@ -327,5 +327,60 @@ class Slice003_08SurfaceTests(unittest.TestCase):
         )
 
 
+# ---------------------------------------------------------------------------
+# Slice 019-04 — oracle-as-a-service / bring-your-own-implementer
+# ---------------------------------------------------------------------------
+
+
+class OracleAsAServiceDocsTests(unittest.TestCase):
+    """SKILL.md names the oracle-as-a-service flow: Compile produces a frozen,
+    reviewable oracle; any driver (human, CI, another agent) may perform the
+    edits; quality-gate is the pass/fail authority; the native loop is one
+    optional driver, not a prerequisite. Cross-links ADR-0021 and
+    quality-gate's SKILL.md (ADR-0021 / slice 019-04 AC2/AC4)."""
+
+    def setUp(self):
+        self.text = _skill_text()
+        self.body = self.text.lower()
+
+    def test_oracle_as_a_service_section_header_present(self):
+        self.assertIn(
+            "oracle-as-a-service", self.body,
+            "SKILL.md should have a named oracle-as-a-service section",
+        )
+        self.assertIn("bring-your-own-implementer", self.body)
+
+    def test_named_actors_present(self):
+        # Compile / driver / quality-gate — the three actors of the flow.
+        self.assertIn("compile", self.body)
+        self.assertIn("driver", self.body)
+        self.assertIn("quality-gate", self.body)
+
+    def test_any_driver_examples_named(self):
+        # human / CI / another agent — the flow is driver-agnostic.
+        self.assertIn("human", self.body)
+        self.assertIn("ci", self.body)
+        self.assertIn("another agent", self.body)
+
+    def test_loop_framed_as_optional_not_prerequisite(self):
+        self.assertTrue(
+            "optional driver" in self.body or "optional consumer" in self.body,
+            "SKILL.md should frame the native loop as one optional driver",
+        )
+        self.assertIn("not a prerequisite", self.body)
+
+    def test_links_to_quality_gate_skill(self):
+        self.assertIn(
+            "../quality-gate/SKILL.md", self.text,
+            "SKILL.md should cross-link to skills/quality-gate/SKILL.md",
+        )
+
+    def test_links_to_adr_0021(self):
+        self.assertIn(
+            "adr-0021-oracle-first-agent-loop-optional-consumer.md", self.text,
+            "SKILL.md should cross-link to ADR-0021",
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

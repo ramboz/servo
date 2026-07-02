@@ -98,11 +98,11 @@
 | [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume | DEFERRED |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review | DEFERRED |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface | DEFERRED |  |
-| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-01 — freeze-parsed-acs | DRAFT |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-01 — freeze-parsed-acs | IN_PROGRESS (spec-019-compile-core-simpl…) |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-02 — colocate-artifacts | DRAFT |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-03 — behavioral-ac-recall | DRAFT |  |
-| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-04 — oracle-as-a-service-docs | DRAFT |  |
-| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-05 — single-component-oracle | DRAFT |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-04 — oracle-as-a-service-docs | REVIEWED |  |
+| [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-05 — single-component-oracle | IN_PROGRESS (spec-019-compile-core-simpl…) |  |
 
 ## Deferred slices
 

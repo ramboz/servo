@@ -87,8 +87,10 @@ host default is preserved.
 
 **Scope:** limited to the reported `--driver loop` path. The goal driver
 (`_invoke_claude_goal`) has a separate argv plus the ADR-0008-V3 routing audit;
-the broader "refuse-when-nested / can't-get-edit-perms" behavior is ADR-0021 /
-spec 019-04 work, deliberately not folded into this bug fix.
+the broader "refuse-when-nested / can't-get-edit-perms" behavior is
+[ADR-0021](../decisions/adr-0021-oracle-first-agent-loop-optional-consumer.md) /
+[spec 019-04](../specs/019-compile-core-simplification/slice-04-oracle-as-a-service-docs.md)
+work, deliberately not folded into this bug fix.
 
 ## Already tried
 

@@ -109,7 +109,10 @@ in frontmatter). Full loop suite green after the fix (255 passed); ruff clean.
 
 Servo's headless loop shells out to `claude -p`; the result envelope is a
 first-class failure surface, distinct from the oracle score. Related: Bug 002
-(the same run later failed on edit permissions once auth was fixed).
+(the same run later failed on edit permissions once auth was fixed). The
+refuse-loudly behavior this bug fixed is the auth half of
+[spec 019-04](../specs/019-compile-core-simplification/slice-04-oracle-as-a-service-docs.md)'s
+DoR (ADR-0021).
 
 ## Main recheck
 

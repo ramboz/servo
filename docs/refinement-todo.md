@@ -527,3 +527,40 @@ ADR number.
 **Surfaced by:** this session, ADR-0019 authoring (`adr.py index
 docs/decisions`, 2026-07-01) — full-index diff showed 17 of 18 pre-existing
 entries degraded, one to a completely different unrelated description.
+
+---
+
+## Silent permission denial has no detection signal (agent-loop can't distinguish it from a genuine plateau)
+
+**Deferred:** Bugs 001/002/004 (all DONE) closed the two *detectable* symptoms
+ADR-0021 named — a hard auth/API error envelope (`is_error`/`api_error_status`)
+and an unforwarded target `.claude/settings.json` — for both the loop driver
+and the goal driver. But a third case remains structurally undetectable: when
+a target declares **no** `.claude/settings.json` and the host's default
+(prompt-on-tool) policy silently denies edits, the spawned `claude -p` turn
+can complete "successfully" (`is_error: false`, real turns, real cost) with
+**zero file changes** — there is no error envelope to inspect. Direct grep
+across `loop.py`, the three bug records, and ADR-0021 confirms no env var,
+parent-process signal, or other mechanism exists to positively detect "I am
+nested inside a permission-restricted host" ex ante; ADR-0021's own
+Alternatives Considered explicitly rejects trying to defeat the host's safety
+classifier. This case degrades to the existing `oracle_plateau` terminal
+reason — the ADR's accepted fallback for a genuinely-stuck (vs.
+structurally-blocked) run — so an operator sees a plateau and cannot tell
+from the loop's output alone whether the model is stuck or whether it was
+never allowed to write.
+
+**Resolution trigger:** A future Claude Code release documents a
+nesting/restriction signal (an env var, a parent-process marker, or an API
+that reports the effective permission mode) that `loop.py` could inspect
+before or after an iteration. When that lands, add a dedicated `REASON_*`
+(e.g. `edits_denied` or `permission_restricted`) distinct from
+`oracle_plateau`, with a regression test mirroring `ClaudeErrorEnvelopeTests`
+/ `LoopForwardsTargetSettingsTests`. Until then, inventing a heuristic (e.g.
+sniffing an undocumented env var) would be speculative, not grounded, and is
+deliberately out of scope.
+
+**Surfaced by:** spec 019 slice 019-04 DoR/Assumption A1 (oracle-as-a-service
+docs) — the slice's grounded doc-gap review found no detection signal exists
+after Bugs 001/002/004 closed the two detectable cases; recorded here rather
+than papered over.
