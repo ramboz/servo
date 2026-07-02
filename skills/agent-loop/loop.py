@@ -1235,6 +1235,23 @@ def _budget_floor_hit(cost_ceiling: float, cumulative: float) -> bool:
     return (cost_ceiling - cumulative) < MIN_BUDGET_FLOOR_USD
 
 
+def _settings_args(target: Path) -> list[str]:
+    """`--settings <file>` for the target's own `.claude/settings.json`, else `[]`.
+
+    Bug 002: a headless `claude -p` inherits the host's default (prompt-on-tool)
+    permission mode, which denies Write/Edit/Bash unattended — so a target that
+    pre-authorizes its tools in a committed `.claude/settings.json` still can't
+    edit files. Forwarding that file lets such a target run unattended. Only the
+    target's OWN committed settings are forwarded (never a synthesized bypass
+    mode), so host-level managed policy still governs; when the target declares
+    no settings the flag is omitted and the host default is preserved.
+    """
+    settings = target / ".claude" / "settings.json"
+    if settings.is_file():
+        return ["--settings", str(settings)]
+    return []
+
+
 def _invoke_claude(
     prompt: str, target: Path, *,
     max_budget_usd: float,
@@ -1275,6 +1292,7 @@ def _invoke_claude(
     global _active_subprocess
     cmd: list[str] = ["claude", "-p", "--output-format", "json"]
     cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    cmd.extend(_settings_args(target))
     if agent_name:
         cmd.extend(["--agent", agent_name])
     if session_id:
@@ -1318,6 +1336,20 @@ def _invoke_claude(
             data = None
 
     if data is not None:
+        # Bug 001: a parseable envelope is not automatically a scored iteration.
+        # A hard invocation failure (auth / API / rate-limit) also returns valid
+        # JSON, but with `is_error: true` and no work done — scoring it masks the
+        # real cause as an oracle plateau. The ONLY legitimate `is_error: true`
+        # envelopes in loop mode are the `--max-budget-usd` / `--max-turns` halts
+        # (they carry real partial work worth scoring), so exclude just those.
+        if data.get("is_error") and str(data.get("subtype") or "") not in (
+            SUBTYPE_ERROR_MAX_BUDGET, SUBTYPE_ERROR_MAX_TURNS,
+        ):
+            status = data.get("api_error_status")
+            detail = f" (api_error_status={status})" if status else ""
+            raw = str(data.get("result") or data.get("subtype") or "error").strip()
+            first_line = raw.splitlines()[0] if raw else "error"
+            return None, f"claude -p invocation failed{detail}: {first_line[:200]}"
         # Treat as success regardless of exit code — `--max-budget-usd` halt
         # can produce non-zero + parseable JSON, and that's the iteration's
         # result not an invocation failure.
@@ -2070,6 +2102,10 @@ def _invoke_claude_goal(
     ]
     if max_budget_usd is not None and max_budget_usd > 0:
         cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    # Bug 004 (parity with bug 002): forward the target's own committed
+    # .claude/settings.json so a /goal run against a target that pre-authorizes
+    # its tools runs unattended. Same conservative semantics as the loop driver.
+    cmd.extend(_settings_args(target))
     cmd.append(prompt)
     try:
         proc = subprocess.Popen(
@@ -2385,6 +2421,29 @@ def run_goal_loop(
     cost_usd = result_cost
     num_turns = result_num_turns
     transcript_showed_pass = _scan_pass_sentinel(raw_stdout)
+
+    # Bug 004 (parity with bug 001): a hard /goal invocation failure returns a
+    # parseable result event with `is_error: true` (auth / API / rate-limit).
+    # Surface it as claude_invocation_failed BEFORE running the final gate —
+    # otherwise the gate reports the unchanged oracle state as
+    # `oracle_below_threshold`, masking the real cause. The budget/turn caps are
+    # `is_error: true` too but carry real work, so exclude them (handled below).
+    if result_event.get("is_error") and subtype not in (
+        SUBTYPE_ERROR_MAX_TURNS, SUBTYPE_ERROR_MAX_BUDGET,
+    ):
+        status = result_event.get("api_error_status")
+        detail = f" (api_error_status={status})" if status else ""
+        raw = str(result_event.get("result") or subtype or "error").strip()
+        first_line = raw.splitlines()[0] if raw else "error"
+        sys.stderr.write(
+            f"loop: claude -p invocation failed{detail}: {first_line[:200]}\n")
+        return _finalize(
+            REASON_CLAUDE_INVOCATION_FAILED, cumulative_cost_usd=cost_usd,
+            final_oracle_status=STATUS_ENV_ERROR, subtype=subtype,
+            claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
+            transcript_showed_pass=transcript_showed_pass,
+            exit_code=EXIT_ENV_ERROR,
+        )
 
     # AC4: the FINAL gate.py run is the authority — never the transcript judge.
     # Run it on every clean-return path (incl. the caps) to populate the

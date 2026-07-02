@@ -1,15 +1,15 @@
 ---
-status: REPORTED
-tier:
-severity:
+status: DONE
+tier: standard
+severity: high
 claimed_by: main
-regression_test:
-main_repro_checked_at:
-main_repro_ref:
-main_repro_result:
-red_confirmed_at:
-green_confirmed_at:
-fix_class:
+regression_test: skills/agent-loop/test_loop.py::ClaudeErrorEnvelopeTests
+main_repro_checked_at: 2026-07-02
+main_repro_ref: origin/main@45d8dc0
+main_repro_result: reproduces
+red_confirmed_at: 2026-07-02
+green_confirmed_at: 2026-07-02
+fix_class: local_patch
 security_surface: false
 escalated_to:
 ---
@@ -46,29 +46,47 @@ below-threshold iteration.
 
 ## Hypotheses
 
-1. **(leading)** `loop.py` inspects only the parsed oracle score + the agent
-   `verdict` block, and never checks the `claude -p` **result envelope**
-   (`is_error`, `api_error_status`, `subtype`). An errored invocation is scored
-   as a real iteration.
-2. A `cost_usd: 0` + missing-`modelUsage` iteration is inherently non-productive
-   and should be treated as a failed invocation, not a scored one.
+- [x] **(leading)** `loop.py` inspects only the parsed oracle score + the agent
+  `verdict` block, and never checks the `claude -p` **result envelope**
+  (`is_error`, `api_error_status`, `subtype`). An errored invocation is scored
+  as a real iteration. *Confirm:* read `_invoke_claude`'s return path. *Falsify:*
+  find an existing error-envelope check.
+- [ ] A `cost_usd: 0` + missing-`modelUsage` iteration is inherently
+  non-productive and should be treated as a failed invocation, not a scored one.
+  *Confirm:* correlates with the error envelope. *Falsify:* a legitimate
+  zero-cost iteration exists (it does not — every real iteration has usage).
 
 ## Root cause
 
-_Not yet diagnosed (REPORTED). See hypotheses._
+**Confirmed by code inspection** (`skills/agent-loop/loop.py:1320-1324`).
+`_invoke_claude` returns **any parseable JSON dict as success** —
+`if data is not None: return data, None` — regardless of the envelope's
+`is_error` / `api_error_status` / `subtype`. The `claude_invocation_failed`
+path (loop.py:1780-1787, exit 2) fires *only* when the JSON is unparseable or
+the process exits non-zero **without** JSON. A hard auth/API error
+(`is_error: true, api_error_status: 401`) is still valid JSON, so it is scored
+as a normal below-threshold iteration and the loop plateaus (or, with plateau
+disabled, exhausts `max_iterations`) instead of surfacing the invocation
+failure. The budget/turn halts (`error_max_budget_usd` / `error_max_turns`)
+are the *only* legitimate `is_error: true` envelopes in loop mode and must stay
+scored (the per-iteration `--max-budget-usd` floor documented at
+loop.py:1254-1261).
 
 ## Fix class
 
-_TBD (likely `local_patch` in loop.py's result-handling)._
+`local_patch` — `_invoke_claude`'s result-handling in `loop.py`.
 
 ## Fix
 
-**Direction (not yet implemented):** detect `is_error: true` (or an
-`api_error_status`, or an error `subtype`) in the `claude -p` result and halt
-with `terminal_reason: claude_invocation_failed` (exit 2, per the loop's closed
-exit contract) instead of scoring it and plateauing. A run of cost-0 /
-empty-`modelUsage` iterations is a strong secondary signal of a broken
-invocation, not a plateau.
+`_invoke_claude` (`skills/agent-loop/loop.py`) now inspects the parsed envelope
+before returning it as a scored iteration: if `is_error` is truthy **and** the
+`subtype` is not one of the legitimate budget/turn halts
+(`error_max_budget_usd` / `error_max_turns`), it returns `(None, breadcrumb)`
+— which the loop already maps to `terminal_reason: claude_invocation_failed`
+(exit 2). The breadcrumb names `api_error_status` and the first line of
+`result`, so the operator sees the real cause (e.g. `api_error_status=401`)
+instead of a plateau. The two budget/turn subtypes stay scored because they
+carry real partial work (the per-iteration `--max-budget-usd` floor).
 
 ## Already tried
 
@@ -76,15 +94,23 @@ n/a (reported, not yet worked).
 
 ## Regression test
 
-_TBD — a stub `claude -p` returning an `is_error:true`/401 envelope should drive
-`loop.py` to `claude_invocation_failed`, not `oracle_plateau`._
+`skills/agent-loop/test_loop.py::ClaudeErrorEnvelopeTests` — two tests:
+`test_auth_error_envelope_halts_invocation_failed` (is_error/401 exit-0 JSON →
+rc=2, `claude_invocation_failed`, `401` in stderr) and
+`test_budget_halt_envelope_is_still_scored` (is_error + `error_max_budget_usd`
+→ still scored, runs to `max_iterations_reached`), guarding the fix boundary.
 
 ## Proof
 
-_TBD._
+Red→green witnessed by the teeth gate (`red_confirmed_at` / `green_confirmed_at`
+in frontmatter). Full loop suite green after the fix (255 passed); ruff clean.
 
 ## Learning
 
 Servo's headless loop shells out to `claude -p`; the result envelope is a
 first-class failure surface, distinct from the oracle score. Related: Bug 002
 (the same run later failed on edit permissions once auth was fixed).
+
+## Main recheck
+
+- 2026-07-02 - `origin/main@45d8dc0` -> reproduces: HEAD==origin/main==45d8dc0; _invoke_claude (loop.py:1320-1324) returns any parseable JSON dict as success, so an is_error/401 envelope is scored not failed. New ClaudeErrorEnvelopeTests reproduces (RED) against this code.

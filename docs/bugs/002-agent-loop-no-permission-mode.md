@@ -1,15 +1,15 @@
 ---
-status: REPORTED
-tier:
-severity:
+status: DONE
+tier: standard
+severity: high
 claimed_by: main
-regression_test:
-main_repro_checked_at:
-main_repro_ref:
-main_repro_result:
-red_confirmed_at:
-green_confirmed_at:
-fix_class:
+regression_test: skills/agent-loop/test_loop.py::LoopForwardsTargetSettingsTests
+main_repro_checked_at: 2026-07-02
+main_repro_ref: origin/main@45d8dc0
+main_repro_result: reproduces
+red_confirmed_at: 2026-07-02
+green_confirmed_at: 2026-07-02
+fix_class: local_patch
 security_surface: false
 escalated_to:
 ---
@@ -43,33 +43,52 @@ blocker.
 
 ## Hypotheses
 
-1. **(leading)** `loop.py` builds `["claude","-p","--output-format","json",
-   "--agent",<name>, …]` with no permission flag and no `--settings`, so the
-   spawned runner inherits the host's default (prompt-on-tool) mode, which in a
-   headless context = deny.
-2. It should pass/inherit the **target repo's** permission settings so a repo
-   that pre-authorizes its tools (an allow-list in `.claude/settings.json`) runs
-   unattended out of the box.
+- [x] **(leading)** `loop.py` builds `["claude","-p","--output-format","json",
+  "--agent",<name>, …]` with no permission flag and no `--settings`, so the
+  spawned runner inherits the host's default (prompt-on-tool) mode, which in a
+  headless context = deny. *Confirm:* read `_invoke_claude`'s argv. *Falsify:*
+  find a `--settings`/`--permission-mode` in the argv.
+- [ ] It should pass/inherit the **target repo's** permission settings so a repo
+  that pre-authorizes its tools (an allow-list in `.claude/settings.json`) runs
+  unattended out of the box. *Confirm:* a control `claude -p --settings
+  <allow-list>` allowed edits. *Falsify:* edits still denied with settings.
 
 ## Root cause
 
-_Not yet diagnosed (REPORTED). See hypotheses._
+**Confirmed by code inspection** (`skills/agent-loop/loop.py:1276-1282`).
+`_invoke_claude` constructs its `claude -p` argv as
+`["claude","-p","--output-format","json","--max-budget-usd",…]` plus optional
+`--agent`/`--resume`/prompt — **no `--settings` and no `--permission-mode`**.
+The spawned runner therefore inherits the host's default (prompt-on-tool)
+permission mode, which in a headless (no TTY) context denies `Write`/`Edit`/
+`Bash`. A target repo that pre-authorizes its tools in a committed
+`.claude/settings.json` gets no benefit, so the runner burns tokens without
+editing files and the loop halts on `context_full`/`oracle_plateau`. (Scope:
+the reported repro is `--driver loop`; the goal driver has a separate argv +
+routing audit and is out of scope for this bug — see Fix.)
 
 ## Fix class
 
-_TBD (likely `local_patch` in loop.py's `claude -p` argv construction)._
+`local_patch` — argv construction in `_invoke_claude` (loop driver).
 
 ## Fix
 
-**Direction (not yet implemented):** resolve the target repo's
-`.claude/settings.json` and pass `--settings <that>` (or an explicit
-`--permission-mode` sourced from config) to the spawned `claude -p`, so a target
-that pre-authorizes its tools runs unattended. **Caveat:** this must NOT silently
-enable an unrestricted agent when the host policy forbids it — pair with the
-"refuse-when-nested / can't-get-edit-perms" behavior proposed in the
-oracle-first scoping ADR. Passing permissive settings via shell indirection from
-another auto-mode agent is exactly what a host safety classifier will (correctly)
-block.
+New helper `_settings_args(target)` (`skills/agent-loop/loop.py`) returns
+`["--settings", "<target>/.claude/settings.json"]` when that file exists, else
+`[]`. `_invoke_claude` extends its `claude -p` argv with it, so a target that
+pre-authorizes its tools in a committed `.claude/settings.json` runs unattended.
+
+**Security boundary (addresses the record's caveat):** the fix forwards ONLY
+the target's own committed settings file — it never synthesizes or injects a
+bypass `--permission-mode`. Host-level managed policy still merges on top and
+governs, so this cannot silently enable an unrestricted agent where the host
+forbids it. When the target declares no settings, the flag is omitted and the
+host default is preserved.
+
+**Scope:** limited to the reported `--driver loop` path. The goal driver
+(`_invoke_claude_goal`) has a separate argv plus the ADR-0008-V3 routing audit;
+the broader "refuse-when-nested / can't-get-edit-perms" behavior is ADR-0021 /
+spec 019-04 work, deliberately not folded into this bug fix.
 
 ## Already tried
 
@@ -78,15 +97,23 @@ direction works when the loop supplies settings.
 
 ## Regression test
 
-_TBD — assert the loop's `claude -p` argv includes the resolved `--settings`
-(or `--permission-mode`) when the target declares one._
+`skills/agent-loop/test_loop.py::LoopForwardsTargetSettingsTests` — two tests:
+`test_forwards_settings_when_target_declares_them` (target `.claude/settings.json`
+→ argv carries `--settings <that resolved path>`) and
+`test_no_settings_flag_when_target_has_none` (no settings → no `--settings`).
 
 ## Proof
 
-_TBD._
+Red→green witnessed by the teeth gate (`red_confirmed_at` / `green_confirmed_at`).
+Existing loop tests unaffected (none declare a target `.claude/settings.json`, so
+`_settings_args` returns `[]`); ruff clean.
 
 ## Learning
 
 Related: Bug 001 (same run's earlier auth failure). Together they show servo's
 headless loop cannot run **nested inside another (sandboxed) agent** — it is a
 top-level / user-run tool. See the oracle-first scoping ADR.
+
+## Main recheck
+
+- 2026-07-02 - `origin/main@45d8dc0` -> reproduces: HEAD==origin/main==45d8dc0; _invoke_claude argv (loop.py:1276-1282) has no --settings/--permission-mode. New LoopForwardsTargetSettingsTests reproduces (RED).

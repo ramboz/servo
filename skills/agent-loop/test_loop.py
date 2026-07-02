@@ -921,6 +921,163 @@ class ClaudeInvocationFailedTests(unittest.TestCase):
         self.assertIn("exited 42", result.stderr)
 
 
+class ClaudeErrorEnvelopeTests(unittest.TestCase):
+    """Bug 001 — a hard `claude -p` error envelope is an invocation failure.
+
+    A `claude -p` run that cannot authenticate emits *parseable* JSON with
+    `is_error: true` / `api_error_status: 401` and exits 0. Before the fix,
+    `_invoke_claude` returned any parseable dict as success, so the loop scored
+    the errored turn as a normal below-threshold iteration and halted on
+    `oracle_plateau` / `max_iterations_reached` — masking the auth failure.
+    The loop must instead halt on `claude_invocation_failed` (rc=2) and name
+    the real cause. Budget/turn halts (`error_max_budget_usd` /
+    `error_max_turns`) are the only legitimate `is_error: true` envelopes in
+    loop mode and must stay scored.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-bug001-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _summary(self, stdout: str) -> dict:
+        return _stdout_json_lines(stdout)[-1]
+
+    def test_auth_error_envelope_halts_invocation_failed(self):
+        # Mirrors the reported repro: valid JSON, exit 0, but is_error/401 and
+        # no modelUsage — exactly what a gateway auth failure returns.
+        payload = json.dumps({
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": True,
+            "api_error_status": 401,
+            "session_id": "auth-fail",
+            "total_cost_usd": 0,
+            "num_turns": 0,
+            "result": (
+                "Failed to authenticate. API Error: 401 Invalid "
+                "authentication credentials"
+            ),
+        })
+        _mock_claude_constant(self.bindir, payload, self.counter)
+        result = _run_loop(self.target, "--prompt", "x", mock_bindir=self.bindir)
+        self.assertEqual(
+            result.returncode, 2,
+            f"expected rc=2, got {result.returncode}; stderr={result.stderr}",
+        )
+        summary = self._summary(result.stdout)
+        self.assertEqual(
+            summary["terminal_reason"], "claude_invocation_failed")
+        self.assertEqual(summary["iterations_completed"], 0)
+        # The operator must see the real cause, not "the model isn't improving".
+        self.assertIn("401", result.stderr)
+
+    def test_budget_halt_envelope_is_still_scored(self):
+        # A per-iteration --max-budget-usd halt is is_error:true too, but it
+        # carries partial work and must remain a scored iteration.
+        payload = json.dumps({
+            "type": "result",
+            "subtype": "error_max_budget_usd",
+            "is_error": True,
+            "session_id": "budget-halt",
+            "total_cost_usd": 0.05,
+            "num_turns": 1,
+            "result": "partial work done before budget hit",
+            "usage": {
+                "input_tokens": 100,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 10,
+            },
+            "modelUsage": {
+                "claude-sonnet-4-6": {
+                    "inputTokens": 100,
+                    "outputTokens": 10,
+                    "contextWindow": 200000,
+                },
+            },
+        })
+        _mock_claude_constant(self.bindir, payload, self.counter)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f"expected rc=0, got {result.returncode}; stderr={result.stderr}",
+        )
+        summary = self._summary(result.stdout)
+        self.assertEqual(
+            summary["terminal_reason"], "max_iterations_reached")
+        self.assertEqual(summary["iterations_completed"], 2)
+
+
+class LoopForwardsTargetSettingsTests(unittest.TestCase):
+    """Bug 002 — the loop driver forwards the target's own .claude/settings.json.
+
+    A headless `claude -p` inherits the host's default (prompt-on-tool)
+    permission mode, which denies Write/Edit/Bash unattended. A target repo
+    that pre-authorizes its tools in a committed `.claude/settings.json` must
+    have that file forwarded via `--settings` so the runner can edit. Only the
+    target's OWN settings are forwarded — this never injects a bypass mode, so
+    host managed policy still governs. When the target declares no settings,
+    the flag is omitted (host default preserved).
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-bug002-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_forwards_settings_when_target_declares_them(self):
+        settings = self.target / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(json.dumps(
+            {"permissions": {"allow": ["Bash", "Edit", "Write"]}}))
+        _mock_claude_with_args_log(
+            self.bindir, _claude_json_payload(), self.counter, self.args_log)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        invocations = _read_args_log(self.args_log)
+        self.assertEqual(len(invocations), 1)
+        settings_arg = _find_flag_value(invocations[0], "--settings")
+        self.assertIsNotNone(
+            settings_arg, "loop did not forward the target's --settings")
+        # loop.py resolves the target, so compare resolved paths (macOS
+        # /var -> /private/var symlink otherwise trips the equality).
+        self.assertEqual(Path(settings_arg).resolve(), settings.resolve())
+
+    def test_no_settings_flag_when_target_has_none(self):
+        _mock_claude_with_args_log(
+            self.bindir, _claude_json_payload(), self.counter, self.args_log)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        invocations = _read_args_log(self.args_log)
+        self.assertEqual(len(invocations), 1)
+        self.assertNotIn("--settings", invocations[0])
+
+
 # ============================================================================
 # PR-review follow-on: schema_version on every JSON line (ADR-0002 mirror)
 # ============================================================================
@@ -4749,6 +4906,58 @@ class GoalOuterCapsTests(_GoalTargetMixin, unittest.TestCase):
         argv = self._argv()
         self.assertIsNone(_find_flag_value(argv, "--max-budget-usd"))
         self.assertEqual(_find_flag_value(argv, "--max-turns"), "5")
+
+
+class GoalDriverParityTests(_GoalTargetMixin, unittest.TestCase):
+    """Bug 004 — the goal driver mirrors the loop driver's 001/002 safeguards.
+
+    (1) It forwards the target's own `.claude/settings.json` via `--settings`
+    (bug 002 twin). (2) A hard `/goal` error envelope (`is_error: true` with an
+    `api_error_status`, and a non-cap subtype) halts on `claude_invocation_failed`
+    (exit 2) naming the cause, instead of running the final gate and reporting a
+    misleading `oracle_below_threshold` (bug 001 twin).
+    """
+
+    def test_goal_forwards_target_settings(self):
+        self._setup_target(_passing_oracle())
+        settings = self.target / ".claude" / "settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(json.dumps(
+            {"permissions": {"allow": ["Bash", "Edit", "Write"]}}))
+        args_log = Path(self.tmpdir) / "args.log"
+        _mock_claude_goal(
+            self.bindir,
+            _goal_stream_jsonl(assistant_text=GOAL_PASS_SENTINEL),
+            args_log=args_log,
+        )
+        _run_goal(self.target, "--prompt", "x",
+                  mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        invocations = _read_args_log(args_log)
+        self.assertEqual(len(invocations), 1, "expected a single claude -p call")
+        settings_arg = _find_flag_value(invocations[0], "--settings")
+        self.assertIsNotNone(
+            settings_arg, "goal driver did not forward the target's --settings")
+        self.assertEqual(Path(settings_arg).resolve(), settings.resolve())
+
+    def test_goal_auth_error_envelope_halts_invocation_failed(self):
+        self._setup_target(_below_threshold_oracle())
+        ev = _goal_result_event(
+            subtype="error_during_execution", is_error=True,
+            result_text=("Failed to authenticate. API Error: 401 Invalid "
+                         "authentication credentials"),
+        )
+        ev["api_error_status"] = 401
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(result_event=ev))
+        result = _run_goal(self.target, "--prompt", "x",
+                           mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(
+            result.returncode, 2,
+            f"expected rc=2, got {result.returncode}; stderr={result.stderr}")
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
+        # The operator must see the real cause, not a below-threshold oracle.
+        self.assertIn("401", result.stderr)
 
 
 # ---------------------------------------------------------------------------
