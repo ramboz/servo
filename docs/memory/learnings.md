@@ -3,6 +3,18 @@
 > Durable, cross-session learnings captured at the close of specs and bugs.
 > One short entry per learning; link the originating record.
 
+## Tooling
+
+### Test runner needs PYTHONUTF8=1 under a C locale
+
+Running this repo's suite with a Python 3.13 interpreter under a `C` locale
+(`LANG`/`LC_ALL` unset) raises a spurious `SyntaxError` importing
+`skills/spec-oracle/checks.py`, which carries an em-dash in a docstring.
+`ast.parse(..., encoding='utf-8')` succeeds — the failure is the
+interpreter's source-decoding under `C`, not a real syntax error. Set
+`PYTHONUTF8=1` (or run under any non-`C` locale) before invoking
+`python3 -m pytest`. Surfaced during spec 019 slice 019-05.
+
 ## Bugs
 
 ### Bug 001 — agent-loop masks auth error as plateau

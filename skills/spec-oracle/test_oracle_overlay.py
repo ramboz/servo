@@ -22,6 +22,7 @@ for the end-to-end pass/fail/env-error paths (the DoD's integration check).
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -424,6 +425,133 @@ class GateIntegrationTests(unittest.TestCase):
         # --json payload reports the weighted composite (key: "composite").
         self.assertEqual(payload.get("composite"), 1.0)
         self.assertEqual(payload.get("status"), "pass")
+
+
+# ===========================================================================
+# CLI
+# ===========================================================================
+
+
+class CliTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self.tmp.name)
+        self.oracle = self.target / "oracle.sh"
+        self.oracle.write_text(scaffold._render_oracle([]))
+        _write_plan(self.target, "099-demo",
+                    [{"id": "AC-1", "family": "file_presence", "path": "x"}])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, *args) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [sys.executable, str(OVERLAY_PY), *[str(a) for a in args]],
+            capture_output=True, text=True)
+
+    def test_generate_via_cli(self):
+        res = self._run("generate", self.target, "099-demo")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        oracle_dir = self.target / ".servo" / "spec-oracles" / "099-demo"
+        self.assertTrue((oracle_dir / "oracle.sh.fragment").is_file())
+        self.assertTrue((oracle_dir / "checks.py").is_file())
+
+    def test_approve_via_cli(self):
+        self._run("install", self.target, "099-demo")
+        res = self._run("approve", self.target, "099-demo")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        plan = json.loads(
+            (self.target / ".servo" / "spec-oracles" / "099-demo"
+             / "checks.json").read_text())
+        self.assertEqual(plan["approval_status"], "approved")
+
+    def test_install_then_uninstall_via_cli(self):
+        res = self._run("install", self.target, "099-demo")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn("# SEED:start spec_oracle_099_demo",
+                      self.oracle.read_text())
+        res2 = self._run("uninstall", self.target, "099-demo")
+        self.assertEqual(res2.returncode, 0, res2.stderr)
+        self.assertNotIn("# SEED:start spec_oracle_099_demo",
+                         self.oracle.read_text())
+
+
+if __name__ == "__main__":
+    unittest.main()
+# ===========================================================================
+# Slice 019-05 — single-to-multi-component upgrade
+# ===========================================================================
+
+
+class SingleToMultiComponentUpgradeTests(unittest.TestCase):
+    """AC #4 — `install` splicing a second component into a freshly
+    scaffolded single-component `oracle.sh` still finds the `COMPONENTS=(`
+    anchor and `# SEED:` markers (the single-component runtime branch does
+    not disturb the regexes `install` relies on), and the resulting
+    oracle.sh correctly falls onto the multi-component weighted-average
+    branch."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self.tmp.name)
+        scaffold.install(self.target, force=True)
+        # Seed a single real component (mirrors test_scaffold.py's
+        # placeholder-seeding convention) so the target starts with exactly
+        # one COMPONENTS entry before the overlay adds a second.
+        oracle = self.target / "oracle.sh"
+        text = oracle.read_text()
+        text, n = re.subn(
+            r"COMPONENTS=\(\s*\n", 'COMPONENTS=(\n  "placeholder:1.0"\n', text, count=1)
+        assert n == 1, "could not seed a baseline placeholder component"
+        text, n2 = re.subn(
+            r'(weighted_sum="0")',
+            "\n# SEED:start placeholder\n"
+            "score_placeholder() {\n"
+            '  echo "${PLACEHOLDER_SCORE:-1.0}"\n'
+            "}\n"
+            "# SEED:end placeholder\n"
+            r"\1",
+            text, count=1)
+        assert n2 == 1, "could not insert baseline placeholder SEED block"
+        oracle.write_text(text)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_install_finds_anchors_on_single_component_oracle(self):
+        oracle_before = (self.target / "oracle.sh").read_text()
+        self.assertEqual(oracle_before.count('"placeholder:1.0"'), 1)
+        _write_plan(self.target, "099-demo",
+                    [{"id": "AC-1", "family": "file_presence", "path": "present.txt"}])
+        # Must not raise — the COMPONENTS=( and SEED-block anchors must
+        # still be present verbatim in the single-component template.
+        ov.install(self.target, "099-demo")
+        oracle_after = (self.target / "oracle.sh").read_text()
+        self.assertIn("# SEED:start spec_oracle_099_demo", oracle_after)
+        self.assertRegex(oracle_after, r'"spec_oracle_099_demo:[0-9.]+"')
+        self.assertIn('"placeholder:1.0"', oracle_after,
+                      "baseline component must survive the splice")
+
+    def test_upgraded_oracle_takes_weighted_average_branch(self):
+        (self.target / "present.txt").write_text("x")
+        _write_plan(self.target, "099-demo",
+                    [{"id": "AC-1", "family": "file_presence", "path": "present.txt"}])
+        ov.install(self.target, "099-demo")
+        ov.approve(self.target, "099-demo")
+        env = os.environ.copy()
+        env["PLACEHOLDER_SCORE"] = "0.0"
+        result = subprocess.run(
+            ["bash", str(self.target / "oracle.sh")],
+            capture_output=True, text=True,
+            env=env,
+            cwd=str(self.target),
+        )
+        # placeholder=0.0 (weight 1.0) + spec-oracle=1.0 (weight 1.0),
+        # equally weighted -> composite 0.5. Proves the two-component
+        # oracle takes the weighted-average branch, not the single-score
+        # direct-compare branch.
+        self.assertIn("composite=0.5", result.stdout,
+                      f"expected a weighted-average composite: {result.stdout!r}")
 
 
 # ===========================================================================

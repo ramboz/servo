@@ -454,6 +454,219 @@ class EnvErrorDistinguishableTests(_ScaffoldedFixture):
         )
 
 
+# ============================================================================
+# Slice 019-05 — single-component-oracle
+# ============================================================================
+
+
+def _seed_second_placeholder_component(target: Path, name: str = "placeholder2"):
+    """Add a second controllable component to a scaffolded oracle.sh.
+
+    Mirrors `_seed_placeholder_component` but registers under a distinct
+    name, so a fixture can carry exactly two components (the ``else``
+    weighted-average branch) without colliding with the first."""
+    oracle = target / "oracle.sh"
+    text = oracle.read_text()
+    new_text, n = re.subn(
+        r'("placeholder:1\.0"\n)',
+        r'\1  "' + name + r':1.0"\n',
+        text,
+        count=1,
+    )
+    if n == 0:
+        raise RuntimeError("could not find COMPONENTS entry to seed alongside")
+    seed_block = (
+        "\n# SEED:start " + name + "\n"
+        "score_" + name + "() {\n"
+        '  echo "${' + name.upper() + '_SCORE:-1.0}"\n'
+        "}\n"
+        "# SEED:end " + name + "\n"
+    )
+    new_text2, n2 = re.subn(
+        r'(weighted_sum="0")',
+        seed_block + r"\1",
+        new_text,
+        count=1,
+    )
+    if n2 == 0:
+        raise RuntimeError("could not find driver-loop anchor to insert 2nd SEED block")
+    oracle.write_text(new_text2)
+
+
+class SingleComponentNoWeightedAverageTests(_ScaffoldedFixture):
+    """AC #1 — a one-component oracle.sh skips the weighted-sum/awk-average
+    arithmetic entirely; the lone component's score is compared directly to
+    THRESHOLD, so its declared weight is inert on this path."""
+
+    def test_rendered_script_has_single_component_branch(self):
+        oracle_text = (self.target / "oracle.sh").read_text()
+        self.assertIn(
+            'if [ "${#COMPONENTS[@]}" -eq 1 ]', oracle_text,
+            "expected a runtime branch keyed on a single registered component",
+        )
+
+    def test_weight_is_inert_on_single_component_path(self):
+        # Change the sole component's declared weight; if the weighted-sum
+        # machinery were still silently in play, a weight change could not
+        # change the outcome anyway for a single term (score*w/w == score),
+        # so this alone would not prove inertness. Combine with the
+        # code-shape check above: no weighted_sum/total_weight variable is
+        # touched on the taken branch for score 0.4 against a 0.5 threshold
+        # regardless of the (irrelevant) weight value.
+        oracle = self.target / "oracle.sh"
+        text = oracle.read_text()
+        heavy_text, n = re.subn(r'"placeholder:1\.0"', '"placeholder:99.0"', text, count=1)
+        self.assertEqual(n, 1, "could not rewrite placeholder weight")
+        oracle.write_text(heavy_text)
+        result = run_oracle(self.target, {"PLACEHOLDER_SCORE": "0.4", "THRESHOLD": "0.5"})
+        self.assertEqual(
+            result.returncode, 1,
+            "a weight of 99.0 must not rescue a below-threshold score on the "
+            f"single-component path: stderr={result.stderr}\nstdout={result.stdout}",
+        )
+        self.assertIn(
+            "composite=0.4", result.stdout,
+            f"composite should equal the raw score, not a weighted value: {result.stdout!r}",
+        )
+
+    def test_no_weighted_sum_arithmetic_on_taken_branch(self):
+        # bash -x traces every executed simple command; a run must show no
+        # awk invocation actually *computing* weighted_sum/total_weight (the
+        # multiplication/division bookkeeping) when there is exactly one
+        # component — the bare "weighted_sum=0" declaration is harmless
+        # unconditional init, so assert on the awk expressions that do the
+        # weighted arithmetic, not the variable name alone.
+        env = os.environ.copy()
+        env["PLACEHOLDER_SCORE"] = "1.0"
+        trace = subprocess.run(
+            ["bash", "-x", str(self.target / "oracle.sh")],
+            capture_output=True, text=True, env=env, cwd=str(self.target),
+        )
+        self.assertNotIn(
+            "s + c*w", trace.stderr,
+            f"weighted-sum awk formula should not execute for one component: {trace.stderr!r}",
+        )
+        self.assertNotIn(
+            "s/t", trace.stderr,
+            f"weighted-average division should not execute for one component: {trace.stderr!r}",
+        )
+        self.assertNotRegex(
+            trace.stderr, r"weighted_sum=\d[\d.]*\d",
+            "weighted_sum should stay at its initial value, never reassigned, "
+            f"for one component: {trace.stderr!r}",
+        )
+
+
+class SingleComponentExitContractTests(_ScaffoldedFixture):
+    """AC #2 — the single-component path keeps the same
+    `oracle: composite=<score> threshold=<threshold>` stdout contract and the
+    closed 0/1/2 exit-code contract, mirroring the multi-component coverage
+    in `WeightedCompositeTests` / `ThresholdGateTests` / `EnvErrorDistinguishableTests`."""
+
+    def test_pass_exits_zero_with_summary_line(self):
+        result = run_oracle(self.target, {"PLACEHOLDER_SCORE": "1.0", "THRESHOLD": "0.5"})
+        self.assertEqual(result.returncode, 0,
+                         f"stderr={result.stderr}\nstdout={result.stdout}")
+        self.assertRegex(
+            result.stdout.strip(),
+            r"^oracle:\s+composite=1(\.0+)?\s+threshold=0\.5\s*$",
+        )
+
+    def test_below_threshold_exits_one_with_summary_line(self):
+        result = run_oracle(self.target, {"PLACEHOLDER_SCORE": "0.2", "THRESHOLD": "0.5"})
+        self.assertEqual(result.returncode, 1,
+                         f"stderr={result.stderr}\nstdout={result.stdout}")
+        self.assertRegex(
+            result.stdout.strip(),
+            r"^oracle:\s+composite=0\.2(0*)?\s+threshold=0\.5\s*$",
+        )
+
+    def test_missing_component_exits_two(self):
+        oracle = self.target / "oracle.sh"
+        text = oracle.read_text()
+        new_block = (
+            "# SEED:start placeholder\n"
+            "score_placeholder() {\n"
+            "  if ! command -v servo-test-nonexistent-tool >/dev/null 2>&1; then\n"
+            "    echo \"missing: servo-test-nonexistent-tool\" >&2\n"
+            "    return 2\n"
+            "  fi\n"
+            "  echo \"1.0\"\n"
+            "}\n"
+            "# SEED:end placeholder"
+        )
+        new_text, n = re.subn(
+            r"# SEED:start placeholder\n.*?# SEED:end placeholder",
+            new_block, text, count=1, flags=re.DOTALL,
+        )
+        self.assertEqual(n, 1, "could not seed a missing-tool component")
+        oracle.write_text(new_text)
+        result = run_oracle(self.target)
+        self.assertEqual(result.returncode, 2,
+                         f"stderr={result.stderr}\nstdout={result.stdout}")
+        self.assertNotIn("composite=", result.stdout,
+                         "no summary line should be printed on the missing-component path")
+
+    def test_bad_rc_exits_two(self):
+        oracle = self.target / "oracle.sh"
+        text = oracle.read_text()
+        new_block = (
+            "# SEED:start placeholder\n"
+            "score_placeholder() {\n"
+            "  echo \"boom\" >&2\n"
+            "  return 3\n"
+            "}\n"
+            "# SEED:end placeholder"
+        )
+        new_text, n = re.subn(
+            r"# SEED:start placeholder\n.*?# SEED:end placeholder",
+            new_block, text, count=1, flags=re.DOTALL,
+        )
+        self.assertEqual(n, 1, "could not seed a bad-rc component")
+        oracle.write_text(new_text)
+        result = run_oracle(self.target)
+        self.assertEqual(result.returncode, 2,
+                         f"stderr={result.stderr}\nstdout={result.stdout}")
+
+
+class MultiComponentBranchUnchangedTests(_ScaffoldedFixture):
+    """AC #3 (driver-mechanics half) — with ≥2 registered components, the
+    weighted-average `else` branch still runs; a heavier weight still moves
+    the composite. Complements the full existing `test_scaffold.py`
+    multi-component fixtures (`SignalDetectionTests`) which assert on
+    rendering shape rather than runtime weighting."""
+
+    def setUp(self):
+        super().setUp()
+        _seed_second_placeholder_component(self.target)
+
+    def test_two_components_take_weighted_average_branch(self):
+        result = run_oracle(
+            self.target,
+            {"PLACEHOLDER_SCORE": "1.0", "PLACEHOLDER2_SCORE": "0.0", "THRESHOLD": "0.5"},
+        )
+        # Equal weights (1.0/1.0) average two scores of 1.0 and 0.0 to 0.5.
+        self.assertIn("composite=0.5", result.stdout,
+                      f"expected an averaged composite: {result.stdout!r}")
+        self.assertEqual(result.returncode, 0,
+                         f"0.5 >= threshold 0.5 should pass: stderr={result.stderr}")
+
+    def test_weight_moves_composite_with_two_components(self):
+        oracle = self.target / "oracle.sh"
+        text = oracle.read_text()
+        heavy_text, n = re.subn(r'"placeholder:1\.0"', '"placeholder:3.0"', text, count=1)
+        self.assertEqual(n, 1)
+        oracle.write_text(heavy_text)
+        result = run_oracle(
+            self.target,
+            {"PLACEHOLDER_SCORE": "1.0", "PLACEHOLDER2_SCORE": "0.0", "THRESHOLD": "0.5"},
+        )
+        # (1.0*3.0 + 0.0*1.0) / (3.0+1.0) = 0.75 — proves the weight is live
+        # (not inert) once a second component is registered.
+        self.assertIn("composite=0.75", result.stdout,
+                      f"expected the weight to move the composite: {result.stdout!r}")
+
+
 class SeedBlockTests(unittest.TestCase):
     """AC #4 — # SEED:start <name> / # SEED:end <name> blocks demarcated.
 
@@ -545,6 +758,42 @@ class ShellcheckTests(unittest.TestCase):
             # Wrapper returns 127 when neither local shellcheck nor docker
             # is available — only skip in that case, not when shellcheck
             # is merely absent.
+            if sc.returncode == 127:
+                self.skipTest(f"shellcheck unavailable: {sc.stderr.strip()}")
+            self.assertEqual(
+                sc.returncode, 0,
+                f"shellcheck warnings:\n{sc.stdout}\n{sc.stderr}",
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_rendered_single_component_oracle_shellcheck_clean(self):
+        # Slice 019-05: the multi-detector fixture above only ever exercises
+        # the >=2-component (weighted-average) branch of oracle.sh.template.
+        # Seed exactly one detector so the single-component (direct-compare)
+        # branch is shellchecked too.
+        wrapper = REPO_ROOT / "scripts" / "shellcheck.sh"
+        self.assertTrue(wrapper.exists(),
+                        f"scripts/shellcheck.sh missing at {wrapper}")
+        tmp = tempfile.mkdtemp(prefix="servo-shellcheck-single-")
+        try:
+            target = Path(tmp) / "demo"
+            target.mkdir()
+            (target / "pyproject.toml").write_text(
+                "[tool.pytest.ini_options]\n"
+            )
+            result = run_scaffold(target)
+            self.assertEqual(result.returncode, 0,
+                             f"scaffold failed: {result.stderr}")
+            oracle_text = (target / "oracle.sh").read_text()
+            self.assertEqual(
+                len(re.findall(r'^\s*"[^"]+:[^"]+"\s*$', oracle_text, re.M)), 1,
+                "fixture must render exactly one COMPONENTS entry",
+            )
+            sc = subprocess.run(
+                [str(wrapper), "-S", "warning", str(target / "oracle.sh")],
+                capture_output=True, text=True,
+            )
             if sc.returncode == 127:
                 self.skipTest(f"shellcheck unavailable: {sc.stderr.strip()}")
             self.assertEqual(
