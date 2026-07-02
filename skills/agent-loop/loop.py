@@ -192,6 +192,29 @@ REASON_RUN_ID_COLLISION = "run_id_collision"
 # opts out; a non-git target skips the check entirely.
 REASON_DIRTY_TREE = "dirty_tree"
 
+# Slice 016-02 execution-plan consumption (ADR-0016). `--plan <path>` reads a
+# compiled `plan.json`'s `budget` + `driver` as run defaults; every read failure
+# is a fail-closed rc=2 refusal with a structured stderr reason, mirroring the
+# `state_missing` / `state_schema_mismatch` resume-refusal style. `loop.py`
+# consumes `provenance: compiled` plans only — a `human_edited` plan could carry
+# a loosened brake, so it is refused pending 016-03's clamp (ADR-0016 "clamp,
+# never loosen"; A2 in the slice).
+PLAN_SCHEMA_VERSION = 1
+PROVENANCE_COMPILED = "compiled"
+REASON_PLAN_MISSING = "plan_missing"
+REASON_PLAN_MALFORMED = "plan_malformed"
+REASON_PLAN_SCHEMA_MISMATCH = "plan_schema_mismatch"
+REASON_PLAN_REQUIRES_CLAMP = "plan_requires_clamp"
+# The four budget knobs a compiled plan can supply as run defaults, mapped to
+# the `loop.py` CLI flag they default. Loop-only brakes (context-fill / plateau)
+# are dropped under the goal driver exactly as explicit flags are (slice AC3).
+_PLAN_BUDGET_KEYS = (
+    "max_iterations",
+    "cost_ceiling_usd",
+    "context_fill_threshold",
+    "plateau_window",
+)
+
 # Slice 003-04 state-file constants (per ADR-0004).
 STATE_SCHEMA_VERSION = 1
 STATE_FILE_NAME = "state.json"
@@ -1040,6 +1063,110 @@ def _refuse_preflight(
         "run_id": run_id,
     })
     return EXIT_ENV_ERROR
+
+
+def _refuse_plan(*, reason: str, message: str) -> int:
+    """Fail-closed refusal for a plan-read error (slice 016-02, rc=2).
+
+    Emitted before any run starts (before routing, run-dir creation, or a
+    state.json write), so — unlike `_refuse_preflight` — there is no run-id yet
+    and no configured budget to echo. The summary shape mirrors the preflight
+    refusal (a single JSON line + a stderr breadcrumb) with the plan-read
+    `terminal_reason`; the closed reasons are `plan_missing` / `plan_malformed`
+    / `plan_schema_mismatch` / `plan_requires_clamp`.
+    """
+    sys.stderr.write(f"loop: {message}\n")
+    _emit_json({
+        "terminal_reason": reason,
+        "iterations_completed": 0,
+        "cumulative_cost_usd": 0.0,
+        "final_oracle_status": STATUS_ENV_ERROR,
+    })
+    return EXIT_ENV_ERROR
+
+
+def _load_plan(
+    plan_path: Path,
+) -> tuple[Optional[dict], Optional[tuple[str, str]]]:
+    """Read + validate a compiled `plan.json` (slice 016-02, ADR-0016).
+
+    Returns `(plan_dict, None)` on success, or `(None, (reason, message))` when
+    the plan cannot be consumed — fail-closed, never a partial read. The caller
+    turns the `(reason, message)` pair into an rc=2 `_refuse_plan`. Validation,
+    in order:
+
+    - **missing file** → `plan_missing`.
+    - **unreadable / malformed JSON, or a non-object top level** →
+      `plan_malformed` (mirrors `_load_state`'s absent/unparseable/non-dict
+      collapse; a bare list is not a plan).
+    - **`schema_version` != PLAN_SCHEMA_VERSION** (incl. missing) →
+      `plan_schema_mismatch` (mirrors the resume `state_schema_mismatch` guard).
+    - **`provenance` != "compiled"** → `plan_requires_clamp`: a `human_edited`
+      (or any non-compiled) plan could carry a loosened brake, so it is refused
+      pending 016-03's clamp (A2; ADR-0016 "clamp, never loosen").
+
+    This slice consumes only the `budget` + `driver` fields; `prompt_ref`
+    rendering is out of scope (016-05), so the plan's other fields are inert.
+    """
+    if not plan_path.exists():
+        return None, (
+            REASON_PLAN_MISSING,
+            f"plan file not found at {plan_path}; check the --plan path",
+        )
+    try:
+        data = json.loads(plan_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None, (
+            REASON_PLAN_MALFORMED,
+            f"plan file at {plan_path} is unreadable or not valid JSON",
+        )
+    if not isinstance(data, dict):
+        return None, (
+            REASON_PLAN_MALFORMED,
+            f"plan file at {plan_path} is not a JSON object",
+        )
+    schema = data.get("schema_version")
+    if schema != PLAN_SCHEMA_VERSION:
+        return None, (
+            REASON_PLAN_SCHEMA_MISMATCH,
+            f"plan schema_version mismatch: file has {schema!r}, this loop.py "
+            f"expects {PLAN_SCHEMA_VERSION}",
+        )
+    provenance = data.get("provenance")
+    if provenance != PROVENANCE_COMPILED:
+        return None, (
+            REASON_PLAN_REQUIRES_CLAMP,
+            f"plan provenance is {provenance!r}; loop.py consumes only "
+            f"{PROVENANCE_COMPILED!r} plans. A non-compiled (e.g. human_edited) "
+            f"plan may carry a loosened brake and needs clamping before Run — "
+            f"deferred to slice 016-03",
+        )
+    return data, None
+
+
+def _resolve_from_plan(
+    cli_value: Optional[object],
+    plan_budget: Optional[dict],
+    key: str,
+) -> Optional[object]:
+    """Precedence resolver: explicit CLI flag > plan value > loop.py default.
+
+    `cli_value` is the argparse value (`None` == flag not passed). When the
+    caller passed the flag, that wins. Otherwise the plan's budget value (if
+    present) is used. When neither supplies a value, `None` is returned so the
+    downstream `run_loop` / `run_goal_loop` applies its built-in `DEFAULT_*`.
+
+    Crucially, a plan value is returned as a fresh local — it is NOT written
+    back into `args.*`. The goal-driver brake-drop (slice 003-06) warns iff
+    `args.<brake> is not None`; keeping the plan value out of `args` is what
+    lets a plan-sourced loop-only brake be dropped silently under the goal
+    driver (slice AC3) instead of misattributed to the user.
+    """
+    if cli_value is not None:
+        return cli_value
+    if plan_budget is not None and key in plan_budget:
+        return plan_budget[key]
+    return None
 
 
 def _target_preflight_error(target: Path) -> Optional[tuple[str, str]]:
@@ -2756,7 +2883,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--driver",
         choices=[DRIVER_AUTO, DRIVER_LOOP, DRIVER_GOAL],
-        default=DRIVER_AUTO,
+        # Slice 016-02: default is `None` (not DRIVER_AUTO) so plan-precedence
+        # can distinguish "user passed --driver" from "accept the default". The
+        # effective driver is resolved below (`effective_arg_driver`) as
+        # explicit flag > plan `driver` > DRIVER_AUTO, *above* the routing
+        # probes, so a plan's driver reaches routing while an omitted --driver
+        # with no plan still routes exactly as `auto` did.
+        default=None,
         help=(
             "Continuation driver. `auto` (default) runs a deterministic "
             "host-support probe (is `/goal` available; are hooks permitted) and "
@@ -2843,6 +2976,24 @@ def main(argv: Optional[list[str]] = None) -> int:
             f"progress nor fake a plateau. Default "
             f"{DEFAULT_PLATEAU_NOISE_FLOOR}. Set to a frozen eval's δ when an "
             f"eval component contributes to the composite."
+        ),
+    )
+    parser.add_argument(
+        "--plan",
+        dest="plan",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a compiled execution `plan.json` (ADR-0016 / slice 016-02). "
+            "A generic path — loop.py never derives a spec-id. Reads the plan's "
+            "`budget` (max_iterations / cost_ceiling / context_fill_threshold / "
+            "plateau_window) and `driver` as run defaults for any knob you did "
+            "not pass on the command line (precedence: explicit flag > plan > "
+            "built-in default). Consumes `provenance: compiled` plans only; a "
+            "human_edited plan refuses pending the 016-03 clamp. With no --plan, "
+            "behavior is byte-for-byte today's (CLI flags + defaults). Mutually "
+            "exclusive with --resume (the persisted state.json is authoritative "
+            "on resume). --prompt is still required (prompt_ref render = 016-05)."
         ),
     )
     parser.add_argument(
@@ -2933,14 +3084,25 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # --explain-routing (slice 003-07 AC5): print the verdict and exit 0,
     # read-only. Handled before flag-shape validation so it needs no --prompt.
+    # Slice 016-02 migrated `--driver`'s default to None; resolve the omitted
+    # case back to DRIVER_AUTO here so the read-only explanation is byte-for-byte
+    # today's (plan-driven routing is resolved on the actual-run path below).
     if args.explain_routing:
-        verdict = _decide_route(target, args.driver)
+        verdict = _decide_route(
+            target, args.driver if args.driver is not None else DRIVER_AUTO
+        )
         sys.stdout.write(_format_routing_explanation(verdict, target))
         return EXIT_OK
 
     # ---- Flag-shape validation ---------------------------------------------
     if args.resume_anyway and args.resume is None:
         parser.error("--resume-anyway requires --resume <run-id>")
+    # Slice 016-02 AC8: on resume the persisted state.json is authoritative, so
+    # a plan cannot also supply run defaults — passing both is a user error.
+    if args.plan is not None and args.resume is not None:
+        parser.error("--plan and --resume are mutually exclusive (on resume the "
+                     "persisted state.json is authoritative; a fresh --plan run "
+                     "takes no --resume)")
     if args.resume is None and args.prompt is None:
         parser.error("--prompt is required unless --resume <run-id> is given")
     if args.max_iterations is not None and args.max_iterations < 1:
@@ -2991,6 +3153,57 @@ def main(argv: Optional[list[str]] = None) -> int:
             detached=True,
         )
 
+    # ---- Plan consumption (slice 016-02, ADR-0016) -------------------------
+    # Read `budget` + `driver` from a compiled plan.json as run defaults for
+    # knobs the caller did not pass. This is the ONLY path a plan is read on;
+    # with no --plan, `plan_budget` / `plan_driver` stay None and every
+    # resolution below collapses to today's args-or-default behavior (AC5).
+    # Fail-closed: a missing / malformed / schema-mismatched / non-compiled plan
+    # refuses rc=2 with a structured reason BEFORE any run starts (AC6/AC7).
+    plan_budget = None
+    plan_driver = None
+    if args.plan is not None:
+        plan, plan_err = _load_plan(args.plan.resolve())
+        if plan_err is not None:
+            return _refuse_plan(reason=plan_err[0], message=plan_err[1])
+        plan_budget = plan.get("budget") or {}
+        plan_driver = plan.get("driver")
+
+    # Resolve the effective driver: explicit --driver > plan `driver` > auto
+    # (slice 016-02 A1/AC2). Done ABOVE the routing probes so a plan's driver
+    # reaches routing; an omitted --driver with no plan resolves to DRIVER_AUTO,
+    # i.e. today's routing. Budget knobs resolve just above the run_loop /
+    # run_goal_loop call (below) — the plan value is kept in a fresh local, NOT
+    # written into args.*, so a plan-sourced loop-only brake is dropped silently
+    # under the goal driver (AC3) instead of tripping the "stray brake" warning.
+    if args.driver is not None:
+        effective_arg_driver = args.driver
+    elif plan_driver is not None:
+        effective_arg_driver = plan_driver
+    else:
+        effective_arg_driver = DRIVER_AUTO
+
+    # ---- Budget resolution (slice 016-02 AC1/AC2/AC3) ----------------------
+    # Precedence per knob: explicit CLI flag > plan `budget` value > loop.py
+    # default (`None` here ⇒ the driver applies its DEFAULT_*). Resolved ABOVE
+    # both the `--background` detached-launch branch and the foreground dispatch
+    # so a plan's budget reaches every launch path — including the detached goal
+    # child (AC1: budget applies for each knob the caller did not pass, with no
+    # background carve-out). Plan values are held in fresh locals — NEVER written
+    # back into args.* — so the goal-driver brake-drop below (which warns iff
+    # `args.<brake> is not None`) sees only EXPLICIT flags: a plan-sourced
+    # loop-only brake is dropped silently under the goal driver, not
+    # misattributed to the user (AC3 KEY). With no plan, `_resolve_from_plan`
+    # returns `args.*` unchanged (None when unset) — byte-for-byte today (AC5).
+    max_iterations = _resolve_from_plan(
+        args.max_iterations, plan_budget, "max_iterations")
+    cost_ceiling = _resolve_from_plan(
+        args.cost_ceiling, plan_budget, "cost_ceiling_usd")
+    context_fill_threshold = _resolve_from_plan(
+        args.context_fill_threshold, plan_budget, "context_fill_threshold")
+    plateau_window = _resolve_from_plan(
+        args.plateau_window, plan_budget, "plateau_window")
+
     # ---- Host-scope routing (slice 003-07 AC4) -----------------------------
     # `loop` always runs (the portable path needs no probe). `goal` / `auto`
     # resolve via the deterministic host-support verdict: an explicit `goal` on
@@ -2999,7 +3212,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # the goal driver (it delegates continuation to /goal), so it routes as if
     # `--driver goal` was requested — an unsupported host refuses rather than
     # silently downgrading to a non-detachable loop run.
-    routing_driver = DRIVER_GOAL if args.background else args.driver
+    routing_driver = DRIVER_GOAL if args.background else effective_arg_driver
     if routing_driver == DRIVER_LOOP:
         effective_driver = DRIVER_LOOP
     else:
@@ -3022,7 +3235,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 cost_ceiling=ceiling, max_turns=max_turns,
             )
         effective_driver = verdict["chosen_driver"]
-        if (args.driver == DRIVER_AUTO and not args.background
+        if (effective_arg_driver == DRIVER_AUTO and not args.background
                 and effective_driver == DRIVER_LOOP):
             sys.stderr.write(
                 f"loop: auto-routing to --driver loop ({verdict['ineligible_reason']}); "
@@ -3032,12 +3245,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     # ---- Detached launch (slice 003-08 AC1) --------------------------------
     # Routing above guaranteed effective_driver == goal (an ineligible host
     # already refused). Spawn the goal driver in a new OS session and return.
+    # The plan-resolved budget locals (not args.*) carry the plan's budget into
+    # the detached child (slice 016-02 AC1).
     if args.background:
         return run_goal_loop_background(
             target,
             prompt=args.prompt,
-            max_iterations=args.max_iterations,
-            cost_ceiling=args.cost_ceiling,
+            max_iterations=max_iterations,
+            cost_ceiling=cost_ceiling,
             allow_dirty=args.allow_dirty,
         )
 
@@ -3045,7 +3260,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # `--context-fill-threshold` / `--plateau-window` / `--resume-anyway` are
     # loop-mode brakes; they're ignored when the effective driver is `goal` (the
     # /goal primitive owns continuation). `--max-iterations` / `--cost-ceiling`
-    # carry over as the outer-call `--max-turns` / `--max-budget-usd` caps.
+    # carry over as the outer-call `--max-turns` / `--max-budget-usd` caps. The
+    # warning keys on `args.*` (explicit flags only) so plan-sourced loop-only
+    # brakes are dropped silently (AC3); the loop-only budget locals resolved
+    # above are simply not forwarded to the goal driver.
     if effective_driver == DRIVER_GOAL:
         loop_only = [
             name for name, val in (
@@ -3064,18 +3282,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         return run_goal_loop(
             target,
             prompt=args.prompt,
-            max_iterations=args.max_iterations,
-            cost_ceiling=args.cost_ceiling,
+            max_iterations=max_iterations,
+            cost_ceiling=cost_ceiling,
             resume_run_id=args.resume,
             allow_dirty=args.allow_dirty,
         )
     return run_loop(
         target,
         prompt=args.prompt,
-        max_iterations=args.max_iterations,
-        cost_ceiling=args.cost_ceiling,
-        context_fill_threshold=args.context_fill_threshold,
-        plateau_window=args.plateau_window,
+        max_iterations=max_iterations,
+        cost_ceiling=cost_ceiling,
+        context_fill_threshold=context_fill_threshold,
+        plateau_window=plateau_window,
         plateau_noise_floor=args.plateau_noise_floor,
         resume_run_id=args.resume,
         resume_anyway=args.resume_anyway,

@@ -6204,5 +6204,489 @@ class EmitRoutinePromptTests(_GoalTargetMixin, unittest.TestCase):
         self.assertIn("--prompt is required", result.stderr)
 
 
+# ============================================================================
+# Slice 016-02 — run-consume: loop.py reads budget + driver from a plan.json
+#
+# Test classes map 1:1 to the slice's acceptance criteria:
+#   AC1 → PlanConsumeDefaultsTests      (plan supplies budget + driver defaults)
+#   AC2 → PlanPrecedenceTests           (explicit flag > plan > loop.py default)
+#   AC3 → PlanDriverAwareBudgetTests    (goal-driver carve-out; no stray warning)
+#   AC4 → PlanPromptStillRequiredTests  (--prompt still required; no prompt_ref)
+#   AC5 → NoPlanUnchangedTests          (no --plan ⇒ byte-for-byte today)
+#   AC6 → PlanReadContractTests         (missing / malformed / schema mismatch)
+#   AC7 → PlanHumanEditedDeferredTests  (provenance: human_edited ⇒ clamp=016-03)
+#   AC8 → PlanResumeExclusiveTests      (--plan + --resume mutually exclusive)
+# ============================================================================
+
+
+def _compiled_plan(
+    *,
+    max_iterations=5,
+    cost_ceiling_usd=2.0,
+    context_fill_threshold=0.75,
+    plateau_window=3,
+    driver="loop",
+    provenance="compiled",
+    schema_version=1,
+    spec_id="016-execution-planner",
+) -> dict:
+    """A minimal ADR-0016 `plan.json` dict (built inline; the producer is NOT called).
+
+    Only the fields 016-02 consumes (`budget` + `driver`) are load-bearing;
+    the reference fields (`oracle`, `suitability_ref`, etc.) are present for
+    shape fidelity but are inert to the consumer this slice ships.
+    """
+    return {
+        "schema_version": schema_version,
+        "spec_id": spec_id,
+        "compiled_at": "2026-07-02T00:00:00+00:00",
+        "suitability_ref": f".servo/suitability/{spec_id}.json",
+        "oracle": {"path": "oracle.sh", "components": ["tests"], "threshold": 0.5},
+        "evaluation_model": None,
+        "budget": {
+            "max_iterations": max_iterations,
+            "cost_ceiling_usd": cost_ceiling_usd,
+            "context_fill_threshold": context_fill_threshold,
+            "plateau_window": plateau_window,
+        },
+        "driver": driver,
+        "prompt_ref": f"docs/specs/{spec_id}/spec.md",
+        "provenance": provenance,
+    }
+
+
+def _write_plan(tmp: Path, plan: dict, *, name: str = "plan.json") -> Path:
+    """Serialize `plan` to a JSON file under `tmp` and return its path."""
+    path = tmp / name
+    path.write_text(json.dumps(plan))
+    return path
+
+
+class PlanConsumeDefaultsTests(unittest.TestCase):
+    """AC1 — a compiled plan supplies budget + driver as defaults for un-passed knobs.
+
+    Under the loop driver all four budget knobs come from the plan when the
+    caller passes none of them; the enforced budget is observable in state.json.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-defaults-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_state_records_plan_budget_when_no_flags_passed(self):
+        plan = _compiled_plan(
+            max_iterations=2, cost_ceiling_usd=1.25,
+            context_fill_threshold=0.5, plateau_window=4, driver="loop",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        # No budget flags, no --driver, no --plateau-window: everything from the plan.
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["max_iterations"], 2)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 1.25, places=6)
+        self.assertAlmostEqual(state["context_fill_threshold"], 0.5, places=6)
+        self.assertEqual(state["plateau_window"], 4)
+
+    def test_plan_max_iterations_bounds_the_run(self):
+        # A plan max_iterations of 2 halts the loop at 2 iterations (observable
+        # via oracle_score_history length) with no CLI --max-iterations.
+        plan = _compiled_plan(max_iterations=2, plateau_window=0, driver="loop")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["iteration_count"], 2)
+
+
+class PlanPrecedenceTests(unittest.TestCase):
+    """AC2 — precedence: explicit CLI flag > plan value > loop.py default."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-precedence-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_explicit_flag_overrides_plan(self):
+        plan = _compiled_plan(max_iterations=2, cost_ceiling_usd=1.25, driver="loop")
+        plan_path = _write_plan(self.tmp, plan)
+        # Explicit --max-iterations 1 must win over the plan's 2.
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--max-iterations", "1", "--plateau-window", "0",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["max_iterations"], 1)
+        # A knob the caller did NOT pass still takes the plan value.
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 1.25, places=6)
+
+    def test_plan_overrides_default_for_unpassed_knob(self):
+        # cost_ceiling not passed → plan's 1.25, not the built-in $2.00 default.
+        plan = _compiled_plan(cost_ceiling_usd=1.25, driver="loop")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--max-iterations", "1", "--plateau-window", "0",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 1.25, places=6)
+
+    def test_explicit_driver_overrides_plan_driver(self):
+        # Plan says goal; explicit --driver loop wins → a loop-mode summary
+        # (no "driver" key, loop-only oracle_score_history field).
+        plan = _compiled_plan(driver="goal")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--driver", "loop", "--max-iterations", "1", "--plateau-window", "0",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertNotIn("driver", summary)
+        self.assertIn("oracle_score_history", summary)
+
+
+class PlanDriverAwareBudgetTests(_GoalTargetMixin, unittest.TestCase):
+    """AC3 — driver-aware budget: goal-driver carve-out for plan-sourced brakes.
+
+    Under the goal driver (incl. driver:auto routed to goal) the loop-only
+    brakes (context_fill_threshold, plateau_window) from the plan are dropped
+    exactly as explicit flags are — and NO "stray brake" warning is emitted for
+    plan-sourced values. max_iterations / cost_ceiling still apply under goal.
+    Under the loop driver all four apply (covered by PlanConsumeDefaultsTests).
+    """
+
+    def setUp(self):
+        self._setup_target(_passing_oracle())
+        self.tmp = Path(self.tmpdir)
+
+    def test_goal_driver_plan_max_iterations_and_ceiling_apply(self):
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate\n" + GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success", cost=0.1),
+        ))
+        plan = _compiled_plan(
+            max_iterations=7, cost_ceiling_usd=3.5,
+            context_fill_threshold=0.5, plateau_window=4, driver="goal",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = self._summary(result)
+        self.assertEqual(summary["driver"], "goal")
+        # max_iterations → outer --max-turns; cost_ceiling → --max-budget-usd cap.
+        self.assertEqual(summary["max_turns"], 7)
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 3.5, places=6)
+
+    def test_goal_driver_does_not_warn_for_plan_sourced_brakes(self):
+        # AC3 KEY: a plan carrying context_fill_threshold + plateau_window under
+        # the goal driver must NOT trip the "loop-mode brake ... is ignored"
+        # warning — those are plan defaults, not a user request.
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate\n" + GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success"),
+        ))
+        plan = _compiled_plan(
+            context_fill_threshold=0.5, plateau_window=4, driver="goal",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotIn("loop-mode brake", result.stderr)
+        self.assertNotIn("--context-fill-threshold", result.stderr)
+        self.assertNotIn("--plateau-window", result.stderr)
+
+    def test_explicit_brake_still_warns_under_goal_with_plan(self):
+        # A plan does not suppress the warning for an EXPLICITLY-passed brake:
+        # the carve-out only spares plan-sourced values.
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate\n" + GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success"),
+        ))
+        plan = _compiled_plan(driver="goal")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--plateau-window", "5",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("--plateau-window", result.stderr)
+        self.assertIn("ignored", result.stderr)
+
+    def test_background_launch_forwards_plan_budget(self):
+        # AC1 (blocker fix): --plan + --background on a goal-eligible host must
+        # carry the plan's max_iterations + cost_ceiling into the DETACHED goal
+        # launch — not silently fall back to the built-in defaults. The parent's
+        # synchronous detach summary echoes the resolved caps (max_turns /
+        # cost_ceiling_usd), so we assert against it without awaiting the child.
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate\n" + GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success"),
+        ))
+        plan = _compiled_plan(max_iterations=7, cost_ceiling_usd=3.5, driver="goal")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--background", "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = self._summary(result)
+        self.assertTrue(summary["detached"])
+        self.assertEqual(summary["terminal_reason"], "detached")
+        # Plan budget forwarded, not the DEFAULT_* (5 / $2.00).
+        self.assertEqual(summary["max_turns"], 7)
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 3.5, places=6)
+
+
+class PlanPromptStillRequiredTests(unittest.TestCase):
+    """AC4 — --prompt stays required; 016-02 does NOT consume prompt_ref."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-prompt-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_plan_without_prompt_still_refuses(self):
+        plan = _compiled_plan(driver="loop")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--prompt is required", result.stderr)
+        # No run started: no state.json written.
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+
+class NoPlanUnchangedTests(unittest.TestCase):
+    """AC5 — no --plan ⇒ byte-for-byte today's behavior (the load-bearing invariant)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-noplan-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_no_plan_uses_builtin_defaults(self):
+        # No --plan, no budget brakes → the built-in DEFAULT_* constants, exactly
+        # as a pre-016-02 invocation. (ceiling=$2.00, context-fill=0.75,
+        # plateau_window=3.) Uses `_run_raw` with an explicit loop driver so no
+        # test-harness --plateau-window 0 is injected — the default must surface.
+        result = _run_raw(
+            self.target, "--driver", "loop", "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 2.0, places=6)
+        self.assertAlmostEqual(state["context_fill_threshold"], 0.75, places=6)
+        self.assertEqual(state["plateau_window"], 3)
+
+    def test_no_plan_summary_shape_unchanged(self):
+        # The summary line carries the same keys / values as a pre-slice run.
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 2.0, places=6)
+        # No plan-read reason ever surfaces on the no-plan path.
+        self.assertNotIn(summary["terminal_reason"],
+                         {"plan_missing", "plan_malformed",
+                          "plan_schema_mismatch", "plan_requires_clamp"})
+
+    def test_no_plan_does_not_read_a_stray_plan_file(self):
+        # A plan.json sitting in the target must be inert without --plan (loop.py
+        # never derives a spec-id / plan path). Behavior stays today's default.
+        _write_plan(Path(self.tmpdir), _compiled_plan(max_iterations=2))
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        # max_iterations came from the CLI flag (1), not the stray plan (2).
+        self.assertEqual(state["max_iterations"], 1)
+
+
+class PlanReadContractTests(unittest.TestCase):
+    """AC6 — fail-closed plan-read: missing / malformed / schema-mismatch ⇒ rc2."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-read-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _assert_refused(self, result, reason):
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], reason)
+        # No run started: no state.json written.
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+    def test_missing_plan_file_refuses(self):
+        missing = self.tmp / "nope.json"
+        result = _run_raw(self.target, "--plan", str(missing), "--prompt", "x")
+        self._assert_refused(result, "plan_missing")
+
+    def test_malformed_json_refuses(self):
+        bad = self.tmp / "plan.json"
+        bad.write_text("{ this is not json ]")
+        result = _run_raw(self.target, "--plan", str(bad), "--prompt", "x")
+        self._assert_refused(result, "plan_malformed")
+
+    def test_non_object_json_refuses(self):
+        # Valid JSON but not an object (e.g. a bare list) is malformed as a plan.
+        bad = self.tmp / "plan.json"
+        bad.write_text("[1, 2, 3]")
+        result = _run_raw(self.target, "--plan", str(bad), "--prompt", "x")
+        self._assert_refused(result, "plan_malformed")
+
+    def test_schema_version_mismatch_refuses(self):
+        plan = _compiled_plan(schema_version=2)
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "plan_schema_mismatch")
+
+    def test_missing_schema_version_refuses(self):
+        plan = _compiled_plan()
+        del plan["schema_version"]
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "plan_schema_mismatch")
+
+
+class PlanHumanEditedDeferredTests(unittest.TestCase):
+    """AC7 — provenance: human_edited ⇒ rc2 + plan_requires_clamp (clamp = 016-03)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-human-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_human_edited_plan_refuses_pending_clamp(self):
+        plan = _compiled_plan(provenance="human_edited")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "plan_requires_clamp")
+        # The breadcrumb names 016-03 (the clamp slice).
+        self.assertIn("016-03", result.stderr)
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+    def test_unknown_provenance_refuses(self):
+        # Anything other than "compiled" is refused pending the clamp (fail-closed).
+        plan = _compiled_plan(provenance="mystery")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "plan_requires_clamp")
+
+
+class PlanResumeExclusiveTests(unittest.TestCase):
+    """AC8 — --plan and --resume are mutually exclusive (parser.error, rc2)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-resume-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_plan_plus_resume_is_a_parser_error(self):
+        plan = _compiled_plan()
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path),
+            "--resume", "20260101T000000-abcd",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--plan", result.stderr)
+        self.assertIn("--resume", result.stderr)
+        # A parser.error is caught before any plan-read refusal summary line.
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+
 if __name__ == "__main__":
     unittest.main()

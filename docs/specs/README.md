@@ -95,9 +95,10 @@
 | [015-edd-suitability](015-edd-suitability/spec.md) | 015-04 — skill-and-explain | **DONE** | `/servo:edd-suitability` SKILL.md + CLI output modes: human default, `--json` (full ADR-0015 verdict), `--explain` (ordered first-match rule trace, stdout-only — never persisted). `_rule_table()` shared by `decide()`/`build_trace()`. Real-classifier dogfood (`examples/needs-evidence-then-suitable.md`) proves the `needs_evidence→suitable` flip. Registered in install-contract (illustrative in scaffold mode). 14 surface tests; compliance subagent PASS. Model-assist + waiver = documented seams, not built. **Follow-up:** scaffolded `suitability.py` can't resolve `oracle_plan` (spec-oracle not vendored). |
 | [015-edd-suitability](015-edd-suitability/spec.md) | 🔬 015-05 — suitability-at-the-boundary (spike) | **DONE** |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-01 — plan-emit | **DONE** | 19 tests; `execution_plan.py compile` → `.servo/plans/<spec-id>/plan.json` ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)); references-not-copies (`suitability_ref`); budget = loop.py defaults; emits **only on a `suitable` verdict** — landed the 015-03 Compile-gate *mechanism* (015-03 trigger met, full ACs still open). Added reasons `oracle_missing` + `suitability_malformed`. |
-| [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume | DEFERRED |  |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume | **DONE** | `loop.py --plan <path>` (generic path, no `spec-id` derivation) reads `budget`+`driver` as run defaults; precedence flag&gt;plan&gt;default (`--driver` migrated to a `None`-sentinel, resolved above the routing probes); goal-driver carve-out (plan-sourced loop-only brakes dropped, no stray-brake warning); `human_edited` refused (`plan_requires_clamp`, clamp=016-03); `--prompt` still required (`prompt_ref` render split to 016-05). +484 test lines / 21 plan tests; passed a 4-pass frame-critique. |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review | DEFERRED |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface | DEFERRED |  |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-05 — prompt-render | DEFERRED |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-01 — freeze-parsed-acs | **DONE** |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-02 — colocate-artifacts | **DONE** |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-03 — behavioral-ac-recall | **DONE** |  |
@@ -116,6 +117,6 @@
 | [008-eval-authoring](008-eval-authoring/spec.md) | 008-04 — frozen-params-and-emit |  |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | Resume after 013-01 lands and a real caller needs |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | Resume when a second design-eval consumer appears, or |
-| [016-execution-planner](016-execution-planner/spec.md) | 016-02 — run-consume |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-03 — clamp-and-review |  |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-04 — skill-surface |  |
+| [016-execution-planner](016-execution-planner/spec.md) | 016-05 — prompt-render |  |
