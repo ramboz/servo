@@ -1,20 +1,22 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-07-01
-deciders:
+deciders: ramboz
 supersedes:
 superseded-by:
-last_verified: 2026-07-01
+last_verified: 2026-07-02
 ---
 
 # ADR-0023: Co-locate durable spec-oracle artifacts with the spec; keep only ephemeral state under .servo/
 
 ## Status
 
-Proposed (2026-07-01) — surfaced by an external dogfood (cwv-workbench spec 015);
-awaiting acceptance. Refines the `.servo/` layout established by
+Accepted (2026-07-02)
+
+Surfaced by an external dogfood (cwv-workbench spec 015); awaiting acceptance.
+Refines the `.servo/` layout established by
 [ADR-0004](adr-0004-session-state-file-format.md) and
-[ADR-0016](adr-0016-execution-plan-handoff.md).
+[ADR-0016](adr-0016-execution-plan-artifact.md).
 
 ## Context
 
@@ -84,7 +86,7 @@ duplicated per overlay.
 ## References
 
 - [ADR-0004](adr-0004-session-state-file-format.md),
-  [ADR-0016](adr-0016-execution-plan-handoff.md) — `.servo/` state layout
+  [ADR-0016](adr-0016-execution-plan-artifact.md) — `.servo/` state layout
 - [ADR-0022](adr-0022-freeze-against-parsed-acs.md) — freeze against parsed ACs
 - [Spec 006](../specs/006-spec-oracle/spec.md) — spec-oracle
 - Implemented by [Spec 019](../specs/019-compile-core-simplification/spec.md)

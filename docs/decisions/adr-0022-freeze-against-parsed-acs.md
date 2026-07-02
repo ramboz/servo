@@ -1,19 +1,21 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-07-01
-deciders:
+deciders: ramboz
 supersedes:
 superseded-by:
-last_verified: 2026-07-01
+last_verified: 2026-07-02
 ---
 
 # ADR-0022: Freeze the spec-oracle against parsed ACs, not the raw spec file
 
 ## Status
 
-Proposed (2026-07-01) — surfaced by an external dogfood (cwv-workbench spec 015);
-awaiting acceptance. Refines [spec 006](../specs/006-spec-oracle/spec.md)'s
-freeze-and-controls (006-04).
+Accepted (2026-07-02)
+
+Surfaced by an external dogfood (cwv-workbench spec 015); awaiting acceptance.
+Refines [spec 006](../specs/006-spec-oracle/spec.md)'s freeze-and-controls
+(006-04).
 
 ## Context
 

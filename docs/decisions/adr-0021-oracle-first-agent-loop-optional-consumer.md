@@ -1,23 +1,24 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-07-01
-deciders:
+deciders: ramboz
 supersedes:
 superseded-by:
-last_verified: 2026-07-01
+last_verified: 2026-07-02
 ---
 
 # ADR-0021: Servo is oracle-first; the agent-loop is one optional consumer
 
 ## Status
 
-Proposed (2026-07-01) — surfaced by an external dogfood (cwv-workbench spec 015);
-awaiting acceptance.
+Accepted (2026-07-02)
+
+Surfaced by an external dogfood (cwv-workbench spec 015); awaiting acceptance.
 
 ## Context
 
 The agent-loop ([spec 003](../specs/003-agent-loop/spec.md),
-[ADR-0008](adr-0008-agent-loop-claude-code-autonomy.md)) drives edits by shelling
+[ADR-0008](adr-0008-loop-on-autonomy-primitives.md)) drives edits by shelling
 out to `claude -p`. In an external dogfood, all six slices of cwv-workbench's
 spec 015 were driven to DONE using servo's **Compile + gate** — but the **native
 loop could not run at all** because it was invoked from inside another (auto-mode
@@ -85,7 +86,7 @@ flow.
 
 ## References
 
-- [ADR-0008](adr-0008-agent-loop-claude-code-autonomy.md) — agent-loop autonomy
+- [ADR-0008](adr-0008-loop-on-autonomy-primitives.md) — agent-loop autonomy
 - [Spec 003](../specs/003-agent-loop/spec.md) — agent-loop
 - [Bug 001](../bugs/001-agent-loop-masks-auth-error-as-plateau.md),
   [Bug 002](../bugs/002-agent-loop-no-permission-mode.md)
