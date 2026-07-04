@@ -30,6 +30,7 @@
 - [ADR-0021: Servo is oracle-first; the agent-loop is one optional consumer](adr-0021-oracle-first-agent-loop-optional-consumer.md) — An external dogfood (cwv-workbench spec 015) drove 6/6 slices to DONE via **Compile + gate + an external implementer**, but the native agent-loop could **not** run nested inside another agent (401 auth per Bug 001, denied edit perms per Bug 002, and the host safety classifier correctly refusing to spawn an unrestricted sub-agent). Reframes servo as oracle-first: Compile produces a frozen oracle, `quality-gate` is the authority, any driver (human/CI/agent) does the edits, and the loop is one optional consumer that must **refuse loudly** when it can't function rather than plateau. (2026-07-01, Accepted 2026-07-02)
 - [ADR-0022: Freeze the spec-oracle against parsed ACs, not the raw spec file](adr-0022-freeze-against-parsed-acs.md) — `--enforce-freeze` (006-04) hashes the raw spec file, so a living-document consumer (jig rewrites the slice's `status:` frontmatter on every transition + appends deviation/reconciliation) hits `spec_oracle_stale` at every state change though no AC changed. Freeze against the **parsed AC set** (servo already stores `approved_content_hash` over `checks.json`) and drop the raw-file check, decoupling servo from the consumer's frontmatter lifecycle. (2026-07-01, Accepted 2026-07-02)
 - [ADR-0023: Co-locate durable spec-oracle artifacts with the spec; keep only ephemeral state under .servo/](adr-0023-colocate-durable-spec-oracle-artifacts.md) — Durable spec-oracle artifacts (`plan.md`, `checks.json`) live under `.servo/spec-oracles/<id>/`, disconnected from the spec they evaluate — forcing path-duplicating `spec-id`s, coupling the freeze across a directory boundary, splitting spec+oracle in review, and copying the ~39KB `checks.py` runner into every overlay (6× in the dogfood). Co-locate the durable artifacts with the spec; keep only ephemeral state (`runs/`, ledger, manifest, plan handoff) under `.servo/`; reference one shared `checks.py`. (2026-07-01, Accepted 2026-07-02)
+- [ADR-0024: Extract the frozen-eval harness into a shared module for the second eval kind](adr-0024-extract-frozen-eval-harness.md) — ADR-0009's Alternatives section deferred extracting `validate_freeze`/`aggregate_lower_bound`/`definition_hash` out of design-eval "until a second eval kind demands them." GitHub issue #16 (content-fidelity: text-vs-rubric fidelity, text-model judge) is that second kind. Extracts the already-modality-agnostic freeze/hash/aggregate/ledger/install-splice primitives into `skills/_common/fidelity_eval.py`; design-eval and a new sibling `content-fidelity` skill both consume it, each keeping its own artifact-capture + judge-payload mechanism and prerequisites. (2026-07-03, Accepted)
 
 ## Pending
 
@@ -46,7 +47,10 @@ ADR), `0015` is Accepted (the EDD suitability gate), and `0016` is Accepted
 by the conformance-scores ledger ADR, `0018` is Accepted (suitability gates
 Compile, not the heartbeat), `0019` is Accepted (eval authoring stays
 entirely servo-owned), and `0020` is Accepted (minimum supported Python is
-3.9), so the next free number is `0021`:
+3.9), `0021` is Accepted (oracle-first / agent-loop optional consumer),
+`0022` is Accepted (freeze against parsed ACs), `0023` is Accepted
+(co-locate durable spec-oracle artifacts), and `0024` is Accepted (extract
+the frozen-eval harness), so the next free number is `0025`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
 
