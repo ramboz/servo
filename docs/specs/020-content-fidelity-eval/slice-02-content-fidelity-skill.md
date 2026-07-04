@@ -1,5 +1,5 @@
 ---
-status: READY_FOR_IMPLEMENTATION
+status: RECONCILED
 dependencies: [020-01, adr-0005, adr-0024]
 arch_review: true
 frame_review: true
@@ -106,22 +106,24 @@ model instead of a vision model, built on the shared harness from 020-01.
    splice helpers from 020-01 rather than re-implementing them.
 
 **DoD:**
-- [ ] All ACs pass; full test suite green (no regressions to design-eval or
-      the shared module).
-- [ ] Implementer test coverage exercises each AC with at least one fixture,
+- [x] All ACs pass; full test suite green (no regressions to design-eval or
+      the shared module) — 37 tests in `test_content_fidelity.py`; full repo
+      suite 1326 passed, 0 failed.
+- [x] Implementer test coverage exercises each AC with at least one fixture,
       using the fake-scores-style offline hook (mirroring design-eval's
       `SERVO_DESIGN_EVAL_FAKE_SCORES` pattern) so the suite runs with no live
       API/CLI dependency.
-- [ ] Compliance review pass (`jig:independent-review` implementation).
-- [ ] Craft review pass (`pr-review` rubric).
-- [ ] Arch review pass (`arch_review: true` — new skill, new oracle
-      component kind).
-- [ ] Frame-critique pass recorded (`frame_review: true` — see Assumptions
-      A1-A2).
-- [ ] Deviation log produced under this slice heading.
-- [ ] Reconciliation sweep produced under this slice heading.
-- [ ] Reconciliation review pass.
-- [ ] `docs/refinement-todo.md` updated if any decisions were deferred.
+- [x] Compliance review pass (`jig:independent-review` implementation) — pass.
+- [x] Craft review pass (`pr-review` rubric) — pass (round 2, after a
+      blocker fix on the `source` freeze-hash gap).
+- [x] Arch review pass (`arch_review: true` — new skill, new oracle
+      component kind) — pass (round 2, confirming the fix).
+- [x] Frame-critique pass recorded (`frame_review: true` — see Assumptions
+      A1-A2) — pass (round 4).
+- [x] Deviation log produced under this slice heading.
+- [x] Reconciliation sweep produced under this slice heading.
+- [x] Reconciliation review pass — pass.
+- [x] `docs/refinement-todo.md` updated if any decisions were deferred.
 
 ## Assumptions
 
@@ -186,18 +188,61 @@ design-eval gives UI projects today.
 
 ### Deviation log (after reconciliation)
 
-_Filled during reconciliation._
+Original ACs preserved above; the implementation deviated/extended as follows:
+
+1. **No `capture-refs`-equivalent CLI subcommand.** Design-eval renders a
+   mockup to a reference PNG via Playwright; content-fidelity's references
+   are already plain text (inline in `config.json` or a project-owned file),
+   so there is nothing to *render*. Neither AC6 nor AC8 requires this verb.
+   Confirmed a legitimate reading by both the compliance and craft review
+   passes, not a gap.
+2. **`_judge_cli`'s `claude -p` invocation omits `--allowedTools Read`.**
+   Design-eval's vision judge needs `Read` to open two PNGs by path;
+   content-fidelity's text judge receives the reference and generated text
+   inline in the prompt, so no file-read tool access is needed. Confirmed by
+   both review passes.
+3. **`source` was missing from the frozen definition hash — caught by
+   craft-review round 1 (`[blocker]`), independently disputed by arch-review
+   round 1 (`pass`, reasoning `source`'s target content shouldn't be
+   hashed).** Both readings were partially right: `source`'s *descriptor*
+   (type + path/run) is part of the definition per AC2's literal text and
+   must trip stale on change; `source`'s *target content* is the moving
+   artifact under test and must never be content-hashed (that's what AC3
+   protects). Resolved by splitting the single `_CASE_FILE_FIELDS` constant
+   into two: `_REFERENCE_FILE_FIELDS = ("reference",)` (passed to
+   `artifact_hashes` — on-disk content hashing, unchanged) and
+   `_CASE_PIN_FIELDS = ("reference", "source")` (passed to
+   `definition_hash`/`validate_freeze` — value-pinning via
+   `json.dumps(sort_keys=True)`, which serializes `source`'s nested dict
+   verbatim). Three new tests
+   (`test_changed_source_type_is_stale`/`test_changed_source_path_is_stale`/
+   `test_changed_source_does_not_affect_artifact_hashes`) prove both
+   properties hold simultaneously. Round 2 of both arch and craft review
+   confirmed the fix. **No change to `skills/_common/fidelity_eval.py`'s
+   behavior or public signatures was needed** — the fix is entirely in how
+   content-fidelity's `score.py` calls the existing, already-shipped shared
+   functions, which is itself a small piece of evidence that 020-01's
+   generalization (parameterized field lists) was sufficient.
+4. **`skills/_common/fidelity_eval.py`'s `definition_hash` docstring was
+   extended** (not its behavior or signature) to name the
+   pin-vs-content-hash distinction explicitly, per craft-review round 2's
+   reconciliation note — so a future third caller doesn't have to re-derive
+   this from git history. This touches an already-DONE slice's (020-01)
+   file, but is a pure documentation addition with zero behavior change
+   (verified: full `skills/_common/`, `skills/design-eval/`, and
+   `skills/content-fidelity/` suites green after the edit); it is not a
+   reopening of 020-01's ACs.
 
 ### Reconciliation sweep
 
 | Artifact | Disposition | Rationale |
 |----------|-------------|-----------|
-| `README.md` | `no-op` | _TODO during reconciliation._ |
-| `docs/specs/README.md` | `updated` | Regenerated by `workflow.py status-board`; new skill row. |
-| `docs/product-vision.md` | `no-op` | _TODO during reconciliation._ |
-| `docs/architecture.md` | `updated` | New skill + shared-module consumer worth recording. |
-| Primer surfaces | `no-op` | _TODO during reconciliation._ |
-| `docs/inbox.md` | `no-op` | _TODO during reconciliation._ |
-| `docs/refinement-todo.md` | `updated` | A1's two open items: (1) is file-or-command a sufficient config shape for real projects, if not resolved during implementation; (2) `command`-backed cases have no structural cross-run determinism requirement, so ADR-0005 clause 4's plateau noise floor `δ` is not sized to absorb generator drift — deliberately deferred, with the cheapest candidate mitigation (content-hash-keyed artifact caching across the plateau window) named for a future implementer. |
-| `docs/memory/**` | `no-op` | _TODO during reconciliation._ |
-| `docs/decisions/README.md` / ADR index | `no-op` | ADR-0024 already indexed. |
+| `README.md` | `no-op` | Project front door unaffected — no change to servo's top-level install/usage instructions. |
+| `docs/specs/README.md` | `updated` | Regenerated by `workflow.py status-board`. |
+| `docs/product-vision.md` | `no-op` | Checked — no scope/behavior drift; implements an already-Accepted ADR. |
+| `docs/architecture.md` | `no-op` | Already covers this skill generically (the "Shared frozen-eval harness" subsection was written during 020-01's reconciliation to describe both consumers, content-fidelity included, ahead of this slice landing). Re-checked against the shipped skill — still accurate, no further edit needed. |
+| Primer surfaces | `no-op` | Checked — no `CLAUDE.md`/`AGENTS.md` exist in this repo. |
+| `docs/inbox.md` | `no-op` | Checked — no entries reference content-fidelity or this slice. |
+| `docs/refinement-todo.md` | `updated` | Two entries, both dated 2026-07-03: (1) the file-or-command config-shape sufficiency question (A1, unresolved, non-blocking — ships provisionally per 012-05's precedent); (2) the cross-run generator-determinism gap for `command`-backed cases (ADR-0005 clause 4 unmitigated for that input class), with the cheapest candidate mitigation named. |
+| `docs/memory/**` | `deferred` | Reserved for the end-of-ceremony `/jig:memory-sync` pass after spec 020 fully closes (both slices DONE) — same batching decision recorded in 020-01's sweep. |
+| `docs/decisions/README.md` / ADR index | `no-op` | ADR-0024 already indexed and Accepted (done during framing, before either slice's implementation began). |

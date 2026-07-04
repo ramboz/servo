@@ -708,3 +708,28 @@ gating a loop's plateau detection.
 **Surfaced by:** slice 020-02's frame-critique pass (rounds 2-3,
 2026-07-03) — a named, disclosed risk, not a slice defect; `file`-backed
 cases are unaffected.
+
+---
+
+## `content-fidelity`'s file-or-command config shape is unvalidated against a real consumer
+
+**Deferred:** spec 020 (content-fidelity-eval), slice 020-02, Assumption A1
+(the narrower half — distinct from the cross-run-determinism entry above,
+which A1's second half covers). Design-eval's screen/mockup config shape was
+de-risked by a real throwaway spike (012's spike-findings) before it
+shipped; content-fidelity's two-mechanism artifact-gathering config (`file`
+read vs. `command` exec) shipped without an equivalent spike or a committed
+first consumer, on the reasoning that it is the smallest shape covering
+ADR-0005's dataset-is-a-hashed-artifact framing. It may not cover every real
+shape a text-fidelity project needs (e.g. a multi-step pipeline, or an
+artifact that needs post-processing before judging).
+
+**Resolution trigger:** the first real content-fidelity consumer (mirroring
+design-eval's 012-05 "first consumer wiring" pattern) — extend the config
+shape then, informed by what that project actually needs, rather than
+guessing further shapes now.
+
+**Surfaced by:** slice 020-02's frame-critique pass (round 1, 2026-07-03) and
+its compliance review (2026-07-03) — a disclosed, non-blocking scope
+question, not a defect; the shipped `file`/`command` shape is fully
+functional for both of its own documented use cases.

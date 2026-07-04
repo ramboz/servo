@@ -60,13 +60,29 @@ def definition_hash(
 
     ``cases_key`` is the config key holding the case array (e.g. ``"screens"``
     for design-eval, ``"cases"`` for content-fidelity). ``case_file_fields``
-    lists the per-case fields that name a file (e.g. ``("reference",
-    "setup")``); every other per-case field this hash cares about (``id``,
-    ``weight``) is fixed across callers. ``extra_fields`` lists additional
-    top-level config keys a specific caller wants pinned as part of its
-    definition (e.g. design-eval's screenshot viewport) — this module itself
-    has no modality-specific fields, so a caller with nothing extra to pin
-    (e.g. content-fidelity) simply omits the argument.
+    lists the per-case fields to pin **by value** into the hashed definition
+    (e.g. ``("reference", "setup")``); every other per-case field this hash
+    cares about (``id``, ``weight``) is fixed across callers. ``extra_fields``
+    lists additional top-level config keys a specific caller wants pinned as
+    part of its definition (e.g. design-eval's screenshot viewport) — this
+    module itself has no modality-specific fields, so a caller with nothing
+    extra to pin (e.g. content-fidelity) simply omits the argument.
+
+    **A caller may pass a *different* ``case_file_fields`` tuple here than it
+    passes to :func:`artifact_hashes` for the same case shape** (content-fidelity,
+    spec 020-02, does exactly this). This function only serializes each named
+    field's *value* — it never reads a file. :func:`artifact_hashes` treats
+    its own ``case_file_fields`` argument differently: each named field is
+    assumed to be an on-disk path, and its file *content* gets read and
+    hashed. A per-case field that describes how to obtain a moving target
+    (e.g. content-fidelity's ``source``: "run this command" / "read this
+    file") belongs in *this* function's ``case_file_fields`` (so changing the
+    descriptor trips stale) but must be **excluded** from
+    :func:`artifact_hashes`'s (content-hashing whatever the descriptor
+    currently points to would freeze the moving target itself, defeating the
+    point of re-gathering it each run). A frozen reference artifact (e.g.
+    ``reference``) belongs in both — its value is part of the definition,
+    and its content should never silently change post-freeze.
     """
     definition = {
         "judge": config.get("judge"),
