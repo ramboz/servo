@@ -105,7 +105,7 @@
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-04 — oracle-as-a-service-docs | **DONE** |  |
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-05 — single-component-oracle | **DONE** |  |
 | [020-content-fidelity-eval](020-content-fidelity-eval/spec.md) | 020-01 — extract-shared-harness | **DONE** |  |
-| [020-content-fidelity-eval](020-content-fidelity-eval/spec.md) | 020-02 — content-fidelity-skill | RECONCILED |  |
+| [020-content-fidelity-eval](020-content-fidelity-eval/spec.md) | 020-02 — content-fidelity-skill | **DONE** |  |
 
 ## Deferred slices
 

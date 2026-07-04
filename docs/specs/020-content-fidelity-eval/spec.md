@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [adr-0024]
 last_verified: 2026-07-03
 ---

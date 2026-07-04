@@ -1,5 +1,5 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [020-01, adr-0005, adr-0024]
 arch_review: true
 frame_review: true

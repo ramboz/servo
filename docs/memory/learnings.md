@@ -15,6 +15,37 @@ interpreter's source-decoding under `C`, not a real syntax error. Set
 `PYTHONUTF8=1` (or run under any non-`C` locale) before invoking
 `python3 -m pytest`. Surfaced during spec 019 slice 019-05.
 
+## Spec workflow
+
+### `dependencies:` frontmatter rejects a bare spec number
+
+`workflow.py transition <slice> DONE` refuses with "unknown dependency token
+shape" on a bare spec number like `012` — it needs a slice-shape token
+(`012-04`) or an ADR (`adr-0024`). This has now bitten two specs (016 and
+020): a slice that depends on an *older* spec's already-built code (not that
+spec's own DONE lifecycle, which it may never formally complete if it
+predates the per-slice DONE-gate machinery) should describe that dependency
+in prose (DoR/Goal text), not in `dependencies:` — a bare-spec entry there
+either fails the token-shape check, or, if it did parse, would permanently
+block `DONE` on an unrelated spec's unresolved lifecycle. Surfaced by spec
+020 slice 020-01.
+
+### A shared module copied (not referenced) into multiple targets needs a two-candidate import probe
+
+`skills/_common/` (the ADR-0024 shared frozen-eval harness) is consumed by
+skills whose runtime is `shutil.copyfile`d into an arbitrary target's
+`.servo/<skill>/` (unlike spec-oracle's `checks.py`, referenced by absolute
+plugin-install path and never copied — ADR-0023). A copied file can't do the
+jig-idiom `sys.path.insert(parent.parent); from _common import x`, because
+once copied its `__file__` no longer sits near the plugin's `skills/`
+directory. The working pattern: try a source-layout sibling path
+(`../_common/<module>.py`, for when the importing file still lives in its
+skill's source directory) then fall back to a same-directory sibling
+(`<module>.py`, for when both files were copied flat into the same target
+directory) — an existence probe via `importlib.util.spec_from_file_location`,
+not a `sys.path` mutation. See `skills/design-eval/score.py::_load_fidelity_eval`
+(the first instance) and ADR-0024 / spec 020's slice 020-01.
+
 ## Bugs
 
 ### Bug 001 — agent-loop masks auth error as plateau
