@@ -124,6 +124,32 @@ scaffolder) dropped into the target. The Phase column ties each skill back to th
 | `/servo:variant-race` | Run | N-worktree parallel race | future |
 | `/servo:heartbeat` | Compile + Run | Routine-triggered read-only discovery → triage inbox → oracle-gated dispatch (the scheduled **front-end**) | 011 |
 
+### Shared frozen-eval harness (`skills/_common/`)
+
+Non-deterministic eval skills (`design-eval`, and its sibling
+`content-fidelity`) share a modality-agnostic runtime module,
+`skills/_common/fidelity_eval.py` ([ADR-0024](decisions/adr-0024-extract-frozen-eval-harness.md)):
+freeze validation, definition/artifact hashing, n-sample lower-bound
+aggregation, JSON-from-model-reply extraction, HTTP retry, the ledger writer,
+and the oracle.sh install/uninstall/manifest-registration splice — all
+parameterized (case-array key, per-case file fields, extra pinned top-level
+fields, component name) so a caller supplies its own shape without the
+module knowing what "screens" or "viewport" mean. Each skill keeps its own
+capture mechanism (Playwright screenshot vs. reading/generating text) and
+judge payload (vision content blocks vs. text-only prompt) — those stay
+forked, per skill, alongside that skill's own `SKILL.md` prerequisites.
+
+**Deployment note:** unlike spec-oracle's `checks.py` (referenced by an
+absolute plugin-install path, never copied — see below), design-eval's and
+content-fidelity's runtime files are `shutil.copyfile`d into the target's
+`.servo/<skill>/` at install time, so `fidelity_eval.py` is copied alongside
+each skill's own `score.py`. A skill's `score.py` resolves the shared module
+via a two-candidate probe (a source-layout sibling one directory up, or a
+copied-flat sibling in the same directory) — sound for either deployment
+shape, but the copied module has no re-sync signal once installed (a
+pre-existing property of this copy-based deployment, tracked in
+`docs/refinement-todo.md`).
+
 ## Project vs servo-core split
 
 This is the load-bearing distinction. Servo ships **templates and orchestration**; the project owns **content and policy**.

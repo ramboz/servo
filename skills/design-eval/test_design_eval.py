@@ -127,6 +127,30 @@ class FreezeTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 de.freeze(tmp)
 
+    def test_changed_viewport_is_stale(self):
+        # design-eval pins "viewport" into the definition hash via its
+        # score.py wrapper's extra_fields argument (not hardcoded in the
+        # shared module) — changing it must still invalidate the freeze.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            config = json.loads((d / "config.json").read_text())
+            config["viewport"]["width"] = 1024
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(config, d)
+
+    def test_definition_hash_unchanged_for_pre_existing_frozen_config(self):
+        # Regression pin (020-01 fix round): generalizing definition_hash to
+        # take extra_fields instead of hardcoding "viewport" must not change
+        # the hash design-eval already produced/approved for this exact
+        # config shape — a pre-existing frozen config.json's
+        # approved_content_hash must still validate.
+        config = _base_config()
+        h = score.definition_hash(config)
+        self.assertEqual(
+            h, "sha256:4837a50759f77e0d55003a3328c3bf9ec1d203f3509b636ce28b63b303aa3e08")
+
 
 class ScoreHonestyTests(unittest.TestCase):
     """Stale / env_error → exit 2; a valid frozen run with fake scores → 0 + float."""
@@ -323,10 +347,14 @@ class JudgeParseTests(unittest.TestCase):
 # --- helper: run score.main() with the eval dir as the script's base dir ---
 
 def _capture_main(eval_dir: Path):
-    # Ensure the eval dir has a score.py copy whose __file__ is in the eval dir.
+    # Ensure the eval dir has a score.py copy whose __file__ is in the eval dir,
+    # plus its sibling fidelity_eval.py (score.py's two-candidate import probe,
+    # ADR-0024/020-01 — the copied-target layout) so the copy runs standalone.
     import shutil as _sh
     if not (eval_dir / "score.py").is_file():
         _sh.copyfile(HERE / "score.py", eval_dir / "score.py")
+    if not (eval_dir / "fidelity_eval.py").is_file():
+        _sh.copyfile(HERE.parent / "_common" / "fidelity_eval.py", eval_dir / "fidelity_eval.py")
     mod = _load("design_eval_score_run", str(eval_dir / "score.py"))
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

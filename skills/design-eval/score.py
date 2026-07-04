@@ -20,123 +20,75 @@ Python 3.9+ standard library only (servo constraint, ADR-0020).
 from __future__ import annotations
 
 import base64
-import hashlib
+import importlib.util
 import json
-import math
 import os
-import random
 import shutil
-import statistics
 import subprocess
 import sys
-import time
+import time  # noqa: F401 — re-exposed as `score.time` for test monkeypatching (see _post_with_retry)
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 
 EXIT_OK = 0
 EXIT_ENV_ERROR = 2  # → oracle.sh treats rc=2 as a missing component → gate env_error
 _FAKE_SCORES_ENV = "SERVO_DESIGN_EVAL_FAKE_SCORES"  # test/offline hook (no API/browser)
 
-
-class EnvError(RuntimeError):
-    """Infrastructure failure — must surface as exit 2, never a 0.0 score."""
-
-
-class StaleError(RuntimeError):
-    """The frozen definition changed — refuse until re-frozen (exit 2)."""
-
-
-# --------------------------------------------------------------------------- #
-# Freeze (mirrors spec-oracle's 006-04 approval model for the eval case)
-# --------------------------------------------------------------------------- #
-
-def sha256_text(text: str) -> str:
-    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+# design-eval's case shape, passed to the shared module's generalized
+# definition_hash/artifact_hashes/validate_freeze (ADR-0024).
+_CASES_KEY = "screens"
+_CASE_FILE_FIELDS = ("reference", "setup")
+# design-eval-specific top-level field pinned into the frozen definition hash
+# (a vision/screenshot concept the shared module itself knows nothing about).
+_EXTRA_HASH_FIELDS = ("viewport",)
 
 
-def sha256_file(path: Path) -> str:
-    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+def _load_fidelity_eval():
+    """Two-candidate probe (servo ADR-0024 / 020-01 Assumption A1): this file
+    is copied by ``design_eval.py::init()`` into an arbitrary target's
+    ``.servo/design-eval/`` and must resolve its sibling shared module there,
+    independent of CWD or how it was invoked (mirrors this file's own
+    ``__file__``-relative ``base_dir`` resolution in ``main()`` below).
+
+    - source layout: ``skills/design-eval/score.py`` next to
+      ``skills/_common/fidelity_eval.py`` (one directory up, then across);
+    - copied-target layout: both files copied flat into the same directory
+      (``.servo/design-eval/score.py`` + ``.servo/design-eval/fidelity_eval.py``).
+    """
+    here = Path(__file__).resolve().parent
+    for candidate in (here.parent / "_common" / "fidelity_eval.py", here / "fidelity_eval.py"):
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location("fidelity_eval", candidate)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    raise ModuleNotFoundError(
+        "fidelity_eval.py not found next to score.py nor at ../_common/fidelity_eval.py")
+
+
+_fe = _load_fidelity_eval()
+
+EnvError = _fe.EnvError
+StaleError = _fe.StaleError
+sha256_text = _fe.sha256_text
+sha256_file = _fe.sha256_file
 
 
 def definition_hash(config: dict) -> str:
-    """Hash the *frozen definition* (ADR-0005 clause 2): judge model + decoding,
-    sample count / aggregation / δ, threshold, viewport, and the screen set.
-    Excludes the hash-bearing/bookkeeping fields so it is stable and
-    self-consistent — and excludes ``app_url``, which is *environmental* (where
-    the running app is reached, e.g. a dev-server port), not part of the eval
-    definition; pinning it would force a re-freeze + re-approval on a port move.
-    """
-    definition = {
-        "judge": config.get("judge"),
-        "samples": config.get("samples"),
-        "threshold": config.get("threshold"),
-        "viewport": config.get("viewport"),
-        "screens": [
-            {
-                "id": s["id"],
-                "reference": s["reference"],
-                "setup": s.get("setup"),
-                "weight": s.get("weight", 1.0),
-            }
-            for s in config.get("screens", [])
-        ],
-    }
-    return sha256_text(json.dumps(definition, sort_keys=True))
+    return _fe.definition_hash(config, _CASES_KEY, _CASE_FILE_FIELDS, _EXTRA_HASH_FIELDS)
 
 
 def artifact_hashes(config: dict, base_dir: Path) -> dict:
-    """The rubric (inline) plus every reference + setup file, by relative path."""
-    hashes = {"rubric": sha256_text(config.get("rubric", ""))}
-    for s in config.get("screens", []):
-        for rel in (s.get("reference"), s.get("setup")):
-            if rel:
-                f = base_dir / rel
-                if f.is_file():
-                    hashes[rel] = sha256_file(f)
-    return hashes
+    return _fe.artifact_hashes(config, base_dir, _CASES_KEY, _CASE_FILE_FIELDS)
 
 
 def validate_freeze(config: dict, base_dir: Path) -> None:
-    """Refuse (StaleError) unless approved and every frozen part still matches."""
-    if config.get("approval_status") != "approved":
-        raise StaleError(
-            "not approved (approval_status != 'approved') — run `design_eval.py freeze`")
-    if definition_hash(config) != config.get("approved_content_hash"):
-        raise StaleError(
-            "definition changed since freeze (model / n / δ / threshold / screens) — re-freeze")
-    frozen = config.get("hashes", {})
-    if not frozen:
-        raise StaleError("no frozen artifact hashes — re-freeze")
-    if frozen.get("rubric") != sha256_text(config.get("rubric", "")):
-        raise StaleError("rubric changed since freeze — re-freeze")
-    for rel, want in frozen.items():
-        if rel == "rubric":
-            continue
-        f = base_dir / rel
-        if not f.is_file():
-            raise StaleError(f"frozen artifact missing: {rel} — re-freeze")
-        if sha256_file(f) != want:
-            raise StaleError(f"frozen artifact changed: {rel} — re-freeze")
+    _fe.validate_freeze(config, base_dir, _CASES_KEY, _CASE_FILE_FIELDS, _EXTRA_HASH_FIELDS)
 
-
-# --------------------------------------------------------------------------- #
-# Aggregation (ADR-0005 clause 3 — within-run anti-flap)
-# --------------------------------------------------------------------------- #
 
 def aggregate_lower_bound(samples, k: float) -> float:
-    """Conservative lower bound of the sampled scores: ``mean − k·stderr``,
-    clamped to ``[0,1]``. A single sample has stderr 0. This is what makes a
-    wobbling judge contribute a high score only when it is *confident across
-    samples* — scores within the band read as "not yet" rather than flapping.
-    """
-    vals = [float(s) for s in samples]
-    if not vals:
-        raise EnvError("no samples to aggregate")
-    mean = statistics.fmean(vals)
-    stderr = 0.0 if len(vals) < 2 else statistics.stdev(vals) / math.sqrt(len(vals))
-    return max(0.0, min(1.0, mean - k * stderr))
+    return _fe.aggregate_lower_bound(samples, k)
 
 
 # --------------------------------------------------------------------------- #
@@ -214,26 +166,12 @@ def _judge_cli(app_png: Path, ref_png: Path, config: dict) -> float:
 
 
 def _post_with_retry(req, timeout: int, attempts: int = 3) -> dict:
-    """POST ``req`` and return the parsed JSON body, with bounded exponential
-    backoff on *transient* failures only: HTTP 429 / 5xx and network/timeout
-    errors are retried; HTTP 4xx (bad request, auth) surfaces immediately because
-    a retry cannot fix it. Exhausting the attempts raises ``EnvError`` (→ rc 2),
-    never a silent score. Each of the ``n`` samples calls this, so a single
-    transient blip on the last sample no longer discards the whole screen."""
-    delay = 1.0
-    for attempt in range(1, attempts + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())
-        except urllib.error.HTTPError as e:
-            if not (e.code == 429 or 500 <= e.code < 600) or attempt == attempts:
-                raise EnvError(f"vision judge request failed (HTTP {e.code}): {e}") from e
-        except (urllib.error.URLError, TimeoutError, OSError) as e:
-            if attempt == attempts:
-                raise EnvError(f"vision judge request failed: {e}") from e
-        time.sleep(delay + random.uniform(0.0, 0.5))
-        delay *= 2
-    raise EnvError("vision judge request failed: retries exhausted")  # unreachable
+    """POST ``req`` via the shared HTTP-retry wrapper (module-level ``urllib``/
+    ``time`` stay imported here, not just in ``_fe``, so tests can monkeypatch
+    ``score.urllib.request.urlopen``/``score.time.sleep`` — both point at the
+    same singleton stdlib modules ``_fe`` calls through, so the patch applies
+    either way)."""
+    return _fe._post_with_retry(req, timeout, attempts)
 
 
 def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
@@ -288,10 +226,7 @@ def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
 
 
 def _extract_json(text: str) -> str:
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        raise ValueError("no JSON object in judge reply")
-    return text[start:end + 1]
+    return _fe._extract_json(text)
 
 
 # --------------------------------------------------------------------------- #
@@ -343,7 +278,7 @@ def score(base_dir: Path) -> float:
 
 def _ledger(base_dir: Path, config: dict, per_screen, composite: float) -> None:
     record = {
-        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "at": _fe.iso_now(),
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
         "composite": round(composite, 4),
@@ -353,11 +288,7 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float) -> None:
             for s, samp, lb in per_screen
         ],
     }
-    try:
-        with (base_dir / "ledger.jsonl").open("a") as f:
-            f.write(json.dumps(record) + "\n")
-    except OSError:
-        pass  # ledger is best-effort — never fail the score on a write error
+    _fe.write_ledger(base_dir, record)
 
 
 def main(argv=None) -> int:

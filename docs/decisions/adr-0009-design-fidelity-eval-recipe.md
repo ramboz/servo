@@ -103,3 +103,13 @@ sub-mode of them.
   the component rides unchanged.
 - **Spec 008 (eval-authoring)** — the sibling spec-oracle-bridge path; convergence
   deferred to the second eval kind.
+
+## Amendments
+
+- **2026-07-03.** The "second eval kind" this ADR's Alternatives section
+  deferred extraction to has arrived (GitHub issue #16, content-fidelity).
+  See [ADR-0024](adr-0024-extract-frozen-eval-harness.md), which extracts the
+  shared freeze/aggregate/ledger/install primitives named here into
+  `skills/_common/fidelity_eval.py`. This record's own text is unchanged —
+  design-eval's public contract (config shape, component name, CLI) does not
+  change.

@@ -637,3 +637,99 @@ copied), or pinning to a specific servo version string recorded in
 **Surfaced by:** spec 019 slice 019-02's arch-review pass — a designed,
 disclosed trade-off of ADR-0023's reference-not-copy default, not a slice
 defect; flagged for future hardening rather than blocking this slice.
+
+---
+
+## Copied shared-eval-harness module has no re-sync / staleness signal
+
+**Deferred:** ADR-0024 / spec 020 (content-fidelity-eval) extracts
+design-eval's freeze/hash/aggregate/ledger primitives into
+`skills/_common/fidelity_eval.py`, but design-eval's runtime stays
+copy-based (the inverse default from ADR-0023's `checks.py`): `score.py` /
+`capture.mjs`, and now `fidelity_eval.py`, are `shutil.copyfile`d into an
+arbitrary target's `.servo/design-eval/` (or `.servo/content-fidelity/`) at
+install time. Once installed, a target's copy has no version stamp or
+staleness check — a later bug fix to the shared module in
+`skills/_common/` never reaches an already-initialized target until it
+re-runs `install`. This pre-dates the extraction (`score.py`/`capture.mjs`
+already have this property today) but the extraction widens its blast
+radius from one skill to every consumer of the shared module. A checked-in
+vendored fallback (if the two-candidate import-resolution mechanism in
+020-01 proves unsound) does **not** close this gap either — it only
+relocates it (source-tree drift instead of install-time drift), confirmed
+by direct read of ADR-0023's `--vendor-engine` mechanism, which itself only
+hashes a vendored file once at freeze time (drift-from-snapshot detection),
+never against the live canonical source.
+
+**Resolution trigger:** if a real drift incident occurs (a shared-module fix
+silently not reaching an installed target), or as part of a future
+freeze/install hardening pass — options include a hash-comment stamped into
+the copied file at install time plus a `--check-stale` verb on the
+authoring CLI, or adopting ADR-0023's reference-by-absolute-path model for
+`fidelity_eval.py` specifically (even though `score.py`/`capture.mjs` stay
+copied) since it has no legitimate reason to be vendored per-skill the way
+skill-specific runtime code does.
+
+**Surfaced by:** ADR-0024's frame-critique pass (rounds 1-2, 2026-07-03) —
+a named, disclosed, out-of-scope risk, not a slice defect; the extraction's
+core value proposition (one edited canonical file instead of N
+hand-duplicated ones) holds regardless of which reach-the-target mechanism
+is used.
+
+---
+
+## `content-fidelity`'s `command`-backed cases have no structural cross-run determinism requirement
+
+**Deferred:** spec 020 (content-fidelity-eval), slice 020-02. Design-eval
+structurally requires every case to supply a `setups/<id>.mjs` that seeds
+deterministic app state before capture — no equivalent exists for
+`content-fidelity`'s `command` artifact-gathering mechanism (AC6), which may
+wrap a non-deterministic (e.g. LLM-backed) generator. Slice 020-02's AC3
+guarantees the artifact is gathered once per scoring run and reused across
+all `n` judge samples (so a single `score()` call's n-sample lower bound
+measures judge noise only, per ADR-0005 clause 3) — but that guarantee does
+not extend **across** runs. ADR-0005 clause 4's plateau noise floor `δ` is
+calibrated to judge stderr, not to generator output drift, so a
+non-deterministic `command` case can produce a composite delta `δ` was
+never sized to absorb: `loop.py` may read generator drift as false progress
+or a false plateau. The noise-floor mechanism itself is not broken — `δ` is
+just not scoped for this input class.
+
+**Resolution trigger:** if a real consumer hits this (a `command`-backed
+case producing visibly noisy plateau/progress signal across loop
+iterations), or as part of a future content-fidelity hardening pass. The
+cheapest identified candidate: cache the gathered artifact keyed by its
+content hash across a loop's plateau window, so a `command` case naturally
+behaves like a stable `file` case once generated once, without requiring
+the generator itself to be deterministic. Until then, the skill's
+authoring guidance steers projects toward `file`-backed cases for anything
+gating a loop's plateau detection.
+
+**Surfaced by:** slice 020-02's frame-critique pass (rounds 2-3,
+2026-07-03) — a named, disclosed risk, not a slice defect; `file`-backed
+cases are unaffected.
+
+---
+
+## `content-fidelity`'s file-or-command config shape is unvalidated against a real consumer
+
+**Deferred:** spec 020 (content-fidelity-eval), slice 020-02, Assumption A1
+(the narrower half — distinct from the cross-run-determinism entry above,
+which A1's second half covers). Design-eval's screen/mockup config shape was
+de-risked by a real throwaway spike (012's spike-findings) before it
+shipped; content-fidelity's two-mechanism artifact-gathering config (`file`
+read vs. `command` exec) shipped without an equivalent spike or a committed
+first consumer, on the reasoning that it is the smallest shape covering
+ADR-0005's dataset-is-a-hashed-artifact framing. It may not cover every real
+shape a text-fidelity project needs (e.g. a multi-step pipeline, or an
+artifact that needs post-processing before judging).
+
+**Resolution trigger:** the first real content-fidelity consumer (mirroring
+design-eval's 012-05 "first consumer wiring" pattern) — extend the config
+shape then, informed by what that project actually needs, rather than
+guessing further shapes now.
+
+**Surfaced by:** slice 020-02's frame-critique pass (round 1, 2026-07-03) and
+its compliance review (2026-07-03) — a disclosed, non-blocking scope
+question, not a defect; the shipped `file`/`command` shape is fully
+functional for both of its own documented use cases.
