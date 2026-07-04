@@ -168,3 +168,55 @@ spec-less; ADR-0018).
 - [Spec 016 — execution-planner](../specs/016-execution-planner/spec.md) — the
   producer; [Spec 017 — evaluation-intelligence](../specs/017-evaluation-intelligence/spec.md)
   — the adaptive-planning consumer that rewrites it.
+
+## Amendments
+
+### 2026-07-04 — "ceiling above policy" narrowed to the disable-sentinel; no numeric magnitude ceiling introduced
+
+The Decision and Verification sections above name **two** clamp triggers: "a
+plan with no ceiling, **or a ceiling above policy**, is clamped." Implementing
+this in **016-03 (clamp-and-review)** surfaced a gap this ADR did not
+anticipate: **no numeric "policy ceiling" exists anywhere in `loop.py`, and
+inventing one collides with this same ADR's human-review goal.**
+
+016-02 (run-consume) already recorded, in its own framing, that "no separate
+'policy ceiling' exists in loop.py" — the `DEFAULT_MAX_ITERATIONS` /
+`DEFAULT_COST_CEILING_USD` / `DEFAULT_CONTEXT_FILL_THRESHOLD` /
+`DEFAULT_PLATEAU_WINDOW` constants are documented CLI *defaults* (per
+`docs/architecture.md` "Project vs servo-core split"), not a safety maximum
+anyone decided on — and a CLI flag can already exceed them uncapped today
+(`loop.py`'s flag-shape validation only enforces lower bounds). A 016-03
+frame-critique pass caught the consequence directly: clamping a
+`human_edited` plan to `DEFAULT_*` would silently defeat the very capability
+this ADR asks for — a human reviewing a plan and raising its budget (the
+single most likely edit) would have that edit clawed back to the out-of-the-box
+default, making "review and adjust" close to "review and be ignored" for the
+budget dimension.
+
+**Effective status:** the **"no ceiling" clause is implemented as written** —
+a plan (`compiled` or `human_edited`) may never request the documented `0`
+("disable this brake") sentinel on `cost_ceiling_usd`, `context_fill_threshold`,
+or `plateau_window`; that sentinel is clamped up to the knob's `DEFAULT_*`
+(a live brake) rather than honored as disabled. The **"ceiling above policy"
+clause is narrowed to mean exactly this disable-sentinel case** — there is no
+separate numeric magnitude a plan-sourced value is clamped against; a plan
+value that *raises* a knob above `DEFAULT_*` is honored exactly like an
+explicit CLI flag. Introducing a genuine magnitude policy ceiling (distinct
+from a knob's own default) remains open and is deferred to a future decision
+if a real need for one surfaces — it is not invented here to satisfy this
+ADR's letter at the cost of the review workflow this ADR itself asks for.
+
+**Disclosed trade-off (persistence, not just a one-shot flag).** A CLI flag
+is re-asserted, and re-scrutinized, at every invocation; a `human_edited`
+plan is a **persistent, reusable artifact** (this spec's Goal 6: "a run is
+reconstructable from its plan") that a raised `cost_ceiling_usd` /
+`max_iterations` governs **silently across every future unattended run**
+against that spec-id until the plan is recompiled or re-edited. Equating
+"raise it once via CLI" with "bake a raised value into a plan consumed
+indefinitely" is not a hidden gap — it is a deliberate, disclosed choice not
+to invent an undecided re-approval/expiry policy on top of an already-narrow
+amendment. If real use surfaces a need for one (e.g. a `human_edited` plan
+that goes stale after N days, mirroring 006-04's `stale` approval state),
+that is its own future decision, not a reason to fall back to an arbitrary
+`DEFAULT_*` cap that this same ADR already rejected above for defeating the
+review workflow.

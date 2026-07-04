@@ -1,5 +1,5 @@
 ---
-status: DONE
+status: IN_PROGRESS
 dependencies: [001, 003, 006]
 last_verified:
 ---
@@ -73,9 +73,14 @@ planner that emits it and teaches Run to consume it.
    verbatim to `claude -p`), a distinct capability. The heartbeat dispatcher is
    **not** a plan consumer: its findings are spec-less, so a `spec-id`-keyed plan has
    nothing to bind (ADR-0018).
-5. **Clamp, never loosen.** A plan budget above the safe ceiling is clamped to
-   the guardrail bound, not honored; the plan configures *how* Run optimizes, the
-   brakes (ADR-0008/003) and the oracle authority (ADR-0011) are untouched.
+5. **Clamp, never disable.** A plan budget requesting the documented "disable
+   this brake" sentinel is clamped back to a live default, not honored as
+   disabled ([ADR-0016 amendment, 2026-07-04](../../decisions/adr-0016-execution-plan-artifact.md#amendments):
+   narrowed from a numeric magnitude ceiling once 016-03 found no such policy
+   ceiling exists, and inventing one would silently defeat the review goal
+   below). A plan value that *raises* a knob is honored exactly like an
+   explicit CLI flag; the plan configures *how* Run optimizes, the brakes
+   (ADR-0008/003) and the oracle authority (ADR-0011) are untouched.
 6. **Be reproducible.** A run is reconstructable from its plan; the plan records
    `compiled_at` and `provenance`.
 
@@ -103,7 +108,7 @@ The Compile→Run handoff the plan makes durable:
 [budget/driver/prompt]                                        │  (reviewable, editable)
                                                               ▼
                                           [Servo Run: loop.py --plan <path>]
-                                          reads defaults, clamps to safe ceilings,
+                                          reads defaults, clamps disabled brakes,
                                           oracle stays authority → state.json (outcome)
 ```
 
@@ -125,7 +130,7 @@ prompt" proved to be a distinct *compile-a-prompt* capability, not a knob-read.
 |---|---|---|---|---|
 | [016-01](slice-01-plan-emit.md) | plan-emit | Path | **DONE** | Compile `plan.json` from suitability verdict + oracle + overlay + budget/driver/prompt; ADR-0016 schema; **references not copies** (`suitability_ref`, not an inlined verdict); `schema_version`; git-ignored `.servo/plans/`; emits **only on a `suitable` verdict** (the 015-03 Compile gate). |
 | [016-02](slice-02-run-consume.md) | run-consume | Path | **DRAFT** | `loop.py --plan <path>` (generic path, no `spec-id` derivation) reads `budget` + `driver` as run defaults; precedence flag > plan > default; driver-aware budget (goal driver drops loop-only brakes); no `--plan` ⇒ today's behavior unchanged; `human_edited` plans refused (clamp = 016-03). `--prompt` stays required (`prompt_ref` consumption = 016-05). Consumer is `loop.py` only, not the heartbeat (ADR-0018). |
-| [016-03](slice-03-clamp-and-review.md) | clamp-and-review | Rules | DEFERRED | Clamp over-ceiling budgets to the safe bound; `human_edited` provenance + review/approve before Run. Trigger: 016-02 DONE. |
+| [016-03](slice-03-clamp-and-review.md) | clamp-and-review | Rules | DRAFT | Clamp a plan's disable-sentinel budget values back to a live default (not a numeric magnitude ceiling — ADR-0016 amended 2026-07-04); `human_edited` provenance becomes consumable + review/approve before Run. Trigger (016-02 DONE) met; re-opened. |
 | [016-04](slice-04-skill-surface.md) | skill-surface | Interface | DEFERRED | `/servo:execution-plan` surface + install-contract entry. (Heartbeat plan-reuse dropped — ADR-0018.) Trigger: 016-01..03 DONE. |
 | [016-05](slice-05-prompt-render.md) | prompt-render | Path | DEFERRED | Producer *compiles* an actionable seed prompt from the spec (not the raw `spec.md` doc) → target-relative artifact; `loop.py --plan` seeds from `prompt_ref` when `--prompt` omitted. Split from 016-02 by its frame-critique (rendering is a distinct capability). Trigger: 016-02 DONE. |
 
