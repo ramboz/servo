@@ -195,16 +195,25 @@ REASON_DIRTY_TREE = "dirty_tree"
 # Slice 016-02 execution-plan consumption (ADR-0016). `--plan <path>` reads a
 # compiled `plan.json`'s `budget` + `driver` as run defaults; every read failure
 # is a fail-closed rc=2 refusal with a structured stderr reason, mirroring the
-# `state_missing` / `state_schema_mismatch` resume-refusal style. `loop.py`
-# consumes `provenance: compiled` plans only — a `human_edited` plan could carry
-# a loosened brake, so it is refused pending 016-03's clamp (ADR-0016 "clamp,
-# never loosen"; A2 in the slice).
+# `state_missing` / `state_schema_mismatch` resume-refusal style. Slice 016-03
+# supersedes 016-02 AC7: `loop.py` now consumes both `provenance: compiled` AND
+# `provenance: human_edited` plans (a human review/adjust workflow, ADR-0016) —
+# any OTHER provenance value still refuses. A human_edited plan's budget goes
+# through the exact same clamp (016-03 AC1) and validation (016-03 AC3) as a
+# compiled plan before being consumed; no separate code path.
 PLAN_SCHEMA_VERSION = 1
 PROVENANCE_COMPILED = "compiled"
+PROVENANCE_HUMAN_EDITED = "human_edited"
 REASON_PLAN_MISSING = "plan_missing"
 REASON_PLAN_MALFORMED = "plan_malformed"
 REASON_PLAN_SCHEMA_MISMATCH = "plan_schema_mismatch"
 REASON_PLAN_REQUIRES_CLAMP = "plan_requires_clamp"
+# Slice 016-03 AC3: a plan-sourced budget/driver value that is the wrong type,
+# out of the same range the equivalent CLI flag enforces, or (for `driver`) not
+# one of the recognized choices — refused fail-closed BEFORE clamping or a run
+# starts. A `0` disable-sentinel is a VALID value (016-03 AC1 clamps it); this
+# reason is for values clamping cannot rescue.
+REASON_PLAN_VALUE_INVALID = "plan_value_invalid"
 # The four budget knobs a compiled plan can supply as run defaults, mapped to
 # the `loop.py` CLI flag they default. Loop-only brakes (context-fill / plateau)
 # are dropped under the goal driver exactly as explicit flags are (slice AC3).
@@ -1101,9 +1110,11 @@ def _load_plan(
       collapse; a bare list is not a plan).
     - **`schema_version` != PLAN_SCHEMA_VERSION** (incl. missing) →
       `plan_schema_mismatch` (mirrors the resume `state_schema_mismatch` guard).
-    - **`provenance` != "compiled"** → `plan_requires_clamp`: a `human_edited`
-      (or any non-compiled) plan could carry a loosened brake, so it is refused
-      pending 016-03's clamp (A2; ADR-0016 "clamp, never loosen").
+    - **`provenance` not in {"compiled", "human_edited"}** → `plan_requires_clamp`:
+      an unrecognized provenance value is refused fail-closed (016-03 AC2
+      supersedes 016-02 AC7's blanket "any non-compiled provenance refuses" —
+      a `human_edited` plan is now accepted and consumable, since its budget
+      goes through the same clamp/validation as a `compiled` plan below).
 
     This slice consumes only the `budget` + `driver` fields; `prompt_ref`
     rendering is out of scope (016-05), so the plan's other fields are inert.
@@ -1133,13 +1144,12 @@ def _load_plan(
             f"expects {PLAN_SCHEMA_VERSION}",
         )
     provenance = data.get("provenance")
-    if provenance != PROVENANCE_COMPILED:
+    if provenance not in (PROVENANCE_COMPILED, PROVENANCE_HUMAN_EDITED):
         return None, (
             REASON_PLAN_REQUIRES_CLAMP,
             f"plan provenance is {provenance!r}; loop.py consumes only "
-            f"{PROVENANCE_COMPILED!r} plans. A non-compiled (e.g. human_edited) "
-            f"plan may carry a loosened brake and needs clamping before Run — "
-            f"deferred to slice 016-03",
+            f"{PROVENANCE_COMPILED!r} or {PROVENANCE_HUMAN_EDITED!r} plans "
+            f"(016-03)",
         )
     return data, None
 
@@ -1167,6 +1177,115 @@ def _resolve_from_plan(
     if plan_budget is not None and key in plan_budget:
         return plan_budget[key]
     return None
+
+
+def _validate_plan_budget(plan_budget: Optional[dict]) -> Optional[tuple[str, str]]:
+    """Fail-closed plan-value validation, BEFORE clamping (slice 016-03 AC3).
+
+    Mirrors the flag-shape validation `main()` already runs for the equivalent
+    CLI flag (`loop.py:3225-3236`): a plan-sourced budget value of the
+    wrong type, or one that would fail the same range check as its CLI flag,
+    is a refusal — not something to clamp. A `0` is a VALID value on the three
+    clampable knobs (016-03 AC1 handles it); this only rejects what clamping
+    cannot rescue: wrong type, negative `max_iterations`, `cost_ceiling_usd`
+    below 0, `context_fill_threshold` outside [0.0, 1.0], or negative
+    `plateau_window`. (`plateau_noise_floor` is a CLI-only knob — it has no
+    plan-`budget` field, per `execution_plan.py`'s schema — so it is not
+    validated here.)
+
+    Returns `(reason, message)` naming the offending key on the first failure
+    found, or `None` when every present key is well-formed. `plan_budget` may
+    be `None`/`{}` (no --plan, or a plan with an empty budget block) — nothing
+    to validate.
+    """
+    if not plan_budget:
+        return None
+    if "max_iterations" in plan_budget:
+        value = plan_budget["max_iterations"]
+        if isinstance(value, bool) or not isinstance(value, int):
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.max_iterations must be an int, got {value!r}"
+            )
+        if value < 1:
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.max_iterations must be >= 1, got {value!r}"
+            )
+    if "cost_ceiling_usd" in plan_budget:
+        value = plan_budget["cost_ceiling_usd"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.cost_ceiling_usd must be a number, got {value!r}"
+            )
+        if value < 0:
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.cost_ceiling_usd must be >= 0, got {value!r}"
+            )
+    if "context_fill_threshold" in plan_budget:
+        value = plan_budget["context_fill_threshold"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.context_fill_threshold must be a number, got "
+                f"{value!r}"
+            )
+        if value < 0 or value > 1:
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.context_fill_threshold must be in [0.0, 1.0], "
+                f"got {value!r}"
+            )
+    if "plateau_window" in plan_budget:
+        value = plan_budget["plateau_window"]
+        if isinstance(value, bool) or not isinstance(value, int):
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.plateau_window must be an int, got {value!r}"
+            )
+        if value < 0:
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.plateau_window must be >= 0, got {value!r}"
+            )
+    return None
+
+
+def _validate_plan_driver(plan_driver: Optional[object]) -> Optional[tuple[str, str]]:
+    """Refuse a plan `driver` value outside {auto, loop, goal} (016-03 AC3).
+
+    An unrecognized choice must refuse rather than silently route as `auto` —
+    mirrors argparse's own `choices=` enforcement for `--driver`. `None`
+    (the key absent) is not validated here; the caller only invokes this when
+    a plan actually supplies a `driver`.
+    """
+    if plan_driver not in (DRIVER_AUTO, DRIVER_LOOP, DRIVER_GOAL):
+        return REASON_PLAN_VALUE_INVALID, (
+            f"plan driver must be one of {{{DRIVER_AUTO!r}, {DRIVER_LOOP!r}, "
+            f"{DRIVER_GOAL!r}}}, got {plan_driver!r}"
+        )
+    return None
+
+
+def _clamp_plan_value(
+    plan_budget: Optional[dict], key: str, default: float,
+) -> tuple[Optional[object], bool]:
+    """Clamp-never-disable for one plan-sourced budget knob (016-03 AC1/A2).
+
+    A plan-sourced `0` (the documented "disable this brake" sentinel) is
+    clamped UP to `default` (a live brake at its documented starting
+    strength) rather than honored as disabled. A plan value that RAISES the
+    knob above `default` is honored as-is — no cap from above (A1: no numeric
+    policy ceiling exists or is invented here). Only a value actually present
+    in `plan_budget` is eligible for clamping; absent-key resolution stays
+    `_resolve_from_plan`'s job.
+
+    Returns `(value, clamped)`: `value` is `default` when clamped, else the
+    plan's own value unchanged; `clamped` is True iff the disable sentinel
+    fired (the caller uses this to decide whether to emit a breadcrumb).
+    CLI-flag values are NEVER passed through this helper (A3) — only
+    `plan_budget` is read, mirroring `_resolve_from_plan`'s discipline.
+    """
+    if plan_budget is None or key not in plan_budget:
+        return None, False
+    value = plan_budget[key]
+    if value == 0:
+        return default, True
+    return value, False
 
 
 def _target_preflight_error(target: Path) -> Optional[tuple[str, str]]:
@@ -2984,16 +3103,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=Path,
         default=None,
         help=(
-            "Path to a compiled execution `plan.json` (ADR-0016 / slice 016-02). "
-            "A generic path — loop.py never derives a spec-id. Reads the plan's "
-            "`budget` (max_iterations / cost_ceiling / context_fill_threshold / "
-            "plateau_window) and `driver` as run defaults for any knob you did "
-            "not pass on the command line (precedence: explicit flag > plan > "
-            "built-in default). Consumes `provenance: compiled` plans only; a "
-            "human_edited plan refuses pending the 016-03 clamp. With no --plan, "
-            "behavior is byte-for-byte today's (CLI flags + defaults). Mutually "
-            "exclusive with --resume (the persisted state.json is authoritative "
-            "on resume). --prompt is still required (prompt_ref render = 016-05)."
+            "Path to a compiled execution `plan.json` (ADR-0016 / slices "
+            "016-02/016-03). A generic path — loop.py never derives a spec-id. "
+            "Reads the plan's `budget` (max_iterations / cost_ceiling / "
+            "context_fill_threshold / plateau_window) and `driver` as run "
+            "defaults for any knob you did not pass on the command line "
+            "(precedence: explicit flag > plan > built-in default). Consumes "
+            "`provenance: compiled` and `human_edited` plans (any other value "
+            "refuses); a plan-sourced `0` (disable this brake) is clamped up "
+            "to the live default rather than honored as disabled — clamp, "
+            "never disable (016-03). With no --plan, behavior is byte-for-byte "
+            "today's (CLI flags + defaults). Mutually exclusive with --resume "
+            "(the persisted state.json is authoritative on resume). --prompt "
+            "is still required (prompt_ref render = 016-05)."
         ),
     )
     parser.add_argument(
@@ -3158,8 +3280,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     # knobs the caller did not pass. This is the ONLY path a plan is read on;
     # with no --plan, `plan_budget` / `plan_driver` stay None and every
     # resolution below collapses to today's args-or-default behavior (AC5).
-    # Fail-closed: a missing / malformed / schema-mismatched / non-compiled plan
-    # refuses rc=2 with a structured reason BEFORE any run starts (AC6/AC7).
+    # Fail-closed: a missing / malformed / schema-mismatched / unrecognized-
+    # provenance plan refuses rc=2 with a structured reason BEFORE any run
+    # starts (AC6; AC7 now accepts both compiled and human_edited, 016-03 AC2).
     plan_budget = None
     plan_driver = None
     if args.plan is not None:
@@ -3168,6 +3291,22 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _refuse_plan(reason=plan_err[0], message=plan_err[1])
         plan_budget = plan.get("budget") or {}
         plan_driver = plan.get("driver")
+
+        # ---- Plan-value validation (slice 016-03 AC3) ----------------------
+        # Fail-closed, BEFORE clamping or driver resolution: a plan-sourced
+        # budget value of the wrong type / out of the CLI flag's own range, or
+        # an unrecognized `driver` choice, refuses rc=2 naming the offending
+        # key — no run starts, no state.json written. A `0` disable-sentinel
+        # is a VALID value here (016-03 AC1 clamps it below); this only
+        # catches what clamping cannot rescue. Applies identically to a
+        # `compiled` or `human_edited` plan — no separate code path.
+        budget_err = _validate_plan_budget(plan_budget)
+        if budget_err is not None:
+            return _refuse_plan(reason=budget_err[0], message=budget_err[1])
+        if plan_driver is not None:
+            driver_err = _validate_plan_driver(plan_driver)
+            if driver_err is not None:
+                return _refuse_plan(reason=driver_err[0], message=driver_err[1])
 
     # Resolve the effective driver: explicit --driver > plan `driver` > auto
     # (slice 016-02 A1/AC2). Done ABOVE the routing probes so a plan's driver
@@ -3203,6 +3342,28 @@ def main(argv: Optional[list[str]] = None) -> int:
         args.context_fill_threshold, plan_budget, "context_fill_threshold")
     plateau_window = _resolve_from_plan(
         args.plateau_window, plan_budget, "plateau_window")
+
+    # ---- Clamp-never-disable: cost_ceiling_usd (slice 016-03 AC1, A1/A2/A6) --
+    # Clamped unconditionally, driver-independent (A6: 016-02 AC3 already
+    # applies this knob "still under goal"), at the SAME resolution point as
+    # today, immediately after `_resolve_from_plan`. Only a plan-sourced `0`
+    # is clamped — an explicit `--cost-ceiling 0` is untouched (`args.cost_
+    # ceiling is not None` short-circuits before the plan is even consulted,
+    # matching `_resolve_from_plan`'s own CLI-flag-wins precedence; A3).
+    # `context_fill_threshold` / `plateau_window` are intentionally NOT
+    # clamped here — A6 scopes their clamp to the loop-driver branch that
+    # actually forwards them, just above the `run_loop(...)` call below, so no
+    # breadcrumb fires for a value about to be dropped entirely under goal.
+    if args.cost_ceiling is None:
+        clamped_cost_ceiling, cost_ceiling_clamped = _clamp_plan_value(
+            plan_budget, "cost_ceiling_usd", DEFAULT_COST_CEILING_USD)
+        if cost_ceiling_clamped:
+            cost_ceiling = clamped_cost_ceiling
+            sys.stderr.write(
+                f"loop: plan-sourced cost_ceiling_usd=0 (disable sentinel) "
+                f"clamped to the live default {DEFAULT_COST_CEILING_USD} "
+                f"(016-03 clamp-never-disable).\n"
+            )
 
     # ---- Host-scope routing (slice 003-07 AC4) -----------------------------
     # `loop` always runs (the portable path needs no probe). `goal` / `auto`
@@ -3290,6 +3451,37 @@ def main(argv: Optional[list[str]] = None) -> int:
             resume_run_id=args.resume,
             allow_dirty=args.allow_dirty,
         )
+
+    # ---- Clamp-never-disable: context_fill_threshold / plateau_window
+    # (slice 016-03 AC1, A6) --------------------------------------------------
+    # Scoped to exactly this branch: the loop driver is the only consumer of
+    # these two knobs (016-02 AC3 drops them entirely under goal, handled
+    # above). Clamping any earlier would emit a breadcrumb for a value that
+    # was about to be silently discarded under goal — A6's frame-critique
+    # finding. Only a plan-sourced `0` with no competing explicit CLI flag is
+    # clamped (A3: `args.*` short-circuits before the plan is consulted).
+    if args.context_fill_threshold is None:
+        clamped_threshold, threshold_clamped = _clamp_plan_value(
+            plan_budget, "context_fill_threshold", DEFAULT_CONTEXT_FILL_THRESHOLD)
+        if threshold_clamped:
+            context_fill_threshold = clamped_threshold
+            sys.stderr.write(
+                f"loop: plan-sourced context_fill_threshold=0 (disable "
+                f"sentinel) clamped to the live default "
+                f"{DEFAULT_CONTEXT_FILL_THRESHOLD} (016-03 clamp-never-"
+                f"disable).\n"
+            )
+    if args.plateau_window is None:
+        clamped_plateau, plateau_clamped = _clamp_plan_value(
+            plan_budget, "plateau_window", DEFAULT_PLATEAU_WINDOW)
+        if plateau_clamped:
+            plateau_window = clamped_plateau
+            sys.stderr.write(
+                f"loop: plan-sourced plateau_window=0 (disable sentinel) "
+                f"clamped to the live default {DEFAULT_PLATEAU_WINDOW} "
+                f"(016-03 clamp-never-disable).\n"
+            )
+
     return run_loop(
         target,
         prompt=args.prompt,

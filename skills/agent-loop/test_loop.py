@@ -6642,7 +6642,13 @@ class PlanReadContractTests(unittest.TestCase):
 
 
 class PlanHumanEditedDeferredTests(unittest.TestCase):
-    """AC7 — provenance: human_edited ⇒ rc2 + plan_requires_clamp (clamp = 016-03)."""
+    """AC7 (016-02) — unrecognized provenance still refuses (plan_requires_clamp).
+
+    Slice 016-03 AC2 supersedes 016-02 AC7's blanket "any non-compiled
+    provenance refuses" rule: `human_edited` is now accepted and consumable
+    (see `PlanHumanEditedConsumableTests`); only a provenance value that is
+    neither "compiled" nor "human_edited" still refuses here, unchanged.
+    """
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-human-")
@@ -6656,19 +6662,8 @@ class PlanHumanEditedDeferredTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_human_edited_plan_refuses_pending_clamp(self):
-        plan = _compiled_plan(provenance="human_edited")
-        plan_path = _write_plan(self.tmp, plan)
-        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
-        self.assertEqual(result.returncode, 2, msg=result.stdout)
-        summary = _stdout_json_lines(result.stdout)[-1]
-        self.assertEqual(summary["terminal_reason"], "plan_requires_clamp")
-        # The breadcrumb names 016-03 (the clamp slice).
-        self.assertIn("016-03", result.stderr)
-        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
-
     def test_unknown_provenance_refuses(self):
-        # Anything other than "compiled" is refused pending the clamp (fail-closed).
+        # Anything other than "compiled"/"human_edited" is refused (fail-closed).
         plan = _compiled_plan(provenance="mystery")
         plan_path = _write_plan(self.tmp, plan)
         result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
@@ -6704,6 +6699,439 @@ class PlanResumeExclusiveTests(unittest.TestCase):
         self.assertIn("--resume", result.stderr)
         # A parser.error is caught before any plan-read refusal summary line.
         self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+
+# ============================================================================
+# Slice 016-03 (clamp-and-review, ADR-0016 amendment 2026-07-04)
+# ============================================================================
+
+
+class PlanClampTests(unittest.TestCase):
+    """AC1 — clamp-never-disable for plan-sourced budget, driver-scoped (A6).
+
+    `cost_ceiling_usd=0` is clamped up to DEFAULT_COST_CEILING_USD
+    unconditionally (either driver). `context_fill_threshold=0` /
+    `plateau_window=0` are clamped only on the loop-driver branch that
+    actually forwards them to run_loop; under goal they are dropped exactly
+    as 016-02 AC3 already specifies, with no clamp breadcrumb. A plan value
+    that *raises* a knob above DEFAULT_* is honored as-is. An explicit CLI
+    flag is never clamped.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-clamp-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_cost_ceiling_zero_clamped_under_loop_driver(self):
+        plan = _compiled_plan(cost_ceiling_usd=0, plateau_window=0, driver="loop")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--max-iterations", "1",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 2.0, places=6)
+        self.assertIn("cost_ceiling_usd", result.stderr)
+        self.assertIn("0", result.stderr)
+
+    def test_context_fill_threshold_zero_clamped_under_loop_driver(self):
+        plan = _compiled_plan(
+            context_fill_threshold=0, plateau_window=0, driver="loop",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--max-iterations", "1",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["context_fill_threshold"], 0.75, places=6)
+        self.assertIn("context_fill_threshold", result.stderr)
+
+    def test_plateau_window_zero_clamped_under_loop_driver(self):
+        plan = _compiled_plan(plateau_window=0, driver="loop")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--max-iterations", "1",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["plateau_window"], 3)
+        self.assertIn("plateau_window", result.stderr)
+
+    def test_cost_ceiling_zero_clamped_under_goal_driver_too(self):
+        # A1/A6: cost_ceiling_usd's clamp is driver-independent.
+        goal_tmp = tempfile.mkdtemp(prefix="servo-plan-clamp-goal-")
+        tmp = Path(goal_tmp)
+        target = tmp / "demo"
+        target.mkdir()
+        _make_manifest(target)
+        _make_oracle(target, _passing_oracle())
+        bindir = tmp / "bin"
+        bindir.mkdir(parents=True, exist_ok=True)
+        _mock_claude_goal(bindir, _goal_stream_jsonl(
+            assistant_text="ran gate\n" + GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success"),
+        ))
+        try:
+            plan = _compiled_plan(cost_ceiling_usd=0, driver="goal")
+            plan_path = _write_plan(tmp, plan)
+            result = _run_raw(
+                target, "--plan", str(plan_path), "--prompt", "x",
+                mock_bindir=bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            summary = _stdout_json_lines(result.stdout)[-1]
+            self.assertAlmostEqual(summary["cost_ceiling_usd"], 2.0, places=6)
+            self.assertIn("cost_ceiling_usd", result.stderr)
+        finally:
+            shutil.rmtree(goal_tmp, ignore_errors=True)
+
+    def test_context_fill_and_plateau_zero_not_clamped_under_goal_driver(self):
+        # A6: these two are dropped entirely under goal (016-02 AC3) — a
+        # disable-sentinel is just one more dropped value, no clamp breadcrumb.
+        tmp = Path(tempfile.mkdtemp(prefix="servo-plan-clamp-goal2-"))
+        target = tmp / "demo"
+        target.mkdir()
+        _make_manifest(target)
+        _make_oracle(target, _passing_oracle())
+        bindir = tmp / "bin"
+        bindir.mkdir(parents=True, exist_ok=True)
+        _mock_claude_goal(bindir, _goal_stream_jsonl(
+            assistant_text="ran gate\n" + GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success"),
+        ))
+        try:
+            plan = _compiled_plan(
+                context_fill_threshold=0, plateau_window=0, driver="goal",
+            )
+            plan_path = _write_plan(tmp, plan)
+            result = _run_raw(
+                target, "--plan", str(plan_path), "--prompt", "x",
+                mock_bindir=bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertNotIn("context_fill_threshold", result.stderr)
+            self.assertNotIn("plateau_window", result.stderr)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_max_iterations_never_clamped(self):
+        # No disable sentinel exists for max_iterations; even a plan value
+        # of 0 is out-of-range (AC3 refusal), not a clamp target. Here we
+        # confirm a small positive value is honored unchanged (not bumped
+        # to DEFAULT_MAX_ITERATIONS=5).
+        plan = _compiled_plan(max_iterations=1, plateau_window=0, driver="loop")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["max_iterations"], 1)
+        self.assertNotIn("max_iterations", result.stderr)
+
+    def test_plan_value_raising_a_knob_is_honored_unchanged(self):
+        # A1: no cap from above — a raised value passes through untouched.
+        plan = _compiled_plan(
+            cost_ceiling_usd=9.0, context_fill_threshold=0.99,
+            plateau_window=10, driver="loop",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--max-iterations", "1",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 9.0, places=6)
+        self.assertAlmostEqual(state["context_fill_threshold"], 0.99, places=6)
+        self.assertEqual(state["plateau_window"], 10)
+        self.assertNotIn("clamp", result.stderr)
+
+    def test_explicit_cli_cost_ceiling_zero_never_clamped(self):
+        # A3: clamping applies to plan-sourced values only; an explicit
+        # --cost-ceiling 0 still disables the brake exactly as today.
+        plan = _compiled_plan(driver="loop")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--cost-ceiling", "0", "--max-iterations", "1",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 0.0, places=6)
+        self.assertNotIn("clamp", result.stderr)
+
+
+class PlanHumanEditedConsumableTests(unittest.TestCase):
+    """AC2 — a `human_edited` plan is consumable (016-02 AC7 superseded).
+
+    Rewrites `PlanHumanEditedDeferredTests.test_human_edited_plan_refuses_
+    pending_clamp`: a human_edited plan now runs successfully, going through
+    the same clamp (AC1) and validation (AC3) as a compiled plan.
+    `test_unknown_provenance_refuses` (provenance "mystery") is retained
+    unchanged in `PlanHumanEditedDeferredTests` above.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-human-consume-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_human_edited_plan_runs_successfully(self):
+        plan = _compiled_plan(
+            provenance="human_edited", max_iterations=1, plateau_window=0,
+            driver="loop",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["max_iterations"], 1)
+
+    def test_human_edited_plan_goes_through_same_clamp_as_compiled(self):
+        plan = _compiled_plan(
+            provenance="human_edited", cost_ceiling_usd=0, max_iterations=1,
+            plateau_window=0, driver="loop",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 2.0, places=6)
+        self.assertIn("cost_ceiling_usd", result.stderr)
+
+    def test_human_edited_plan_goes_through_same_validation_as_compiled(self):
+        plan = _compiled_plan(provenance="human_edited", max_iterations=-1)
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "plan_value_invalid")
+
+
+class PlanValueValidationTests(unittest.TestCase):
+    """AC3 — fail-closed plan-value validation precedes clamping.
+
+    A plan-sourced budget value of the wrong type, or one that would fail
+    the same range check as the equivalent CLI flag, refuses exit 2 with
+    reason `plan_value_invalid`, naming the offending key. An invalid
+    `driver` value refuses the same way rather than defaulting to auto.
+    Validation runs before clamping — a `0` is a valid (clampable) value,
+    not an invalid one.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-validate-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _assert_refused(self, result, offending_key):
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "plan_value_invalid")
+        self.assertIn(offending_key, result.stderr)
+        # No run started: no state.json written.
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+    def test_max_iterations_wrong_type_refuses(self):
+        plan = _compiled_plan(max_iterations="five")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "max_iterations")
+
+    def test_max_iterations_negative_refuses(self):
+        plan = _compiled_plan(max_iterations=-1)
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "max_iterations")
+
+    def test_cost_ceiling_wrong_type_refuses(self):
+        plan = _compiled_plan(cost_ceiling_usd="free")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "cost_ceiling_usd")
+
+    def test_cost_ceiling_negative_refuses(self):
+        plan = _compiled_plan(cost_ceiling_usd=-1.0)
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "cost_ceiling_usd")
+
+    def test_context_fill_threshold_wrong_type_refuses(self):
+        plan = _compiled_plan(context_fill_threshold="high")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "context_fill_threshold")
+
+    def test_context_fill_threshold_out_of_range_refuses(self):
+        plan = _compiled_plan(context_fill_threshold=1.5)
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "context_fill_threshold")
+
+    def test_context_fill_threshold_negative_refuses(self):
+        plan = _compiled_plan(context_fill_threshold=-0.1)
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "context_fill_threshold")
+
+    def test_plateau_window_wrong_type_refuses(self):
+        plan = _compiled_plan(plateau_window="many")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "plateau_window")
+
+    def test_plateau_window_negative_refuses(self):
+        plan = _compiled_plan(plateau_window=-1)
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "plateau_window")
+
+    def test_invalid_driver_string_refuses(self):
+        plan = _compiled_plan(driver="rogue")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "driver")
+
+    def test_zero_is_valid_not_refused(self):
+        # 0 is a valid (clampable) value, not an invalid one — validation
+        # must not refuse the disable sentinel; AC1's clamp handles it.
+        plan = _compiled_plan(
+            cost_ceiling_usd=0, context_fill_threshold=0, plateau_window=0,
+            driver="loop",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        bindir = self.tmp / "bin"
+        counter = self.tmp / "counter.txt"
+        _mock_claude_session_per_iter(bindir, counter)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            "--max-iterations", "1",
+            mock_bindir=bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+
+class PlanClampNoOpTests(unittest.TestCase):
+    """AC5 — no --plan, or a plan that never hits the disable sentinel on any
+    knob (including one that *raises* a knob above default), is unaffected:
+    behavior/state.json byte-for-byte identical to pre-016-03, no clamp
+    breadcrumb. Extends `NoPlanUnchangedTests`.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-plan-clamp-noop-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_session_per_iter(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_no_plan_no_clamp_breadcrumb(self):
+        result = _run_raw(
+            self.target, "--driver", "loop", "--prompt", "x",
+            "--max-iterations", "1", "--plateau-window", "0",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotIn("clamp", result.stderr)
+
+    def test_plan_with_no_disable_sentinel_is_a_noop(self):
+        plan = _compiled_plan(
+            max_iterations=2, cost_ceiling_usd=1.25,
+            context_fill_threshold=0.5, plateau_window=4, driver="loop",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["max_iterations"], 2)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 1.25, places=6)
+        self.assertAlmostEqual(state["context_fill_threshold"], 0.5, places=6)
+        self.assertEqual(state["plateau_window"], 4)
+        self.assertNotIn("clamp", result.stderr)
+
+    def test_plan_raising_a_knob_above_default_is_a_noop(self):
+        plan = _compiled_plan(
+            max_iterations=1, cost_ceiling_usd=9.0,
+            context_fill_threshold=0.95, plateau_window=8, driver="loop",
+        )
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertAlmostEqual(state["cost_ceiling_usd"], 9.0, places=6)
+        self.assertAlmostEqual(state["context_fill_threshold"], 0.95, places=6)
+        self.assertEqual(state["plateau_window"], 8)
+        self.assertNotIn("clamp", result.stderr)
 
 
 if __name__ == "__main__":

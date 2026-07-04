@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-servo execution-planner — slice 016-01 (plan-emit).
+servo execution-planner — slice 016-01 (plan-emit) + slice 016-03 (clamp-and-review).
 
 The last step of Servo Compile: assemble the
 [ADR-0016](../../docs/decisions/adr-0016-execution-plan-artifact.md) **execution
@@ -10,7 +10,7 @@ the durable Compile→Run handoff artifact — the reciprocal of the per-run
 
 Usage
 -----
-    python3 execution_plan.py compile <target> --spec <spec-path>
+    python3 execution_plan.py compile <target> --spec <spec-path> [--force]
 
 The plan **references** (never copies) the other Compile artifacts:
   - the suitability verdict (`.servo/suitability/<spec-id>.json`, spec 015) via a
@@ -22,7 +22,12 @@ The plan **references** (never copies) the other Compile artifacts:
     (`null` for a baseline-oracle-only target).
 
 The `budget` block records `loop.py`'s public defaults — the planned, safe budget.
-Clamping a hand-edited over-ceiling value is slice 016-03 (not here).
+Clamping a hand-edited disable-sentinel value is `loop.py`'s job at Run time
+(slice 016-03 AC1). This module's own slice 016-03 responsibility (AC4) is
+**recompile-preserve**: `compile` refuses to silently clobber a plan whose
+`budget`/`driver` content was hand-edited since it was last compiled (detected
+by `budget_hash`, not a self-reported `provenance` label — see `write_plan`),
+unless `--force` is passed.
 
 The `suitable`-only precondition
 --------------------------------
@@ -45,6 +50,7 @@ Never exits 1; never leaves a torn artifact.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -248,6 +254,19 @@ def _load_evaluation_model(target: Path, spec_id: str):
 # Compile + persistence
 # ---------------------------------------------------------------------------
 
+def _budget_hash(budget: dict, driver: str) -> str:
+    """sha256 hex digest of the canonical-JSON `{budget, driver}` (016-03 A5).
+
+    Only these two fields — the ones this slice's ACs and `loop.py` actually
+    consume — are hashed; the other referenced-not-copied plan fields (per
+    ADR-0016) are producer identity, not human-editable surface. `sort_keys`
+    makes the digest independent of key insertion order, so an edit that
+    reorders keys without changing values does not spuriously read as drift.
+    """
+    canonical = json.dumps({"budget": budget, "driver": driver}, sort_keys=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def compile_plan(target: Path, spec_path: Path) -> tuple:
     """Assemble the execution plan. Returns ``(spec_id, plan_dict)``.
 
@@ -264,9 +283,20 @@ def compile_plan(target: Path, spec_path: Path) -> tuple:
     oracle = _load_oracle(target)
     evaluation_model = _load_evaluation_model(target, spec_id)
 
+    budget = {
+        "max_iterations": BUDGET_MAX_ITERATIONS,
+        "cost_ceiling_usd": BUDGET_COST_CEILING_USD,
+        "context_fill_threshold": BUDGET_CONTEXT_FILL_THRESHOLD,
+        "plateau_window": BUDGET_PLATEAU_WINDOW,
+    }
+    driver = DEFAULT_DRIVER
+
     # Key insertion order is load-bearing (ADR-0016 schema order): schema_version
     # first (mirrors every servo artifact), then identity, then the referenced
-    # models, then the planning knobs, then provenance.
+    # models, then the planning knobs, then provenance. `budget_hash` (016-03
+    # AC4/A5) is stamped over the VALUES BEING WRITTEN for this compile, so a
+    # subsequent compile can tell whether a human edited `budget`/`driver`
+    # in between (recompile-preserve, `write_plan`).
     plan = {
         "schema_version": SCHEMA_VERSION,
         "spec_id": spec_id,
@@ -274,28 +304,63 @@ def compile_plan(target: Path, spec_path: Path) -> tuple:
         "suitability_ref": suitability_ref,
         "oracle": oracle,
         "evaluation_model": evaluation_model,
-        "budget": {
-            "max_iterations": BUDGET_MAX_ITERATIONS,
-            "cost_ceiling_usd": BUDGET_COST_CEILING_USD,
-            "context_fill_threshold": BUDGET_CONTEXT_FILL_THRESHOLD,
-            "plateau_window": BUDGET_PLATEAU_WINDOW,
-        },
-        "driver": DEFAULT_DRIVER,
+        "budget": budget,
+        "driver": driver,
         "prompt_ref": str(spec_path),
         "provenance": "compiled",
+        "budget_hash": _budget_hash(budget, driver),
     }
     return spec_id, plan
 
 
-def write_plan(target: Path, spec_id: str, plan: dict) -> Path:
+def write_plan(target: Path, spec_id: str, plan: dict, *, force: bool = False) -> Path:
     """Atomically write the plan; return its path.
 
     Written under the git-ignored `.servo/plans/<spec-id>/` (covered by the
     existing `.servo/` ignore rule). Insertion order preserved (no `sort_keys`).
+
+    Slice 016-03 AC4/A5 (recompile-preserve): before overwriting an EXISTING
+    plan at this path, recompute what its `budget_hash` should be from its own
+    current on-disk `budget`/`driver` and compare to its own recorded
+    `budget_hash`. A mismatch means the content drifted since it was last
+    (re)compiled — regardless of what its `provenance` field claims — so this
+    raises `EnvError("plan_edit_detected", ...)` and does NOT overwrite,
+    unless `force=True` bypasses the check unconditionally. No existing plan,
+    or one whose content still matches its own hash, is unaffected —
+    unconditional overwrite, exactly as before this slice.
+
+    Two deliberate fail-OPEN edge cases (there is no coherent edit to protect
+    in either, so refusing would only add friction, not safety):
+    - **Unreadable/malformed existing `plan.json`** (`existing = None` below):
+      overwritten unconditionally, same as if no plan existed. A corrupt file
+      is not a human's edit worth preserving.
+    - **Existing plan with no `budget_hash` field at all** (`recorded_hash is
+      None` below) — e.g. a plan compiled by 016-01, before this slice
+      existed: there is no recorded baseline to detect drift against, so the
+      overwrite proceeds exactly as it did before 016-03. The very next
+      compile stamps a `budget_hash`, so drift detection is live from then on.
     """
     out_dir = target / ".servo" / "plans" / spec_id
-    out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "plan.json"
+    if not force and out_path.is_file():
+        try:
+            existing = json.loads(out_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            existing = None
+        if isinstance(existing, dict):
+            recorded_hash = existing.get("budget_hash")
+            current_hash = _budget_hash(
+                existing.get("budget") or {}, existing.get("driver")
+            )
+            if recorded_hash is not None and recorded_hash != current_hash:
+                raise EnvError(
+                    "plan_edit_detected",
+                    f"plan at {out_path} was edited since it was last "
+                    f"compiled (budget/driver content no longer matches its "
+                    f"recorded budget_hash); refusing to overwrite the edit. "
+                    f"Pass --force to recompile and discard it.",
+                )
+    out_dir.mkdir(parents=True, exist_ok=True)
     tmp = out_dir / f"{TMP_PREFIX}plan.json{TMP_SUFFIX}"
     tmp.write_text(json.dumps(plan, indent=2) + "\n")
     os.replace(tmp, out_path)
@@ -311,10 +376,10 @@ def _run_compile(args: argparse.Namespace) -> int:
     spec_path = Path(args.spec).resolve()
     try:
         spec_id, plan = compile_plan(target, spec_path)
+        out_path = write_plan(target, spec_id, plan, force=args.force)
     except EnvError as exc:
         print(f"servo: {exc.reason}: {exc}", file=sys.stderr)
         return 2
-    out_path = write_plan(target, spec_id, plan)
     print(f"servo: execution plan for {spec_id} compiled -> {out_path}")
     return 0
 
@@ -331,6 +396,14 @@ def main(argv: list | None = None) -> int:
     compile_p.add_argument("target", help="target project directory")
     compile_p.add_argument(
         "--spec", dest="spec", required=True, help="path to the spec.md to plan"
+    )
+    compile_p.add_argument(
+        "--force", action="store_true",
+        help=(
+            "bypass the recompile-preserve refusal (016-03 AC4) and "
+            "overwrite an existing plan.json even if its budget/driver "
+            "content was hand-edited since it was last compiled"
+        ),
     )
 
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)

@@ -1,7 +1,7 @@
 ---
-status: READY_FOR_IMPLEMENTATION
+status: RECONCILED
 dependencies: [016-02, 003-08, adr-0008, adr-0016]
-last_verified:
+last_verified: 2026-07-04
 frame_review: true
 ---
 
@@ -203,24 +203,26 @@ recompiling a spec no longer silently overwrites a human's edit.
    emitted. *Test:* `PlanClampNoOpTests` (extends `NoPlanUnchangedTests`).
 
 **DoD:**
-- [ ] All ACs pass; full test suite green (no regressions in the existing
+- [x] All ACs pass; full test suite green (no regressions in the existing
       1327+ tests).
-- [ ] Implementer coverage exercises each AC with ≥1 fixture per knob for
+- [x] Implementer coverage exercises each AC with ≥1 fixture per knob for
       AC1, both directions (accept/refuse) for AC2/AC3, both flag states
       (absent/`--force`) for AC4, and the no-op baseline for AC5.
-- [ ] Reviewed by jig compliance + craft; `frame_review: true` ⇒
+- [x] Reviewed by jig compliance + craft; `frame_review: true` ⇒
       frame-critique pass cleared before READY_FOR_REVIEW.
-- [ ] Deviation log produced under this slice heading.
-- [ ] Reconciliation sweep produced under this slice heading.
-- [ ] Reconciliation review passed.
-- [ ] `docs/refinement-todo.md` updated if any decisions are deferred during
-      implementation.
+- [x] Deviation log produced under this slice heading.
+- [x] Reconciliation sweep produced under this slice heading.
+- [x] Reconciliation review passed.
+- [x] `docs/refinement-todo.md` updated if any decisions are deferred during
+      implementation — n/a: no new deferred decision; the deliberately-open
+      magnitude-ceiling question is already recorded in ADR-0016's Amendment,
+      not a fresh refinement-todo entry.
 
 ### Close-out (post-DONE)
 
-- [ ] `docs/specs/README.md` regenerated; the clamp + human-edited-consumable
+- [x] `docs/specs/README.md` regenerated; the clamp + human-edited-consumable
       + recompile-preserve behavior recorded in the Notes column.
-- [ ] 016-04's dependency on this slice (skill-surface) re-checked — it stays
+- [x] 016-04's dependency on this slice (skill-surface) re-checked — it stays
       DEFERRED regardless (still parked behind its own trigger).
 
 **Anti-horizontal-phasing check:** After this slice, a human can hand-edit a
@@ -228,3 +230,86 @@ compiled plan — raise a budget knob, tighten one, or leave it alone — and
 `loop.py --plan` runs against it exactly as edited, transparently clamped
 back to a live brake only if the edit tried to disable one — real, observable
 Compile→Run value, not intermediate plumbing.
+
+### Deviation log (after reconciliation)
+
+Original ACs preserved above. Implementation notes:
+
+1. **Six rounds of pre-implementation frame-critique, not the usual one-shot.**
+   `frame_review: true` fired an adversarial pass that ran six times before
+   authoring even reached READY_FOR_IMPLEMENTATION (evidence:
+   `reviews/slice-03-frame-critique.md` + this file's `## Assumptions`
+   A1-A6, each dated to the round that surfaced it). Rounds 1-2 found the ACs
+   themselves were built on an undecided premise (a numeric "policy ceiling"
+   ADR-0016 named but nothing ever defined) and an ADR/spec/slice
+   inconsistency once that premise was narrowed; rounds 3-4 found the AC4
+   recompile-refusal and AC1 clamp mechanisms each had a real correctness gap
+   (a self-reported label with no integrity check; a sequencing collision
+   with 016-02 AC3's goal-driver brake-drop); round 5 found the narrowed
+   scope's own disclosure undersold a persistence risk; round 6 passed. All
+   six findings are fixed in the ACs/Assumptions as authored — nothing was
+   deferred to implementation.
+2. **ADR-0016 amended, not just the slice.** Because round 1-2's finding was
+   at the ADR level (ADR-0016's Decision/Verification text names a "ceiling
+   above policy" clamp trigger that was never operationalized anywhere in
+   `loop.py`), the fix landed as a dated `## Amendments` section in
+   `docs/decisions/adr-0016-execution-plan-artifact.md` (2026-07-04),
+   preserving the original Decision/Verification text per the
+   records-vs-live-prose convention, plus matching updates to `spec.md`'s
+   Goal 5, Core-model diagram, and the 016-03 SPIDR-table row so the ADR,
+   the parent spec, and the slice all state the same narrowed scope.
+3. **Post-implementation review found two real, fixed issues; both required
+   one re-review round.** The first compliance + craft passes both
+   independently flagged the same live bug: `loop.py`'s `--plan` `--help`
+   text still said a `human_edited` plan refuses, directly contradicting
+   this slice's own AC2 — fixed. Compliance additionally flagged that
+   `execution_plan.py`'s `write_plan` has two fail-open edge cases (an
+   existing plan with no `budget_hash` field at all — i.e. 016-01-vintage;
+   and an unreadable/malformed existing plan) that fall through to an
+   unconditional overwrite, undocumented and untested — fixed by adding an
+   explicit docstring rationale for both plus one dedicated regression test
+   each (`test_legacy_plan_with_no_budget_hash_field_overwrites_unconditionally`,
+   `test_malformed_existing_plan_overwrites_unconditionally` in
+   `test_execution_plan.py`). Craft's remaining nits (a stale
+   `plateau_noise_floor` docstring mention, a stale line-number citation)
+   were fixed inline. Both passes were re-run against the fixed deliverable
+   and returned `pass`.
+4. **`_load_plan` never checks `budget_hash`; only `execution_plan.py`'s
+   `write_plan` does (compliance re-review note).** This is intentional, not
+   an oversight: the hash exists solely to protect the *recompile* step from
+   clobbering an edit (AC4/A5); `loop.py`'s consumption side already treats
+   `compiled` and `human_edited` plans identically (AC2) and clamps/validates
+   uniformly (AC1/AC3) regardless of whether the content matches any prior
+   hash. There is nothing for the hash to protect on the read side — recorded
+   here per the reviewer's request, no code change needed.
+5. **`PlanHumanEditedDeferredTests` test-class name is now narrower than it
+   sounds (compliance re-review note, not fixed).** The class originally held
+   016-02 AC7's full "any non-compiled provenance refuses" coverage; this
+   slice's AC2 supersedes most of that, so the class now holds only the
+   retained `test_unknown_provenance_refuses` case. The class docstring was
+   updated to say so accurately, but the class name itself was left as-is
+   (a cosmetic rename after both reviews had already passed the deliverable
+   was judged not worth a further re-review cycle) — noted here for anyone
+   grepping test-class names later.
+6. **Craft-flagged strength adopted as a pattern, not a code change:** the
+   "deliberately fail-open, here's why" docstring style added to `write_plan`
+   (execution_plan.py:332-341) is a good precedent for any future similar
+   choice elsewhere in the codebase — noted for future authors, not acted on
+   here (out of this slice's scope).
+
+### Reconciliation sweep
+
+| Artifact | Disposition | Rationale |
+|----------|-------------|-----------|
+| `README.md` | `no-op` | Skill-internal flags on `loop.py` / `execution_plan.py`; the project front door covers install + high-level usage, not per-flag detail. |
+| `docs/specs/README.md` | `updated` | Regenerated by `workflow.py status-board`; 016-03 status + Notes column reflect clamp-never-disable + human-edited-consumable + recompile-preserve. |
+| `docs/product-vision.md` | `no-op` | No behavior/scope drift beyond what ADR-0016's amendment already reconciles; no design-principle violation (both reviews' principles checks passed). |
+| `docs/architecture.md` | `no-op` | No module-boundary or public-contract change; `--plan`/`--force` are additive flags on existing skill-internal CLIs, already covered by their own `--help` text. |
+| `docs/decisions/README.md` / ADR index | `updated` | ADR-0016 gained a dated `## Amendments` section (2026-07-04); no new ADR authored, no `status:` change (stays Accepted). |
+| agent-loop `SKILL.md` | `no-op` | `--plan`'s `human_edited`-consumable + clamp behavior is self-documenting via `loop.py --help` (updated this slice); no SKILL.md narrative references the old refused-human_edited behavior. |
+| execution-planner skill docs | `no-op` | `execution_plan.py`'s own module docstring was updated inline (this slice's diff) to describe AC4; no separate SKILL.md exists for this skill. |
+| `docs/inbox.md` | `no-op` | No items resolved by this slice. |
+| `docs/refinement-todo.md` | `no-op` | The one open question this slice deliberately leaves (a genuine magnitude policy ceiling, if ever needed) is recorded as a disclosed trade-off in ADR-0016's Amendment, not a servo-dev refinement-todo entry — it's a product-policy question, not an implementation loose end. |
+| `docs/memory/**` | `deferred` | `/jig:memory-sync` to be run as a separate step after this reconciliation lands (out-of-repo artifact under `~/.claude/projects/.../memory/`). |
+| Additional live prose / generated templates | `no-op` | No install-contract or template surface touched. |
+| `docs/bugs/**` | `no-op` | This slice originated from spec-authoring (016-03 reopen), not a bug report; no bug record applies. |

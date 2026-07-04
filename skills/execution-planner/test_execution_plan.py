@@ -391,6 +391,151 @@ class PlanRecompileIdempotentTests(unittest.TestCase):
 
 
 # ==========================================================================
+# Slice 016-03 (clamp-and-review) AC4 — recompile preserves an edited plan,
+# detected by content hash (A5), not a self-reported provenance label.
+# ==========================================================================
+
+class RecompilePreservesEditTests(unittest.TestCase):
+    def test_recompile_without_force_refuses_after_hand_edit(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            plan_path = _plan_path(target)
+            edited = json.loads(plan_path.read_text())
+            edited["budget"]["max_iterations"] = 99
+            before_write = plan_path.read_bytes()
+            plan_path.write_text(json.dumps(edited, indent=2) + "\n")
+            edited_bytes = plan_path.read_bytes()
+            self.assertNotEqual(edited_bytes, before_write)
+
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 2, res.stderr)
+            self.assertIn("plan_edit_detected", res.stderr)
+            # The hand-edited file is left untouched on disk.
+            self.assertEqual(plan_path.read_bytes(), edited_bytes)
+
+    def test_recompile_with_force_overwrites_edit(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            plan_path = _plan_path(target)
+            edited = json.loads(plan_path.read_text())
+            edited["budget"]["max_iterations"] = 99
+            plan_path.write_text(json.dumps(edited, indent=2) + "\n")
+
+            res = subprocess.run(
+                [sys.executable, str(EXECUTION_PLAN), "compile", str(target),
+                 "--spec", str(spec), "--force"],
+                capture_output=True, text=True, env=dict(os.environ),
+            )
+            self.assertEqual(res.returncode, 0, res.stderr)
+            fresh = json.loads(plan_path.read_text())
+            self.assertEqual(fresh["budget"]["max_iterations"], EXPECTED_BUDGET["max_iterations"])
+            self.assertEqual(fresh["provenance"], "compiled")
+
+    def test_recompile_recompile_recompile_no_edits_always_succeeds(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+
+    def test_compile_stamps_budget_hash(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _, _, plan = _compile_ok(root)
+            self.assertIn("budget_hash", plan)
+            self.assertIsInstance(plan["budget_hash"], str)
+            self.assertEqual(len(plan["budget_hash"]), 64)  # sha256 hex digest
+
+    def test_edit_to_driver_also_detected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            plan_path = _plan_path(target)
+            edited = json.loads(plan_path.read_text())
+            edited["driver"] = "loop"
+            plan_path.write_text(json.dumps(edited, indent=2) + "\n")
+
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 2, res.stderr)
+            self.assertIn("plan_edit_detected", res.stderr)
+
+    def test_no_edit_recompile_unaffected_regardless_of_provenance_label(self):
+        # A5: a stale human_edited label with no real content edit must not
+        # needlessly block a routine recompile — the hash, not the label,
+        # gates the refusal.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            plan_path = _plan_path(target)
+            unedited = json.loads(plan_path.read_text())
+            unedited["provenance"] = "human_edited"
+            plan_path.write_text(json.dumps(unedited, indent=2) + "\n")
+
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            fresh = json.loads(plan_path.read_text())
+            self.assertEqual(fresh["provenance"], "compiled")
+
+    def test_legacy_plan_with_no_budget_hash_field_overwrites_unconditionally(self):
+        # A pre-016-03-vintage plan (no budget_hash field at all) has no
+        # recorded baseline to detect drift against — recompile proceeds
+        # exactly as it did before this slice, and the fresh plan gets a
+        # budget_hash from then on (write_plan docstring's documented choice).
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            plan_path = _plan_path(target)
+            legacy = json.loads(plan_path.read_text())
+            legacy["budget"]["max_iterations"] = 999  # simulate a hand-edit
+            del legacy["budget_hash"]
+            plan_path.write_text(json.dumps(legacy, indent=2) + "\n")
+
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            fresh = json.loads(plan_path.read_text())
+            self.assertIn("budget_hash", fresh)
+            self.assertEqual(fresh["budget"]["max_iterations"], EXPECTED_BUDGET["max_iterations"])
+
+    def test_malformed_existing_plan_overwrites_unconditionally(self):
+        # An unreadable/corrupt existing plan.json is not a coherent edit to
+        # protect — recompile proceeds rather than refusing on unparseable
+        # bytes (write_plan docstring's documented choice).
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            plan_path = _plan_path(target)
+            plan_path.write_text("{ not valid json ]")
+
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            fresh = json.loads(plan_path.read_text())
+            self.assertEqual(fresh["provenance"], "compiled")
+
+
+# ==========================================================================
 # Slice 015-03 (compile-precondition) — the verdict as a Servo Compile gate.
 # The gate MECHANISM ships in 016-01 (refuse unless suitable); 015-03 adds the
 # enrichment: surface reasons + missing_evidence on refusal (AC1), explicit
