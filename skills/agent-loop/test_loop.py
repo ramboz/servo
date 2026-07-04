@@ -6480,6 +6480,24 @@ class PlanDriverAwareBudgetTests(_GoalTargetMixin, unittest.TestCase):
         self.assertEqual(summary["max_turns"], 7)
         self.assertAlmostEqual(summary["cost_ceiling_usd"], 3.5, places=6)
 
+    def test_goal_unavailable_refusal_echoes_plan_budget_not_default(self):
+        # Bug fix (016-02 deviation log #3, loop.py:3221-3224): the
+        # goal_unavailable refusal summary must echo the plan-resolved budget
+        # (already computed above the routing check), not args.*/DEFAULT_*,
+        # when a plan supplies a driver that turns out to be unavailable.
+        _make_mock_claude(self.bindir, _goal_mock_body(), version="1.0.0")
+        plan = _compiled_plan(max_iterations=9, cost_ceiling_usd=4.25, driver="goal")
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(
+            self.target, "--plan", str(plan_path), "--prompt", "x",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "goal_unavailable")
+        self.assertEqual(summary["max_turns"], 9)
+        self.assertAlmostEqual(summary["cost_ceiling_usd"], 4.25, places=6)
+
 
 class PlanPromptStillRequiredTests(unittest.TestCase):
     """AC4 — --prompt stays required; 016-02 does NOT consume prompt_ref."""

@@ -3218,9 +3218,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     else:
         verdict = _decide_route(target, routing_driver)
         if verdict["refused"]:
-            ceiling = (args.cost_ceiling if args.cost_ceiling is not None
+            # Echo the plan-resolved budget (already computed above at
+            # AC1/AC2), not raw args.*/DEFAULT_* — a plan can supply the
+            # ceiling/turns the refusal reports (016-02 deviation log #3).
+            ceiling = (cost_ceiling if cost_ceiling is not None
                        else DEFAULT_COST_CEILING_USD)
-            max_turns = (args.max_iterations if args.max_iterations is not None
+            max_turns = (max_iterations if max_iterations is not None
                          else DEFAULT_MAX_ITERATIONS)
             hint = ("--background needs the goal driver" if args.background
                     else "--driver goal is unsupported on this host")
