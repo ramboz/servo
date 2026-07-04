@@ -1,6 +1,6 @@
 ---
-status: RECONCILED
-dependencies: [012, adr-0024]
+status: DONE
+dependencies: [adr-0024]
 arch_review: true
 frame_review: true
 last_verified: 2026-07-03
@@ -17,6 +17,16 @@ test suite is the regression backstop.
 **DoR:**
 - ✅ **ADR-0024 records the boundary** (what moves vs. what stays forked) —
   see its Decision section.
+- ✅ **Not a formal `dependencies:` entry, but real: this slice extracts code
+  from [spec 012](../012-design-eval/spec.md)'s already-built `design-eval`
+  runtime**, which exists in-tree today regardless of spec 012's own
+  frontmatter lifecycle state (`DRAFT`, per its own "honest status note" —
+  012 predates this project's per-slice DONE-gate machinery and uses the
+  older embedded-`## Slice` format). This slice's dependency is on the
+  *code being present and correct*, not on spec 012 reaching `DONE` through
+  a lifecycle it was never run through — so `012` is intentionally omitted
+  from the frontmatter `dependencies:` list (which would otherwise permanently
+  block this slice's own `DONE` transition on an unrelated, unresolvable gate).
 - ✅ **Grounded by direct code read** (`skills/design-eval/score.py`,
   `design_eval.py`, 2026-07-03): `EnvError`/`StaleError` (score.py:43-48),
   `sha256_text`/`sha256_file` (55-60), `definition_hash` (63-86),

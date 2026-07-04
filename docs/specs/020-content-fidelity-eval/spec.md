@@ -1,6 +1,6 @@
 ---
 status: IN_PROGRESS
-dependencies: [012, adr-0024]
+dependencies: [adr-0024]
 last_verified: 2026-07-03
 ---
 
