@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.0](https://github.com/ramboz/servo/compare/v0.5.1...v0.6.0) (2026-07-04)
+
+
+### Features
+
+* **execution-planner:** run-consume — loop.py --plan reads budget+driver (016-02) ([43d04dd](https://github.com/ramboz/servo/commit/43d04ddf6dc353b7f37287b795dd0e284a1a4147))
+* **spec-019:** compile-core-simplification (ADR-0021/0022/0023) ([#15](https://github.com/ramboz/servo/issues/15)) ([0666353](https://github.com/ramboz/servo/commit/0666353f570594e350004c4d241269fd2a1001ec))
+* **spec-020:** generalize the frozen-eval harness, ship content-fidelity (ADR-0024) ([#17](https://github.com/ramboz/servo/issues/17)) ([087559c](https://github.com/ramboz/servo/commit/087559caaf4bbd3dc34c647d71af179ed306c5d9))
+
+
+### Bug Fixes
+
+* **agent-loop:** surface claude -p invocation errors and forward target settings ([4315187](https://github.com/ramboz/servo/commit/4315187b2bba9041281954fa25e3411ee1d14460))
+* **spec-oracle:** tolerate bold-label AC preamble; warn on empty AC section ([f272502](https://github.com/ramboz/servo/commit/f272502753e528d614b6d32435e1a87977c54786))
+
+
+### Documentation
+
+* **bugs:** file bugs 001-003 from external dogfood ([e513aa5](https://github.com/ramboz/servo/commit/e513aa5e9cbaab88b29fd8dde26490d6d015adff))
+* **decisions:** propose ADR-0021/0022/0023 from external dogfood ([676549f](https://github.com/ramboz/servo/commit/676549f39944cd39222182f6b345a26215737f1b))
+* **specs:** draft spec 019 compile-core-simplification ([b6bb055](https://github.com/ramboz/servo/commit/b6bb055e962cdaf6327c3d8efef6136ab1ab5fcd))
+
 ## [0.5.1](https://github.com/ramboz/servo/compare/v0.5.0...v0.5.1) (2026-07-01)
 
 
