@@ -10,11 +10,13 @@ last_verified:
 > spec-oracle overlay + suitability verdict) into a durable, reviewable
 > **execution plan** that Servo Run consumes — the Compile→Run handoff artifact
 > at `<target>/.servo/plans/<spec-id>/plan.json`, per
-> [ADR-0016](../../decisions/adr-0016-execution-plan-artifact.md). Provisional
-> skill: `/servo:execution-plan`.
+> [ADR-0016](../../decisions/adr-0016-execution-plan-artifact.md). Skill:
+> `/servo:execution-planner` (016-04).
 
-> **Status: DONE — 016-01/02/03 DONE (2026-06-30 / 2026-07-02 / 2026-07-04);
-> 016-04/05 stay DEFERRED** pending their own grounding-consumer triggers.
+> **Status: DONE — 016-01/02/03/04 DONE (2026-06-30 / 2026-07-02 / 2026-07-04 /
+> 2026-07-08); spec 016's active work is complete. 016-05 stays DEFERRED**
+> (prompt-render, pending a real Compile→Run that wants the plan to supply the
+> task prompt rather than a hand-passed `--prompt`).
 > Activated once [ADR-0016](../../decisions/adr-0016-execution-plan-artifact.md)
 > was Accepted (2026-06-30). The plan's **sole consumer is `loop.py`** — Compile →
 > Run for a real spec — *not* the heartbeat, whose findings are spec-less
@@ -36,8 +38,13 @@ last_verified:
 > [ADR-0016 amendment](../../decisions/adr-0016-execution-plan-artifact.md#amendments));
 > `provenance: human_edited` plans are now consumable; `execution_plan.py
 > compile` refuses to silently clobber an edited plan (content-hash detected,
-> `--force` overrides). **016-04 (skill-surface)** stays DEFERRED behind a real
-> `/servo:execution-plan` surface need.
+> `--force` overrides). **[016-04](slice-04-skill-surface.md) (skill-surface)** —
+> ships `/servo:execution-planner` (house-style SKILL.md + `compile --json`
+> outcome envelope); a **plugin-discovered** skill, deliberately **not** vendored
+> into `install-contract.json` `required.skills` (a Compile-phase host tool whose
+> only runtime consumer, `loop.py --plan`, is already `agent-loop` — mirrors the
+> 015-04 posture). Realizes the provisional `/servo:execution-plan` as
+> `/servo:execution-planner` (matches the skill dir). Closes spec 016's active work.
 
 ## Why this spec
 
@@ -137,7 +144,7 @@ prompt" proved to be a distinct *compile-a-prompt* capability, not a knob-read.
 | [016-01](slice-01-plan-emit.md) | plan-emit | Path | **DONE** | Compile `plan.json` from suitability verdict + oracle + overlay + budget/driver/prompt; ADR-0016 schema; **references not copies** (`suitability_ref`, not an inlined verdict); `schema_version`; git-ignored `.servo/plans/`; emits **only on a `suitable` verdict** (the 015-03 Compile gate). |
 | [016-02](slice-02-run-consume.md) | run-consume | Path | **DONE** | `loop.py --plan <path>` (generic path, no `spec-id` derivation) reads `budget` + `driver` as run defaults; precedence flag > plan > default; driver-aware budget (goal driver drops loop-only brakes); no `--plan` ⇒ today's behavior unchanged; `human_edited` plans refused pending 016-03 (superseded). `--prompt` stays required (`prompt_ref` consumption = 016-05). Consumer is `loop.py` only, not the heartbeat (ADR-0018). |
 | [016-03](slice-03-clamp-and-review.md) | clamp-and-review | Rules | **DONE** | Clamp a plan's disable-sentinel budget values back to a live default (not a numeric magnitude ceiling — [ADR-0016 amended](../../decisions/adr-0016-execution-plan-artifact.md#amendments) 2026-07-04, no such policy ceiling was ever decided anywhere in `loop.py`); `human_edited` provenance now consumable (supersedes 016-02's refusal); plan-value validation fails closed before clamping; `execution_plan.py compile` refuses to clobber an edited plan via content hash (`budget_hash`, not a self-reported label), `--force` to override. |
-| [016-04](slice-04-skill-surface.md) | skill-surface | Interface | DEFERRED | `/servo:execution-plan` surface + install-contract entry. (Heartbeat plan-reuse dropped — ADR-0018.) Trigger: 016-01..03 DONE. |
+| [016-04](slice-04-skill-surface.md) | skill-surface | Interface | **DONE** | `/servo:execution-planner` SKILL.md (house-style) + `execution_plan.py compile --json` outcome envelope. **Plugin-discovered, NOT vendored** into `required.skills` — the original goal's "install-contract entry" was reframed by the frame-critique: it's a Compile-phase host tool (only runtime consumer `loop.py --plan` is already `agent-loop`), mirroring 015-04. Heartbeat plan-reuse dropped (ADR-0018). |
 | [016-05](slice-05-prompt-render.md) | prompt-render | Path | DEFERRED | Producer *compiles* an actionable seed prompt from the spec (not the raw `spec.md` doc) → target-relative artifact; `loop.py --plan` seeds from `prompt_ref` when `--prompt` omitted. Split from 016-02 by its frame-critique (rendering is a distinct capability). Trigger: 016-02 DONE. |
 
 ## Open questions

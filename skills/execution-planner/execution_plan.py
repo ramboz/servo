@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-servo execution-planner — slice 016-01 (plan-emit) + slice 016-03 (clamp-and-review).
+servo execution-planner — slice 016-01 (plan-emit) + slice 016-03 (clamp-and-review)
++ slice 016-04 (skill-surface: the `--json` outcome envelope).
 
 The last step of Servo Compile: assemble the
 [ADR-0016](../../docs/decisions/adr-0016-execution-plan-artifact.md) **execution
@@ -10,7 +11,7 @@ the durable Compile→Run handoff artifact — the reciprocal of the per-run
 
 Usage
 -----
-    python3 execution_plan.py compile <target> --spec <spec-path> [--force]
+    python3 execution_plan.py compile <target> --spec <spec-path> [--force] [--json]
 
 The plan **references** (never copies) the other Compile artifacts:
   - the suitability verdict (`.servo/suitability/<spec-id>.json`, spec 015) via a
@@ -378,9 +379,24 @@ def _run_compile(args: argparse.Namespace) -> int:
         spec_id, plan = compile_plan(target, spec_path)
         out_path = write_plan(target, spec_id, plan, force=args.force)
     except EnvError as exc:
+        # Env errors are unchanged in every mode (015-04's "env errors
+        # unchanged under --json"): structured stderr reason, exit 2, no
+        # JSON envelope, no torn artifact.
         print(f"servo: {exc.reason}: {exc}", file=sys.stderr)
         return 2
-    print(f"servo: execution plan for {spec_id} compiled -> {out_path}")
+    if args.json:
+        envelope = {
+            "schema_version": SCHEMA_VERSION,
+            "spec_id": spec_id,
+            "status": "compiled",
+            "plan_path": str(out_path),
+            "provenance": plan["provenance"],
+            "driver": plan["driver"],
+            "budget": plan["budget"],
+        }
+        print(json.dumps(envelope, indent=2))
+    else:
+        print(f"servo: execution plan for {spec_id} compiled -> {out_path}")
     return 0
 
 
@@ -403,6 +419,15 @@ def main(argv: list | None = None) -> int:
             "bypass the recompile-preserve refusal (016-03 AC4) and "
             "overwrite an existing plan.json even if its budget/driver "
             "content was hand-edited since it was last compiled"
+        ),
+    )
+    compile_p.add_argument(
+        "--json", action="store_true",
+        help=(
+            "on success, print a structured JSON outcome envelope "
+            "(schema_version/spec_id/status/plan_path/provenance/driver/"
+            "budget) instead of the human confirmation line; env-error "
+            "refusals are unchanged in every mode (016-04 AC3)"
         ),
     )
 
