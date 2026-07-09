@@ -97,3 +97,23 @@ invocation site. The **independent review step** — not the original fix — is
 surfaced the residual, which is the argument for keeping that step even on
 "obvious" small fixes. See
 [docs/bugs/004-goal-driver-masks-errors-and-drops-settings.md](../bugs/004-goal-driver-masks-errors-and-drops-settings.md).
+
+### Bug 005 — execution-planner blind to the post-ADR-0023 overlay location
+
+A refactor that moves an artifact's canonical location reaches only the call
+sites the moving slice enumerated. ADR-0023 / slice 019-02 moved the spec-oracle
+overlay from `.servo/spec-oracles/<id>/` to the colocated
+`<spec-dir>/oracle/<id>/`, but `execution_plan.py::_load_evaluation_model`
+hardcoded its own copy of the old path and was not in 019-02's grounding list —
+so it silently kept reading the (now-empty) legacy location and degraded the
+plan's `evaluation_model` to `null` for every overlay in the new, default layout.
+Two lessons: (1) a **silent** degradation (exit 0, an optional field → `null`)
+ships undetected far more easily than a hard failure — the suite even stayed
+green because its fixtures fabricated the *old* path, so a location move needs a
+test at the **new** location, not merely a swept call site. (2) The
+**dependency-free-skill invariant** (execution-planner duplicates rather than
+imports across skill-dir boundaries) is why the fix duplicates
+`oracle_dir_for_spec`'s dual-path logic locally — which means the same drift can
+recur (a duplicated resolver won't follow a future change to the canonical one);
+an accepted, logged trade-off. See
+[docs/bugs/005-evaluation-model-stale-overlay-path.md](../bugs/005-evaluation-model-stale-overlay-path.md).

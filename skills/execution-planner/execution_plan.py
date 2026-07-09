@@ -226,15 +226,30 @@ def _parse_threshold(oracle_sh: Path) -> float:
         return DEFAULT_ORACLE_THRESHOLD
 
 
-def _load_evaluation_model(target: Path, spec_id: str):
+def _load_evaluation_model(target: Path, spec_dir: Path, spec_id: str):
     """Build the `evaluation_model` block from the 006 overlay, or `None`.
 
     References the overlay by `spec_oracle_id` + AC counts (never the check
     bodies). A baseline-oracle-only target (no overlay) yields `None` — ADR-0016:
     a plan exists even without a spec-oracle.
+
+    Resolves the overlay's `checks.json` at the post-ADR-0023 colocated location
+    `<spec_dir>/oracle/<spec_id>/checks.json` (the default since slice 019-02),
+    falling back to the legacy `<target>/.servo/spec-oracles/<spec_id>/checks.json`
+    only when the colocated one is absent — mirroring
+    `spec-oracle/oracle_overlay.py::oracle_dir_for_spec` ("the new location always
+    wins once it has its own plan"). The dual-path rule is **duplicated** here,
+    not imported across the skill-directory boundary, per this module's
+    dependency-free-skill invariant (see the file header — same reason the budget
+    constants are mirrored rather than imported from `loop.py`). Bug 005.
     """
-    checks_json = target / ".servo" / "spec-oracles" / spec_id / "checks.json"
-    if not checks_json.is_file():
+    new_checks = spec_dir / "oracle" / spec_id / "checks.json"
+    legacy_checks = target / ".servo" / "spec-oracles" / spec_id / "checks.json"
+    if new_checks.is_file():
+        checks_json = new_checks
+    elif legacy_checks.is_file():
+        checks_json = legacy_checks
+    else:
         return None
     try:
         plan = json.loads(checks_json.read_text())
@@ -282,7 +297,10 @@ def compile_plan(target: Path, spec_path: Path) -> tuple:
     # The suitable-only precondition (015-03 gate) comes first.
     suitability_ref = _require_suitable(target, spec_id)
     oracle = _load_oracle(target)
-    evaluation_model = _load_evaluation_model(target, spec_id)
+    # spec_dir = the spec's own directory — the post-ADR-0023 overlay home
+    # (`<spec_dir>/oracle/<spec_id>/`); `_load_evaluation_model` needs it to
+    # find a colocated overlay (bug 005). `spec_id` is this dir's name.
+    evaluation_model = _load_evaluation_model(target, spec_path.parent, spec_id)
 
     budget = {
         "max_iterations": BUDGET_MAX_ITERATIONS,

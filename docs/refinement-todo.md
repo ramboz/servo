@@ -569,6 +569,16 @@ than papered over.
 
 ## execution-planner's evaluation_model still reads the pre-ADR-0023 spec-oracle path
 
+**RESOLVED (2026-07-08 — [bug 005](bugs/005-evaluation-model-stale-overlay-path.md)):**
+`_load_evaluation_model` now takes `spec_dir` and resolves the colocated
+`<spec-dir>/oracle/<spec-id>/checks.json` first, legacy
+`.servo/spec-oracles/<spec-id>/checks.json` as fallback (dual-path logic
+duplicated locally, not imported — per the dependency-free-skill invariant), with
+two regression tests on the new layout (`test_evaluation_model_from_colocated_overlay`
++ `test_evaluation_model_colocated_wins_over_legacy`). Fixed via the `jig:bug-fix`
+ceremony (standard tier; bug-review + craft PASS). Original deferral write-up
+preserved below.
+
 **Deferred:** Slice 019-02 (ADR-0023) moved a spec-oracle's durable artifacts
 from `<target>/.servo/spec-oracles/<spec-id>/` to the spec's own
 `<spec-dir>/oracle/<spec-id>/`, funneling every in-skill call site through one

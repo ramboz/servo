@@ -132,6 +132,24 @@ def _write_overlay(target: Path, *, n_checks: int, n_residual: int,
     return path
 
 
+def _write_overlay_colocated(root: Path, *, n_checks: int, n_residual: int,
+                             spec_id: str = SPEC_ID) -> Path:
+    """Write the overlay at the POST-ADR-0023 colocated location
+    (`<spec-dir>/oracle/<spec-id>/checks.json`), where `<spec-dir>` is the spec's
+    own directory (`root / spec_id`, matching `_make_spec`). Slice 019-02 made
+    this the default layout — the one bug 005 was blind to."""
+    out = root / spec_id / "oracle" / spec_id
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / "checks.json"
+    path.write_text(json.dumps({
+        "schema_version": 1,
+        "spec_id": spec_id,
+        "checks": [{"id": f"AC-{i}", "family": "command"} for i in range(n_checks)],
+        "residual_judgment": [{"id": f"AC-r{i}"} for i in range(n_residual)],
+    }))
+    return path
+
+
 def _run_cli(target: Path, spec: Path):
     return subprocess.run(
         [sys.executable, str(EXECUTION_PLAN), "compile", str(target),
@@ -191,6 +209,42 @@ class PlanShapeTests(unittest.TestCase):
             root = Path(d)
             _, _, plan = _compile_ok(root)
             self.assertIsNone(plan["evaluation_model"])
+
+    def test_evaluation_model_from_colocated_overlay(self):
+        # Regression: bug 005 — an overlay at the post-ADR-0023 colocated
+        # location (<spec-dir>/oracle/<id>/checks.json) must populate
+        # evaluation_model, not silently degrade to null.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            _write_overlay_colocated(root, n_checks=5, n_residual=2)
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            plan = json.loads(_plan_path(target).read_text())
+            self.assertEqual(plan["evaluation_model"],
+                             {"spec_oracle_id": SPEC_ID, "ac_count": 5,
+                              "residual": 2})
+
+    def test_evaluation_model_colocated_wins_over_legacy(self):
+        # Bug 005 precedence: when BOTH the colocated (new) and legacy
+        # .servo/spec-oracles overlays exist, the new location wins — mirrors
+        # oracle_overlay.oracle_dir_for_spec ("the new location always wins once
+        # it has its own plan").
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root)
+            spec = _make_spec(root)
+            _write_suitability(target, "suitable")
+            _write_overlay(target, n_checks=1, n_residual=0)          # legacy
+            _write_overlay_colocated(root, n_checks=9, n_residual=3)  # new
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            plan = json.loads(_plan_path(target).read_text())
+            self.assertEqual(plan["evaluation_model"],
+                             {"spec_oracle_id": SPEC_ID, "ac_count": 9,
+                              "residual": 3})
 
     def test_oracle_threshold_parsed_from_oracle_sh(self):
         with tempfile.TemporaryDirectory() as d:
