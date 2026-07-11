@@ -106,6 +106,8 @@
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-05 — single-component-oracle | **DONE** |  |
 | [020-content-fidelity-eval](020-content-fidelity-eval/spec.md) | 020-01 — extract-shared-harness | **DONE** |  |
 | [020-content-fidelity-eval](020-content-fidelity-eval/spec.md) | 020-02 — content-fidelity-skill | **DONE** |  |
+| [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-01 - diff-anchored, narrow-first investigation | DRAFT |  |
+| [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-02 - record and verify load-bearing assumptions | DRAFT |  |
 
 ## Deferred slices
 
