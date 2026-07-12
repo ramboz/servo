@@ -1,5 +1,5 @@
 ---
-status: READY_FOR_REVIEW
+status: READY_FOR_IMPLEMENTATION
 dependencies: [008-04, adr-0005]
 last_verified:
 ---

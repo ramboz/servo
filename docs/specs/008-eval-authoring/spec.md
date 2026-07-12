@@ -18,7 +18,7 @@ last_verified:
 > [ADR-0024](../../decisions/adr-0024-extract-frozen-eval-harness.md) harness —
 > no parallel infrastructure.
 
-> **Status: READY_FOR_REVIEW** (all six slices queued for plan review; activated 2026-07-11) by the eval-authoring thrust
+> **Status: READY_FOR_IMPLEMENTATION** (all six slices reviewed clean via a jig:analyze pass — 8 findings resolved; activated 2026-07-11) by the eval-authoring thrust
 > ([ADR-0026](../../decisions/adr-0026-generic-eval-authoring-surface.md),
 > [ADR-0027](../../decisions/adr-0027-goal-to-eval-assisted-authoring.md)). The
 > former "parked until a first EDD spec" trigger is retired: the decision to make
