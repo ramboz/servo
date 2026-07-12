@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [006, 015, adr-0005, adr-0019, adr-0024, adr-0026, adr-0027]
 last_verified:
 ---
@@ -19,15 +19,20 @@ last_verified:
 > [ADR-0024](../../decisions/adr-0024-extract-frozen-eval-harness.md) harness —
 > no parallel infrastructure.
 
-> **Status: READY_FOR_IMPLEMENTATION** (all six slices reviewed clean via a jig:analyze pass — 8 findings resolved; activated 2026-07-11) by the eval-authoring thrust
-> ([ADR-0026](../../decisions/adr-0026-generic-eval-authoring-surface.md),
+> **Status: DONE** (all six slices 008-01..06 implemented, reviewed
+> compliance+craft+reconciliation, and landed 2026-07-12) by the eval-authoring
+> thrust ([ADR-0026](../../decisions/adr-0026-generic-eval-authoring-surface.md),
 > [ADR-0027](../../decisions/adr-0027-goal-to-eval-assisted-authoring.md)). The
-> former "parked until a first EDD spec" trigger is retired: the decision to make
+> former "parked until a first EDD spec" trigger was retired: the decision to make
 > general non-deterministic eval authoring servo's differentiated capability *is*
 > the trigger, made deliberately, with a mature external system (Mystique, studied
 > as inspiration — not a target, not a dependency) supplying the grounding a
-> hypothetical single consumer would have. Slices 008-01..06 are cut as real,
-> buildable work; ACs below are first-draft, to be sharpened during this review.
+> hypothetical single consumer would have. Ships as one guided skill
+> `/servo:eval-authoring` (SKILL.md + `eval_authoring.py` + `score.py` +
+> `eval-frame-review.md`). The one load-bearing correction found during
+> implementation is recorded in Goal 5 + slice 008-04: there is no spec-006
+> "eval-family compile step" — the emit self-freezes + self-installs via the shared
+> ADR-0024 harness, exactly as the `design-eval` / `content-fidelity` presets do.
 
 ## Why this spec
 
