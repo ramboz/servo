@@ -113,6 +113,12 @@ def _flipping_oracle(sentinel: str) -> str:
     """)
 
 
+def _markdown_section(text: str, heading: str) -> str:
+    pattern = rf"(?ims)^##\s+{re.escape(heading)}\s*\n.*?(?=^##\s+|\Z)"
+    match = re.search(pattern, text)
+    return match.group(0) if match else ""
+
+
 def _claude_json_payload(
     *, session_id: str = "mock-session-1",
     cost: float = 0.05,
@@ -3767,6 +3773,7 @@ _BTICK = "\\u0060\\u0060\\u0060"  # JSON-encoded triple backtick (18 chars)
 def _runner_verdict_block(
     *, verdict: str = "CHANGES_MADE",
     files_changed: Optional[str] = None,
+    assumptions: Optional[str] = None,
     reasoning: str = "mock runner",
 ) -> str:
     """JSON-encoded runner-shaped verdict block for embedding in `result`."""
@@ -3777,6 +3784,8 @@ def _runner_verdict_block(
     ]
     if files_changed:
         lines.append(f"files_changed: {files_changed}")
+    if assumptions:
+        lines.append(f"assumptions: {assumptions}")
     lines.append(f"reasoning: {reasoning}")
     lines.append(_BTICK)
     return "\\n" + "\\n".join(lines) + "\\n"
@@ -4158,6 +4167,40 @@ class RunnerVerdictBlockTests(unittest.TestCase):
             "runner.md must forbid editing the frozen spec-oracle artifacts")
         self.assertIn("self-grading", text)
 
+    def test_runner_md_documents_narrow_first_investigation(self):
+        # Spec 021-01 — runner prompt carries the coherent narrow-first block.
+        text = _markdown_section(
+            (REPO_ROOT / "agents" / "runner.md").read_text(),
+            "Investigation discipline",
+        ).lower()
+        self.assertIn("## investigation discipline", text)
+        for phrase in (
+            "files that changed",
+            "oracle output",
+            "locate before you read",
+            "glob",
+            "grep",
+            "batch that discovery",
+            "focused ranges",
+            "simpler query",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_runner_md_documents_load_bearing_assumptions_field(self):
+        # Spec 021-02 — runner records headless assumptions instead of asking.
+        prompt = (REPO_ROOT / "agents" / "runner.md").read_text()
+        posture = _markdown_section(prompt, "Operating posture").lower()
+        output = _markdown_section(
+            prompt, "Required output: fenced `verdict` block",
+        ).lower()
+        avoid = _markdown_section(prompt, "What to avoid").lower()
+        self.assertIn("no clarifying questions", posture)
+        self.assertIn("load-bearing assumptions", posture)
+        self.assertIn("assumptions:", output)
+        self.assertIn("optional under `schema_version: 1`", output)
+        self.assertIn("omit the field", output)
+        self.assertIn("record any load-bearing interpretation", avoid)
+
     def test_runner_verdict_block_surfaces_in_per_iter_json(self):
         # Iter 1 is runner; emit a CHANGES_MADE verdict and verify it
         # appears in the per-iter JSON line.
@@ -4184,6 +4227,33 @@ class RunnerVerdictBlockTests(unittest.TestCase):
         self.assertEqual(v["verdict"], "CHANGES_MADE")
         self.assertEqual(v["files_changed"], "a.py, b.py")
         self.assertEqual(v["reasoning"], "Added null-check")
+
+    def test_runner_verdict_block_surfaces_assumptions_in_per_iter_json(self):
+        # Spec 021-02 — optional assumptions survive parser/log round-trip.
+        assumption = "Prompt targets Python API behavior, not CLI output."
+        block = _runner_verdict_block(
+            verdict="CHANGES_MADE",
+            files_changed="a.py",
+            assumptions=assumption,
+            reasoning="Added API regression coverage",
+        )
+        _mock_claude_with_verdict(
+            self.bindir, self.counter,
+            runner_block=block,
+        )
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        per_iter = [
+            line for line in _stdout_json_lines(result.stdout) if "iteration" in line
+        ]
+        self.assertEqual(len(per_iter), 1)
+        v = per_iter[0]["verdict"]
+        self.assertEqual(v["schema_version"], 1)
+        self.assertEqual(v["assumptions"], assumption)
 
 
 # ============================================================================
@@ -4216,6 +4286,41 @@ class JudgeVerdictBlockTests(unittest.TestCase):
         self.assertIn("PASS", text)
         self.assertIn("FAIL", text)
         self.assertIn("INCONCLUSIVE", text)
+
+    def test_judge_md_documents_narrow_first_investigation(self):
+        # Spec 021-01 — judge prompt carries the parallel narrow-first block.
+        text = _markdown_section(
+            (REPO_ROOT / "agents" / "judge.md").read_text(),
+            "Investigation discipline",
+        ).lower()
+        self.assertIn("## investigation discipline", text)
+        for phrase in (
+            "files_changed",
+            "oracle output",
+            "locate before you read",
+            "glob",
+            "grep",
+            "batch that discovery",
+            "focused ranges",
+            "simpler query",
+        ):
+            self.assertIn(phrase, text)
+
+    def test_judge_md_documents_assumption_verification(self):
+        # Spec 021-02 — judge verifies runner assumptions against evidence.
+        text = (REPO_ROOT / "agents" / "judge.md").read_text()
+        prompt_shape = _markdown_section(text, "Iteration prompt shape").lower()
+        output = _markdown_section(
+            text, "Required output: fenced `verdict` block",
+        ).lower()
+        self.assertIn("assumptions:", prompt_shape)
+        self.assertIn("verify each load-bearing assumption", prompt_shape)
+        self.assertIn("changed code", prompt_shape)
+        self.assertIn("oracle output", prompt_shape)
+        self.assertIn("unsupported or violated assumption", prompt_shape)
+        self.assertIn("verdict", prompt_shape)
+        self.assertIn("reasoning", output)
+        self.assertIn("unsupported or violated", output)
 
     def test_judge_verdict_block_surfaces_in_per_iter_json(self):
         # Iter 2 is judge; emit a PASS verdict and verify it appears in
@@ -4458,6 +4563,26 @@ class VerdictSchemaMismatchTests(unittest.TestCase):
         summary = _stdout_json_lines(result.stdout)[-1]
         self.assertEqual(summary["terminal_reason"], "verdict_schema_mismatch")
 
+    def test_e_malformed_field_line_refuses(self):
+        # Spec 021-02 — multiline/truncated assumptions cannot silently parse.
+        self._make_mock_with_block_text([
+            "schema_version: 1",
+            "verdict: CHANGES_MADE",
+            "files_changed: a.py",
+            "assumptions: Prompt targets Python API behavior",
+            "not CLI output",
+            "reasoning: malformed multiline assumption",
+        ])
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "5",
+            "--plateau-window", "0",
+            mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("malformed field line", result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "verdict_schema_mismatch")
+
     def test_no_block_at_all_is_not_a_refusal(self):
         # AC10 enumerates three refusal paths within a block; "no block" is
         # informational, not a refusal. Loop continues with last_verdict=None.
@@ -4517,6 +4642,38 @@ class ParseVerdictBlockUnitTests(unittest.TestCase):
         self.assertEqual(fields["verdict"], "PASS")
         self.assertEqual(fields["score"], "0.9")
         self.assertEqual(fields["reasoning"], "looks good")
+
+    def test_optional_assumptions_field_is_accepted_under_schema_v1(self):
+        assumption = "Prompt targets Python API behavior, not CLI output."
+        text = (
+            "```verdict\n"
+            "schema_version: 1\n"
+            "verdict: CHANGES_MADE\n"
+            "files_changed: src/auth.py\n"
+            f"assumptions: {assumption}\n"
+            "reasoning: added regression coverage\n"
+            "```\n"
+        )
+        fields, err = self.parse(text)
+        self.assertIsNone(err)
+        self.assertEqual(fields["schema_version"], 1)
+        self.assertEqual(fields["assumptions"], assumption)
+        self.assertEqual(fields["reasoning"], "added regression coverage")
+
+    def test_malformed_multiline_assumptions_field_refuses(self):
+        text = (
+            "```verdict\n"
+            "schema_version: 1\n"
+            "verdict: CHANGES_MADE\n"
+            "files_changed: src/auth.py\n"
+            "assumptions: Prompt targets Python API behavior\n"
+            "not CLI output.\n"
+            "reasoning: added regression coverage\n"
+            "```\n"
+        )
+        fields, err = self.parse(text)
+        self.assertIsNone(fields)
+        self.assertIn("malformed field line", err)
 
     def test_no_block_returns_none_none(self):
         fields, err = self.parse("no block here at all")

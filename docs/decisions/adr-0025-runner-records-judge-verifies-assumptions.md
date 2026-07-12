@@ -1,17 +1,19 @@
 ---
-status: Proposed
+status: Accepted
 date: 2026-07-11
 deciders: ramboz
 supersedes:
 superseded-by:
-last_verified: 2026-07-11
+last_verified: 2026-07-12
 ---
 
 # ADR-0025: Runner records load-bearing assumptions; judge verifies them
 
 ## Status
 
-Proposed — decides spec 021 slice 02. Blocks that slice's DoR until Accepted.
+Accepted (2026-07-12)
+
+Decides spec 021 slice 02. Blocks that slice's DoR until Accepted.
 
 ## Context
 
@@ -54,21 +56,12 @@ the composite only as a frozen score). Any assumption mechanism must live in the
    only load-bearing assumptions (empty/omitted is the correct, common state — no
    boilerplate), mirroring jig's risk-gated assumptions discipline.
 
-**Open sub-decision to ratify on acceptance — schema compatibility.** Whether the
-new field can be added at `schema_version: 1` depends on whether `loop.py`'s
-parser **tolerates unknown fields** or rejects them:
-
-- **Recommended (if the parser tolerates unknown keys): keep `schema_version: 1`
-  and add `assumptions:` as an OPTIONAL field.** No existing required field
-  changes, so old and new blocks both parse; the strict `schema_version` gate is
-  untouched. Lowest blast radius.
-- **Otherwise: bump to `schema_version: 2`** and teach `loop.py` to accept `2`
-  (still refusing missing/other values), with `assumptions:` defined at v2.
-
-The implementing slice (021-02) must first **probe `loop.py`'s unknown-field
-behavior** (a Verification item below) and then apply whichever branch that
-probe dictates. Acceptance of this ADR ratifies the *mechanism*; the branch is
-determined by the probe, not by taste.
+**Schema compatibility.** The 2026-07-12 pre-acceptance probe found that
+`loop.py`'s `_parse_verdict_block` tolerates unknown fields after the first
+`schema_version: 1` line. Therefore `assumptions:` is OPTIONAL under
+`schema_version: 1`; no version bump is required. The strict schema gate remains
+unchanged: missing / non-first / quoted / non-integer / wrong-version
+`schema_version` values still refuse with `verdict_schema_mismatch`.
 
 ## Consequences
 
@@ -105,9 +98,10 @@ determined by the probe, not by taste.
   learn to correlate; the verdict block already is that channel.
 
 ## Verification
-- Probe `loop.py`'s verdict-block parser for unknown-field behavior (does an
-  extra key at `schema_version: 1` parse, or terminate with
-  `verdict_schema_mismatch`?) — this selects the schema branch above.
+- Preserve the probed `loop.py` verdict-block parser behavior: an optional
+  `assumptions:` field at `schema_version: 1` parses successfully, while missing
+  / non-first / quoted / non-integer / wrong-version `schema_version` still
+  refuses with `verdict_schema_mismatch`.
 - Surface tests assert the runner records and the judge verifies assumptions.
 - A `loop.py` parse test proves the chosen branch: valid blocks (with and without
   `assumptions:`) accept; malformed/missing `schema_version` still refuses.

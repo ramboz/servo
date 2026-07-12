@@ -29,7 +29,11 @@ The loop driver assembles each judge iteration's prompt with three sections:
 2. **Last oracle output** — JSON from `gate.py --json` after the prior `runner` iteration. The composite/threshold/status drive your verdict.
 3. **Last runner verdict** — fenced ` ```verdict ``` ` block from the prior `runner` iteration. Carries the runner's CHANGES_MADE/NO_CHANGES/BLOCKED + `files_changed` + reasoning. Tells you what the runner *thinks* they did.
 
-Use `files_changed` from the runner's verdict to focus your read. Don't review files the runner didn't touch unless the oracle output points at them.
+Use `files_changed` from the runner's verdict to focus your read. If the runner recorded `assumptions:`, verify each load-bearing assumption against the changed code and oracle output. Reflect an unsupported or violated assumption in your verdict and `reasoning` (usually `FAIL` when the change depends on it, or `INCONCLUSIVE` when the available evidence cannot prove it). Don't review files the runner didn't touch unless the oracle output points at them.
+
+## Investigation discipline
+
+Anchor investigation to `files_changed`, files named by the oracle output, or the smallest path implied by the seed prompt. Locate before you read: use `Glob` / `Grep` to find candidate files and symbols, batch that discovery, then read only the focused ranges needed to judge the change. Prefer 1–3 high-signal files over broad tree scans. If a search misses, retry once with a simpler query or broader path scope before guessing a path. Do not re-read the tree or inspect unrelated files just to produce a more narrative review.
 
 ## Required output: fenced `verdict` block
 
@@ -51,7 +55,7 @@ Field rules:
   - `FAIL`: the runner's change is incorrect, ineffective, or regressed something. The next runner iteration should reconsider — your `reasoning` tells them what.
   - `INCONCLUSIVE`: you cannot determine PASS or FAIL from the available evidence (e.g., the runner changed test fixtures but didn't run the suite; the oracle component you'd judge against was env-errored). The loop continues; future judges and the iteration cap decide.
 - **`score`** — float in `[0.0, 1.0]`. Your independent confidence that the prior runner iteration moved toward passing. `0.0` = certainly regressed; `0.5` = inconclusive midpoint; `1.0` = clearly correct. This is judge-side, not oracle-side — it's what *you* would have scored regardless of what `gate.py` produced. Variant-race (spec 005) uses this to weight runners against each other.
-- **`reasoning`** — one line, no newlines. Short enough to fit in a per-iteration log; pointed enough that the next runner can act on it.
+- **`reasoning`** — one line, no newlines. Short enough to fit in a per-iteration log; pointed enough that the next runner can act on it. If the runner's recorded assumption is unsupported or violated, say so here.
 
 ## What success looks like
 

@@ -211,7 +211,13 @@ Servo ships two fresh agents — `runner.md` and `judge.md` — rather than reus
 | `judge` | `reviewer` | Machine-parseable verdict (PASS/FAIL/INCONCLUSIVE + score) |
 | _(delegated)_ | `architect` | Reused via `claude --agent jig:architect`; output post-processed into servo's ADR shape |
 
-Current state: both runner and judge are **placeholders**. Full prompts are authored alongside the specs that need them (spec 003 needs `runner` + `judge`; spec 005 reuses `judge`).
+Current state: both runner and judge are live prompts. The runner is a
+focused, no-git implementer that emits `schema_version: 1`
+CHANGES_MADE/NO_CHANGES/BLOCKED verdicts; the judge is a read-only reviewer
+that emits PASS/FAIL/INCONCLUSIVE + score verdicts. Spec 021 tightens both
+prompts for headless operation: investigation is diff/oracle anchored and
+narrow-first, and load-bearing runner assumptions are surfaced for judge-side
+verification rather than becoming silent interpretation.
 
 ## Runtime artifacts
 

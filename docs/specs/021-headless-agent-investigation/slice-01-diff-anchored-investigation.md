@@ -1,7 +1,7 @@
 ---
-status: DRAFT
-dependencies: [003, adr-0003]
-last_verified: 2026-07-11
+status: DONE
+dependencies: [003-05, adr-0003]
+last_verified: 2026-07-12
 ---
 
 ## Slice 021-01 - diff-anchored, narrow-first investigation
@@ -16,9 +16,9 @@ prose ("Read 1-3 relevant files to understand the failure shape" in runner.md;
 into an explicit discipline. Advisory only — no oracle/gate change.
 
 **DoR:**
-- [ ] ADR-0003 remains the governing roster/verdict contract; this slice makes
+- [x] ADR-0003 remains the governing roster/verdict contract; this slice makes
       no schema change.
-- [ ] The agent-prompt surface tests are identified (the tests that assert
+- [x] The agent-prompt surface tests are identified (the tests that assert
       `runner.md`/`judge.md` content — same suite that guards the 003-05 prompts).
 
 **Acceptance Criteria:**
@@ -36,11 +36,11 @@ into an explicit discipline. Advisory only — no oracle/gate change.
    present in both files (a distinctive marker per file).
 
 **DoD:**
-- [ ] All ACs met; full suite green.
-- [ ] Surface tests cover the runner and judge guidance.
-- [ ] Reviewed (compliance + craft); evidence recorded.
-- [ ] Deviation log + reconciliation sweep under this slice.
-- [ ] Host packages / vendored copies regenerated if servo ships them.
+- [x] All ACs met; full suite green.
+- [x] Surface tests cover the runner and judge guidance.
+- [x] Reviewed (compliance + craft); evidence recorded.
+- [x] Deviation log + reconciliation sweep under this slice.
+- [x] Host packages / vendored copies regenerated if servo ships them.
 
 **Anti-horizontal-phasing check:** After this slice, every headless iteration's
 runner and judge receive narrow-first investigation guidance — an observable
@@ -48,9 +48,47 @@ change in the prompts the loop actually dispatches, end-to-end.
 
 ### Deviation log (after reconciliation)
 
-_TODO: filled during reconciliation._
+- **Prompt-only implementation.** Changed `agents/runner.md` and
+  `agents/judge.md` only for runtime behavior; no changes to `oracle.sh`,
+  `gate.py`, `loop.py`, or the verdict-block schema.
+- **Craft review nits addressed before closeout.** `agents/runner.md` now names
+  the last runner verdict retained in the transcript rather than the ambiguous
+  "prior verdict"; prompt surface tests now assert against the extracted
+  `## Investigation discipline` section instead of the full document.
+- **Reconciliation review caught stale architecture prose.** The
+  `docs/architecture.md` Subagents section still said runner and judge were
+  placeholders. Updated it to describe the live runner/judge prompts and the
+  spec 021 headless-operation hardening.
+- **Dependency token normalized for jig DONE validation.** The original
+  whole-spec dependency `003` was narrowed to the concrete shipped dependency
+  `003-05` (runner/judge prompt + verdict parser contract), because the current
+  workflow validator only recognizes slice-fragment and ADR tokens at DONE time.
+- **Verification.** Focused prompt/verdict tests passed with
+  `python3 -m unittest skills/agent-loop/test_loop.py -k RunnerVerdictBlockTests -k JudgeVerdictBlockTests`
+  (7 tests), and the full repo suite passed with `python3 scripts/run_tests.py`
+  (1529 tests).
 
 ### Reconciliation sweep
 
-_TODO: record drift-prone surfaces checked (agent prompts, README, status board,
-any vendored gate.py/agent copies)._
+- **Agent prompts** — `updated`. `agents/runner.md` and `agents/judge.md` carry
+  parallel `## Investigation discipline` blocks with diff/oracle anchoring,
+  locate-before-read, batched discovery, focused ranges, and simpler-query
+  retry guidance.
+- **Prompt surface tests** — `updated`. `skills/agent-loop/test_loop.py` now
+  checks the runner and judge investigation sections directly.
+- **Verdict/oracle boundary** — `no-op`. Parser, oracle, and gate behavior are
+  unchanged; ADR-0003 remains the verdict contract.
+- **Architecture** — `updated`. `docs/architecture.md` no longer describes
+  runner/judge as placeholders; it reflects their live verdict-block prompts and
+  spec 021's headless-loop prompt hardening.
+- **Host packages** — `updated`. `python3 scripts/build_host_packages.py`
+  regenerated `hosts/claude/agents/*` and
+  `hosts/codex/plugins/servo/agents/*`.
+- **Review evidence** — `updated`. Compliance and craft verdicts are recorded
+  in `docs/specs/021-headless-agent-investigation/reviews/`.
+- **Dependency metadata** — `updated`. `dependencies:` now names `003-05`
+  instead of whole-spec `003`, matching the actual runner/judge prompt contract
+  this slice builds on and satisfying jig's DONE-time validator.
+- **Status board** — `pending final regen` by this landing thread. Trigger:
+  after both 021 slices close, regenerate `docs/specs/README.md` once so the
+  board reflects the final spec state.

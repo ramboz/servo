@@ -117,3 +117,6 @@ imports across skill-dir boundaries) is why the fix duplicates
 recur (a duplicated resolver won't follow a future change to the canonical one);
 an accepted, logged trade-off. See
 [docs/bugs/005-evaluation-model-stale-overlay-path.md](../bugs/005-evaluation-model-stale-overlay-path.md).
+
+## Jig DONE dependency tokens require slice fragments
+When transitioning a slice to DONE with this jig workflow version, dependencies frontmatter is validated by token shape. Whole-spec tokens such as 003 are reported as unknown dependency token shape; use the concrete DONE slice token that owns the dependency, e.g. 003-05 for the runner/judge prompt and verdict-parser contract, plus ADR tokens like adr-0003.

@@ -108,8 +108,8 @@
 | [019-compile-core-simplification](019-compile-core-simplification/spec.md) | 019-05 — single-component-oracle | **DONE** |  |
 | [020-content-fidelity-eval](020-content-fidelity-eval/spec.md) | 020-01 — extract-shared-harness | **DONE** |  |
 | [020-content-fidelity-eval](020-content-fidelity-eval/spec.md) | 020-02 — content-fidelity-skill | **DONE** |  |
-| [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-01 - diff-anchored, narrow-first investigation | DRAFT |  |
-| [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-02 - record and verify load-bearing assumptions | DRAFT |  |
+| [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-01 - diff-anchored, narrow-first investigation | **DONE** |  |
+| [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-02 - record and verify load-bearing assumptions | **DONE** |  |
 | [022-dual-host-release-parity](022-dual-host-release-parity/spec.md) | 022-01 — dual-host release boundary | **DONE** | Dual-host install, CI, release, and documentation parity landed with all 11 current skills, including eval-authoring. |
 
 ## Deferred slices

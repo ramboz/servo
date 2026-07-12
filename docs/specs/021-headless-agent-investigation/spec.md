@@ -1,7 +1,7 @@
 ---
-status: DRAFT
-dependencies: [003, adr-0003]
-last_verified: 2026-07-11
+status: DONE
+dependencies: [003-05, adr-0003]
+last_verified: 2026-07-12
 ---
 
 # Spec 021 - headless agent investigation & assumption discipline

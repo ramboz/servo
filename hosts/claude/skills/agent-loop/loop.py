@@ -482,7 +482,10 @@ def _parse_verdict_block(
     for line in lines[1:]:
         line = line.strip()
         if ":" not in line:
-            continue
+            return None, (
+                f"verdict block contains malformed field line "
+                f"({line[:60]!r}); expected key: value"
+            )
         key, _, val = line.partition(":")
         fields[key.strip()] = val.strip()
     return fields, None
