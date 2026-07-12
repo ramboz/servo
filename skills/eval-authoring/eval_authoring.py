@@ -1,8 +1,8 @@
 """
-servo eval-authoring — slices 008-01 (residual-triage) + 008-02 (rubric-shaping),
-the self-contained core of the single servo-owned guided skill
-`/servo:eval-authoring` (ADR-0019 / ADR-0026). Durable artifacts are co-located
-with the spec
+servo eval-authoring — slices 008-01 (residual-triage), 008-02
+(rubric-shaping), and 008-03 (reference-set), the self-contained core of the
+single servo-owned guided skill `/servo:eval-authoring` (ADR-0019 / ADR-0026).
+Durable artifacts are co-located with the spec
 (ADR-0023), mirroring `skills/spec-oracle/oracle_plan.py`'s convention.
 
 Given a spec-006 evidence plan (`checks.json`, produced by
@@ -40,6 +40,22 @@ Usage:
         where `<eval-name>` is a slug of `--ac` (becomes `score_<name>` once
         008-04 emits + spec-006 compiles). The tool proposes; the human edits
         and approves before anything is frozen (008-04's job, not this one).
+
+    python3 eval_authoring.py dataset <plan> --ac <id>
+        (Slice 008-03.) Resolve the same colocation dir, and grow the
+        statistical **reference set** for one already-rubric-shaped AC's
+        `config.json`. On first run (`cases` still empty), scaffolds cases
+        seeded verbatim from the spec's own `## Examples` / `## Edge cases`
+        markdown sections (never inventing scenario/input text) — or, when
+        neither section exists, a small labeled `EDIT ME` placeholder per
+        taxonomy category for the human to fill in. On any later run
+        (`cases` already non-empty), never overwrites — the dataset is a
+        project-owned, human-grown artifact; the local `config.json` file is
+        the source of truth (AC1). Every run validates the case list's shape
+        (AC2) and prints a non-fatal advisory when it is under the
+        provisional minimum-viable-size floor (AC3) — never autofilling
+        toward it. Writes the updated `config.json` and a human-reviewable
+        `dataset.md` under the same `<eval-name>/` directory `rubric` used.
 
 Design decision — classification stays deterministic, never LLM-assisted
 -------------------------------------------------------------------------
@@ -631,6 +647,363 @@ def rubric_target(plan_path: Path, ac_id: str, archetype: str):
 
 
 # ---------------------------------------------------------------------------
+# Reference-set / dataset (slice 008-03 — AC1 / AC2 / AC3 / AC4 / AC5)
+# ---------------------------------------------------------------------------
+
+# AC2's borrowed taxonomy. `skip_case` never gets an `expected_output` (it is
+# excluded from scoring entirely — that exclusion mechanics are 008-04's, not
+# this slice's; here it is just a valid taxonomy member).
+CASE_CATEGORIES = ("happy_path", "edge_case", "skip_case")
+
+# Provisional minimum-viable-size floor (AC3) — a starting number, not a
+# derived one; it is expected to be re-tuned once the first real eval is
+# authored end-to-end. Never auto-filled toward: see `dataset_size_warning`.
+MIN_DATASET_SIZE = 12
+
+_EDIT_ME = "EDIT ME"
+
+# --- string-constraint DSL (AC2): "<field> <op> <value>", op in {==, >=, <=} ---
+_CONSTRAINT_OPS = ("==", ">=", "<=")
+_CONSTRAINT_RE = re.compile(
+    r"^\s*(?P<field>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<op>==|>=|<=)\s*(?P<value>.+?)\s*$"
+)
+
+
+def parse_constraint(text: str) -> dict:
+    """Parse one string-constraint DSL expression (AC2) — e.g. `"length >=
+    100"` or `"version == 3.10"` — into `{"field": str, "op": "==" | ">=" |
+    "<=", "value": float | str}`.
+
+    `==`'s value is always kept as a bare **string** (surrounding quotes
+    stripped if quoted), never float-coerced — `"version == 3.10"` must
+    preserve `"3.10"` exactly rather than collapsing it to the float `3.1`,
+    and `==` is just as often comparing non-numeric text (e.g. a tone
+    label) as a numeric-looking one. `>=`/`<=` require a genuinely numeric
+    value: it is parsed to a `float` right here, at parse/`validate_case`
+    time, so an un-evaluable inequality (e.g. `"size >= large"`) fails at
+    authoring time with a clear message, not silently or later at score
+    time. Raises `EnvError` with a clear, specific message on a malformed
+    expression: empty/non-string input, no recognized operator
+    (`==`/`>=`/`<=`), a missing field/value, or a non-numeric `>=`/`<=`
+    value.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise EnvError(
+            "malformed_constraint", f"empty or non-string constraint: {text!r}")
+    m = _CONSTRAINT_RE.match(text)
+    if not m:
+        raise EnvError(
+            "malformed_constraint",
+            f"malformed constraint {text!r} — expected '<field> <op> <value>' "
+            f"with <op> one of {_CONSTRAINT_OPS}",
+        )
+    field = m.group("field")
+    op = m.group("op")
+    raw_value = m.group("value").strip()
+    if not raw_value:
+        raise EnvError("malformed_constraint", f"malformed constraint {text!r} — missing a value")
+    if op == "==":
+        value = raw_value.strip("\"'")
+    else:
+        try:
+            value = float(raw_value)
+        except ValueError as exc:
+            raise EnvError(
+                "malformed_constraint",
+                f"malformed constraint {text!r} — {op!r} requires a numeric value, "
+                f"got {raw_value!r}",
+            ) from exc
+    return {"field": field, "op": op, "value": value}
+
+
+def evaluate_constraint(constraint: dict, actual_values: dict) -> bool:
+    """Evaluate one `parse_constraint`-parsed constraint against
+    `actual_values` — a dict of field name -> the value computed for one
+    candidate (e.g. `{"length": 142, "tone": "warm"}`), which the eventual
+    scorer (008-04's candidate-gather) is responsible for deriving from a
+    candidate; this DSL only knows how to *compare*, not how to extract a
+    named field's value from raw candidate text.
+
+    `==` compares `str(actual)` against the parsed (already-string,
+    never-float-coerced) `value` — so `"3.10"` never silently matches
+    `"3.1"`. `>=`/`<=` already carry a numeric `value` (validated at
+    `parse_constraint` time); only the *actual* value is coerced to `float`
+    here, since it comes from live per-candidate data at evaluation time,
+    not from the authored expression. Raises `EnvError` if the constraint's
+    `field` has no entry in `actual_values`, or if a `>=`/`<=` comparison is
+    attempted against a non-numeric actual value — cheap, deterministic, and
+    fails clearly rather than silently passing/failing.
+    """
+    field, op, expected = constraint["field"], constraint["op"], constraint["value"]
+    if field not in actual_values:
+        raise EnvError(
+            "constraint_field_missing",
+            f"cannot evaluate constraint on field {field!r} — no actual value supplied",
+        )
+    actual = actual_values[field]
+    if op == "==":
+        return str(actual) == expected
+    try:
+        actual_num = float(actual)
+    except (TypeError, ValueError) as exc:
+        raise EnvError(
+            "constraint_not_numeric",
+            f"cannot compare field {field!r} with operator {op!r} against a non-numeric value",
+        ) from exc
+    return actual_num >= expected if op == ">=" else actual_num <= expected
+
+
+# --- per-case shape validation (AC2 / AC5) ---
+
+def validate_case(case, index: int) -> None:
+    """Validate one case against AC2's exact shape:
+    `{id, category, scenario, input, expected_output?: {description,
+    constraints?: [<dsl>...]}, baseline?}`.
+
+    `expected_output` is optional at the per-case level — its *presence*
+    is what distinguishes a ground-truthed case (has a description, and
+    optionally cheap deterministic `constraints`) from a rubric-only judged
+    case (no hard label at all; the rubric alone scores it) — AC5's "both in
+    one dataset." `baseline` is optional too: the per-case field the
+    comparative archetype (PROPOSED-vs-BASELINE) needs; carried in the shape
+    here so 008-04 can widen `judge()`/scoring to use it without a reshape.
+
+    Raises `EnvError`, citing the case's position, on the first problem
+    found.
+    """
+    where = f"cases[{index}]"
+    if not isinstance(case, dict):
+        raise EnvError("dataset_malformed_case", f"{where} is not an object")
+    for field in ("id", "category", "scenario", "input"):
+        value = case.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise EnvError(
+                "dataset_malformed_case", f"{where} is missing a non-empty {field!r}")
+    if case["category"] not in CASE_CATEGORIES:
+        raise EnvError(
+            "dataset_malformed_case",
+            f"{where}.category {case['category']!r} must be one of {CASE_CATEGORIES}",
+        )
+    expected_output = case.get("expected_output")
+    if expected_output is not None:
+        description = expected_output.get("description") if isinstance(
+            expected_output, dict) else None
+        if not isinstance(description, str) or not description.strip():
+            raise EnvError(
+                "dataset_malformed_case",
+                f"{where}.expected_output must be an object with a non-empty 'description'",
+            )
+        constraints = expected_output.get("constraints")
+        if constraints is not None:
+            if not isinstance(constraints, list):
+                raise EnvError(
+                    "dataset_malformed_case", f"{where}.expected_output.constraints must be a list")
+            for c_index, raw_constraint in enumerate(constraints):
+                try:
+                    parse_constraint(raw_constraint)
+                except EnvError as exc:
+                    raise EnvError(
+                        "dataset_malformed_case",
+                        f"{where}.expected_output.constraints[{c_index}]: {exc}",
+                    ) from exc
+    baseline = case.get("baseline")
+    if baseline is not None and not isinstance(baseline, str):
+        raise EnvError("dataset_malformed_case", f"{where}.baseline must be a string when present")
+
+
+def validate_dataset(cases) -> list:
+    """Validate the whole case list (AC2): every case's shape, plus unique
+    `id`s. Raises `EnvError` on the first problem found; returns `cases`
+    unchanged on success (a pure check, no I/O)."""
+    if not isinstance(cases, list):
+        raise EnvError("dataset_malformed", "cases must be a list")
+    seen_ids = set()
+    for i, case in enumerate(cases):
+        validate_case(case, i)
+        if case["id"] in seen_ids:
+            raise EnvError(
+                "dataset_duplicate_id", f"duplicate case id {case['id']!r} at cases[{i}]")
+        seen_ids.add(case["id"])
+    return cases
+
+
+def dataset_size_warning(cases: list):
+    """AC3: a clear, non-fatal advisory when the dataset is under the
+    provisional minimum-viable-size floor — never a reason to fail the
+    command, and never a reason to invent cases to close the gap (spec 008
+    non-goal: no fabricated ground truth). Returns `None` when the floor is
+    met."""
+    if len(cases) >= MIN_DATASET_SIZE:
+        return None
+    return (
+        f"only {len(cases)} case(s) — below the provisional minimum-viable-size "
+        f"floor of {MIN_DATASET_SIZE} (provisional, tuned against the first real "
+        "eval). This is a non-fatal advisory: the tool never autofills cases or "
+        "labels to reach the floor (spec 008 non-goal: no fabricated ground "
+        "truth) — add real cases yourself."
+    )
+
+
+# --- scaffolding from the spec's own text (AC1) ---
+
+_EXAMPLES_HEADING_RE = re.compile(r"^#{1,6}\s*examples?\b", re.IGNORECASE)
+_EDGE_CASE_HEADING_RE = re.compile(r"^#{1,6}\s*edge[\s-]*cases?\b", re.IGNORECASE)
+_ANY_HEADING_RE = re.compile(r"^#{1,6}\s")
+_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*\S)\s*$")
+
+
+def _extract_section_bullets(spec_text: str, heading_re: re.Pattern) -> list:
+    """Bullet items (`- ...` / `* ...`) under the first heading matching
+    `heading_re`, up to the next heading of any level (or end of text)."""
+    bullets = []
+    in_section = False
+    for line in spec_text.splitlines():
+        if heading_re.match(line):
+            in_section = True
+            continue
+        if in_section and _ANY_HEADING_RE.match(line):
+            break
+        if in_section:
+            m = _BULLET_RE.match(line)
+            if m:
+                bullets.append(m.group(1))
+    return bullets
+
+
+def _placeholder_case(index: int, category: str) -> dict:
+    """A clearly-labeled, never-invented starting point (AC1/AC3): the
+    scenario/input/expected-output text is an explicit `EDIT ME` instruction,
+    not fabricated case content."""
+    label = category.replace("_", " ")
+    case = {
+        "id": f"case-{index}",
+        "category": category,
+        "scenario": f"{_EDIT_ME} — describe a {label} scenario for this AC.",
+        "input": f"{_EDIT_ME} — the input this scenario feeds to the candidate under test.",
+    }
+    if category != "skip_case":
+        case["expected_output"] = {
+            "description": f"{_EDIT_ME} — describe the expected behaviour/output.",
+        }
+    return case
+
+
+def scaffold_cases(spec_text: str) -> list:
+    """AC1: seed cases from the spec's own `## Examples` / `## Edge cases`
+    markdown sections — bullet text copied **verbatim**, never invented, as
+    `happy_path` / `edge_case` cases with no `expected_output` (rubric-only:
+    inventing a hard label for spec prose the tool did not author would be
+    fabricated ground truth).
+
+    When neither section is present (or both are empty), scaffolds a small
+    labeled `EDIT ME` placeholder per taxonomy category instead — a starting
+    point for the human to fill in, never fabricated content (AC1/AC3).
+    """
+    cases = []
+    idx = 1
+    for bullet in _extract_section_bullets(spec_text, _EXAMPLES_HEADING_RE):
+        cases.append({"id": f"case-{idx}", "category": "happy_path", "scenario": bullet,
+                      "input": bullet})
+        idx += 1
+    for bullet in _extract_section_bullets(spec_text, _EDGE_CASE_HEADING_RE):
+        cases.append({"id": f"case-{idx}", "category": "edge_case", "scenario": bullet,
+                      "input": bullet})
+        idx += 1
+    if not cases:
+        for category in CASE_CATEGORIES:
+            cases.append(_placeholder_case(idx, category))
+            idx += 1
+    return cases
+
+
+def _render_dataset_md(config: dict, ac_id: str, warning) -> str:
+    """Render the human-reviewable `dataset.md` (mirrors `triage.md`/
+    `rubric.md`'s idiom): makes the human-gate + honesty contract explicit —
+    this is a project-owned, human-grown artifact; the tool never fabricates
+    case content or ground truth."""
+    cases = config.get("cases", [])
+    lines = [
+        f"# Eval dataset — {ac_id}",
+        "",
+        f"- **Cases:** {len(cases)} (provisional minimum-viable-size floor: "
+        f"{MIN_DATASET_SIZE}, tuned against the first real eval)",
+        "",
+    ]
+    if warning:
+        lines += [f"> **Advisory:** {warning}", ""]
+    lines += [
+        "> **Local file = source of truth.** This dataset lives in the "
+        "project's git, colocated with the spec (`config.json`'s `cases`) — "
+        "you own and grow it directly; the tool never fabricates case "
+        "content or ground-truth labels (spec 008 non-goal).",
+        "",
+        "## Cases",
+        "",
+    ]
+    if cases:
+        lines.append("| id | category | scenario | ground-truthed? |")
+        lines.append("|---|---|---|---|")
+        for c in cases:
+            scenario = (c.get("scenario") or "").replace("|", "\\|")
+            truthed = "yes" if c.get("expected_output") else "rubric-only"
+            lines.append(f"| {c.get('id')} | {c.get('category')} | {scenario} | {truthed} |")
+    else:
+        lines.append("_No cases yet._")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def dataset_target(plan_path: Path, ac_id: str):
+    """Load the plan, resolve the same `<spec-dir>/eval/<spec-id>/<eval-name>/`
+    dir `rubric_target` wrote to (AC1/AC4), and scaffold/validate its
+    `config.json`'s `cases`.
+
+    Requires `rubric` to have already run for `ac_id` (its `config.json` is
+    where this slice's cases live — AC5's harness shape, extended). On first
+    run (`cases` still empty), seeds via `scaffold_cases`; on any later run,
+    never overwrites already-present cases (a human may have edited them) —
+    `dataset` only re-validates and re-reports in that case.
+
+    Returns `(config, out_dir, warning, scaffolded)`.
+    """
+    plan = load_plan(plan_path)
+    spec_dir = _spec_dir_from_plan_path(plan_path, plan)
+    eval_dir = eval_dir_for_spec(spec_dir, plan["spec_id"])
+
+    out_dir = eval_dir / _slug(ac_id)
+    config_path = out_dir / "config.json"
+    if not config_path.is_file():
+        raise EnvError(
+            "rubric_missing",
+            f"no config.json at {config_path} — run `rubric` for {ac_id!r} first",
+        )
+    try:
+        config = json.loads(config_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise EnvError(
+            "config_malformed_json", f"config.json is not valid JSON: {config_path} ({exc})"
+        ) from exc
+
+    existing_cases = config.get("cases") or []
+    if existing_cases:
+        cases = existing_cases
+        scaffolded = False
+    else:
+        spec_path = spec_dir / Path(plan["source_spec_path"]).name
+        spec_text = spec_path.read_text() if spec_path.is_file() else ""
+        cases = scaffold_cases(spec_text)
+        scaffolded = True
+
+    validate_dataset(cases)
+    config["cases"] = cases
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+
+    warning = dataset_size_warning(cases)
+    (out_dir / "dataset.md").write_text(_render_dataset_md(config, ac_id, warning))
+    return config, out_dir, warning, scaffolded
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -698,17 +1071,54 @@ def _rubric_main(argv: list) -> int:
     return 0
 
 
+def _dataset_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py dataset",
+        description=(
+            "Scaffold/grow the statistical reference set (cases) for one "
+            "already-rubric-shaped AC's config.json."
+        ),
+    )
+    parser.add_argument(
+        "plan_path", metavar="plan",
+        help="Path to the same spec-006 checks.json plan passed to `triage`/`rubric`.",
+    )
+    parser.add_argument(
+        "--ac", required=True,
+        help="The AC id to scaffold/grow a dataset for (must already have a rubric config.json).",
+    )
+    args = parser.parse_args(argv)
+
+    plan_path = Path(args.plan_path).resolve()
+    try:
+        config, out_dir, warning, scaffolded = dataset_target(plan_path, args.ac)
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    verb = "scaffolded" if scaffolded else "left"
+    print(f"servo: {verb} {len(config['cases'])} case(s) for {args.ac} -> {out_dir}")
+    if warning:
+        print(f"warning: {warning}")
+    return 0
+
+
 def main(argv: list | None = None) -> int:
     # Hand-rolled subcommand dispatch (mirrors `oracle_plan.py` / `gate.py`).
-    # `triage` (008-01) and `rubric` (008-02) exist so far; later slices add
-    # `from-goal`/`dataset`/`emit`/`audit` alongside them.
+    # `triage` (008-01), `rubric` (008-02), and `dataset` (008-03) exist so
+    # far; later slices add `from-goal`/`emit`/`audit` alongside them.
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "triage":
         return _triage_main(argv[1:])
     if argv and argv[0] == "rubric":
         return _rubric_main(argv[1:])
-    print("error: unknown or missing subcommand (expected: triage, rubric)", file=sys.stderr)
+    if argv and argv[0] == "dataset":
+        return _dataset_main(argv[1:])
+    print(
+        "error: unknown or missing subcommand (expected: triage, rubric, dataset)",
+        file=sys.stderr,
+    )
     return 2
 
 

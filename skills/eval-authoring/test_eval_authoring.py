@@ -1,6 +1,6 @@
 """
-AC verification tests for slices 008-01 (residual-triage) and 008-02
-(rubric-shaping) of `/servo:eval-authoring`.
+AC verification tests for slices 008-01 (residual-triage), 008-02
+(rubric-shaping), and 008-03 (reference-set) of `/servo:eval-authoring`.
 
 Run from the repo root:
     python3 -m pytest skills/eval-authoring/test_eval_authoring.py -q
@@ -11,7 +11,10 @@ surface"). The 008-01 tranche (classification) is deterministic
 call), so every fixture there is stable and offline. The 008-02 tranche
 (rubric shaping + the judge path in `score.py`) is also offline: the judge
 HTTP call is monkeypatched exactly as `skills/content-fidelity/
-test_content_fidelity.py` does (no real API key / network access needed).
+test_content_fidelity.py` does (no real API key / network access needed). The
+008-03 tranche (the `dataset` subcommand + the constraint DSL + case-shape
+validation) is pure/offline too — no judge call is exercised by scaffolding
+or validating a dataset.
 
 Test idiom mirrors `skills/spec-oracle/test_oracle_plan.py` /
 `skills/edd-suitability/test_suitability.py`:
@@ -26,6 +29,7 @@ Test idiom mirrors `skills/spec-oracle/test_oracle_plan.py` /
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -817,6 +821,546 @@ class StructuredJudgeOutputTests(unittest.TestCase):
         self.assertEqual(
             score._extract_json('Sure! {"score": 0.8, "reasoning": "x"} done'),
             '{"score": 0.8, "reasoning": "x"}')
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-03 (reference-set) — helpers + fixtures
+# ---------------------------------------------------------------------------
+
+EXAMPLE_EDGE_SPEC_MD = """# Spec 042-demo
+
+## Examples
+
+- Summarize a 3-paragraph article about quarterly earnings faithfully.
+- Summarize a product changelog without adding new claims.
+
+## Edge cases
+
+- An article with no clear thesis statement.
+- A source document containing contradictory statements.
+
+## Acceptance criteria
+
+- AC-042-demo-1: The summary must not contradict any fact in the source document.
+"""
+
+NO_HEADINGS_SPEC_MD = """# Spec 042-demo
+
+Just some prose with no Examples or Edge cases sections at all.
+"""
+
+
+def _triage_shape_and_dataset(root: Path, spec_text=None, ac_id: str = "AC-042-demo-1"):
+    """Shared fixture flow (008-03): optionally seed a custom `spec.md`, then
+    `triage` -> `rubric` -> `dataset` for `ac_id`. Returns `(plan_path,
+    rubric_dir, dataset_proc)` — `dataset_proc` is the `dataset` subcommand's
+    completed process, so tests can inspect its stdout/stderr/returncode."""
+    if spec_text is not None:
+        spec_dir = root / "042-demo"
+        spec_dir.mkdir(parents=True, exist_ok=True)
+        (spec_dir / "spec.md").write_text(spec_text)
+    plan_path, rubric_dir = _triage_then_shape(root, ac_id=ac_id)
+    proc = _run_cli(["dataset", str(plan_path), "--ac", ac_id])
+    return plan_path, rubric_dir, proc
+
+
+def _dataset_case(case_id: str = "case-1", **overrides) -> dict:
+    case = {
+        "id": case_id,
+        "category": "happy_path",
+        "scenario": "A simple happy-path scenario.",
+        "input": "Some input text.",
+        "expected_output": {"description": "A description of the expected output."},
+    }
+    case.update(overrides)
+    return case
+
+
+# ---------------------------------------------------------------------------
+# AC2 — the string-constraint DSL: parse + evaluate + malformed errors
+# ---------------------------------------------------------------------------
+
+class ConstraintDSLTests(unittest.TestCase):
+    def test_equality_constraint_parses_and_evaluates(self):
+        constraint = ea.parse_constraint("tone == warm")
+        self.assertEqual(constraint, {"field": "tone", "op": "==", "value": "warm"})
+        self.assertTrue(ea.evaluate_constraint(constraint, {"tone": "warm"}))
+        self.assertFalse(ea.evaluate_constraint(constraint, {"tone": "cold"}))
+
+    def test_gte_constraint_parses_and_evaluates_numerically(self):
+        constraint = ea.parse_constraint("length >= 100")
+        self.assertEqual(constraint, {"field": "length", "op": ">=", "value": 100.0})
+        self.assertTrue(ea.evaluate_constraint(constraint, {"length": 142}))
+        self.assertFalse(ea.evaluate_constraint(constraint, {"length": 50}))
+
+    def test_lte_constraint_parses_and_evaluates_numerically(self):
+        constraint = ea.parse_constraint("length <= 500")
+        self.assertEqual(constraint["op"], "<=")
+        self.assertTrue(ea.evaluate_constraint(constraint, {"length": 300}))
+        self.assertFalse(ea.evaluate_constraint(constraint, {"length": 600}))
+
+    def test_constraint_parses_with_no_surrounding_whitespace(self):
+        constraint = ea.parse_constraint("length>=100")
+        self.assertEqual(constraint, {"field": "length", "op": ">=", "value": 100.0})
+
+    def test_malformed_constraint_unknown_operator_errors_cleanly(self):
+        with self.assertRaises(ea.EnvError):
+            ea.parse_constraint("length != 100")
+
+    def test_malformed_constraint_missing_value_errors_cleanly(self):
+        with self.assertRaises(ea.EnvError):
+            ea.parse_constraint("length >=")
+
+    def test_malformed_constraint_missing_operator_errors_cleanly(self):
+        with self.assertRaises(ea.EnvError):
+            ea.parse_constraint("just some free text")
+
+    def test_malformed_constraint_empty_string_errors_cleanly(self):
+        with self.assertRaises(ea.EnvError):
+            ea.parse_constraint("")
+
+    def test_evaluate_missing_field_is_a_clean_error(self):
+        constraint = ea.parse_constraint("length >= 100")
+        with self.assertRaises(ea.EnvError):
+            ea.evaluate_constraint(constraint, {})
+
+    def test_evaluate_non_numeric_actual_for_inequality_is_a_clean_error(self):
+        constraint = ea.parse_constraint("length >= 100")
+        with self.assertRaises(ea.EnvError):
+            ea.evaluate_constraint(constraint, {"length": "not-a-number"})
+
+    def test_equality_constraint_preserves_version_string_without_float_coercion(self):
+        # craft nit: "==" must not float-coerce its value — "3.10" would
+        # collapse to 3.1 and silently stop distinguishing from "3.1".
+        constraint = ea.parse_constraint("version == 3.10")
+        self.assertEqual(constraint, {"field": "version", "op": "==", "value": "3.10"})
+        self.assertTrue(ea.evaluate_constraint(constraint, {"version": "3.10"}))
+        self.assertFalse(ea.evaluate_constraint(constraint, {"version": "3.1"}))
+
+    def test_gte_non_numeric_operand_is_rejected_at_parse_time(self):
+        # craft nit: a >=/<= operand must be numeric, checked at
+        # parse_constraint/validate_case time — fails at authoring, not
+        # later at score time.
+        with self.assertRaises(ea.EnvError):
+            ea.parse_constraint("size >= large")
+
+    def test_lte_non_numeric_operand_is_rejected_at_parse_time(self):
+        with self.assertRaises(ea.EnvError):
+            ea.parse_constraint("size <= large")
+
+
+# ---------------------------------------------------------------------------
+# AC2 / AC5 — per-case shape validation: ground-truthed + rubric-only, mixed
+# ---------------------------------------------------------------------------
+
+class CaseShapeValidationTests(unittest.TestCase):
+    def test_valid_ground_truthed_case_passes(self):
+        case = {
+            "id": "case-1", "category": "happy_path",
+            "scenario": "A scenario.", "input": "Some input.",
+            "expected_output": {
+                "description": "A description.",
+                "constraints": ["length >= 10", "tone == warm"],
+            },
+        }
+        ea.validate_case(case, 0)  # no exception
+
+    def test_valid_rubric_only_case_passes_with_no_expected_output(self):
+        """AC5: a rubric-only judged case carries no hard label at all."""
+        case = {
+            "id": "case-2", "category": "edge_case",
+            "scenario": "An edge scenario.", "input": "Some edge input.",
+        }
+        ea.validate_case(case, 0)  # no exception
+
+    def test_mixed_dataset_validates(self):
+        """AC5: ground-truthed and rubric-only cases coexist in one dataset."""
+        cases = [
+            {
+                "id": "case-1", "category": "happy_path",
+                "scenario": "A ground-truthed scenario.", "input": "Input A.",
+                "expected_output": {"description": "Expected A.", "constraints": ["length >= 5"]},
+            },
+            {
+                "id": "case-2", "category": "edge_case",
+                "scenario": "A rubric-only scenario.", "input": "Input B.",
+            },
+        ]
+        ea.validate_dataset(cases)  # no exception
+        self.assertIn("expected_output", cases[0])
+        self.assertNotIn("expected_output", cases[1])
+
+    def test_invalid_category_is_a_clean_error(self):
+        case = {"id": "case-1", "category": "bogus", "scenario": "s", "input": "i"}
+        with self.assertRaises(ea.EnvError):
+            ea.validate_case(case, 0)
+
+    def test_missing_required_field_is_a_clean_error(self):
+        case = {"id": "case-1", "category": "happy_path", "scenario": "s"}  # no `input`
+        with self.assertRaises(ea.EnvError):
+            ea.validate_case(case, 0)
+
+    def test_malformed_constraint_inside_a_case_is_a_clean_error(self):
+        case = {
+            "id": "case-1", "category": "happy_path", "scenario": "s", "input": "i",
+            "expected_output": {"description": "d", "constraints": ["length !! 100"]},
+        }
+        with self.assertRaises(ea.EnvError):
+            ea.validate_case(case, 0)
+
+    def test_duplicate_ids_are_a_clean_error(self):
+        cases = [
+            {"id": "case-1", "category": "happy_path", "scenario": "s1", "input": "i1"},
+            {"id": "case-1", "category": "edge_case", "scenario": "s2", "input": "i2"},
+        ]
+        with self.assertRaises(ea.EnvError):
+            ea.validate_dataset(cases)
+
+    def test_baseline_field_carries_through_for_the_comparative_archetype(self):
+        """008-02's carry-forward: the shape carries what 008-04's widened
+        comparative scoring will need, without scoring anything here."""
+        case = {
+            "id": "case-1", "category": "happy_path", "scenario": "s", "input": "i",
+            "baseline": "A baseline/reference text for PROPOSED-vs-BASELINE.",
+        }
+        ea.validate_case(case, 0)  # no exception
+
+
+# ---------------------------------------------------------------------------
+# AC1 — scaffolding: seeded from the spec's own Examples / Edge cases text
+# ---------------------------------------------------------------------------
+
+class DatasetScaffoldFromSpecTests(unittest.TestCase):
+    def test_cases_seeded_from_examples_and_edge_cases_verbatim(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir, proc = _triage_shape_and_dataset(
+                root, spec_text=EXAMPLE_EDGE_SPEC_MD)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            config = json.loads((rubric_dir / "config.json").read_text())
+            cases = config["cases"]
+            self.assertEqual(len(cases), 4)
+
+            happy = [c for c in cases if c["category"] == "happy_path"]
+            edge = [c for c in cases if c["category"] == "edge_case"]
+            self.assertEqual(len(happy), 2)
+            self.assertEqual(len(edge), 2)
+
+            self.assertEqual(
+                {c["scenario"] for c in happy},
+                {
+                    "Summarize a 3-paragraph article about quarterly earnings faithfully.",
+                    "Summarize a product changelog without adding new claims.",
+                },
+            )
+            self.assertEqual(
+                {c["scenario"] for c in edge},
+                {
+                    "An article with no clear thesis statement.",
+                    "A source document containing contradictory statements.",
+                },
+            )
+            # Never invents an expected_output for spec-sourced examples/edge
+            # cases — verbatim scenario/input text only (AC1's "never invent
+            # case content or labels").
+            for c in cases:
+                self.assertNotIn("expected_output", c)
+                self.assertEqual(c["scenario"], c["input"])
+
+
+class DatasetPlaceholderScaffoldTests(unittest.TestCase):
+    def test_no_headings_scaffolds_one_labeled_placeholder_per_category(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir, proc = _triage_shape_and_dataset(
+                root, spec_text=NO_HEADINGS_SPEC_MD)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            config = json.loads((rubric_dir / "config.json").read_text())
+            cases = config["cases"]
+            self.assertEqual(len(cases), 3)
+            self.assertEqual(
+                {c["category"] for c in cases}, {"happy_path", "edge_case", "skip_case"})
+            for c in cases:
+                self.assertIn("EDIT ME", c["scenario"])
+                self.assertIn("EDIT ME", c["input"])
+
+
+# ---------------------------------------------------------------------------
+# AC3 — minimum-viable-size guidance: warns, never autofills
+# ---------------------------------------------------------------------------
+
+class DatasetMinSizeWarningTests(unittest.TestCase):
+    def test_under_floor_dataset_warns_without_autofill(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir, proc = _triage_shape_and_dataset(
+                root, spec_text=EXAMPLE_EDGE_SPEC_MD)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("warning:", proc.stdout)
+            self.assertIn("12", proc.stdout)
+
+            config = json.loads((rubric_dir / "config.json").read_text())
+            # Never autofilled toward the floor: exactly the 4 spec-sourced
+            # cases, not padded with invented ones to reach 12.
+            self.assertEqual(len(config["cases"]), 4)
+
+    def test_floor_met_dataset_has_no_warning(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path, rubric_dir = _triage_then_shape(root)
+            config_path = rubric_dir / "config.json"
+            config = json.loads(config_path.read_text())
+            config["cases"] = [_dataset_case(f"case-{i}") for i in range(ea.MIN_DATASET_SIZE)]
+            config_path.write_text(json.dumps(config, indent=2) + "\n")
+
+            proc = _run_cli(["dataset", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("warning:", proc.stdout)
+
+
+class DatasetNoOverwriteTests(unittest.TestCase):
+    def test_rerun_never_overwrites_already_scaffolded_or_edited_cases(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path, rubric_dir, proc1 = _triage_shape_and_dataset(
+                root, spec_text=EXAMPLE_EDGE_SPEC_MD)
+            self.assertEqual(proc1.returncode, 0, proc1.stderr)
+            self.assertIn("scaffolded", proc1.stdout)
+
+            config_path = rubric_dir / "config.json"
+            config = json.loads(config_path.read_text())
+            # Simulate a human edit: add a real, hand-authored case.
+            config["cases"].append(_dataset_case(
+                "case-hand-1", scenario="A real hand-authored scenario.",
+                input="Real input text.",
+                expected_output={"description": "Real expected output."}))
+            config_path.write_text(json.dumps(config, indent=2) + "\n")
+            before = json.loads(config_path.read_text())["cases"]
+
+            proc2 = _run_cli(["dataset", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+            self.assertIn("left", proc2.stdout)
+
+            after = json.loads(config_path.read_text())["cases"]
+            self.assertEqual(before, after)
+
+
+# ---------------------------------------------------------------------------
+# AC4 — freeze integration: a case edit trips stale / changes definition_hash
+# ---------------------------------------------------------------------------
+
+class DatasetFreezeTests(unittest.TestCase):
+    def test_case_edit_changes_definition_hash(self):
+        config = _base_rubric_config()
+        config["cases"] = [
+            _dataset_case("case-1"),
+            _dataset_case("case-2", category="edge_case", scenario="An edge scenario.",
+                          input="Edge input.", expected_output=None),
+        ]
+        digest1 = score.definition_hash(config)
+
+        edited = copy.deepcopy(config)
+        edited["cases"][0]["input"] = "Changed input text."
+        digest2 = score.definition_hash(edited)
+
+        self.assertNotEqual(digest1, digest2)
+        # Deterministic: re-hashing the unchanged config reproduces digest1.
+        self.assertEqual(digest1, score.definition_hash(config))
+
+    def test_baseline_field_is_pinned_by_value(self):
+        config = _base_rubric_config()
+        config["cases"] = [_dataset_case("case-1", baseline="Baseline text A.")]
+        digest1 = score.definition_hash(config)
+
+        edited = copy.deepcopy(config)
+        edited["cases"][0]["baseline"] = "Baseline text B."
+        digest2 = score.definition_hash(edited)
+
+        self.assertNotEqual(digest1, digest2)
+
+    def test_frozen_config_trips_stale_on_case_edit(self):
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            config = _base_rubric_config()
+            config["cases"] = [_dataset_case("case-1")]
+            config["approval_status"] = "approved"
+            config["approved_content_hash"] = score.definition_hash(config)
+            config["hashes"] = score.artifact_hashes(config, base_dir)
+
+            score.validate_freeze(config, base_dir)  # approved + matching -> no exception
+
+            config["cases"][0]["expected_output"]["description"] = "A DIFFERENT expected output."
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(config, base_dir)
+
+
+# ---------------------------------------------------------------------------
+# AC6 — the dataset composite: a mixed labeled + rubric-only dataset scores
+# end-to-end (fake judge scores + fake actuals for the constraint DSL, same
+# offline hook idiom as content-fidelity's `_FAKE_SCORES_ENV`).
+# ---------------------------------------------------------------------------
+
+class DatasetCompositeScoreTests(unittest.TestCase):
+    def setUp(self):
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+        os.environ.pop(score._FAKE_ACTUALS_ENV, None)
+
+    def tearDown(self):
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+        os.environ.pop(score._FAKE_ACTUALS_ENV, None)
+
+    def _write_config(self, base_dir: Path, cases: list, n: int = 1) -> None:
+        config = _base_rubric_config()
+        config["samples"] = {"n": n, "k": 1.0, "delta": 0.03}
+        config["cases"] = cases
+        (base_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+
+    def test_mixed_labeled_and_rubric_only_dataset_scores_end_to_end(self):
+        """AC6: a mixed labeled + rubric-only dataset, scored end-to-end,
+        composes to a float in [0,1] — and, with n=1 (stderr 0, so the
+        lower bound equals the sample itself), the composite is exactly the
+        unweighted mean of the three *scored* cases (`skip_case` excluded
+        from the denominator — see the next test for a dedicated check)."""
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [
+                _dataset_case("case-happy-1", expected_output={
+                    "description": "A ground-truthed description.",
+                    "constraints": ["length >= 100"],
+                }),
+                _dataset_case("case-rubric-1", category="edge_case", expected_output=None),
+                _dataset_case("case-skip-1", category="skip_case", expected_output=None),
+            ])
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps({
+                "case-happy-1": [0.9], "case-rubric-1": [0.8],
+                # Deliberately no "case-skip-1" entry: if the composite tried
+                # to score the skip_case it would KeyError -> EnvError, so a
+                # clean pass here is itself proof the skip_case was excluded.
+            })
+            os.environ[score._FAKE_ACTUALS_ENV] = json.dumps({"case-happy-1": {"length": 142}})
+
+            composite = score.score(base_dir)
+            self.assertGreaterEqual(composite, 0.0)
+            self.assertLessEqual(composite, 1.0)
+            self.assertAlmostEqual(composite, (0.9 + 0.8) / 2, places=6)
+
+    def test_skip_case_is_excluded_from_the_denominator(self):
+        """A skip_case sitting alongside scored cases must not change the
+        composite versus the same dataset with the skip_case simply
+        absent — direct proof it never enters the weighted mean."""
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [
+                _dataset_case("case-a", expected_output=None),
+                _dataset_case("case-b", category="edge_case", expected_output=None),
+            ])
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"case-a": [0.9], "case-b": [0.7]})
+            without_skip = score.score(base_dir)
+
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [
+                _dataset_case("case-a", expected_output=None),
+                _dataset_case("case-b", category="edge_case", expected_output=None),
+                _dataset_case("case-skip", category="skip_case", expected_output=None),
+            ])
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"case-a": [0.9], "case-b": [0.7]})  # no "case-skip" entry
+            with_skip = score.score(base_dir)
+
+        self.assertEqual(without_skip, with_skip)
+
+    def test_failed_hard_constraint_changes_the_composite(self):
+        """AC2's composition rule: a failed hard constraint zeroes that
+        case's contribution, so the composite drops versus the same dataset
+        with the constraint passing."""
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [
+                _dataset_case("case-a", expected_output={
+                    "description": "d", "constraints": ["length >= 100"]}),
+                _dataset_case("case-b", category="edge_case", expected_output=None),
+            ])
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"case-a": [0.9], "case-b": [0.9]})
+
+            os.environ[score._FAKE_ACTUALS_ENV] = json.dumps({"case-a": {"length": 142}})
+            passing = score.score(base_dir)
+            self.assertAlmostEqual(passing, 0.9)
+
+            os.environ[score._FAKE_ACTUALS_ENV] = json.dumps({"case-a": {"length": 10}})
+            failing = score.score(base_dir)
+            self.assertAlmostEqual(failing, 0.45)  # (0.0*1 + 0.9*1) / 2
+            self.assertLess(failing, passing)
+
+    def test_missing_fake_score_for_a_scored_case_is_env_error_not_zero(self):
+        """Honesty (ADR-0005): a missing judged sample raises EnvError, it
+        never silently scores 0.0."""
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [
+                _dataset_case("case-a", expected_output=None),
+                _dataset_case("case-b", category="edge_case", expected_output=None),
+            ])
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps({"case-a": [0.9]})
+            # "case-b" is missing entirely.
+            with self.assertRaises(score.EnvError):
+                score.score(base_dir)
+
+    def test_live_path_without_candidate_gather_is_env_error_not_zero(self):
+        """Honesty (ADR-0005): with no fake-scores hook and no real
+        candidate-gather yet (008-04), a live score() call raises EnvError
+        rather than silently scoring a placeholder."""
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [_dataset_case("case-a", expected_output=None)])
+            with self.assertRaises(score.EnvError):
+                score.score(base_dir)
+
+    def test_score_does_not_enforce_freeze_on_a_draft_config(self):
+        """This slice's `score()` deliberately never calls `validate_freeze`
+        — enforcing the freeze is 008-04 AC5's job. A still-`draft`
+        (unapproved) config.json scores successfully here."""
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [_dataset_case("case-a", expected_output=None)])
+            config = json.loads((base_dir / "config.json").read_text())
+            self.assertEqual(config["approval_status"], "draft")
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps({"case-a": [0.8]})
+            self.assertAlmostEqual(score.score(base_dir), 0.8)
+
+
+# ---------------------------------------------------------------------------
+# CLI error / colocation coverage
+# ---------------------------------------------------------------------------
+
+class DatasetCLIErrorTests(unittest.TestCase):
+    def test_dataset_before_rubric_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+            proc = _run_cli(["triage", str(plan_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            # No `rubric` run first -> no config.json to grow.
+            proc2 = _run_cli(["dataset", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc2.returncode, 2)
+            self.assertIn("error:", proc2.stderr)
+            self.assertNotIn("Traceback", proc2.stderr)
+
+
+class DatasetColocationTests(unittest.TestCase):
+    def test_dataset_artifacts_live_beside_the_rubric_not_dot_servo(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir, proc = _triage_shape_and_dataset(root)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertTrue((rubric_dir / "config.json").is_file())
+            self.assertTrue((rubric_dir / "dataset.md").is_file())
+            self.assertFalse((root / ".servo").exists())
 
 
 if __name__ == "__main__":
