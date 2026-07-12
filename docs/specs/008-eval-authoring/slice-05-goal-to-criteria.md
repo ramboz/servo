@@ -26,15 +26,19 @@ criterion ([ADR-0027](../../decisions/adr-0027-goal-to-eval-assisted-authoring.m
   coverage gaps); faithfulness AND *implicit* coverage of intent are best-effort
   advisory reads only, since both are epistemic and the human's job (ADR-0027 Decision #2) — emitting advisory flags, not a
   rubber-stampable verdict. It reuses `jig:independent-review` when jig is co-installed (the ADR-0001
-  filesystem-hint coupling), else a built-in servo eval-frame-review prompt — servo
-  does not hard-depend on jig.
+  filesystem-hint coupling), else a built-in eval-frame-review **prompt shipped with the `eval-authoring`
+  skill and run in a fresh subagent** (not a new entry in servo's `runner`/`judge`
+  agent roster — ADR-0003's loop roster is untouched; this mirrors the
+  architect→`jig:architect` delegation posture). servo does not hard-depend on jig.
 - **AC3** The proposal + reviewer flags are presented to the human, who edits /
   accepts / rejects / **adds** each AC (adding covers criteria the expansion
   omitted — the human is the backstop for coverage-of-intent). Only the curated set proceeds; **nothing is frozen
   without recorded human approval** (spec 008 goal 6; ADR-0005).
-- **AC4** The curated AC set is emitted as a lightweight, project-owned, spec-shaped
-  artifact that `edd-suitability` (015) and `spec-oracle classify` (006) consume
-  **unchanged** — no downstream contract change.
+- **AC4** The curated AC set is emitted as a **minimal spec-shaped Markdown
+  artifact** (frontmatter + a tagged `## Acceptance criteria` list) that
+  `spec-oracle classify` (006) consumes **unchanged** via its existing spec-AC
+  parser; `edd-suitability` (015) reads the same artifact for its criteria split
+  (AC5), not a full verdict. No new format, no downstream contract change.
 - **AC5** Running the criteria-classification half of `edd-suitability` (015) on the
   emitted artifact surfaces the **evaluable-vs-human-residual split** over the ACs,
   so the author learns early whether the goal is mostly evaluable vs mostly taste.

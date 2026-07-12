@@ -21,11 +21,13 @@ light.
   eval's judged cases for human spot-checking, and records the human labels
   alongside the judge scores.
 - **AC2** Computes advisory judge-trust metrics — **fail-precision**,
-  **pass-miss-rate**, and (where the sample clears a stated minimum floor)
-  **score-vs-human drift** — over the labeled sample.
+  **pass-miss-rate**, and (where the sample clears a stated minimum floor —
+  provisional **≥20 labeled cases**) **score-vs-human drift** — over the labeled
+  sample.
 - **AC3** Emits a recommendation `auto` (trust the judge) vs `confirmed-only`
-  (require human confirmation), derived from stated thresholds, as **advisory
-  output** — printed/returned, not enforced.
+  (require human confirmation), derived from stated thresholds (provisional, from
+  the surveyed prior art: fail-precision ≥ 0.70, pass-miss-rate ≤ 0.20), as
+  **advisory output** — printed/returned, not enforced.
 - **AC4** The audit does **not** alter the composite, the frozen definition, or
   `gate.py`/`oracle.sh` behavior. Auto-demotion of an untrusted judge is explicitly
   **deferred** and recorded in `docs/refinement-todo.md` and spec 008 Open questions

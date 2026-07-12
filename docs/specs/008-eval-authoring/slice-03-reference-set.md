@@ -21,7 +21,8 @@ state; the author owns the truth, the skill never fabricates ground truth. This 
   `{id, category ∈ {happy_path | edge_case | skip_case}, scenario, input, expected_output{description, constraints[]?}}`
   (borrowed taxonomy), with a small string-constraint DSL (`==`, `>=`, `<=`) for
   cheap deterministic sub-checks alongside the judged score.
-- **AC3** Minimum-viable-size guidance is surfaced with a stated default floor, but
+- **AC3** Minimum-viable-size guidance is surfaced with a stated default floor
+  (provisional **≥12 cases**, tuned against the first real eval), but
   the tool **never invents cases or labels** to reach it — an under-sized dataset
   warns, it does not autofill (spec 008 non-goal: no fabricated ground truth).
 - **AC4** The dataset is the hashed artifact ADR-0005 freezes, via the shared

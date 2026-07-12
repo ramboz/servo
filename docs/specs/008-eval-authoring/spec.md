@@ -73,9 +73,11 @@ authoring surface that lowers the barrier end to end.
 
 0. **Expand a goal into curated criteria (opt-in front-end).** Turn a free-form
    goal into a *proposed* AC set, each tagged `deterministic | judged | human-only`
-   with a rationale; a fresh independent-reviewer subagent checks the frame
-   (faithfulness, honest tagging, measurability, gaps); the human curates and
-   approves. Never autonomous, never a false criterion silently frozen
+   with a rationale; a fresh independent-reviewer subagent runs an advisory fresh-eyes pass —
+   reliable on *structural* defects (wording-obvious mis-tags, unmeasurable
+   predicates, goal-restatement, surface-literal gaps), with faithfulness and
+   implicit coverage left to the human, who is the sole per-AC gate and approves
+   each. Never autonomous, never a false criterion silently frozen
    ([ADR-0027](../../decisions/adr-0027-goal-to-eval-assisted-authoring.md)).
 1. **Triage residual judgment.** Given a spec-006 plan (or the curated ACs from
    goal 0), sort each `residual_judgment` AC into *eval-able* vs *human-residual*
@@ -157,6 +159,12 @@ honored; ADR-0026's kind-agnostic surface), with subcommands per stage
 `skills/eval-authoring/eval_authoring.py` helper that reuses
 `skills/_common/fidelity_eval.py`.
 
+**Test surface:** all slices' tests live in
+`skills/eval-authoring/test_eval_authoring.py` (servo's `skills/<name>/test_*.py`
+convention). **Terminology:** one capability, three role-names — the *capability*
+is goal→eval, the *slice* is 008-05 (goal-to-criteria), the CLI *subcommand* is
+`from-goal`.
+
 ## SPIDR split
 
 **Path-first**, same axis specs 016 and this spec's original sketch used: the
@@ -191,9 +199,10 @@ slice number because triage (008-01) is the smaller, self-contained core that
   presets.
 - **Minimum viable dataset size**, and how to seed it (spec examples? existing
   fixtures? sampled logs?) — pin against the first real authored eval (008-03).
-- **Goal→eval AC-artifact shape** — how spec-shaped must the curated AC set be for
-  015 + 006 to consume it unchanged (a minimal `spec.md`-like file vs a dedicated
-  `criteria.yaml`)? Settle in 008-05. Note: goal→eval feeds 006's classify + 015's
+- **Goal→eval AC-artifact shape** — **RESOLVED 2026-07-11** (analyze review): the curated AC set is a
+  **minimal spec-shaped Markdown artifact** (frontmatter + a tagged
+  `## Acceptance criteria` list), consumed by 006's classify and read by 015 for its
+  criteria split via the existing spec-AC parser — no new format. Note: goal→eval feeds 006's classify + 015's
   *criteria split*, not a full 015 verdict at expansion time (a signal-less
   synthesized spec degenerates to `needs_evidence` — ADR-0018).
 - **Independent-reviewer sourcing** — `jig:independent-review` when co-installed vs

@@ -17,7 +17,9 @@ runs.
 ### Acceptance criteria
 
 - **AC1** A guided step sets `n`, `δ`, threshold, and judge model+params, each with
-  a sane default and a one-line plain-language trade-off note (the ADR-0005 knobs).
+  a sane provisional default — inherited from the shipped fidelity presets
+  (design-eval / content-fidelity `config.json`) as the starting point, tuned per
+  eval — and a one-line plain-language trade-off note (the ADR-0005 knobs).
 - **AC2** Emits the eval definition in the exact shape spec-006's eval-family compile
   step consumes → a frozen `score_<name>` per ADR-0005.
 - **AC3** The emitted component is built on `skills/_common/fidelity_eval.py`
