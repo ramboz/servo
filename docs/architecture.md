@@ -1,41 +1,32 @@
 ---
-status: DRAFT
-last_verified: 2026-07-01
+status: ACTIVE
+last_verified: 2026-07-12
 ---
 
 # Architecture: servo
 
-> Status: Draft — evolves as specs land.
+> Status: Active — evolves as capabilities land.
 
-## Two phases: Servo Compile and Servo Run
+## Phase boundaries
 
-Servo is an **Evaluation-Driven Development engine**: it compiles an engineering
-specification into executable evaluation, then runs an implementation against that
-evaluation until convergence. The two phases are a first-class architectural
-concept ([ADR-0014](decisions/adr-0014-evaluation-compiler.md)); the portable
-execution loop is **one stage inside Servo Run**, not the product.
-
-```text
-            ┌──────────────────── Servo Compile ─────────────────────┐  ┌────────── Servo Run ──────────┐
-Specification → EDD Suitability → Evidence Compilation → Evaluation Model
-            → Oracle Synthesis → Execution Planning → Execution Loop → Evaluation Report
-```
-
-- **Servo Compile** — spec → evidence model + evaluation model + oracle +
-  execution plan.
-- **Servo Run** — compiled artifacts → implementation + evaluation/convergence
-  reports.
+The product rationale and conceptual Compile/Run model live in
+[product vision](product-vision.md#two-phases-servo-compile-and-servo-run).
+Architecturally, the boundary is the durable execution plan: Compile produces
+approved evaluation artifacts and a plan; Run consumes them without weakening
+their oracle, budget, or termination controls
+([ADR-0014](decisions/adr-0014-evaluation-compiler.md),
+[ADR-0016](decisions/adr-0016-execution-plan-artifact.md)).
 
 Every skill belongs to a phase:
 
 | Phase | Skill | Role |
 |---|---|---|
-| **Compile** | `/servo:edd-suitability` (015, planned) | EDD suitability gate + missing-evidence — the first Compile step ([ADR-0015](decisions/adr-0015-edd-suitability-gate.md)) |
+| **Compile** | `/servo:edd-suitability` (015, done) | EDD suitability gate + missing-evidence — the first Compile step ([ADR-0015](decisions/adr-0015-edd-suitability-gate.md)) |
 | **Compile** | `/servo:scaffold-init` (001) | Oracle synthesis from detected signals |
 | **Compile** | `/servo:spec-oracle` (006) | Compile a spec/slice into an AC-mapped evidence overlay |
 | **Compile** | `/servo:design-eval` (012) | Compile UI-vs-mockup intent into a frozen eval component |
 | **Compile** | `/servo:eval-authoring` (008, DONE) | Human-in-the-loop authoring of a frozen, text-judged eval component (goal→criteria, triage, rubric, reference-set, freeze+install, judge-audit) |
-| **Compile** | `/servo:execution-plan` (016, planned) | Compile the execution plan — the Compile→Run handoff ([ADR-0016](decisions/adr-0016-execution-plan-artifact.md)) |
+| **Compile + Run** | `/servo:execution-planner` (016, active work done) | Emit and consume the Compile→Run plan; validate edits and clamp values without loosening brakes. Prompt rendering alone is deferred. ([ADR-0016](decisions/adr-0016-execution-plan-artifact.md)) |
 | **Compile** | `/servo:heartbeat` *discovery* (011) | Read-only discovery + dispatch planning over project signals |
 | **Run** | `/servo:quality-gate` (002) | Execute the compiled oracle; normalized exit codes |
 | **Run** | `/servo:agent-loop` (003) | The portable execution loop (an interchangeable runtime) |
@@ -43,37 +34,38 @@ Every skill belongs to a phase:
 | **Run** | `/servo:variant-race` (005, future) | Best-of-N execution against the oracle |
 | **Run** | `/servo:heartbeat` *dispatch* (011) | Oracle-gated dispatch of each finding into a worktree loop |
 
-Two later tiers ride on top of these phases: **Evaluation Intelligence** (spec
-017 — convergence analysis, oracle debugging, adaptive planning, explainability,
-cost optimization) reasons *about* the compiled evaluation, and **Continuous
-Evaluation** (spec 018 — repository monitoring, automatic recompilation,
-regression execution) runs the pipeline on a schedule. Both are scope-captured,
-not yet built; see [the roadmap](specs/ROADMAP.md).
-
-The mechanics below — contracts, guardrails, runtime artifacts — are unchanged by
-this framing; they are the *implementation* of these two phases.
+Future capability sequencing belongs in [the roadmap](specs/ROADMAP.md); this
+document records only implemented boundaries and contracts.
 
 ## Shape
 
-Servo is a Claude Code plugin in the same shape as [jig](https://github.com/ramboz/jig):
+Servo is a dual Claude Code/Codex plugin with a canonical source tree and two
+generated host packages:
 
 ```
 servo/
 ├── .claude-plugin/
 │   ├── marketplace.json
 │   └── plugin.json
+├── .codex-plugin/
+│   └── plugin.json
+├── .agents/plugins/
+│   └── marketplace.json   (Codex remote-install pointer)
+├── hosts/                  (committed, generated; never hand-edited)
+│   ├── claude/             (flat Claude plugin)
+│   └── codex/              (Codex marketplace + nested plugin)
 ├── skills/
 │   └── <skill-name>/
 │       ├── SKILL.md
 │       └── <helper>.py
-├── agents/                 (deferred — runtime skills will populate)
-├── hooks/                  (deferred — Spec 003 will populate)
+├── agents/                 (runner/judge prompts)
+├── hooks/                  (plugin hook assets when present)
 ├── templates/              (per-project artifacts copied into target)
 ├── scripts/                (verification, install helpers)
 ├── docs/
 │   ├── product-vision.md
 │   ├── architecture.md
-│   ├── decisions/          (ADRs — deferred until first hard-to-reverse choice)
+│   ├── decisions/          (ADRs)
 │   └── specs/
 │       └── <NNN>-<name>/spec.md
 ├── README.md
@@ -82,49 +74,46 @@ servo/
 
 ## Install surfaces
 
-Servo has two distinct install layers; conflating them is the easiest way to
-ship a broken install:
+Servo has two distinct layers:
 
 | Layer | What is installed | Destination | Owner |
 |---|---|---|---|
-| **Servo runtime install** | Skills, agents, templates, scripts, descriptors | Plugin root, release zip, or `<target>/.claude/` | Servo |
+| **Servo plugin install** | Skills, agents, templates, descriptors | Claude Code or Codex plugin store | Servo |
 | **Project oracle install** | `oracle.sh`, `.servo/install.json`, refinement notes | Target project root | Project |
 
-The **project oracle install** is `/servo:scaffold-init` (spec 001) and is
-covered by [Install manifest](#install-manifest) below. The **servo runtime
-install** (spec 007) has three surfaces — plugin root, release zip, and
-project-local scaffold — that are three projections of one data-driven
-contract (`.claude-plugin/install-contract.json`) checked by one verifier
-(`scripts/verify_install.py {plugin,zip,scaffold}`). `scripts/build_release_zip.py`
-packages the deterministic archive and `scripts/scaffold_runtime.py` vendors
-the `servo-`prefixed runtime into a target's `.claude/`. The single repo
-verification command `scripts/verify_install_surfaces.sh` runs the plugin
-verifier plus the install-surface test suites and is wired into CI on push and
-pull request. See the README's "Installing servo" section for the
-user-facing chooser. Runtime install/scaffold paths also refresh the
+The public path is deliberately sequential: install the Servo plugin from the
+remote marketplace, start a fresh session in the target project, then invoke
+`/servo:scaffold-init`. The latter is covered by
+[Install manifest](#install-manifest) below. Plugin delivery has one canonical
+source tree and two committed generated packages:
+
+- `hosts/claude/` is a flat runtime-only Claude plugin. The root
+  `.claude-plugin/marketplace.json` points here, so remote installation does not
+  ship tests, source docs, or CI files.
+- `hosts/codex/` is a Codex marketplace bundle with its plugin at
+  `plugins/servo/`. The root `.agents/plugins/marketplace.json` enables the
+  remote `codex plugin marketplace add ramboz/servo` flow. Codex skill docs rewrite only the plugin-root environment
+  variable to `${PLUGIN_ROOT}`; real Claude-only behavior such as `claude -p`,
+  `/goal`, and Claude `Stop` hooks remains named as such.
+
+`scripts/build_host_packages.py` regenerates both packages and its `--check`
+mode is a read-only CI drift guard. Release archives and the legacy
+project-local Claude runtime vendor remain supported maintainer/compatibility
+surfaces, but they are not alternate steps in the public install flow.
+`scripts/build_release_zip.py --host ...` archives the committed packages into:
+`servo-claude-v<version>.zip` (flat plugin) and
+`servo-codex-v<version>.zip` (extract-then-add marketplace; no Codex zip-drop).
+`scripts/scaffold_runtime.py` remains the explicit legacy Claude project-local
+vendor surface. `scripts/verify_install_surfaces.sh` runs focused install tests.
+`scripts/ci_check.py` is the canonical local CI entry point and mirrors the
+workflow's suite, manifest, pinned Ruff, install, and drift gates. Runtime
+install/scaffold paths refresh the
 best-effort servo availability breadcrumb at
 `${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json`, per
 [ADR-0013](decisions/adr-0013-servo-available-breadcrumb.md), so sibling tools
 can cheaply detect that servo has been observed on the machine.
 
-## Skill split
-
-Servo is **Compile-first, Run-second**: the Servo Run skills all presuppose the
-compiled evaluation artifacts that the Servo Compile skills (chiefly the
-scaffolder) dropped into the target. The Phase column ties each skill back to the
-[two-phase model](#two-phases-servo-compile-and-servo-run).
-
-| Skill | Phase | Role | Spec |
-|---|---|---|---|
-| `/servo:scaffold-init` | Compile | Probe → Q&A → tailored install of `oracle.sh` (+ optional agent-loop/hook/race stubs) | 001 |
-| `/servo:spec-oracle` | Compile | Compile a spec/slice into AC-mapped deterministic checks and an oracle overlay | 006 |
-| `/servo:quality-gate` | Run | Runtime invocation of scaffolded `oracle.sh`; normalized exit codes | 002 |
-| `/servo:agent-loop` | Run | Headless iteration driver (the portable execution loop) | 003 |
-| `/servo:oracle-hook` | Run | Claude Code hook installer | 004 |
-| `/servo:variant-race` | Run | N-worktree parallel race | future |
-| `/servo:heartbeat` | Compile + Run | Routine-triggered read-only discovery → triage inbox → oracle-gated dispatch (the scheduled **front-end**) | 011 |
-
-### Shared frozen-eval harness (`skills/_common/`)
+## Shared frozen-eval harness (`skills/_common/`)
 
 Non-deterministic eval skills (`design-eval`, and its sibling
 `content-fidelity`) share a modality-agnostic runtime module,
@@ -168,7 +157,7 @@ This is the load-bearing distinction. Servo ships **templates and orchestration*
 
 ## Tier model
 
-Mirrors jig's tier-based scaffolding:
+Servo uses three risk-based scaffolding tiers:
 
 - **Tier 0** — `oracle.sh` only. Always installs. Composite score of whatever signals are detected.
 - **Tier 1** — Tier 0 + agent-loop driver stub. Offered when the project has signals dense enough to make iteration meaningful (tests + lint + types, or similar).
@@ -185,9 +174,13 @@ Probe the target for:
 - **CI** — `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/config.yml`.
 - **Language** — coarse heuristic from highest-signal file (`pyproject.toml`/`*.py` → python, `package.json`/`*.ts`/`*.js` → javascript, `Cargo.toml` → rust, `go.mod` → go).
 - **`oracle.sh` already at target root** → refuse install without `--force` (slice 001-01).
-- **`.servo/install.json`** (servo's own manifest, like jig's `scaffold.json`).
+- **`.servo/install.json`** (Servo's install-state manifest).
 
 Detected components drive which `score_<name>` fragments are spliced into the generated `oracle.sh`. Fragments live under `templates/components/<name>.sh.fragment`. A no-signal target gets a comment-only oracle that exits 2 with `no signals detected — populate # SEED: blocks manually`.
+
+Custom components follow the same convention: place a `score_<name>` function
+between matching `# SEED:start <name>` and `# SEED:end <name>` markers, then add
+the component to the oracle's component roster.
 
 **Audit subcommand:** `scaffold.py detect <target>` prints the full detection payload as JSON (signals + components + per-component weights + which detector ran) without writing anything to disk. Useful for debugging or wizard-mode previews.
 
@@ -206,7 +199,7 @@ After install, the target gets `.servo/install.json` with:
 }
 ```
 
-This is the analog of jig's `scaffold.json` and is what later runtime skills consult to know what was installed.
+Later runtime skills consult this manifest to know what was installed.
 
 ## Subagents
 
@@ -300,7 +293,7 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 ## Agent-loop guardrails
 
 > **Servo Run stage.** The agent-loop is the portable execution loop — one stage
-> of Servo Run (see [Two phases](#two-phases-servo-compile-and-servo-run)). It
+> of Servo Run (see [product vision](product-vision.md#two-phases-servo-compile-and-servo-run)). It
 > optimizes an implementation against the *already-compiled* evaluation; it does
 > not decide what to evaluate. The guardrails below are what make that runtime
 > safe to fire-and-forget. A host-native `plan`/`run` phase hint may shape the
@@ -441,61 +434,16 @@ the vocabulary belongs to servo, hosts only render it.
 [heartbeat triage inbox](#runtime-artifacts) (`triage`), and
 [spec 012 design-eval](specs/012-design-eval/spec.md) (`evaluate`).
 
-## Decisions
+## Decision records
 
-| ADR | Status | Captures |
-|---|---|---|
-| [ADR-0001](decisions/adr-0001-reuse-jig-test-detector.md) | Accepted | Reuse jig's `tdd.py detect` via subprocess when co-installed; fall back to built-in detectors otherwise. The first concrete instance of the filesystem-only coupling. |
-| [ADR-0002](decisions/adr-0002-gate-caller-contract.md) | Accepted | Quality-gate caller contract: `gate.py` exits only 0/1/2 (unexpected oracle exits remap to 2); `--json` output carries `schema_version` from day one. The contract specs 003/004/005 will consume. |
-| [ADR-0003](decisions/adr-0003-fresh-subagent-roster.md) | Accepted | Servo ships two fresh agents (`runner`, `judge`) rather than reusing jig's `implementer` / `reviewer` — the runtime output schemas diverge (machine-parseable verdict block vs narrative). Architect calls are delegated to `jig:architect` directly; the wrapping format is post-processed into servo's ADR shape. |
-| [ADR-0004](decisions/adr-0004-session-state-file-format.md) | Accepted | Servo's per-run state at `<target>/.servo/runs/<run-id>/state.json`. References Claude Code's session by `session_id`, doesn't copy the transcript. Versioned via `state_schema_version`; filesystem-only coupling with Claude Code per ADR-0001 framing. |
-| [ADR-0005](decisions/adr-0005-eval-oracle-component.md) | Accepted | A non-deterministic eval enters the composite only as a *frozen* `score_<name>` (rubric + dataset + judge model + `n` + `δ` hashed and approved), reporting a confidence lower bound; `loop.py` gains a plateau noise floor. Reciprocal to jig's ADR-0022. |
-| [ADR-0006](decisions/adr-0006-meta-judge-output-contract.md) | Accepted | Meta-judge `Stop`-hook output contract (spec 004): block with a composite/threshold hint on below-threshold (not `additionalContext`), fail **open** on env-error (a `systemMessage`, never a block — can't trap a session), nudge once per stop sequence. The interactive inverse of agent-loop's fail-closed brakes. |
-| [ADR-0007](decisions/adr-0007-align-release-with-jig.md) | Accepted | Adopt release-please + an enforced conventional-commit PR-title gate for servo releases (align with jig), replacing the hand-edited version / local-zip / no-tag flow. Implemented by spec 010. |
-| [ADR-0008](decisions/adr-0008-loop-on-autonomy-primitives.md) | Accepted | Rebase agent-loop orchestration onto Claude Code's autonomy primitives (`/goal`, `/background`, Routines); servo keeps only the deterministic guardrail + oracle layer and retains the external loop driver as the portable path for hook-restricted / non-Claude-Code hosts. Hard constraint: `/goal`'s transcript-only judge never replaces `oracle.sh`. |
-| [ADR-0009](decisions/adr-0009-design-fidelity-eval-recipe.md) | Accepted | Design-fidelity as a first-class eval recipe (`/servo:design-eval`): compiles "does the built UI match the mockup?" into a frozen `score_design_fidelity` oracle component (pinned vision model, n-sampled, confidence lower bound), riding ADR-0005's frozen-eval contract. |
-| [ADR-0010](decisions/adr-0010-triage-inbox-schema.md) | Accepted | Triage-inbox state-file schema & dedupe identity (spec 011): `schema_version: 2`; ratified `finding_id`; sticky `status` lifecycle separate from a recomputed `actionable` verdict + immutable `provenance` marker (Guardrail #4); one uniform merge + retention rule; `flock` double-fire safety; reserves `outcome.cost_usd` for 011-04. Reciprocal to ADR-0004. |
-| [ADR-0011](decisions/adr-0011-host-native-phase-hints.md) | Accepted | Host-native planning/implementation modes (Claude Plan Mode, Codex approval modes) may shape prompts and dispatch as **advisory phase hints** (`plan`/`run`/`evaluate`/`triage`); `gate.py`, `oracle.sh`, run state, triage state, and frozen eval ledgers stay authoritative. Missing host-mode support degrades to today's behavior, never `env_error`. Anchors spec 013 (013-01 landed as this docs contract; 013-02/03 parked). |
-| [ADR-0013](decisions/adr-0013-servo-available-breadcrumb.md) | Accepted | Servo writes a best-effort user-state availability marker at `${XDG_STATE_HOME:-$HOME/.local/state}/servo/available.json` so jig can detect "servo probably available" via a cheap filesystem check, without Claude-specific registries or subprocesses. |
-| [ADR-0014](decisions/adr-0014-evaluation-compiler.md) | Proposed | Servo is an Evaluation-Driven Development engine — it compiles intent into executable evaluation, and the autonomous loop is one consumer. Makes the **Servo Compile** / **Servo Run** split first-class and widens ADR-0005's narrow "EDD" to the product philosophy. Framing only — no contract or behavior change. |
-| [ADR-0015](decisions/adr-0015-edd-suitability-gate.md) | Proposed | The first Servo Compile step is an **EDD suitability analysis** that emits a closed three-state, fail-closed **gate** (`suitable` / `needs_evidence` / `unsuitable`) plus a `missing_evidence` list — not a score. Gates the pipeline (incl. the per-finding heartbeat dispatch boundary) so the loop never optimizes toward an un-evaluable false pass. Anchors spec 015. |
-| [ADR-0016](decisions/adr-0016-execution-plan-artifact.md) | Proposed | Servo Compile emits a durable, reviewable **execution plan** (`.servo/plans/<spec-id>/plan.json`) that Servo Run consumes — making Execution Planning a real stage. References (not copies) the oracle + overlay, is human-editable, and **cannot loosen a brake** (clamped). Reciprocal to ADR-0004 (plan vs outcome); opt-in. Anchors spec 016. |
-
-### Pending (ADR candidates)
-
-Numbers below are *hints* of the next likely allocation order, not reservations — the next accepted ADR claims the next free number (now `0017`) regardless of which candidate fires first.
-
-- **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Servo scaffolds it; the project owns it forever after. Driving factors: zero servo runtime dependency for the most-invoked artifact, dev can grep + edit without learning a DSL, version-control friendly. Crystallizes if anyone ever proposes a Python or Node oracle alternative.
+Relevant decisions are linked beside the contracts they govern. The canonical
+status and complete inventory live in the
+[decision index](decisions/README.md); architecture does not duplicate it.
 
 ## Open questions (not yet ADR-worthy)
 
-- **Composite weighting heuristic** — **resolved (slice 001-02):** weighted *average* (`sum(weight*score) / sum(weight)`), with `"name:weight"` registered in a `COMPONENTS` bash array. Equal weights are the scaffold default; tuning is deferred to the user (and surfaced as a `Weights` decision in 001-04's `refinement-todo.md`). Picked weighted average over weighted sum so any threshold in `[0, 1]` is meaningful regardless of how many components are present. **Refined (slice 019-05):** with exactly one component (the common case — every real oracle in the cwv-workbench dogfood was single-component), `oracle.sh` compares that component's score directly against `THRESHOLD` with no weight arithmetic at all; the weighted-average path above still runs unchanged for two or more components.
 - **`.servo/install.json` checked in vs ignored** — currently `.gitignore`d; revisit when team-shared servo installs become a use case.
 - **Scaffold-init interaction with jig-scaffolded projects** — likely fine (no path collisions) but worth an explicit slice-level test in 001-03 or 001-05.
-- **Agent-loop driver: shell vs Python.** **Resolved (slice 003-01 DoR):** Python, same shape as `scaffold.py` / `gate.py`. JSON parsing + state-file management in 003-04 was materially easier in Python than bash.
-
-## Why no crew skill
-
-Multi-agent crews (hand-off / voting / leader-follower coordination) don't yet generalize enough to scaffold. Servo ships a one-page [post-mortem template](../templates/crew-postmortem.md) for capturing ad-hoc crew experiments, but no `/servo:crew` skill. If post-mortems start showing a consistent pattern, that's a future spec; today it would be premature.
-
-## Internal scoping reference
-
-> Internal-only — kept here to anchor scope decisions during spec
-> authoring. Not a public framing of servo; should not leak into
-> user-facing docs (README, product-vision, templates).
-
-Each runtime skill traces back to a specific pattern in private learning notes:
-
-| Spec | Skill | Source pattern |
-|---|---|---|
-| 001 | `/servo:scaffold-init` | (spans the four runtime patterns' setup) |
-| 002 | `/servo:quality-gate` | oracle scoring |
-| 003 | `/servo:agent-loop` | headless iteration ("Ralph") |
-| 004 | `/servo:oracle-hook` | meta-judge hook |
-| 005 | `/servo:variant-race` | worktree race |
-| 006 | `/servo:spec-oracle` | spec-to-evidence compiler |
-| 011 | `/servo:heartbeat` | (none — the scheduled *front-end*; Routines-as-trigger, not one of the four runtime patterns) |
-| n/a | (teams pattern covered) | by jig's `agents/` |
-| n/a | (crews pattern skipped) | post-mortem template only |
-
-Decisions land in [docs/decisions/](decisions/) as ADRs once they're hard to reverse.
+- **Why `oracle.sh` remains project-owned plain bash** — revisit only if a
+  Python or Node oracle is proposed; current drivers are zero runtime
+  dependency, inspectability, and easy project ownership.

@@ -5,10 +5,10 @@
 > file's table without destroying this hand-maintained content.
 
 Servo is an **Evaluation-Driven Development engine** with two phases —
-**Servo Compile** (spec → executable evaluation) and **Servo Run** (execute
-against it to convergence). The roadmap is organized around **evaluation
+**Servo Compile** (engineering intent + project evidence → executable
+evaluation) and **Servo Run** (execute against it to convergence). The roadmap is organized around **evaluation
 capability**, not incremental loop features; the four phases below map onto that
-pipeline. See [docs/product-vision.md](../product-vision.md#roadmap) and
+pipeline. See [docs/product-vision.md](../product-vision.md#product-direction) and
 [ADR-0014](../decisions/adr-0014-evaluation-compiler.md). Descriptions name the
 cross-cutting AI-native concerns each spec addresses — not just the skill it
 ships — so the gap inventory stays visible during spec authoring.
@@ -28,18 +28,19 @@ portable loop, oracle execution, and the agent abstraction.
 
 ## Phase 2 — Evaluation Compilation *(Servo Compile; in progress)*
 
-Turning a spec into executable evaluation: oracle synthesis, spec → evidence
-overlays, and eval authoring.
+Turning goals, curated criteria, existing specs, and project signals into
+executable evaluation: goal→criteria authoring, oracle synthesis, evidence
+overlays, and frozen eval definitions.
 
 | Spec | Description |
 |---|---|
 | [015-edd-suitability](015-edd-suitability/spec.md) | **DONE (2026-06-30).** The first Compile step: decide whether the work suits EDD and identify missing evidence, emitting a closed three-state, fail-closed **suitability verdict** ([ADR-0015](../decisions/adr-0015-edd-suitability-gate.md), Accepted). Ships `/servo:edd-suitability` with `--json`/`--explain`. Gates **Servo Compile**, not the heartbeat — [ADR-0018](../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md) narrowed the original two-call-site design after a 36-finding spike (015-05) showed the heartbeat's spec-less findings degenerate to `needs_evidence` for every candidate; the heartbeat keeps gating evaluability via `gate.py` instead. |
 | [001-scaffold-init](001-scaffold-init/spec.md) | **DONE.** Probe a target's signals (tests/lint/CI/language) and synthesize a tailored `oracle.sh` + `.servo/install.json`, signal-aware rather than a generic stub. The MVP. |
 | [006-spec-oracle](006-spec-oracle/spec.md) | **DONE.** Compile a spec/slice into a reviewable, deterministic **evidence overlay**: AC→check mapping, check engine, negative controls, freeze/approval, and an installable `score_spec_oracle_<id>` component. Turns acceptance criteria into runnable evaluation so loops optimize against the *spec*, not just the baseline suite. |
-| [008-eval-authoring](008-eval-authoring/spec.md) | **DRAFT — activated 2026-07-11; slices 008-01..06 cut as real work.** The generic, kind-agnostic eval-authoring surface `/servo:eval-authoring` ([ADR-0026](../decisions/adr-0026-generic-eval-authoring-surface.md)): expand a goal into curated, independently-reviewed, human-approved ACs ([ADR-0027](../decisions/adr-0027-goal-to-eval-assisted-authoring.md)); triage eval-able vs human-residual; shape the rubric; collect the reference set; set frozen `n`/`δ`/threshold/model; emit a definition `/servo:spec-oracle` compiles+freezes ([ADR-0005](../decisions/adr-0005-eval-oracle-component.md)) on the shared harness ([ADR-0024](../decisions/adr-0024-extract-frozen-eval-harness.md)); plus a light advisory judge-audit. Servo-owned, one skill ([ADR-0019](../decisions/adr-0019-eval-authoring-servo-owned.md)); `design-eval`/`content-fidelity` stay as presets beside it. Activated deliberately by the eval-authoring thrust, not by an accidental first consumer. |
+| [008-eval-authoring](008-eval-authoring/spec.md) | **DONE.** The generic, kind-agnostic eval-authoring surface `/servo:eval-authoring` ([ADR-0026](../decisions/adr-0026-generic-eval-authoring-surface.md)): expand a goal into curated, independently-reviewed, human-approved ACs ([ADR-0027](../decisions/adr-0027-goal-to-eval-assisted-authoring.md)); triage eval-able vs human-residual; shape the rubric; collect the reference set; set frozen `n`/`δ`/threshold/model; then emit, freeze, and install a `score_<name>` component through the shared ADR-0024 harness ([ADR-0005](../decisions/adr-0005-eval-oracle-component.md), [ADR-0024](../decisions/adr-0024-extract-frozen-eval-harness.md)). `/servo:spec-oracle` remains the upstream deterministic-criteria classifier; it does not compile judged evals. The skill also ships a light advisory judge-audit. |
 | [012-design-eval](012-design-eval/spec.md) | **DRAFT.** Compile UI-vs-mockup intent into a frozen `score_design_fidelity` oracle component (pinned vision model, n-sampled, confidence lower bound), riding ADR-0005's frozen-eval contract ([ADR-0009](../decisions/adr-0009-design-fidelity-eval-recipe.md)). The non-deterministic sibling of the deterministic component templates. |
 | [020-content-fidelity-eval](020-content-fidelity-eval/spec.md) | **DONE (2026-07-03).** The second eval kind ADR-0009 anticipated: extracted design-eval's already-modality-agnostic freeze/hash/aggregate/ledger/install harness into a shared `skills/_common/fidelity_eval.py` ([ADR-0024](../decisions/adr-0024-extract-frozen-eval-harness.md), Accepted), then shipped `/servo:content-fidelity` — a sibling skill compiling "does this text match the rubric?" into a frozen `score_content_fidelity` component judged by a pinned text model. Two known, disclosed gaps tracked in `docs/refinement-todo.md`: the file-or-command config shape is unvalidated against a real consumer, and `command`-backed cases have no structural cross-run determinism guarantee. |
-| [016-execution-planner](016-execution-planner/spec.md) | **DRAFT — 016-01 DONE (2026-06-30); 016-02..04 DEFERRED.** The last Compile step: compile a durable, reviewable **execution plan** (`.servo/plans/<spec-id>/plan.json`) that Servo Run consumes ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md), Accepted) — making "Execution Planning" a real stage instead of a bag of CLI flags. `execution_plan.py compile` emits the plan (references-not-copies the suitability verdict/oracle/overlay) and enforces the `suitable`-only Compile gate — the mechanism 015-03 builds its full ACs on. Reciprocal to the per-run `state.json`; clamps but never loosens a brake. 016-02..04 (Run consuming the plan, clamp/review, skill surface) stay parked behind a real Compile→Run consumer. |
+| [016-execution-planner](016-execution-planner/spec.md) | **ACTIVE WORK DONE — 016-01..04 DONE; 016-05 DEFERRED.** The last Compile step emits a durable, reviewable **execution plan** (`.servo/plans/<spec-id>/plan.json`) that Servo Run consumes ([ADR-0016](../decisions/adr-0016-execution-plan-artifact.md), Accepted). The shipped path covers plan emission, Run consumption, human-edit validation, clamp-without-loosening, and the discoverable `/servo:execution-planner` surface. Only prompt rendering remains deferred. |
 
 ## Phase 3 — Evaluation Intelligence *(scope-captured; seeds shipped)*
 
@@ -78,8 +79,9 @@ see the section below.
 | Spec | Description |
 |---|---|
 | [007-install-surfaces](007-install-surfaces/spec.md) | **DONE.** Two install layers kept distinct (servo runtime install vs project oracle install), three runtime surfaces (plugin / zip / project-local scaffold) behind one data-driven contract and one verifier. |
-| [009-ci-hardening](009-ci-hardening/spec.md) | **CI correctness.** Run servo's _full_ test suite (not just the install-surface subset) across a declared Python matrix, plus a ruff lint floor. Closes the gap where the 13 skill test files — the loop/gate/oracle/scaffold logic — never run in CI. |
-| [010-release-automation](010-release-automation/spec.md) | **Release orchestration.** Conventional-commit PR-title gate → release-please (version bump + CHANGELOG + tag + GitHub release) → build/smoke/upload the release zip. Adopts jig's proven pipeline ([ADR-0007](../decisions/adr-0007-align-release-with-jig.md)); servo's `build_release_zip.py` is already release-ready, so this is orchestration only. |
+| [009-ci-hardening](009-ci-hardening/spec.md) | **DONE. CI correctness.** Full suite across the Python floor/latest bracket plus Ruff; spec 022 adds `scripts/ci_check.py` as the canonical local mirror of the named workflow gates. |
+| [010-release-automation](010-release-automation/spec.md) | **DONE. Release orchestration.** Conventional PR-title gate → release-please (four synchronized manifests + CHANGELOG + tag + GitHub release) → build/smoke/upload the host-explicit Claude and Codex archives. Spec 022 supplies the current dual-host package boundary. |
+| [022-dual-host-release-parity](022-dual-host-release-parity/spec.md) | **IN PROGRESS.** Committed generated Claude/Codex packages, one CI-equivalent local gate, synchronized manifests, host-explicit release assets, and a marketplace-first public install path ([ADR-0028](../decisions/adr-0028-committed-dual-host-plugin-packages.md)). |
 
 ## Sequencing rationale
 
@@ -106,10 +108,10 @@ artifact); each is anchored by an accepted ADR
 [ADR-0016](../decisions/adr-0016-execution-plan-artifact.md)). **015 is now
 DONE** (closed 2026-06-30; a pre-implementation spike, 015-05, narrowed its
 scope to gating Compile rather than the heartbeat — [ADR-0018](../decisions/adr-0018-suitability-gates-compile-not-heartbeat.md));
-**016-01 (plan-emit) landed 2026-06-30** and, as a side effect, gave 015-03 the
-Compile-gate mechanism it needed to close too. **016-02..04 stay parked**
-behind their grounding consumer (a real Compile→Run reading the plan), like
-005. **013** (host-phase-aware loops) followed the same pattern on
+**016-01..04 are DONE**: plan emission, Run consumption, clamp/review, and the
+skill surface all landed; only 016-05 prompt rendering is deferred. The first
+slice also gave 015-03 the Compile-gate mechanism it needed to close.
+**013** (host-phase-aware loops) followed the same pattern on
 2026-07-01: its contract-defining first slice (013-01) shipped once
 [ADR-0011](../decisions/adr-0011-host-native-phase-hints.md) was accepted,
 while 013-02/03 stay parked behind a real host-adapter caller. Specs
@@ -136,7 +138,7 @@ of jig.
 | `Stop`-hook grading (oracle-scored, structured retry hints) | 004-oracle-hook | The original meta-judge pattern; structured replacement for ad-hoc Stop-hook regex |
 | Worktree-race coordination + winner selection | 005-variant-race | Variant-lease pattern; same family as jig's spec-number reservation but for ephemeral worktrees |
 | Spec-specific judging | 006-spec-oracle | Turns acceptance criteria into deterministic evidence overlays so loops optimize against the spec, not just the baseline suite |
-| Install surface drift | 007-install-surfaces | Two install layers kept distinct — *servo runtime install* (plugin root / release zip / project-local `.claude/` scaffold) vs *project oracle install* (`/servo:scaffold-init` → `oracle.sh` + `.servo/install.json`). All three runtime surfaces share one data-driven contract (`.claude-plugin/install-contract.json`) and one verifier (`scripts/verify_install.py`); `scripts/verify_install_surfaces.sh` runs them in CI |
+| Install surface drift | 007-install-surfaces + 022-dual-host-release-parity | Public flow is marketplace plugin install → fresh target-project session → `/servo:scaffold-init`. Release archives and project-local runtime vending remain verified maintainer/compatibility surfaces. `scripts/ci_check.py` mirrors CI and includes the focused install contract gate. |
 
 Gaps that stay with jig (primer-doc hygiene, supervised slice-level drift
 detection, parallel-worktree spec-numbering, memory-recall, PostToolUse
@@ -151,10 +153,11 @@ deviation log). Source: 2026-06-11 release/CI alignment review.
 
 | Gap (servo behind jig) | Servo home | Notes |
 |---|---|---|
-| CI runs only the install-surface subset, not the full suite | 009-ci-hardening | The 13 skill test files (loop/gate/oracle/scaffold) never run in CI today |
-| No Python version matrix / declared floor | 009-ci-hardening | Recommend 3.11 + 3.12 (jig parity) |
+| CI runs only the install-surface subset, not the full suite | 009-ci-hardening + 022-dual-host-release-parity | Closed: full suite plus one `scripts/ci_check.py` local mirror of CI's named gates |
+| No Python version matrix / declared floor | 009-ci-hardening | Closed: Python 3.9 floor + latest supported 3.x bracket |
 | No Python lint floor (only shellcheck) | 009-ci-hardening | `ruff.toml` mirroring jig |
 | No release automation (manual version + build; no changelog/tags/GitHub release) | 010-release-automation | release-please + conventional-commit gate; [ADR-0007](../decisions/adr-0007-align-release-with-jig.md) |
+| One Claude-shaped plugin/archive; no Codex artifact or package drift guard | 022-dual-host-release-parity | Committed `hosts/claude` + `hosts/codex`, host-explicit release assets, synchronized manifests; [ADR-0028](../decisions/adr-0028-committed-dual-host-plugin-packages.md) |
 
 One axis flows the other way (servo → jig): servo's data-driven
 `.claude-plugin/install-contract.json` — one file consumed by the builder,

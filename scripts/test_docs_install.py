@@ -1,113 +1,96 @@
-"""
-Tests for slice 007-05 (docs-and-ci).
+"""Regression guards for Servo's public install and contributor docs."""
 
-Automates "docs reviewed for stale path examples": asserts that every script
-path the README install section references actually exists on disk, and that
-the README documents all three runtime-install surfaces plus the manual
-release recipe. A renamed or deleted install helper makes these fail.
+from __future__ import annotations
 
-Run from the repo root:
-    python3 scripts/test_docs_install.py
-or with discovery:
-    python3 -m unittest discover -s scripts -p 'test_*.py'
-"""
-
-import re
 import unittest
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-README = REPO_ROOT / "README.md"
-WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
-
-# Every script path the README install section hands the reader. If any of
-# these is renamed or removed, the docs go stale silently — this list is the
-# guard.
-REFERENCED_SCRIPTS = (
-    "scripts/verify_install.py",
-    "scripts/build_release_zip.py",
-    "scripts/scaffold_runtime.py",
-    "scripts/verify_install_surfaces.sh",
-)
+ROOT = Path(__file__).resolve().parents[1]
+README = ROOT / "README.md"
+CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 
 
-class ReadmeInstallSectionTests(unittest.TestCase):
+class PublicInstallDocsTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.readme = README.read_text()
+        self.readme = README.read_text(encoding="utf-8")
 
-    def test_install_section_present(self) -> None:
-        self.assertIn("## Installing servo", self.readme)
-
-    def test_three_runtime_surfaces_documented(self) -> None:
-        for heading in (
-            "### Plugin install",
-            "### Release zip install",
-            "### Project-local scaffold install",
+    def test_remote_marketplace_install_is_the_public_path(self) -> None:
+        for command in (
+            "/plugin marketplace add ramboz/servo",
+            "/plugin install servo@servo",
+            "codex plugin marketplace add ramboz/servo",
+            "codex plugin add servo@servo",
         ):
-            self.assertIn(heading, self.readme, f"missing README heading: {heading}")
+            with self.subTest(command=command):
+                self.assertIn(command, self.readme)
 
-    def test_two_layer_distinction_stated(self) -> None:
-        # AC1/AC2: runtime install vs project oracle install must be explicit.
-        self.assertIn("Servo runtime install", self.readme)
-        self.assertIn("Project oracle install", self.readme)
+    def test_public_install_continues_with_project_setup(self) -> None:
+        self.assertIn("Set up Servo for this project", self.readme)
+        self.assertIn("/servo:scaffold-init", self.readme)
+        self.assertIn("oracle.sh", self.readme)
+        self.assertIn(".servo/install.json", self.readme)
 
-    def test_release_recipe_present(self) -> None:
-        self.assertIn("### Release recipe", self.readme)
-        # AC5: the recipe must name the produced artifact shape.
-        self.assertIn("dist/servo-v", self.readme)
+    def test_readme_does_not_promote_maintainer_install_paths(self) -> None:
+        for stale in (
+            "Host-explicit release zip install",
+            "scripts/scaffold_runtime.py",
+            "scripts/build_release_zip.py",
+            "scripts/verify_install_surfaces.sh",
+            "<absolute-path-to-checkout>",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, self.readme)
 
-    def test_verification_command_documented(self) -> None:
-        # AC3: the single verification command is documented.
-        self.assertIn("bash scripts/verify_install_surfaces.sh", self.readme)
+    def test_install_section_stays_compact(self) -> None:
+        start = self.readme.index("### Install")
+        end = self.readme.index("\n## ", start + len("### Install"))
+        install = self.readme[start:end]
+        self.assertLessEqual(len(install.splitlines()), 35)
 
-    def test_referenced_scripts_exist(self) -> None:
-        # "Docs reviewed for stale path examples": every script the install
-        # section mentions must be present in the README *and* on disk.
-        for rel in REFERENCED_SCRIPTS:
-            with self.subTest(script=rel):
-                self.assertIn(rel, self.readme, f"README does not reference {rel}")
-                self.assertTrue(
-                    (REPO_ROOT / rel).is_file(),
-                    f"referenced script does not exist: {rel}",
-                )
-
-    def test_documented_zip_artifact_name_is_version_neutral(self) -> None:
-        # Spec 010: releases are automated and release-please bumps
-        # .claude-plugin/plugin.json on every release WITHOUT touching the
-        # README. So the README must document the artifact *shape*
-        # (servo-v<version>.zip), not a pinned concrete version — a pinned
-        # version would go stale and redden the release PR's own CI on the
-        # first bump. (Supersedes the earlier exact-version guard from 007-05,
-        # which was correct only while the version was hand-edited.)
-        self.assertIn(
-            "servo-v<version>.zip",
-            self.readme,
-            "README should document the version-neutral artifact name "
-            "servo-v<version>.zip (it survives release-please version bumps)",
+    def test_reading_order_matches_the_dual_host_plugin_family(self) -> None:
+        headings = (
+            "## Why Servo",
+            "## What it does",
+            "## Principles Servo encodes",
+            "## Start here",
+            "### Install",
+            "## Extension points",
+            "## Verifying a host install",
+            "## Getting started",
+            "## Repository structure (for contributors)",
+            "## Contributing",
+            "## Status",
         )
-        pinned = re.search(r"servo-v\d+\.\d+\.\d+\.zip", self.readme)
-        self.assertIsNone(
-            pinned,
-            f"README pins a concrete version ({pinned.group(0) if pinned else ''}); use the "
-            "servo-v<version>.zip placeholder so docs survive release-please bumps",
-        )
+        positions = [self.readme.index(heading) for heading in headings]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_packaged_readme_links_survive_without_repository_docs(self) -> None:
+        self.assertNotIn("](docs/", self.readme)
+        self.assertNotIn("](CONTRIBUTING.md)", self.readme)
+        self.assertNotIn("](LICENSE)", self.readme)
 
 
-class CiWorkflowTests(unittest.TestCase):
-    # Spec 009-01 retired verify.yml in favour of a single ci.yml (test matrix +
-    # install-surfaces job). These guards still assert the same thing — the
-    # install-surface verification command runs in CI on push and PR — they
-    # just point at the new workflow file.
-    def test_workflow_file_exists(self) -> None:
-        # AC4: the install-surface gate is still wired into CI.
-        self.assertTrue(WORKFLOW.is_file(), "missing .github/workflows/ci.yml")
+class ContributorDocsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.contributing = CONTRIBUTING.read_text(encoding="utf-8")
 
-    def test_workflow_runs_verification_command(self) -> None:
-        text = WORKFLOW.read_text()
-        self.assertIn("bash scripts/verify_install_surfaces.sh", text)
-        # Triggers on push and pull_request.
-        self.assertIn("push:", text)
-        self.assertIn("pull_request:", text)
+    def test_local_ci_has_one_canonical_entry_point(self) -> None:
+        self.assertIn("python3 scripts/ci_check.py", self.contributing)
+
+    def test_claude_local_development_loads_the_generated_package(self) -> None:
+        self.assertIn('claude --plugin-dir "$(pwd)/hosts/claude"', self.contributing)
+        self.assertNotIn("/plugin marketplace add .", self.contributing)
+
+    def test_maintainer_docs_own_package_and_release_details(self) -> None:
+        for text in (
+            "scripts/build_host_packages.py",
+            "scripts/build_release_zip.py --host claude",
+            "scripts/build_release_zip.py --host codex",
+            "servo-claude-v<version>.zip",
+            "servo-codex-v<version>.zip",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, self.contributing)
 
 
 if __name__ == "__main__":

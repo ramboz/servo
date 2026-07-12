@@ -34,6 +34,7 @@
 - [ADR-0025: Runner records load-bearing assumptions; judge verifies them](adr-0025-runner-records-judge-verifies-assumptions.md) — The headless agent-loop can't ask clarifying questions, so an ambiguous prompt is silently interpreted; the runner surfaces its load-bearing assumptions in the verdict block and the judge verifies them. Stays advisory in the agent layer (ADR-0021 / ADR-0011 / ADR-0005); amends the ADR-0003 verdict-block contract. Filed alongside jig spec 087 narrow-first review. (2026-07-11, Proposed)
 - [ADR-0026: Eval authoring generalizes to one kind-agnostic authoring surface](adr-0026-generic-eval-authoring-surface.md) — Activates spec 008 as `/servo:eval-authoring`: instead of an ever-growing set of bespoke per-kind eval skills, one generic surface turns any eval-able `residual_judgment` AC into a frozen `score_<name>`, reusing the ADR-0024 harness and handing off to spec-006 to compile+freeze. Reconciles with ADR-0024's "siblings not a flag" (the generic surface *removes* the capture/judge-payload axis rather than switching over it); `design-eval`/`content-fidelity` stay as presets. Driven by the 2026-07-11 eval-authoring thrust; Mystique studied as inspiration only. (2026-07-11, Accepted)
 - [ADR-0027: Goal→eval is assisted authoring, gated by independent review and human curation](adr-0027-goal-to-eval-assisted-authoring.md) — Closes servo's goal-vs-spec impedance: `/servo:eval-authoring from-goal` expands a free-form goal into *proposed* tagged ACs, a fresh independent-reviewer subagent (jig:independent-review when co-installed, else built-in) checks the frame for faithfulness/honest-tagging/measurability/gaps, and the human curates + approves before anything freezes. Guards against a *false criterion* (the authoring-time analogue of false-pass); stays advisory in the authoring layer, never an oracle gate (ADR-0021/0011/0005). Decides spec 008 slice 008-05. (2026-07-11, Accepted)
+- [ADR-0028: Commit generated Claude and Codex plugin packages](adr-0028-committed-dual-host-plugin-packages.md) — Commits deterministic runtime-only Claude and Codex host packages built from canonical source, guarded against drift, remotely installable through root marketplace pointers, and released as host-explicit verified archives. (2026-07-12, Accepted)
 
 ## Pending
 
@@ -54,9 +55,9 @@ entirely servo-owned), and `0020` is Accepted (minimum supported Python is
 `0022` is Accepted (freeze against parsed ACs), `0023` is Accepted
 (co-locate durable spec-oracle artifacts), and `0024` is Accepted (extract
 the frozen-eval harness), `0025` is reserved (Proposed) by the
-runner-records / judge-verifies-assumptions ADR, `0026` is Accepted (generic eval-authoring-surface) and `0027` is Accepted — goal→eval assisted-authoring ADR, so the next free number is `0028`:
+runner-records / judge-verifies-assumptions ADR, `0026` is Accepted (generic eval-authoring-surface), `0027` is Accepted (goal→eval assisted authoring), and `0028` is reserved by the dual-host package ADR, so the next free number is `0029`:
 
-- **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone ever proposes a Python or Node oracle alternative. Listed in `docs/architecture.md` under "Pending (ADR candidates)".
+- **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone proposes a Python or Node oracle alternative.
 
 ## Format
 

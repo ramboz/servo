@@ -1,0 +1,13 @@
+# SEED:start ruff
+score_ruff() {
+  if ! command -v ruff >/dev/null 2>&1; then
+    echo "missing: ruff" >&2
+    return 2
+  fi
+  if ruff check . >/dev/null 2>&1; then
+    echo "1.0"
+  else
+    echo "0.0"
+  fi
+}
+# SEED:end ruff

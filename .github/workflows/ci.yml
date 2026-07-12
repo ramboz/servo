@@ -1,32 +1,9 @@
 name: CI
 
-# Spec 009 (ci-hardening). Two orthogonal gates, both required to merge:
-#   - test:             does servo *work*?  the full pytest suite (every test
-#                       under skills/ + scripts/, per pyproject's testpaths)
-#                       across the supported Python matrix — this is the skill
-#                       logic (loop / gate / oracle / scaffold) that is servo's
-#                       actual product.
-#   - install-surfaces: does servo *install*?  the three runtime-install
-#                       surfaces (plugin root / release zip / project-local
-#                       scaffold) via scripts/verify_install_surfaces.sh.
-#
-# Replaces the slice-007-05 verify.yml, which ran only the install-surfaces
-# gate and never exercised the skill suites. The matrix floor mirrors
-# pyproject's requires-python (>=3.9) per ADR-0020: servo's helpers run on the
-# adopter's python3, which on default macOS (Command Line Tools) is 3.9.6, so
-# the supported floor is verified here — not just on modern interpreters. Keep
-# `X | None` behind `from __future__ import annotations` and avoid 3.10-only
-# runtime APIs (e.g. zip(strict=)) so the 3.9 leg stays green; `ruff
-# target-version=py39` is the static backstop. `actions/setup-python` no longer
-# ships the exact 3.9.6 patch for current hosted runners, so we pin the 3.9
-# MINOR and let it resolve the latest 3.9.x — patch releases don't change
-# language/stdlib compat.
-#
-# The `on:` key is quoted to dodge the YAML 1.1 truthy-`on` coercion.
-
 "on":
-  push:
   pull_request:
+  push:
+    branches: [main]
 
 jobs:
   test:
@@ -34,47 +11,33 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.12"]
+        # Servo's helpers run on adopters' Python. Bracket the supported range:
+        # the macOS-compatible 3.9 floor and the latest supported 3.x.
+        python-version: ["3.9", "3.12"]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install pytest
+      - name: Install test runner
         run: python3 -m pip install --upgrade pip pytest
 
-      - name: Run full test suite
-        # Bare pytest from the repo root honours pyproject's
-        # testpaths = ["skills", "scripts"] — the same command run locally.
-        run: python3 -m pytest
+      - name: Run test suite
+        run: python3 scripts/run_tests.py
 
-      - name: Lint (ruff)
-        # Spec 009-02. Config lives in ruff.toml. Pinned for reproducibility —
-        # a floating linter can redden an unrelated PR the day a new release
-        # adds a rule under our selected prefixes (F/E/W/I/B). pipx is
-        # preinstalled on ubuntu-latest and runs ruff ephemerally (installs
-        # nothing global), matching servo's uvx/pipx local convention.
+      - name: Validate manifests
+        run: python3 scripts/validate_manifests.py
+
+      - name: Code-health floor
         run: pipx run --spec ruff==0.15.17 ruff check .
 
-  install-surfaces:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install pytest
-        run: python3 -m pip install --upgrade pip pytest
-
       - name: Verify install surfaces
-        # ubuntu-latest ships shellcheck preinstalled, so the oracle shellcheck
-        # test actually runs here (it skips on dev machines without it).
         run: bash scripts/verify_install_surfaces.sh
+
+      - name: Host-package drift guard
+        run: python3 scripts/build_host_packages.py --check

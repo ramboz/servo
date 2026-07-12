@@ -10,6 +10,21 @@
           "type": "json",
           "path": ".claude-plugin/plugin.json",
           "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": ".codex-plugin/plugin.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "hosts/claude/.claude-plugin/plugin.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "hosts/codex/plugins/servo/.codex-plugin/plugin.json",
+          "jsonpath": "$.version"
         }
       ],
       "changelog-sections": [

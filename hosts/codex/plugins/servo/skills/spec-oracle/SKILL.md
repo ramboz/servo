@@ -1,0 +1,187 @@
+---
+
+name: spec-oracle
+description: >-
+  Compile a spec or slice into a reviewable, project-owned **evidence overlay**: map each acceptance criterion to a deterministic check family, write a `plan.md` + `checks.json` under the spec's own `oracle/<id>/` directory, compile the checks into an installable `oracle.sh` component, and freeze it behind an explicit approval so an unattended loop can optimize against the spec's promises instead of a hand-waved single judge.
+---
+
+# /servo:spec-oracle
+
+Compile a spec/slice into a **spec-specific evidence oracle**: acceptance-criteria
+mapping, deterministic checks, negative controls, an installable oracle component,
+and an evidence ledger — so `/servo:agent-loop` can optimize against the spec
+without pretending one generic LLM judge understands every product promise.
+
+The helpers live at `${PLUGIN_ROOT}/skills/spec-oracle/`:
+
+| Helper | Role | Spec |
+|---|---|---|
+| `oracle_plan.py` | Read a spec/slice → `plan.md` + `checks.json` (AC → check-family map) | 006-01 |
+| `checks.py` | Stdlib check engine: run a `checks.json` → JSONL evidence + composite score | 006-02 |
+| `oracle_overlay.py` | Compile a checked plan into an installable `oracle.sh` component | 006-03 |
+| `oracle_overlay.py approve` | Freeze the overlay (negative controls + hashes) before unattended use | 006-04 |
+
+## When to use this skill
+
+Use when the user wants to **turn a spec into a trustworthy scoring target**.
+Scaffolding the baseline oracle is `/servo:scaffold-init`; *running* any oracle is
+`/servo:quality-gate`; *iterating* against it is `/servo:agent-loop`. This skill
+is the compiler in between: spec → reviewable plan → installed, frozen overlay.
+
+## Q&A before planning
+
+Before generating anything, confirm:
+
+1. **Target path** — the repo the overlay installs into (where `oracle.sh` lives).
+2. **Spec / slice path** — the Markdown spec or slice file whose Acceptance
+   Criteria become checks.
+3. **Baseline commands** — the existing test/lint/build commands the overlay
+   should reuse for `command`-family checks (so it composes with, not replaces,
+   the baseline oracle).
+4. **Stop point** — whether to **stop after plan generation** (the user reviews
+   `plan.md` and elaborates checks by hand) or **proceed to install an approved
+   overlay**. Installation and approval are separate, explicit steps — see below.
+
+## Workflow
+
+```bash
+# 1. Plan — read the spec, classify ACs, write a reviewable plan beside it.
+#    Read-only over the target; writes only under the spec's own oracle dir.
+python3 "${PLUGIN_ROOT}/skills/spec-oracle/oracle_plan.py" <target> <spec-path>
+#    → <spec-path's directory>/oracle/<spec-id>/{plan.md,checks.json}
+
+# 2. Review plan.md with the user. Deterministic checks are listed; residual
+#    judgment (taste / positioning / "good enough") is surfaced explicitly with
+#    a reason and a suggested human-review path. Elaborate executable fields
+#    (command, path, expected, ...) into checks.json as needed.
+
+# 3. Install the overlay as an ordinary oracle.sh component (does not approve).
+#    <spec-dir> is the spec's own directory (the parent of <spec-path>).
+python3 "${PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" install <target> <spec-dir> <spec-id>
+#    By default the fragment references the shared checks.py (no per-overlay
+#    copy). Add --vendor-engine to copy checks.py alongside the plan for the
+#    documented clone-portability case (a Routine/CI without the servo plugin).
+
+# 4. Approve — ONLY on explicit user instruction. Runs each check's negative
+#    control where one is defined (proving it can fail), records source +
+#    artifact hashes, and flips approval_status to approved.
+python3 "${PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" approve <target> <spec-dir> <spec-id>
+
+# 5. Run it — the overlay is now a normal component; score it with the gate or
+#    let the loop optimize against it.
+python3 "${PLUGIN_ROOT}/skills/quality-gate/gate.py" <target> --json
+
+# Remove the component without deleting the plan/check artifacts:
+python3 "${PLUGIN_ROOT}/skills/spec-oracle/oracle_overlay.py" uninstall <target> <spec-id>
+```
+
+**Artifact location.** The durable artifacts (`plan.md`, `checks.json`,
+`oracle.sh.fragment`) live under the spec's own directory tree
+(`docs/specs/<spec>/oracle/<slice-id>/`), not `<target>/.servo/` —
+[ADR-0023](../../docs/decisions/adr-0023-colocate-durable-spec-oracle-artifacts.md)
+(slice 019-02). `.servo/` only ever holds run-scoped state. A target with a
+pre-019-02 `.servo/spec-oracles/<id>/` install keeps working via a soft
+read-fallback — no explicit migration step is required.
+
+## No silent approval
+
+**This skill never marks an overlay `approved` on its own.** Approval is a
+deliberate, separate step (`oracle_overlay.py approve`) that requires an explicit
+user instruction or a reviewed approval artifact. Until approved, the installed
+component runs with `--enforce-freeze` and **refuses to score** (`rc=2`,
+`spec_oracle_unapproved`), so `/servo:agent-loop` cannot consume a draft overlay.
+Approval is also where falsifiability is proven: a check whose negative control
+does not fail blocks approval. Generating or installing a plan is safe and
+reversible; approving it is the trust boundary — treat it like one.
+
+## Check families
+
+Each AC is classified into one family (or surfaced as residual judgment):
+
+`command` · `file_presence` · `text_invariant` · `json_contract` ·
+`archive_inventory` · `markdown_links` · `generated_artifact_command` ·
+`runtime_reference_scan` · `residual_judgment` (explicitly not deterministic in
+v1 — carries a reason + suggested review).
+
+## Shared AC grammar (canonical — slice 019-03)
+
+`oracle_plan.py`'s `extract_acs` + `_classify_family` is the **one** AC-parsing
+and classification pipeline in servo — `/servo:edd-suitability`'s
+`suitability.py` subprocess-delegates to `oracle_plan.py classify` rather than
+parsing ACs itself (see `skills/edd-suitability/SKILL.md`, which points back
+here). Documenting the grammar once, here, keeps both skills' authors and
+consumers aligned on exactly what parses and how it classifies.
+
+**Header shape.** A section opens on an `## Acceptance Criteria` heading (any
+`#` depth) or a bold pseudo-heading label (`**Acceptance Criteria:**`), and
+closes on the next real heading or bold pseudo-heading label — *except* a bold
+label appearing **before** any numbered item has been collected is tolerated
+as interstitial prose (a rationale note between the header and the list), not
+a section terminator (Bug 003). Only `1.`/`2.`/… numbered items inside an open
+section are extracted; a present-but-empty section (header found, zero items
+parsed) warns on stderr rather than silently returning 0 ACs.
+
+**Negative-behavior keyword families (slice 019-03).** Beyond the
+affirmative/structural families above, these anchored phrasings classify as
+`command`-checkable instead of falling through to `residual_judgment`:
+
+| Phrasing | Example |
+|---|---|
+| "X fails when/if Y" | "The lint check fails when a disallowed import is introduced." |
+| "X is excluded [from Y]" | "The dev-only fixture is excluded from the release build." |
+| "X does NOT run/compile/pass/build" | "The deprecated migration does not run in CI anymore." |
+| "X is never Y" / "X never happens" | "The staging flag is never enabled in a production build." |
+
+These are deliberately **narrow and anchored** — a bare "not" or "never"
+anywhere in a statement does *not* trigger the family; only the specific verb
+phrasings above do, so a genuinely `residual_judgment`-appropriate AC (taste,
+positioning) is not swept in as falsely deterministic.
+
+**Residual-judgment catch-all.** Anything matching no deterministic family, or
+carrying taste/positioning language ("tone", "appropriate", "reads well",
+"polished", …), is forced to `residual_judgment` with a `reason` and a
+`suggested_review` path — surfaced, never silently auto-passed.
+
+## Worked examples
+
+Two committed dogfood fixtures under `examples/`, shaped like jig's
+`046-scaffold-artifact-fidelity` and `047-install-contract-verification`. Running
+`oracle_plan.py classify` against them:
+
+**`examples/046-scaffold-fidelity.md` — scaffold/doc fidelity** (3 deterministic, 1 residual):
+
+| AC | Statement (abridged) | Family |
+|---|---|---|
+| AC-046-01-1 | stocktake command works from the scaffold target (tempdir) | `generated_artifact_command` |
+| AC-046-01-2 | local Markdown links in generated docs resolve | `markdown_links` |
+| AC-046-01-3 | onboarding prose reads well / appropriately worded | `residual_judgment` (taste) |
+| AC-046-01-4 | generated manifest contains the version string | `text_invariant` |
+
+**`examples/047-install-contract.md` — install-contract validator** (4 deterministic, 0 residual):
+
+| AC | Statement (abridged) | Family |
+|---|---|---|
+| AC-047-01-1 | `install-contract.json` is valid JSON with required key `schema_version` | `json_contract` |
+| AC-047-01-2 | release zip contains required entries, excludes dev-only files | `archive_inventory` |
+| AC-047-01-3 | verifier script present + executable bit set | `file_presence` |
+| AC-047-01-4 | verifier command runs and exits 0 | `command` |
+
+Validator / doc / install-contract specs land mostly in deterministic families —
+exactly the spec shapes servo dogfoods first. Product-taste ACs ("reads well")
+stay visible as residual judgment instead of being auto-passed.
+
+## Freeze & approval semantics
+
+The installed component runs `checks.py --enforce-freeze` and refuses (`rc=2`)
+unless the overlay is approved and unmodified. The distinct refusal `reason`s:
+
+| `reason` | Meaning |
+|---|---|
+| `spec_oracle_unapproved` | `approval_status` is not `approved` (draft) |
+| `spec_oracle_stale` | `approval_status` is explicitly marked `stale` — re-plan |
+| `spec_oracle_artifact_modified` | generated `checks.py` / `oracle.sh.fragment` was edited |
+| `spec_oracle_plan_modified` | the approved checks in `checks.json` were relaxed |
+
+These are tripwires against honest drift; a frozen overlay must be re-planned and
+re-approved (not hand-edited) to change. See `docs/architecture.md`
+("Spec-oracle freeze & approval") for the full threat model.

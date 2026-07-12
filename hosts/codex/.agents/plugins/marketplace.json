@@ -1,0 +1,20 @@
+{
+  "name": "servo",
+  "interface": {
+    "displayName": "servo"
+  },
+  "plugins": [
+    {
+      "name": "servo",
+      "source": {
+        "source": "local",
+        "path": "./plugins/servo"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Engineering"
+    }
+  ]
+}

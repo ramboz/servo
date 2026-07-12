@@ -1,0 +1,17 @@
+# SEED:start vitest
+score_vitest() {
+  if command -v vitest >/dev/null 2>&1; then
+    runner=("vitest" "run")
+  elif command -v npx >/dev/null 2>&1; then
+    runner=("npx" "--no-install" "vitest" "run")
+  else
+    echo "missing: vitest (install vitest or npx)" >&2
+    return 2
+  fi
+  if "${runner[@]}" >/dev/null 2>&1; then
+    echo "1.0"
+  else
+    echo "0.0"
+  fi
+}
+# SEED:end vitest

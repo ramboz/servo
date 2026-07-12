@@ -1,0 +1,37 @@
+{
+  "name": "servo",
+  "version": "0.6.0",
+  "description": "Evaluation-driven development and closed-loop quality automation for Codex",
+  "author": {
+    "name": "ramboz"
+  },
+  "homepage": "https://github.com/ramboz/servo",
+  "repository": "https://github.com/ramboz/servo",
+  "keywords": [
+    "codex",
+    "evaluation-driven-development",
+    "quality-gates",
+    "agent-loop",
+    "scaffold"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "servo",
+    "shortDescription": "Closed-loop evaluation and quality automation",
+    "longDescription": "Servo compiles engineering intent into executable evaluation, quality gates, evidence plans, and guarded agent loops for Codex projects.",
+    "developerName": "ramboz",
+    "category": "Engineering",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Scaffold Servo evaluation for this project",
+      "Run the Servo quality gate",
+      "Create an evidence plan for this spec"
+    ],
+    "brandColor": "#D97706",
+    "screenshots": []
+  }
+}

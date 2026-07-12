@@ -5,8 +5,8 @@ name: Release
 #   - release-please: reads main's conventional-commit history → version bump
 #     (plugin.json via extra-files) + CHANGELOG.md + tag vX.Y.Z + GitHub release,
 #     all via a release PR.
-#   - package: on a created release, build + smoke-test servo's release zip and
-#     upload it as a release asset.
+#   - package: on a created release, build + smoke-test the Claude and Codex
+#     host packages and upload one host-explicit archive per install shape.
 # Both rely on main's commit subjects being release-please-readable, which the
 # pr-title.yml gate + squash-merge guarantee. `on:` is quoted (servo house
 # style, see ci.yml).
@@ -40,30 +40,76 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Build + smoke-test release zip
-        # servo's builder builds AND smoke-tests in a single default invocation
-        # (--no-smoke would skip the verification; spec 007). Passing --version
-        # makes a version/tag mismatch fail loudly — the builder validates the
-        # requested version against .claude-plugin/plugin.json and exits 2 on
-        # mismatch. The default output is dist/servo-v<version>.zip, so a
-        # failing smoke test fails this step before the upload step runs.
+      - name: Build Claude release zip
         run: |
           python3 scripts/build_release_zip.py \
+            --host claude \
             --version "${{ needs.release-please.outputs.version }}"
 
-      - name: Upload zip to release
+      - name: Build Codex release zip
+        run: |
+          python3 scripts/build_release_zip.py \
+            --host codex \
+            --version "${{ needs.release-please.outputs.version }}"
+
+      - name: Smoke-test Claude zip
+        run: |
+          python3 scripts/build_release_zip.py \
+            --host claude \
+            --smoke-test "dist/servo-claude-v${{ needs.release-please.outputs.version }}.zip"
+
+      - name: Smoke-test Codex zip
+        run: |
+          python3 scripts/build_release_zip.py \
+            --host codex \
+            --smoke-test "dist/servo-codex-v${{ needs.release-please.outputs.version }}.zip"
+
+      - name: Create legacy Claude alias (deprecated)
+        run: |
+          cp \
+            "dist/servo-claude-v${{ needs.release-please.outputs.version }}.zip" \
+            "dist/servo-v${{ needs.release-please.outputs.version }}.zip"
+
+      - name: Upload zips to release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload \
             "${{ needs.release-please.outputs.tag_name }}" \
+            "dist/servo-claude-v${{ needs.release-please.outputs.version }}.zip" \
+            "dist/servo-codex-v${{ needs.release-please.outputs.version }}.zip" \
             "dist/servo-v${{ needs.release-please.outputs.version }}.zip"
+
+      - name: Append install-artifacts note to release body
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          existing="$(gh release view "$TAG" --json body -q .body)"
+          note="$(cat <<EOF
+
+          ## Install artifacts
+
+          - \`servo-claude-v${VERSION}.zip\` — flat Claude Code plugin;
+            extract and load with \`claude --plugin-dir <extracted-dir>\` or
+            import it through Claude's plugin UI.
+          - \`servo-codex-v${VERSION}.zip\` — extract-then-add Codex
+            marketplace bundle. Extract it, then run
+            \`codex plugin marketplace add <absolute-extracted-dir>\` followed by
+            \`codex plugin add servo@servo\`. Codex has no zip-drop install.
+          - \`servo-v${VERSION}.zip\` — deprecated, byte-identical Claude
+            alias retained for one compatibility release. Prefer the
+            host-explicit artifact.
+          EOF
+          )"
+          gh release edit "$TAG" --notes "${existing}${note}"

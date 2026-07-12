@@ -1,0 +1,20 @@
+# SEED:start node_test
+score_node_test() {
+  # Node's built-in test runner is declared in a package.json script, so the
+  # faithful invocation is `npm test` (it runs whatever the project wired up).
+  # Fall back to a bare `node --test` when npm is unavailable.
+  if command -v npm >/dev/null 2>&1; then
+    runner=("npm" "test" "--silent")
+  elif command -v node >/dev/null 2>&1; then
+    runner=("node" "--test")
+  else
+    echo "missing: node/npm (install Node.js)" >&2
+    return 2
+  fi
+  if "${runner[@]}" >/dev/null 2>&1; then
+    echo "1.0"
+  else
+    echo "0.0"
+  fi
+}
+# SEED:end node_test

@@ -711,16 +711,13 @@ class SeedBlockTests(unittest.TestCase):
 
 
 class SeedDocumentationTests(unittest.TestCase):
-    """AC #4 — README documents how a project adds custom SEED blocks."""
+    """AC #4 — architecture documents how projects add custom SEED blocks."""
 
-    def test_readme_explains_seed_convention(self):
-        readme = (REPO_ROOT / "README.md").read_text()
-        self.assertIn("# SEED:start", readme,
-                      "README should mention the # SEED:start marker")
-        self.assertIn("# SEED:end", readme,
-                      "README should mention the # SEED:end marker")
-        self.assertIn("score_", readme,
-                      "README should reference the score_<name> function convention")
+    def test_architecture_explains_seed_convention(self):
+        architecture = (REPO_ROOT / "docs" / "architecture.md").read_text()
+        self.assertIn("# SEED:start", architecture)
+        self.assertIn("# SEED:end", architecture)
+        self.assertIn("score_<name>", architecture)
 
 
 class ShellcheckTests(unittest.TestCase):
