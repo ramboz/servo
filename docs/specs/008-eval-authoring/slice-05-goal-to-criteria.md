@@ -1,7 +1,7 @@
 ---
-status: READY_FOR_IMPLEMENTATION
-dependencies: [008-01, 015, 006, adr-0027, adr-0001]
-last_verified:
+status: DONE
+dependencies: [008-01, 015-04, 006-05, adr-0027, adr-0001]
+last_verified: 2026-07-12
 ---
 
 ## Slice 008-05 — goal-to-criteria
@@ -60,3 +60,84 @@ criterion ([ADR-0027](../../decisions/adr-0027-goal-to-eval-assisted-authoring.m
 
 > This is the net-new capability the surveyed prior art deliberately refused — made
 > safe by the independent-review + human-curation gate it was missing.
+
+### Deviation log (after reconciliation)
+
+Original ACs preserved above.
+
+- **`from-goal` + expansion/review via `claude -p`.** Both the goal→ACs expansion and
+  the fresh independent-reviewer pass are separate one-shot `claude -p
+  --output-format json` subprocesses (mirroring `score.py::_judge_cli` /
+  `loop.py`), each with exhaustive fail-closed handling (not-found / timeout /
+  non-zero / malformed / `is_error` → clean `EnvError` exit 2, **never a fabricated
+  AC**). The reviewer is fed **only the goal text + the proposed AC list** (never the
+  expansion's reasoning), enforcing ADR-0027 Decision #2's structural independence.
+  Tests inject a PATH-shadowed mock `claude` (a per-call sequence via a counter file,
+  the `loop.py` idiom) — no real model.
+- **Reviewer sourcing (ADR-0001 filesystem hint).** `_jig_independent_review_skill_path()`
+  probes `~/.claude/skills/independent-review/SKILL.md` (honoring `$HOME`); present →
+  its text frames the reviewer prompt (`reviewer_source: jig`), absent → the shipped
+  built-in `eval-frame-review.md` (`reviewer_source: built-in`). servo does not
+  hard-depend on jig; both branches tested. The "reuse" is prompt-text reuse, not a
+  jig subagent invocation, and adds no entry to servo's runner/judge roster
+  (ADR-0003 untouched).
+- **Emitted artifact + `extract_acs` round-trip (AC4).** `criteria.md` (frontmatter +
+  a `## Proposed classification & reviewer flags` human table + a **plain** numbered
+  `## Acceptance criteria` list) and `criteria.json` (machine contract) under
+  `<spec-dir>/<goal-slug>/`. **AC4-wording deviation:** the AC says "a *tagged* `##
+  Acceptance criteria` list," but the tags/rationale/flags are carried in the
+  companion table, NOT inline in the AC list — because inline tags would leak into
+  `oracle_plan.extract_acs`'s statement text and break the "consumed unchanged"
+  round-trip, which is the load-bearing requirement (proven by
+  `test_round_trips_through_extract_acs_unchanged`). The tag information is still in
+  the artifact.
+- **Human gate, no auto-approve (AC3), strengthened at review.** Every AC starts
+  `approval_status: proposed`; nothing auto-progresses. `from-goal` now **refuses to
+  overwrite** an existing curated `criteria.md`/`criteria.json` (raises
+  `EnvError("criteria_exists")` *before* any model call) unless `--force` — closing a
+  craft-review [blocker] where a re-run silently clobbered human curation. The
+  explicit human-approval check `require_all_approved` is wired via a new
+  **`criteria-check <criteria.md>`** subcommand (exit 0 all-approved / 1 not-yet / 2
+  env-error); `criteria.md` instructs the human to run it before proceeding. The
+  no-freeze-without-work guarantee remains **procedural** (ADR-0027 Decision #5): the
+  human must curate `criteria.md` and hand-author the dataset, and 008-04's
+  empty-dataset freeze-refusal blocks a free ride.
+- **AC5 criteria-split, not a full verdict.** `criteria-split` subprocesses
+  `oracle_plan.py classify` (the same mechanism `suitability.py::_classify` uses)
+  and reports `n_evaluable` / `n_human_residual` — it never produces a
+  `suitable|needs_evidence|unsuitable` verdict (deferred per ADR-0027 Decision #4 /
+  ADR-0018, since the reference set doesn't exist yet). It is deliberately **not**
+  gated on approval (the author needs the split to *inform* approval).
+- **Boundary (AC6).** `from-goal`/review/curation never import or subprocess
+  `gate.py`/`oracle.sh`; a `from-goal` run leaves an already-scaffolded target's
+  `oracle.sh`/`.servo/install.json` byte-for-byte untouched (tested). Opt-in: a
+  hand-written spec enters directly at 008-01 triage.
+
+**Nits logged (non-blocking, from both review passes):**
+
+- `_iso_now` duplicates `fidelity_eval.iso_now` (reachable in this module) — two
+  timestamp helpers; cosmetic.
+- `criteria.md` frontmatter renders `goal: {!r}` (Python repr), not guaranteed
+  YAML-safe for goals with mixed quotes — harmless (nothing YAML-parses the
+  frontmatter; `extract_acs` reads only the AC list).
+- `criteria-split`'s `oracle_plan classify` subprocess has no `timeout` (a local
+  deterministic classifier, no network) — inconsistent with the bounded `claude -p`
+  call but low-risk.
+- The two-file curation surface (`approval_status` in `criteria.json`, editable ACs
+  in `criteria.md`) is intentional per ADR-0027 Decision #5, but is a coupling a
+  future reader should understand.
+
+### Reconciliation sweep
+
+- **`docs/architecture.md`** — `no-op`. New authoring subcommands on the existing
+  skill; no module-boundary/contract change (no `arch_review`). The reviewer pass is
+  advisory, in the authoring layer, never an oracle gate (ADR-0021/0011/0005 boundary
+  preserved — asserted by the never-touches-gate.py/oracle.sh test).
+- **Load-bearing decision / ADR trigger** — `no-op` (new ADR). The slice *implements*
+  ADR-0027 (already Accepted); no new load-bearing choice with rejected alternatives.
+- **`.claude-plugin/install-contract.json`** — `deferred`. No SKILL.md yet; the new
+  built-in `eval-frame-review.md` prompt is a skill asset that will be picked up when
+  the skill surface + install-contract registration land at close-out.
+- **`docs/refinement-todo.md`** — `no-op`. The logged nits are cheap in-skill
+  follow-ups captured here, not open-ended debt.
+- **Status board** — `deferred`. Regenerated after `DONE`.

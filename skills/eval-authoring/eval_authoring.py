@@ -1,9 +1,9 @@
 """
 servo eval-authoring — slices 008-01 (residual-triage), 008-02
-(rubric-shaping), 008-03 (reference-set), and 008-04 (frozen-params-and-emit),
-the self-contained core of the single servo-owned guided skill
-`/servo:eval-authoring` (ADR-0019 / ADR-0026). Durable artifacts are
-co-located with the spec (ADR-0023), mirroring
+(rubric-shaping), 008-03 (reference-set), 008-04 (frozen-params-and-emit),
+and 008-05 (goal-to-criteria), the self-contained core of the single
+servo-owned guided skill `/servo:eval-authoring` (ADR-0019 / ADR-0026).
+Durable artifacts are co-located with the spec (ADR-0023), mirroring
 `skills/spec-oracle/oracle_plan.py`'s convention.
 
 Given a spec-006 evidence plan (`checks.json`, produced by
@@ -93,6 +93,51 @@ Usage:
         and deregisters it from the install manifest, keeping the frozen
         artifacts under `<dir>/.servo/<name>/` untouched.
 
+    python3 eval_authoring.py from-goal "<goal text>" [--spec-dir <dir>] [--force]
+        (Slice 008-05, ADR-0027.) Expand a free-form goal into a *proposed*,
+        tagged (`deterministic|judged|human-only`) acceptance-criteria set via
+        a fresh one-shot `claude -p` call, run a SECOND fresh `claude -p`
+        independent-reviewer pass (no access to the expansion's reasoning —
+        only the goal text and the proposal) for advisory structural flags,
+        and write the curated-pending proposal under
+        `<spec-dir>/<goal-slug>/` as `criteria.json` (machine contract) and
+        `criteria.md` (the human-editable, spec-shaped artifact: frontmatter +
+        a plain `## Acceptance criteria` list that `spec-oracle classify`
+        (006) parses unchanged). This is an authoring ASSIST, never an
+        autonomous step: every AC starts `approval_status: "proposed"` —
+        nothing is frozen without a human recording approval (ADR-0027
+        Decision #3) — and the human may edit/accept/reject/**add** any AC by
+        editing `criteria.md`'s plain numbered list directly, the same way
+        they would edit a hand-written spec's AC section. Refuses
+        (`EnvError`) to re-run over an already-curated goal directory —
+        `criteria.md`/`criteria.json` may already carry human edits and
+        recorded approvals, and a fresh non-deterministic LLM expansion must
+        never silently clobber those (mirrors `dataset_target`'s own
+        never-overwrite posture for its human-grown cases). Pass `--force` to
+        regenerate deliberately.
+
+    python3 eval_authoring.py criteria-check <criteria.md>
+        (Slice 008-05, ADR-0027 Decision #5.) The explicit, human-invokable
+        form of AC3's human-curation gate: reads the sibling `criteria.json`
+        a `from-goal` run wrote beside `<criteria.md>`, prints each AC's
+        `approval_status`, and exits non-zero until every AC is
+        `"approved"`. The no-freeze-without-approval guarantee itself is
+        enforced procedurally, not by any oracle/gate machinery (ADR-0027
+        Decision #5) — this command is how a human (or a future promotion
+        step) actually invokes that check before treating a goal-derived AC
+        set as curated.
+
+    python3 eval_authoring.py criteria-split <criteria.md>
+        (Slice 008-05, ADR-0027 Decision #4.) Run ONLY `edd-suitability`
+        (015)'s criteria-classification half — the evaluable-vs-human-residual
+        split — over a `from-goal`-emitted (or any spec-shaped) AC artifact,
+        via the same `oracle_plan.py classify` subprocess `suitability.py`
+        itself uses internally. Deliberately NOT the full `suitable |
+        needs_evidence | unsuitable` verdict: at goal-expansion time there is
+        no target signal or reference set yet, so a full verdict would be
+        `needs_evidence` across the board (ADR-0018) — this surfaces only the
+        half goal→eval can legitimately claim.
+
 Architecture note — no spec-006 compile step (this slice's correction)
 ------------------------------------------------------------------------
 Spec 008's prose describes `/servo:spec-oracle`'s "eval-family compile step"
@@ -130,9 +175,12 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -1331,6 +1379,609 @@ def uninstall_target(plan_path: Path, ac_id: str, target) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Goal-to-criteria (slice 008-05, ADR-0027) — an authoring ASSIST, never an
+# autonomous step (Decision #1). Expands a free-form goal into a *proposed*
+# tagged AC set via a fresh one-shot `claude -p` call, runs a SECOND fresh
+# `claude -p` independent-reviewer pass (no access to the expansion's own
+# reasoning — Decision #2) for advisory STRUCTURAL flags only, and writes the
+# result as a spec-shaped Markdown artifact the existing pipeline (015 -> 006
+# -> 008-01 triage) consumes unchanged (Decision #4). Neither step is a new
+# entry in servo's runner/judge agent roster (ADR-0003 untouched) — both are
+# fresh one-shot subprocess calls, mirroring the architect -> jig:architect
+# delegation posture, and `score.py::_judge_cli`'s own `claude -p` subprocess
+# idiom. Nothing here is frozen without a recorded human per-AC approval
+# (Decision #3) and nothing here ever imports/subprocesses `gate.py` or
+# `oracle.sh` (Decision #5 / ADR-0021 / ADR-0011 / ADR-0005 boundary).
+# ---------------------------------------------------------------------------
+
+GOAL_TO_CRITERIA_SCHEMA_VERSION = 1
+
+TAG_DETERMINISTIC = "deterministic"
+TAG_JUDGED = "judged"
+TAG_HUMAN_ONLY = "human-only"
+VALID_TAGS = (TAG_DETERMINISTIC, TAG_JUDGED, TAG_HUMAN_ONLY)
+
+APPROVAL_PROPOSED = "proposed"
+
+REVIEWER_SOURCE_JIG = "jig"
+REVIEWER_SOURCE_BUILT_IN = "built-in"
+
+# Fixed per-invocation wall-clock cap for the two one-shot `claude -p` calls
+# (expansion + review) — mirrors `score.py::_judge_cli`'s fixed 300s bound.
+# Attended authoring (a human is waiting on the result either way), so no
+# separate env-var override knob is offered here (unlike loop.py's unattended
+# `SERVO_CLAUDE_TIMEOUT`); a mock claude in tests returns near-instantly.
+CLAUDE_PROMPT_TIMEOUT_SECONDS = 300
+
+# The built-in reviewer prompt shipped alongside this skill (AC2's "no hard
+# jig dependency" fallback).
+_BUILT_IN_REVIEW_PROMPT_PATH = Path(__file__).resolve().parent / "eval-frame-review.md"
+
+# Bound on how much of a detected jig/built-in framing file is spliced into
+# the reviewer prompt — generous for a short prompt file, cheap insurance
+# against an unexpectedly huge file ballooning the prompt.
+_REVIEW_FRAMING_MAX_CHARS = 4000
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _extract_json_object(text: str) -> str:
+    """Extract the first `{...}` span from noisy model output (mirrors
+    `skills/_common/fidelity_eval.py::_extract_json` — a local copy, not an
+    import, per this module's own "cross-skill data is JSON, never a Python
+    import" convention, extended here to "cross-*call*", not just
+    cross-skill)."""
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        raise EnvError("claude_unparseable_reply", "no JSON object found in claude's reply")
+    return text[start:end + 1]
+
+
+def _resolve_claude() -> "str | None":
+    """The `claude` CLI path: explicit `SERVO_EVAL_AUTHORING_CLAUDE_BIN`
+    override, else PATH (mirrors `score.py::_resolve_claude` exactly — same
+    env var name, so a test — or an operator — can point both halves of this
+    one skill at the same mock/alternate binary without PATH surgery)."""
+    return os.environ.get("SERVO_EVAL_AUTHORING_CLAUDE_BIN") or shutil.which("claude")
+
+
+def _invoke_claude_prompt(prompt: str) -> str:
+    """One fresh, one-shot `claude -p --output-format json <prompt>` call —
+    used for BOTH the expansion step (AC1) and the independent-reviewer step
+    (AC2). Deliberately NOT `--agent <name>`: ADR-0027 Decision #2 is explicit
+    that goal->eval's reviewer is a fresh one-shot subprocess call, not a new
+    entry in servo's runner/judge agent roster (ADR-0003's loop roster stays
+    untouched) — mirrors the architect -> jig:architect delegation posture,
+    and mirrors `score.py::_judge_cli`'s own subprocess idiom almost exactly.
+
+    Returns the envelope's `result` text on success. Raises `EnvError` on any
+    failure: claude not resolvable (PATH or `SERVO_EVAL_AUTHORING_CLAUDE_BIN`),
+    a timeout, a non-zero exit, an unparseable envelope, or `is_error: true` in
+    the envelope — never a silent or fabricated reply (ADR-0005's honesty
+    posture, extended to authoring-time).
+    """
+    claude = _resolve_claude()
+    if not claude:
+        raise EnvError(
+            "claude_not_found",
+            "claude CLI not found — set SERVO_EVAL_AUTHORING_CLAUDE_BIN or add it to PATH",
+        )
+    cmd = [claude, "-p", "--output-format", "json", prompt]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=CLAUDE_PROMPT_TIMEOUT_SECONDS)
+    except FileNotFoundError as exc:
+        raise EnvError("claude_not_found", f"claude CLI not found on PATH: {exc}") from exc
+    except subprocess.TimeoutExpired:
+        raise EnvError(
+            "claude_timeout",
+            f"claude -p timed out after {CLAUDE_PROMPT_TIMEOUT_SECONDS}s",
+        ) from None
+    if proc.returncode != 0:
+        raise EnvError(
+            "claude_invocation_failed",
+            f"claude -p exited {proc.returncode}: {proc.stderr.strip()[:300]}",
+        )
+    try:
+        envelope = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise EnvError(
+            "claude_malformed_envelope", f"claude -p output is not valid JSON: {exc}"
+        ) from exc
+    if not isinstance(envelope, dict):
+        raise EnvError("claude_malformed_envelope", "claude -p output is not a JSON object")
+    if envelope.get("is_error"):
+        raise EnvError(
+            "claude_invocation_failed",
+            f"claude -p reported an error: {str(envelope.get('result'))[:300]}",
+        )
+    return str(envelope.get("result", ""))
+
+
+# --- expansion (AC1) --------------------------------------------------------
+
+_EXPANSION_PROMPT_TEMPLATE = """\
+You are expanding a free-form goal into a PROPOSED set of acceptance criteria \
+for evaluation-driven development. This is a proposal only — a human will \
+edit, accept, reject, and add to it; you are not authoring a frozen contract.
+
+GOAL:
+{goal}
+
+For each acceptance criterion you propose, tag it with EXACTLY ONE of:
+- "deterministic" — a cheap, mechanical, code-checkable predicate (e.g. a \
+byte count, a regex match, a schema check).
+- "judged" — needs an LLM/human judge against a rubric (a quality/\
+faithfulness call that is not cheaply mechanical, but IS still \
+operationalizable into a scored rubric).
+- "human-only" — an irreducibly human taste/policy/sign-off call (e.g. \
+"requires a senior editor's approval") that no rubric can score.
+
+Be honest about the tag: do NOT tag a taste/policy call as "deterministic" \
+or "judged" just because it sounds important — a criterion whose own \
+wording is a subjective/taste/policy call belongs in "human-only" \
+regardless of how it is phrased.
+
+Reply with ONLY a JSON object, no other text, in this exact shape:
+{{"acs": [{{"statement": "<one clear, operational criterion>", \
+"tag": "deterministic|judged|human-only", \
+"rationale": "<one line: why this tag>"}}, ...]}}
+"""
+
+
+def _render_expansion_prompt(goal: str) -> str:
+    return _EXPANSION_PROMPT_TEMPLATE.format(goal=goal)
+
+
+def _parse_expansion_reply(text: str) -> list:
+    """Parse the expansion model's reply into a list of proposed AC dicts:
+    `{"statement": str, "tag": deterministic|judged|human-only, "rationale":
+    str}`. Raises `EnvError` on any malformed shape — never fabricates a
+    criterion from unparseable model output (AC1)."""
+    try:
+        obj = json.loads(_extract_json_object(text))
+    except (json.JSONDecodeError, EnvError) as exc:
+        raise EnvError(
+            "expansion_unparseable", f"could not parse the expansion reply: {exc}"
+        ) from exc
+    acs = obj.get("acs") if isinstance(obj, dict) else None
+    if not isinstance(acs, list) or not acs:
+        raise EnvError("expansion_empty", "the expansion reply carried no acceptance criteria")
+    parsed = []
+    for i, entry in enumerate(acs):
+        if not isinstance(entry, dict):
+            raise EnvError("expansion_malformed_entry", f"acs[{i}] is not an object")
+        statement = entry.get("statement")
+        tag = entry.get("tag")
+        if not isinstance(statement, str) or not statement.strip():
+            raise EnvError(
+                "expansion_malformed_entry", f"acs[{i}] is missing a non-empty statement")
+        if tag not in VALID_TAGS:
+            raise EnvError(
+                "expansion_malformed_entry",
+                f"acs[{i}].tag {tag!r} is not one of {VALID_TAGS}",
+            )
+        parsed.append({
+            "statement": statement.strip(),
+            "tag": tag,
+            "rationale": str(entry.get("rationale", "")).strip(),
+        })
+    return parsed
+
+
+# --- independent review (AC2) -----------------------------------------------
+
+def _jig_independent_review_skill_path() -> "Path | None":
+    """Filesystem-hint probe (ADR-0001 / ADR-0027 Decision #2): is jig's
+    `independent-review` skill installed at USER scope? Mirrors jig's own
+    `review.py::detect_richer_skill` convention exactly — a user-scope
+    `~/.claude/skills/independent-review/SKILL.md` — so the same
+    `Path.home()` call (which honors `$HOME`) keeps this hermetically
+    testable without a real jig install. Returns the `SKILL.md` path when
+    present, else `None`. Conservative on every error (OSError/ValueError/
+    RuntimeError -> None): the built-in prompt is always a safe fallback,
+    never a hard failure — servo does not hard-depend on jig.
+    """
+    try:
+        candidate = Path.home() / ".claude" / "skills" / "independent-review" / "SKILL.md"
+        if candidate.is_file():
+            return candidate
+    except (OSError, ValueError, RuntimeError):
+        pass
+    return None
+
+
+def _review_framing_text(jig_skill_path) -> str:
+    """The reviewer prompt's framing preamble: jig's detected skill file's
+    own content when co-installed, else the built-in `eval-frame-review.md`
+    shipped with this skill (AC2). Falls back to the built-in text on any
+    read failure of a *detected* jig file (belt-and-braces — detection
+    already checked `is_file()`, but a race/permissions error should still
+    degrade to the always-available built-in, never crash the review step).
+    """
+    if jig_skill_path is not None:
+        try:
+            return jig_skill_path.read_text()[:_REVIEW_FRAMING_MAX_CHARS]
+        except OSError:
+            pass
+    return _BUILT_IN_REVIEW_PROMPT_PATH.read_text()[:_REVIEW_FRAMING_MAX_CHARS]
+
+
+def _render_review_prompt(goal: str, acs: list, *, jig_skill_path) -> str:
+    """AC2: the independent-reviewer prompt. Carries ONLY the goal text and
+    the proposed AC list — never the expansion call's own reasoning/
+    chain-of-thought — so the reviewer's independence is a fresh, separate
+    subprocess call, not a continuation of the expansion's context."""
+    ac_lines = "\n".join(
+        f'{i}. [{ac["tag"]}] {ac["statement"]}' for i, ac in enumerate(acs, start=1)
+    )
+    framing = _review_framing_text(jig_skill_path)
+    return f"""{framing}
+
+GOAL (verbatim, as given to the expansion step):
+{goal}
+
+PROPOSED ACCEPTANCE CRITERIA (you do NOT have access to the reasoning that \
+produced these — only the goal text and this list):
+{ac_lines}
+
+Reply with ONLY a JSON object, no other text, in this exact shape:
+{{"flags": [{{"ac_index": <1-based index into the list above, or null if \
+not tied to one AC>, "kind": "mis_tagged|unmeasurable|goal_restatement|\
+coverage_gap", "note": "<one or two sentences>"}}, ...]}}
+If you find nothing to flag, reply with {{"flags": []}}.
+"""
+
+
+def _parse_review_reply(text: str) -> list:
+    """Parse the reviewer's reply into a list of flag dicts: `{"ac_index":
+    int|None, "kind": str, "note": str}`. Raises `EnvError` on a malformed
+    shape (AC2: advisory flags, never a silently-dropped or fabricated
+    review)."""
+    try:
+        obj = json.loads(_extract_json_object(text))
+    except (json.JSONDecodeError, EnvError) as exc:
+        raise EnvError(
+            "review_unparseable", f"could not parse the reviewer reply: {exc}"
+        ) from exc
+    flags = obj.get("flags") if isinstance(obj, dict) else None
+    if not isinstance(flags, list):
+        raise EnvError("review_malformed", "reviewer reply carried no 'flags' list")
+    parsed = []
+    for i, entry in enumerate(flags):
+        if not isinstance(entry, dict):
+            raise EnvError("review_malformed_entry", f"flags[{i}] is not an object")
+        parsed.append({
+            "ac_index": entry.get("ac_index"),
+            "kind": entry.get("kind"),
+            "note": str(entry.get("note", "")),
+        })
+    return parsed
+
+
+# --- curated artifact (AC3 / AC4) -------------------------------------------
+
+def build_criteria_payload(goal: str, acs: list, flags: list, *, reviewer_source: str) -> dict:
+    """Assemble the `criteria.json` payload (AC3/AC4): one entry per proposed
+    AC, each carrying its tag/rationale/reviewer flags and an
+    `approval_status` that ALWAYS starts `"proposed"` — this function never
+    writes `"approved"` (mirrors triage's own `confirmed: False` default;
+    AC3's "nothing is frozen without recorded human approval"). A flag whose
+    `ac_index` is missing/out-of-range/non-integer is not dropped — it is
+    kept as an `unassigned_reviewer_flags` entry (schema-drift-tolerant, AC2:
+    an advisory flag the reviewer couldn't or didn't tie to one AC is still
+    surfaced to the human, never silently discarded).
+    """
+    entries = []
+    for i, ac in enumerate(acs, start=1):
+        entries.append({
+            "id": f"AC-{i}",
+            "statement": ac["statement"],
+            "tag": ac["tag"],
+            "rationale": ac["rationale"],
+            "reviewer_flags": [],
+            "approval_status": APPROVAL_PROPOSED,
+        })
+    unassigned = []
+    for f in flags:
+        idx = f.get("ac_index")
+        if isinstance(idx, int) and not isinstance(idx, bool) and 1 <= idx <= len(entries):
+            entries[idx - 1]["reviewer_flags"].append(
+                {"kind": f.get("kind"), "note": f.get("note", "")})
+        else:
+            unassigned.append({"kind": f.get("kind"), "note": f.get("note", "")})
+    return {
+        "schema_version": GOAL_TO_CRITERIA_SCHEMA_VERSION,
+        "goal": goal,
+        "generated_at": _iso_now(),
+        "reviewer_source": reviewer_source,
+        "acs": entries,
+        "unassigned_reviewer_flags": unassigned,
+    }
+
+
+def require_all_approved(payload: dict) -> None:
+    """The human-curation gate (AC3/AC7), made callable/testable directly:
+    raises `EnvError` unless every AC in `payload["acs"]` carries
+    `approval_status == "approved"`. `from-goal` itself never calls this —
+    it only ever emits `"proposed"` entries — so this exists as the explicit,
+    assertable gate a human (or a future promotion step) must clear before an
+    un-curated, goal-derived AC set could be treated as curated. Mirrors
+    008-04's `freeze_dataset_config` refusing an unapproved rubric config,
+    one stage earlier in the pipeline.
+
+    The no-freeze-without-approval guarantee is deliberately **procedural**,
+    not enforced by any oracle/gate machinery (ADR-0027 Decision #5: "its
+    teeth are procedural — no freeze without human approval"). This function
+    — and the `criteria-check` CLI subcommand that wraps it (below) — is the
+    explicit, human-invokable point where that procedure is actually
+    checked; nothing calls it automatically on `from-goal`'s own path.
+    """
+    unapproved = [e["id"] for e in payload.get("acs", []) if e.get("approval_status") != "approved"]
+    if unapproved:
+        raise EnvError(
+            "criteria_not_approved",
+            f"{len(unapproved)} acceptance criterion/criteria not yet approved "
+            f"({', '.join(unapproved)}) — curate (edit/accept/reject/add) and record "
+            "per-AC approval before treating this proposal as curated",
+        )
+
+
+def criteria_check(criteria_md_path: Path) -> dict:
+    """The `criteria-check` command's logic: the explicit, human-invokable
+    checkpoint for `require_all_approved` (AC3/ADR-0027 Decision #5) — wires
+    that gate into a CLI a human actually runs, rather than leaving it a
+    library function nothing on any path calls.
+
+    Reads the sibling `criteria.json` a `from-goal` run wrote beside
+    `criteria_md_path` (same directory — `from_goal_target` always writes
+    both files together), and reports each AC's `id` + `approval_status`
+    alongside whether `require_all_approved` would pass. Raises `EnvError` on
+    a missing `criteria_md_path`, a missing sibling `criteria.json`, or
+    malformed JSON — never on "not yet approved", which is a normal,
+    reportable outcome (the CLI maps it to a non-zero exit, not a crash).
+
+    Returns `{"all_approved": bool, "acs": [{"id": str, "approval_status":
+    str}, ...]}`.
+    """
+    if not criteria_md_path.is_file():
+        raise EnvError(
+            "criteria_missing", f"criteria artifact not found: {criteria_md_path}")
+    criteria_json_path = criteria_md_path.parent / "criteria.json"
+    if not criteria_json_path.is_file():
+        raise EnvError(
+            "criteria_json_missing",
+            f"no sibling criteria.json at {criteria_json_path} — run `from-goal` first",
+        )
+    try:
+        payload = json.loads(criteria_json_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise EnvError(
+            "criteria_json_malformed",
+            f"criteria.json is not valid JSON: {criteria_json_path} ({exc})",
+        ) from exc
+
+    statuses = [
+        {"id": e.get("id"), "approval_status": e.get("approval_status")}
+        for e in payload.get("acs", [])
+    ]
+    try:
+        require_all_approved(payload)
+        all_approved = True
+    except EnvError:
+        all_approved = False
+    return {"all_approved": all_approved, "acs": statuses}
+
+
+def _render_criteria_md(payload: dict) -> str:
+    """Render `criteria.md` (AC4): frontmatter + a human-curation surface +
+    a plain `## Acceptance criteria` numbered list that `spec-oracle
+    classify` (006) — and, via it, `edd-suitability` (015) — parses
+    unchanged, exactly like a hand-written spec's AC section. The tag /
+    rationale / reviewer-flags / approval-status metadata lives in a
+    SEPARATE table above that section (never mixed into a numbered item's
+    text), so `oracle_plan.extract_acs`'s statement text is the clean
+    criterion only (AC4's round-trip)."""
+    acs = payload["acs"]
+    lines = [
+        "---",
+        f"goal: {payload['goal']!r}",
+        f"generated_at: {payload['generated_at']}",
+        f"reviewer_source: {payload['reviewer_source']}",
+        "---",
+        "",
+        "# Goal-to-criteria proposal",
+        "",
+        "## Goal",
+        "",
+        payload["goal"],
+        "",
+        "> **This is a proposal, not a decision (ADR-0027).** Every "
+        "acceptance criterion below — including its "
+        "`deterministic|judged|human-only` tag — is a starting point from an "
+        "LLM expansion, checked by a fresh independent-reviewer subagent for "
+        "STRUCTURAL issues only (mis-tagging by wording, unmeasurable "
+        "predicates, goal-restatement, surface-literal coverage gaps). The "
+        "reviewer's flags are advisory, not a verdict — it does NOT reliably "
+        "catch a plausible-but-unfaithful criterion or an *implicit* "
+        "coverage gap (a requirement the goal only implies). That is YOUR "
+        "job: edit / accept / reject / **add** each criterion below. You may "
+        "add a criterion the expansion omitted entirely — there is no row to "
+        "reject for something that was never proposed, so adding is how you "
+        "backstop coverage of intent. **Nothing is frozen until you record a "
+        "per-AC approval** (flip `approval_status` to `\"approved\"` in "
+        "`criteria.json` once you agree) — the `## Acceptance criteria` "
+        "section below feeds `spec-oracle classify` (006) and "
+        "`edd-suitability` (015) exactly like a hand-written spec's AC "
+        "section. **Once every AC above is approved, run** "
+        "`eval_authoring.py criteria-check criteria.md` **before proceeding** "
+        "— it reports each AC's approval status and exits non-zero until "
+        "every one reads `approved`.",
+        "",
+        "## Proposed classification & reviewer flags",
+        "",
+    ]
+    if acs:
+        lines.append("| Approve | # | Tag | Statement | Rationale | Reviewer flags |")
+        lines.append("|---|---|---|---|---|---|")
+        for e in acs:
+            statement = e["statement"].replace("|", "&#124;")
+            rationale = e["rationale"].replace("|", "&#124;")
+            flags_text = "; ".join(
+                f'{f.get("kind")}: {f.get("note", "")}' for f in e["reviewer_flags"]
+            ).replace("|", "&#124;") or "-"
+            lines.append(
+                f'| [ ] | {e["id"]} | `{e["tag"]}` | {statement} | {rationale} | {flags_text} |'
+            )
+    else:
+        lines.append("_No acceptance criteria proposed._")
+    if payload["unassigned_reviewer_flags"]:
+        lines += ["", "## Reviewer flags not tied to a single AC", ""]
+        for f in payload["unassigned_reviewer_flags"]:
+            note = str(f.get("note", "")).replace("|", "&#124;")
+            lines.append(f'- {f.get("kind")}: {note}')
+    lines += [
+        "",
+        "## Acceptance criteria",
+        "",
+    ]
+    if acs:
+        for i, e in enumerate(acs, start=1):
+            lines.append(f'{i}. {e["statement"]}')
+    else:
+        lines.append("_No acceptance criteria proposed._")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _goal_slug(goal: str) -> str:
+    """The `<goal-slug>` directory name (AC4): `_slug`'s lowercase/underscore
+    collapse, truncated so a long free-form goal doesn't produce an
+    unreasonably long directory name."""
+    return _slug(goal)[:60].rstrip("_") or "goal"
+
+
+def criteria_dir_for_goal(spec_dir: Path, goal_slug: str) -> Path:
+    """Where `from-goal`'s artifacts live (AC4, ADR-0023 colocation):
+    `<spec_dir>/<goal_slug>/`. This directory plays the role a hand-written
+    spec's own directory plays for `spec.md` — `criteria.md` sits directly
+    inside it, so a later `oracle_plan.py classify <criteria.md>` /
+    `eval_dir_for_spec(this_dir, goal_slug)` call resolves with zero special
+    casing (AC6's opt-in boundary: the curated artifact re-enters the SAME
+    pipeline a hand-written spec.md would, at 008-01 triage)."""
+    _validate_spec_id(goal_slug)
+    return spec_dir / goal_slug
+
+
+def from_goal_target(goal: str, spec_dir: Path, *, force: bool = False) -> tuple:
+    """AC1-AC4: expand the goal -> run the independent-reviewer pass -> emit
+    the curated-pending proposal under `<spec_dir>/<goal-slug>/`. Never
+    imports or subprocesses `gate.py`/`oracle.sh` (AC6/Decision #5) — the two
+    `claude -p` calls and a Markdown/JSON write are the entire side effect.
+
+    Refuses (`EnvError`) when `criteria.md` or `criteria.json` already exist
+    for this goal — a re-run's fresh, non-deterministic LLM output must never
+    silently clobber an already-curated artifact (a human may have edited
+    `criteria.md`'s AC text, or recorded per-AC approvals in
+    `criteria.json` — exactly the human curation AC3 exists to protect).
+    Mirrors `dataset_target`'s own never-overwrite posture for its
+    human-grown `cases` (008-03), applied one step earlier in the pipeline.
+    The check runs BEFORE either `claude -p` call, so a refused re-run costs
+    nothing. Pass `force=True` to regenerate deliberately, discarding
+    whatever curation was already recorded.
+
+    Returns `(payload, out_dir)`.
+    """
+    out_dir = criteria_dir_for_goal(spec_dir, _goal_slug(goal))
+    if not force:
+        for existing in (out_dir / "criteria.md", out_dir / "criteria.json"):
+            if existing.is_file():
+                raise EnvError(
+                    "criteria_exists",
+                    f"{existing} already exists — from-goal refuses to overwrite a "
+                    "possibly human-curated artifact (edits recorded in criteria.md, "
+                    "approvals recorded in criteria.json); pass --force to regenerate "
+                    "deliberately",
+                )
+
+    expansion_text = _invoke_claude_prompt(_render_expansion_prompt(goal))
+    acs = _parse_expansion_reply(expansion_text)
+
+    jig_skill_path = _jig_independent_review_skill_path()
+    review_prompt = _render_review_prompt(goal, acs, jig_skill_path=jig_skill_path)
+    review_text = _invoke_claude_prompt(review_prompt)
+    flags = _parse_review_reply(review_text)
+
+    reviewer_source = (
+        REVIEWER_SOURCE_JIG if jig_skill_path is not None else REVIEWER_SOURCE_BUILT_IN)
+    payload = build_criteria_payload(goal, acs, flags, reviewer_source=reviewer_source)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "criteria.json").write_text(json.dumps(payload, indent=2) + "\n")
+    (out_dir / "criteria.md").write_text(_render_criteria_md(payload))
+    return payload, out_dir
+
+
+# --- criteria split (AC5) ----------------------------------------------------
+
+# spec-006's classifier lives at this fixed sibling-skill path (mirrors
+# `skills/edd-suitability/suitability.py`'s own `DEFAULT_ORACLE_PLAN`).
+ORACLE_PLAN_PATH = Path(__file__).resolve().parent.parent / "spec-oracle" / "oracle_plan.py"
+
+
+def criteria_split(criteria_md_path: Path) -> dict:
+    """AC5: run ONLY 015's criteria-classification half over an emitted
+    artifact — the evaluable-vs-human-residual split — NOT edd-suitability's
+    full `suitable | needs_evidence | unsuitable` verdict (ADR-0027 Decision
+    #4 / ADR-0018): at goal-expansion time there is no target signal or
+    reference set yet, so a full verdict would resolve `needs_evidence`
+    across the board, uselessly. Subprocesses `oracle_plan.py classify`
+    exactly as `suitability.py::_classify` does internally — the SAME half
+    015 itself consumes, not a second, diverging classifier — and never
+    calls `suitability.py`'s `decide`/`analyze` (no verdict is produced, and
+    no `.servo/suitability/*.json` artifact is written).
+    """
+    if not criteria_md_path.is_file():
+        raise EnvError(
+            "criteria_missing", f"criteria artifact not found: {criteria_md_path}")
+    cmd = [sys.executable, str(ORACLE_PLAN_PATH), "classify", str(criteria_md_path)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except OSError as exc:
+        raise EnvError(
+            "oracle_plan_unreadable", f"could not run oracle_plan classify: {exc}"
+        ) from exc
+    if proc.returncode != 0:
+        raise EnvError(
+            "oracle_plan_unreadable",
+            f"oracle_plan classify exited {proc.returncode}: {proc.stderr.strip()}",
+        )
+    try:
+        plan = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        raise EnvError(
+            "oracle_plan_unreadable",
+            f"oracle_plan classify emitted unparseable output: {exc}",
+        ) from exc
+    if not isinstance(plan, dict) or "checks" not in plan or "residual_judgment" not in plan:
+        raise EnvError(
+            "oracle_plan_unreadable",
+            "oracle_plan classify output missing checks / residual_judgment",
+        )
+    checks = plan.get("checks") or []
+    residual = plan.get("residual_judgment") or []
+    return {
+        "spec_id": plan.get("spec_id"),
+        "n_evaluable": len(checks),
+        "n_human_residual": len(residual),
+        "evaluable_ac_ids": [c.get("id") for c in checks],
+        "human_residual_ac_ids": [r.get("id") for r in residual],
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1534,11 +2185,121 @@ def _uninstall_main(argv: list) -> int:
     return 0
 
 
+def _from_goal_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py from-goal",
+        description=(
+            "Expand a free-form goal into a PROPOSED, tagged acceptance-criteria "
+            "set (ADR-0027) -- an authoring assist, never a frozen artifact."
+        ),
+    )
+    parser.add_argument("goal", help="The free-form goal to expand.")
+    parser.add_argument(
+        "--spec-dir", default=".",
+        help=(
+            "Directory under which the goal's own <goal-slug>/ artifact "
+            "directory is created (default: cwd)."
+        ),
+    )
+    parser.add_argument(
+        "--force", action="store_true",
+        help=(
+            "Regenerate even if criteria.md/criteria.json already exist for this "
+            "goal, discarding any human curation already recorded (default: refuse)."
+        ),
+    )
+    args = parser.parse_args(argv)
+
+    spec_dir = Path(args.spec_dir).resolve()
+    try:
+        payload, out_dir = from_goal_target(args.goal, spec_dir, force=args.force)
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    n_acs = len(payload["acs"])
+    n_flags = (
+        sum(len(e["reviewer_flags"]) for e in payload["acs"])
+        + len(payload["unassigned_reviewer_flags"])
+    )
+    print(
+        f"servo: proposed {n_acs} acceptance criterion(s) from a goal "
+        f"({n_flags} reviewer flag(s), reviewer={payload['reviewer_source']}) -> {out_dir}"
+    )
+    print(
+        "servo: PROPOSAL ONLY -- edit/accept/reject/add each AC in criteria.md and "
+        "record per-AC approval in criteria.json before treating this as curated"
+    )
+    return 0
+
+
+def _criteria_check_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py criteria-check",
+        description=(
+            "Report per-AC approval status for a from-goal criteria.md, and check "
+            "whether every AC has recorded human approval (the AC3 human-curation gate, "
+            "ADR-0027 Decision #5)."
+        ),
+    )
+    parser.add_argument("criteria_md", help="Path to a from-goal criteria.md.")
+    args = parser.parse_args(argv)
+
+    criteria_md_path = Path(args.criteria_md).resolve()
+    try:
+        report = criteria_check(criteria_md_path)
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    for entry in report["acs"]:
+        marker = "approved" if entry["approval_status"] == "approved" else "NOT approved"
+        print(f"servo: {entry['id']}: {marker}")
+    if report["all_approved"]:
+        print("servo: every AC approved -- safe to treat this proposal as curated")
+        return 0
+    print(
+        "error: not every AC is approved yet -- curate criteria.md and record per-AC "
+        "approval in criteria.json before treating this proposal as curated",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _criteria_split_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py criteria-split",
+        description=(
+            "Run only edd-suitability's criteria-classification half (evaluable vs "
+            "human-residual) over a spec-shaped AC artifact -- not a full verdict."
+        ),
+    )
+    parser.add_argument(
+        "criteria_md", help="Path to a from-goal criteria.md (or any spec-shaped AC artifact).")
+    args = parser.parse_args(argv)
+
+    criteria_md_path = Path(args.criteria_md).resolve()
+    try:
+        split = criteria_split(criteria_md_path)
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    total = split["n_evaluable"] + split["n_human_residual"]
+    print(
+        f"servo: {split['n_evaluable']} evaluable, {split['n_human_residual']} "
+        f"human-residual of {total} acceptance criteria (criteria split only -- "
+        "NOT a full suitability verdict; see ADR-0027/ADR-0018)"
+    )
+    return 0
+
+
 def main(argv: list | None = None) -> int:
     # Hand-rolled subcommand dispatch (mirrors `oracle_plan.py` / `gate.py`).
-    # `triage` (008-01), `rubric` (008-02), `dataset` (008-03), and
-    # `params`/`emit`/`uninstall` (008-04) exist so far; a later slice adds
-    # `from-goal` (008-05) alongside them.
+    # `triage` (008-01), `rubric` (008-02), `dataset` (008-03),
+    # `params`/`emit`/`uninstall` (008-04), and
+    # `from-goal`/`criteria-check`/`criteria-split` (008-05) make up the full
+    # guided-skill surface.
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "triage":
@@ -1553,9 +2314,15 @@ def main(argv: list | None = None) -> int:
         return _emit_main(argv[1:])
     if argv and argv[0] == "uninstall":
         return _uninstall_main(argv[1:])
+    if argv and argv[0] == "from-goal":
+        return _from_goal_main(argv[1:])
+    if argv and argv[0] == "criteria-check":
+        return _criteria_check_main(argv[1:])
+    if argv and argv[0] == "criteria-split":
+        return _criteria_split_main(argv[1:])
     print(
         "error: unknown or missing subcommand (expected: triage, rubric, dataset, params, "
-        "emit, uninstall)",
+        "emit, uninstall, from-goal, criteria-check, criteria-split)",
         file=sys.stderr,
     )
     return 2

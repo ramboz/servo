@@ -38,6 +38,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -116,11 +117,119 @@ def _out_dir(root: Path, spec_id: str = "042-demo") -> Path:
     return root / spec_id / "eval" / spec_id
 
 
-def _run_cli(args: list) -> subprocess.CompletedProcess:
+def _run_cli(args: list, *, mock_bindir=None, extra_env=None) -> subprocess.CompletedProcess:
+    """Run `eval_authoring.py` as a subprocess.
+
+    `mock_bindir` (008-05): prepended to a minimal system PATH so a mock
+    `claude` shadows any real one (mirrors `skills/agent-loop/test_loop.py`'s
+    `_run_loop` PATH-injection idiom exactly). `extra_env` layers additional
+    env vars on top (e.g. an isolated `HOME` for the jig-presence probe).
+    Neither argument is passed by any of the pre-008-05 tests in this file,
+    so their behavior (inherit the parent env untouched) is unchanged.
+    """
+    env = None
+    if mock_bindir is not None or extra_env is not None:
+        env = dict(os.environ)
+        if mock_bindir is not None:
+            env["PATH"] = f"{mock_bindir}:/bin:/usr/bin"
+        if extra_env:
+            env.update(extra_env)
     return subprocess.run(
         [sys.executable, str(EVAL_AUTHORING)] + args,
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env,
     )
+
+
+# ---------------------------------------------------------------------------
+# 008-05 mock-claude harness (mirrors `skills/agent-loop/test_loop.py`'s
+# `_make_mock_claude` / `_mock_claude_constant` idiom): a bash script written
+# into a per-test `bin/` dir, PATH-injected via `_run_cli(mock_bindir=...)`,
+# so `from-goal`'s two `claude -p` calls (expansion, then review) are served
+# from disk -- never a real model.
+# ---------------------------------------------------------------------------
+
+def _claude_envelope(result_text: str) -> str:
+    """A minimal claude-`-p --output-format json` envelope carrying
+    `result_text` -- the only two fields `_invoke_claude_prompt` reads."""
+    return json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                       "result": result_text})
+
+
+def _make_mock_claude_sequence(bindir: Path, replies: list) -> Path:
+    """Write an executable `claude` shadow that replies with `replies[n-1]`
+    (a full claude envelope, already JSON-encoded) on its n-th invocation
+    (1-indexed) -- lets a single `from-goal` run feed the expansion call a
+    DIFFERENT reply than the review call. Each reply is written to its own
+    file rather than inlined into the script body, so arbitrarily-sized/
+    quoted JSON content never has to survive bash string-escaping."""
+    bindir.mkdir(parents=True, exist_ok=True)
+    for i, reply in enumerate(replies, start=1):
+        (bindir / f"reply-{i}.json").write_text(reply)
+    counter_file = bindir / "counter.txt"
+    body = textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        counter_file='{counter_file}'
+        if [ -f "$counter_file" ]; then n=$(cat "$counter_file"); else n=0; fi
+        n=$((n + 1))
+        echo "$n" > "$counter_file"
+        cat "{bindir}/reply-$n.json"
+    """)
+    claude = bindir / "claude"
+    claude.write_text(body)
+    mode = claude.stat().st_mode
+    claude.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return claude
+
+
+# A goal-derived, structurally mis-tagged taste call (AC7): "requires a
+# senior editor's sign-off" is self-evidently a human sign-off, tagged
+# (wrongly) `deterministic`. Paired with a second, honestly-tagged AC so the
+# fixture exercises a MIXED proposal, not an all-bad one.
+MISTAGGED_EXPANSION_REPLY = _claude_envelope(json.dumps({"acs": [
+    {"statement": "The published post requires a senior editor's sign-off before going live.",
+     "tag": "deterministic",
+     "rationale": "a sign-off event can be checked via a status field"},
+    {"statement": "The summary must not exceed 500 characters.",
+     "tag": "deterministic",
+     "rationale": "a byte-count check"},
+]}))
+
+# The reviewer flags AC #1 (the mis-tagged sign-off) as `mis_tagged`; AC #2 is
+# left unflagged.
+MISTAGGED_REVIEW_REPLY = _claude_envelope(json.dumps({"flags": [
+    {"ac_index": 1, "kind": "mis_tagged",
+     "note": "a senior editor's sign-off is a human/policy call, not deterministic"},
+]}))
+
+# A clean, honestly-tagged two-AC expansion with no reviewer flags -- the
+# baseline "expansion produces tagged ACs" fixture (AC7). The second AC's
+# wording ("exists on disk") deliberately hits spec-006's OWN deterministic
+# `file_presence` family, so `criteria-split` (AC5) has a genuine mixed
+# evaluable/human-residual split to report, not a 0/N degenerate case.
+CLEAN_EXPANSION_REPLY = _claude_envelope(json.dumps({"acs": [
+    {"statement": "The summary must not contradict any fact in the source document.",
+     "tag": "judged", "rationale": "faithfulness needs a judge against the source"},
+    {"statement": "The exported file exists on disk after the export command runs.",
+     "tag": "deterministic", "rationale": "a file-existence check"},
+]}))
+CLEAN_REVIEW_REPLY = _claude_envelope(json.dumps({"flags": []}))
+
+
+def _isolated_home(tmp_root: Path, *, with_jig_skill: bool = False) -> Path:
+    """An isolated `$HOME` for the jig-presence probe (AC7's "built-in
+    reviewer path exercised with jig absent"), so the test is hermetic
+    regardless of what the host machine happens to have installed under its
+    real `~/.claude/skills/`. `with_jig_skill=True` seeds a fake
+    `independent-review/SKILL.md` to exercise the OTHER branch."""
+    home = tmp_root / "home"
+    skill_dir = home / ".claude" / "skills" / "independent-review"
+    if with_jig_skill:
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: independent-review\n---\n\nFresh-eyes review framing.\n")
+    else:
+        home.mkdir(parents=True, exist_ok=True)
+    return home
 
 
 MIXED_RESIDUAL = [
@@ -1923,6 +2032,600 @@ class GateContractTests(unittest.TestCase):
             result = self._run_gate(target)
             self.assertEqual(result.returncode, 2, result.stderr)
             self.assertIn("status=env_error", result.stdout)
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-05 (goal-to-criteria, ADR-0027) -- AC1: expansion produces
+# tagged ACs
+# ---------------------------------------------------------------------------
+
+class GoalExpansionTests(unittest.TestCase):
+    def test_expansion_produces_tagged_acs(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            bindir = root / "bin"
+            home = _isolated_home(root)
+            spec_dir = root / "specs"
+            spec_dir.mkdir()
+            _make_mock_claude_sequence(bindir, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+            goal = "Make the summary faithful"
+
+            proc = _run_cli(
+                ["from-goal", goal, "--spec-dir", str(spec_dir)],
+                mock_bindir=bindir, extra_env={"HOME": str(home)},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            goal_slug = ea._goal_slug(goal)
+            out_dir = spec_dir / goal_slug
+            payload = json.loads((out_dir / "criteria.json").read_text())
+
+            self.assertEqual(len(payload["acs"]), 2)
+            self.assertEqual({e["tag"] for e in payload["acs"]}, {"judged", "deterministic"})
+            for e in payload["acs"]:
+                self.assertTrue(e["rationale"])
+                # AC3: from-goal never auto-approves.
+                self.assertEqual(e["approval_status"], "proposed")
+            self.assertEqual(payload["goal"], goal)
+
+            md = (out_dir / "criteria.md").read_text()
+            self.assertIn("## Acceptance criteria", md)
+            self.assertIn("proposal", md.lower())
+
+    def test_malformed_expansion_reply_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            bindir = root / "bin"
+            home = _isolated_home(root)
+            spec_dir = root / "specs"
+            spec_dir.mkdir()
+            _make_mock_claude_sequence(
+                bindir, [_claude_envelope("I refuse to answer in JSON."), CLEAN_REVIEW_REPLY])
+
+            proc = _run_cli(
+                ["from-goal", "Some goal", "--spec-dir", str(spec_dir)],
+                mock_bindir=bindir, extra_env={"HOME": str(home)},
+            )
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("error:", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# AC3 (BLOCKER fix) -- from-goal never clobbers an already-curated artifact:
+# refuses a re-run over an existing criteria.md/criteria.json unless --force
+# is passed, mirroring dataset_target's never-overwrite posture for its own
+# human-grown cases (008-03).
+# ---------------------------------------------------------------------------
+
+class FromGoalNoOverwriteTests(unittest.TestCase):
+    def _first_run(self, root: Path):
+        bindir = root / "bin"
+        home = _isolated_home(root)
+        spec_dir = root / "specs"
+        spec_dir.mkdir()
+        _make_mock_claude_sequence(bindir, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+        goal = "Make the summary faithful"
+        proc = _run_cli(
+            ["from-goal", goal, "--spec-dir", str(spec_dir)],
+            mock_bindir=bindir, extra_env={"HOME": str(home)},
+        )
+        assert proc.returncode == 0, proc.stderr
+        goal_slug = ea._goal_slug(goal)
+        out_dir = spec_dir / goal_slug
+        return spec_dir, out_dir, goal, home
+
+    def test_rerun_without_force_refuses_and_preserves_human_curation(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            spec_dir, out_dir, goal, home = self._first_run(root)
+
+            # Simulate human curation: edit criteria.md's text and approve
+            # every AC in criteria.json -- exactly what AC3 exists to
+            # protect.
+            criteria_md_path = out_dir / "criteria.md"
+            criteria_json_path = out_dir / "criteria.json"
+            md_text = criteria_md_path.read_text() + "\n<!-- human-edited -->\n"
+            criteria_md_path.write_text(md_text)
+            payload = json.loads(criteria_json_path.read_text())
+            for e in payload["acs"]:
+                e["approval_status"] = "approved"
+            json_text = json.dumps(payload, indent=2) + "\n"
+            criteria_json_path.write_text(json_text)
+
+            # A second run's mock claude replies with DIFFERENT (mis-tagged)
+            # content -- if the refusal didn't fire, the byte-for-byte
+            # assertions below would catch the clobber.
+            bindir2 = root / "bin2"
+            _make_mock_claude_sequence(
+                bindir2, [MISTAGGED_EXPANSION_REPLY, MISTAGGED_REVIEW_REPLY])
+            proc2 = _run_cli(
+                ["from-goal", goal, "--spec-dir", str(spec_dir)],
+                mock_bindir=bindir2, extra_env={"HOME": str(home)},
+            )
+            self.assertEqual(proc2.returncode, 2)
+            self.assertIn("error:", proc2.stderr)
+            self.assertNotIn("Traceback", proc2.stderr)
+            self.assertIn("criteria", proc2.stderr.lower())
+
+            self.assertEqual(criteria_md_path.read_text(), md_text)
+            self.assertEqual(criteria_json_path.read_text(), json_text)
+
+    def test_rerun_with_force_regenerates(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            spec_dir, out_dir, goal, home = self._first_run(root)
+
+            criteria_md_path = out_dir / "criteria.md"
+            before = criteria_md_path.read_text()
+
+            bindir2 = root / "bin2"
+            _make_mock_claude_sequence(
+                bindir2, [MISTAGGED_EXPANSION_REPLY, MISTAGGED_REVIEW_REPLY])
+            proc2 = _run_cli(
+                ["from-goal", goal, "--spec-dir", str(spec_dir), "--force"],
+                mock_bindir=bindir2, extra_env={"HOME": str(home)},
+            )
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+
+            after = criteria_md_path.read_text()
+            self.assertNotEqual(before, after)
+            payload = json.loads((out_dir / "criteria.json").read_text())
+            self.assertIn("sign-off", payload["acs"][0]["statement"])
+            # --force regenerates from scratch: the new proposal is
+            # unapproved again, exactly like a genuine first run.
+            self.assertTrue(all(e["approval_status"] == "proposed" for e in payload["acs"]))
+
+
+# ---------------------------------------------------------------------------
+# AC1/AC2 nit -- SERVO_EVAL_AUTHORING_CLAUDE_BIN override (mirrors
+# score.py::_resolve_claude): from-goal's two claude -p calls resolve
+# through the same env override, so a mock/alternate binary can be pointed
+# at without PATH surgery.
+# ---------------------------------------------------------------------------
+
+class ClaudeBinaryEnvOverrideTests(unittest.TestCase):
+    def test_from_goal_honors_claude_bin_env_override_without_path_shadowing(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            home = _isolated_home(root)
+            spec_dir = root / "specs"
+            spec_dir.mkdir()
+            # Deliberately NOT prepended to PATH (no mock_bindir=...) -- the
+            # mock must be found purely via the env var override.
+            altbin = root / "altbin"
+            claude_path = _make_mock_claude_sequence(
+                altbin, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+            goal = "Make the summary faithful"
+
+            proc = _run_cli(
+                ["from-goal", goal, "--spec-dir", str(spec_dir)],
+                extra_env={
+                    "HOME": str(home),
+                    "SERVO_EVAL_AUTHORING_CLAUDE_BIN": str(claude_path),
+                },
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            goal_slug = ea._goal_slug(goal)
+            payload = json.loads((spec_dir / goal_slug / "criteria.json").read_text())
+            self.assertEqual(len(payload["acs"]), 2)
+
+    def test_resolve_claude_prefers_env_override_over_path(self):
+        orig = os.environ.get("SERVO_EVAL_AUTHORING_CLAUDE_BIN")
+        try:
+            os.environ["SERVO_EVAL_AUTHORING_CLAUDE_BIN"] = "/custom/path/to/claude"
+            self.assertEqual(ea._resolve_claude(), "/custom/path/to/claude")
+        finally:
+            if orig is not None:
+                os.environ["SERVO_EVAL_AUTHORING_CLAUDE_BIN"] = orig
+            else:
+                os.environ.pop("SERVO_EVAL_AUTHORING_CLAUDE_BIN", None)
+
+
+# ---------------------------------------------------------------------------
+# AC2/AC7 -- a structurally mis-tagged taste call is flagged by the reviewer
+# ---------------------------------------------------------------------------
+
+class MisTaggedTasteCallReviewerFlagTests(unittest.TestCase):
+    def test_structurally_mistagged_ac_is_flagged_by_the_reviewer(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            bindir = root / "bin"
+            home = _isolated_home(root)
+            spec_dir = root / "specs"
+            spec_dir.mkdir()
+            _make_mock_claude_sequence(bindir, [MISTAGGED_EXPANSION_REPLY, MISTAGGED_REVIEW_REPLY])
+            goal = "Publish the blog post"
+
+            proc = _run_cli(
+                ["from-goal", goal, "--spec-dir", str(spec_dir)],
+                mock_bindir=bindir, extra_env={"HOME": str(home)},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            goal_slug = ea._goal_slug(goal)
+            out_dir = spec_dir / goal_slug
+            payload = json.loads((out_dir / "criteria.json").read_text())
+
+            mistagged = payload["acs"][0]
+            self.assertIn("sign-off", mistagged["statement"])
+            self.assertEqual(mistagged["tag"], "deterministic")  # the (wrong) LLM self-tag
+            self.assertEqual(len(mistagged["reviewer_flags"]), 1)
+            self.assertEqual(mistagged["reviewer_flags"][0]["kind"], "mis_tagged")
+            # The second, honestly-tagged AC gets no flag.
+            self.assertEqual(payload["acs"][1]["reviewer_flags"], [])
+
+            # AC3: the flag is presented to the human, not buried only in the
+            # machine contract.
+            md = (out_dir / "criteria.md").read_text()
+            self.assertIn("mis_tagged", md)
+
+
+# ---------------------------------------------------------------------------
+# AC3/AC7 -- the human-curation gate: no freezing without recorded per-AC
+# approval, and the human can add a criterion the expansion omitted
+# ---------------------------------------------------------------------------
+
+class HumanCurationGateTests(unittest.TestCase):
+    def test_require_all_approved_raises_when_any_ac_unapproved(self):
+        payload = {"acs": [
+            {"id": "AC-1", "approval_status": "approved"},
+            {"id": "AC-2", "approval_status": "proposed"},
+        ]}
+        with self.assertRaises(ea.EnvError):
+            ea.require_all_approved(payload)
+
+    def test_require_all_approved_passes_when_every_ac_approved(self):
+        payload = {"acs": [{"id": "AC-1", "approval_status": "approved"}]}
+        ea.require_all_approved(payload)  # no exception
+
+    def test_unapproved_goal_derived_ac_set_gets_no_free_ride_to_a_frozen_component(self):
+        """Ties from-goal's own gate to 008-04's EXISTING, independent freeze
+        gate: a goal-derived AC set that never records human approval cannot
+        reach an approved/frozen component any more than a hand-written one
+        can (mirrors `EmitFreezeTests.test_emit_refuses_an_empty_dataset`),
+        run over an artifact `from-goal` produced instead of a hand-written
+        spec.md."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            bindir = root / "bin"
+            home = _isolated_home(root)
+            spec_dir = root / "specs"
+            spec_dir.mkdir()
+            _make_mock_claude_sequence(bindir, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+            goal = "Make the summary faithful"
+
+            proc = _run_cli(
+                ["from-goal", goal, "--spec-dir", str(spec_dir)],
+                mock_bindir=bindir, extra_env={"HOME": str(home)},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            goal_slug = ea._goal_slug(goal)
+            out_dir = spec_dir / goal_slug
+            payload = json.loads((out_dir / "criteria.json").read_text())
+            self.assertTrue(all(e["approval_status"] == "proposed" for e in payload["acs"]))
+            with self.assertRaises(ea.EnvError):
+                ea.require_all_approved(payload)
+
+            # Feed the emitted artifact into oracle_plan.py's plan (write)
+            # step, exactly as a hand-written spec.md would be -- proving
+            # from-goal's output re-enters the SAME pipeline (AC6).
+            criteria_md = out_dir / "criteria.md"
+            oracle_plan_py = REPO_ROOT / "skills" / "spec-oracle" / "oracle_plan.py"
+            plan_proc = subprocess.run(
+                [sys.executable, str(oracle_plan_py), str(out_dir), str(criteria_md)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(plan_proc.returncode, 0, plan_proc.stderr)
+            checks_path = out_dir / "oracle" / goal_slug / "checks.json"
+            self.assertTrue(checks_path.is_file())
+
+            triage_proc = _run_cli(["triage", str(checks_path)])
+            self.assertEqual(triage_proc.returncode, 0, triage_proc.stderr)
+            triage_json = json.loads((out_dir / "eval" / goal_slug / "triage.json").read_text())
+            self.assertTrue(triage_json["eval_able"], "fixture must yield >=1 eval-able AC")
+            ac_id = triage_json["eval_able"][0]
+
+            rubric_proc = _run_cli(["rubric", str(checks_path), "--ac", ac_id])
+            self.assertEqual(rubric_proc.returncode, 0, rubric_proc.stderr)
+
+            # No `dataset` run -> cases still empty -> emit refuses, exactly
+            # like a hand-written spec's un-populated dataset would.
+            emit_proc = _run_cli(["emit", str(checks_path), "--ac", ac_id])
+            self.assertEqual(emit_proc.returncode, 2)
+            self.assertIn("error:", emit_proc.stderr)
+            self.assertNotIn("Traceback", emit_proc.stderr)
+
+    def test_human_can_add_a_criterion_the_expansion_omitted(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            bindir = root / "bin"
+            home = _isolated_home(root)
+            spec_dir = root / "specs"
+            spec_dir.mkdir()
+            _make_mock_claude_sequence(bindir, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+            goal = "Make the summary faithful"
+
+            proc = _run_cli(
+                ["from-goal", goal, "--spec-dir", str(spec_dir)],
+                mock_bindir=bindir, extra_env={"HOME": str(home)},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            goal_slug = ea._goal_slug(goal)
+            criteria_md_path = spec_dir / goal_slug / "criteria.md"
+            oracle_plan = _load_oracle_plan_module()
+            before = oracle_plan.extract_acs(criteria_md_path.read_text(), spec_id=goal_slug)
+
+            # Simulate a human directly editing the plain, spec-shaped AC
+            # section to add a criterion the expansion omitted entirely --
+            # there is no row to "reject" for something never proposed, so
+            # adding is the human's coverage-of-intent backstop (ADR-0027
+            # Decision #3).
+            added_statement = "The summary must cite the source document's title."
+            text = criteria_md_path.read_text().rstrip("\n")
+            text += f"\n{len(before) + 1}. {added_statement}\n"
+            criteria_md_path.write_text(text)
+
+            after = oracle_plan.extract_acs(criteria_md_path.read_text(), spec_id=goal_slug)
+            self.assertEqual(len(after), len(before) + 1)
+            self.assertEqual(after[-1]["statement"], added_statement)
+
+
+# ---------------------------------------------------------------------------
+# AC3/ADR-0027 Decision #5 nit -- `criteria-check` wires `require_all_approved`
+# into an actually-invocable CLI checkpoint (it was previously defined and
+# tested but reachable from no production path).
+# ---------------------------------------------------------------------------
+
+class CriteriaCheckCLITests(unittest.TestCase):
+    def _from_goal(self, root: Path):
+        bindir = root / "bin"
+        home = _isolated_home(root)
+        spec_dir = root / "specs"
+        spec_dir.mkdir()
+        _make_mock_claude_sequence(bindir, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+        goal = "Make the summary faithful"
+        proc = _run_cli(
+            ["from-goal", goal, "--spec-dir", str(spec_dir)],
+            mock_bindir=bindir, extra_env={"HOME": str(home)},
+        )
+        assert proc.returncode == 0, proc.stderr
+        goal_slug = ea._goal_slug(goal)
+        return spec_dir / goal_slug
+
+    def test_criteria_check_reports_not_approved_then_approved(self):
+        with tempfile.TemporaryDirectory() as d:
+            out_dir = self._from_goal(Path(d))
+            criteria_md_path = out_dir / "criteria.md"
+
+            proc = _run_cli(["criteria-check", str(criteria_md_path)])
+            self.assertEqual(proc.returncode, 1)
+            self.assertIn("NOT approved", proc.stdout)
+            self.assertIn("error:", proc.stderr)
+
+            criteria_json_path = out_dir / "criteria.json"
+            payload = json.loads(criteria_json_path.read_text())
+            for e in payload["acs"]:
+                e["approval_status"] = "approved"
+            criteria_json_path.write_text(json.dumps(payload, indent=2) + "\n")
+
+            proc2 = _run_cli(["criteria-check", str(criteria_md_path)])
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+            self.assertIn("every AC approved", proc2.stdout)
+            self.assertNotIn("NOT approved", proc2.stdout)
+
+    def test_criteria_check_missing_sibling_json_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            criteria_md = root / "criteria.md"
+            criteria_md.write_text("# Fake\n")
+            proc = _run_cli(["criteria-check", str(criteria_md)])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("error:", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_criteria_check_missing_artifact_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = _run_cli(["criteria-check", str(Path(d) / "does-not-exist.md")])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("error:", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# AC2/AC7 -- reviewer sourcing: jig's user-scope skill when present, else the
+# built-in prompt; the built-in path works with jig absent
+# ---------------------------------------------------------------------------
+
+class ReviewerSourcingTests(unittest.TestCase):
+    def _run_from_goal(self, root: Path, *, with_jig_skill: bool) -> dict:
+        bindir = root / "bin"
+        home = _isolated_home(root, with_jig_skill=with_jig_skill)
+        spec_dir = root / "specs"
+        spec_dir.mkdir()
+        _make_mock_claude_sequence(bindir, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+        goal = "Make the summary faithful"
+        proc = _run_cli(
+            ["from-goal", goal, "--spec-dir", str(spec_dir)],
+            mock_bindir=bindir, extra_env={"HOME": str(home)},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        goal_slug = ea._goal_slug(goal)
+        return json.loads((spec_dir / goal_slug / "criteria.json").read_text())
+
+    def test_built_in_prompt_used_and_works_with_jig_absent(self):
+        with tempfile.TemporaryDirectory() as d:
+            payload = self._run_from_goal(Path(d), with_jig_skill=False)
+            self.assertEqual(payload["reviewer_source"], "built-in")
+
+    def test_jig_skill_used_when_present_at_user_scope(self):
+        with tempfile.TemporaryDirectory() as d:
+            payload = self._run_from_goal(Path(d), with_jig_skill=True)
+            self.assertEqual(payload["reviewer_source"], "jig")
+
+    def test_jig_probe_direct_unit(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            home_absent = _isolated_home(root / "a", with_jig_skill=False)
+            home_present = _isolated_home(root / "b", with_jig_skill=True)
+            orig_home = os.environ.get("HOME")
+            try:
+                os.environ["HOME"] = str(home_absent)
+                self.assertIsNone(ea._jig_independent_review_skill_path())
+                os.environ["HOME"] = str(home_present)
+                self.assertIsNotNone(ea._jig_independent_review_skill_path())
+            finally:
+                if orig_home is not None:
+                    os.environ["HOME"] = orig_home
+                else:
+                    os.environ.pop("HOME", None)
+
+
+# ---------------------------------------------------------------------------
+# AC4/AC5/AC7 -- the emitted artifact feeds 006 (extract_acs round trip)
+# and 015's criteria split, unchanged / not a full verdict
+# ---------------------------------------------------------------------------
+
+class EmittedArtifactFeedsPipelineTests(unittest.TestCase):
+    def _from_goal(self, root: Path):
+        bindir = root / "bin"
+        home = _isolated_home(root)
+        spec_dir = root / "specs"
+        spec_dir.mkdir()
+        _make_mock_claude_sequence(bindir, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+        goal = "Make the summary faithful"
+        proc = _run_cli(
+            ["from-goal", goal, "--spec-dir", str(spec_dir)],
+            mock_bindir=bindir, extra_env={"HOME": str(home)},
+        )
+        assert proc.returncode == 0, proc.stderr
+        goal_slug = ea._goal_slug(goal)
+        return spec_dir, goal_slug
+
+    def test_round_trips_through_extract_acs_unchanged(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec_dir, goal_slug = self._from_goal(Path(d))
+            out_dir = spec_dir / goal_slug
+            payload = json.loads((out_dir / "criteria.json").read_text())
+            criteria_md_text = (out_dir / "criteria.md").read_text()
+
+            oracle_plan = _load_oracle_plan_module()
+            acs = oracle_plan.extract_acs(criteria_md_text, spec_id=goal_slug)
+
+            self.assertEqual(len(acs), len(payload["acs"]))
+            for extracted, original in zip(acs, payload["acs"]):
+                self.assertEqual(extracted["statement"], original["statement"])
+
+            # Re-parsing the same text a second time reproduces the exact
+            # same result (the round trip is not order/state-dependent).
+            acs_again = oracle_plan.extract_acs(criteria_md_text, spec_id=goal_slug)
+            self.assertEqual(acs, acs_again)
+
+    def test_criteria_split_surfaces_evaluable_vs_human_residual_not_a_full_verdict(self):
+        with tempfile.TemporaryDirectory() as d:
+            spec_dir, goal_slug = self._from_goal(Path(d))
+            criteria_md = spec_dir / goal_slug / "criteria.md"
+
+            split_proc = _run_cli(["criteria-split", str(criteria_md)])
+            self.assertEqual(split_proc.returncode, 0, split_proc.stderr)
+            self.assertIn("evaluable", split_proc.stdout)
+            self.assertIn("NOT a full suitability verdict", split_proc.stdout)
+
+            # AC5: this is the criteria split only -- no suitability verdict
+            # artifact is ever written (that requires target signals +
+            # `suitability.py analyze`, never called here).
+            self.assertFalse((spec_dir / ".servo").exists())
+            self.assertFalse((spec_dir / goal_slug / ".servo").exists())
+
+            split = ea.criteria_split(criteria_md)
+            self.assertEqual(split["n_evaluable"] + split["n_human_residual"], 2)
+            self.assertGreaterEqual(split["n_evaluable"], 1)
+            self.assertGreaterEqual(split["n_human_residual"], 1)
+
+    def test_criteria_split_missing_artifact_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = _run_cli(["criteria-split", str(Path(d) / "does-not-exist.md")])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("error:", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# AC5 nit -- criteria_split raises a clean EnvError on malformed classifier
+# output (mirrors suitability.py::_classify's own checks/residual_judgment
+# key validation), instead of silently reporting a degenerate 0/0 split.
+# ---------------------------------------------------------------------------
+
+class CriteriaSplitKeyValidationTests(unittest.TestCase):
+    def test_malformed_classifier_output_missing_keys_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            criteria_md = root / "criteria.md"
+            criteria_md.write_text("# Fake\n\n## Acceptance criteria\n\n1. Something.\n")
+
+            fake_oracle_plan = root / "fake_oracle_plan.py"
+            fake_oracle_plan.write_text(
+                "import json\nprint(json.dumps({'schema_version': 1}))\n")
+
+            orig = ea.ORACLE_PLAN_PATH
+            ea.ORACLE_PLAN_PATH = fake_oracle_plan
+            try:
+                with self.assertRaises(ea.EnvError):
+                    ea.criteria_split(criteria_md)
+            finally:
+                ea.ORACLE_PLAN_PATH = orig
+
+
+# ---------------------------------------------------------------------------
+# AC6/AC7 -- opt-in boundary: hand-written ACs skip from-goal; from-goal
+# never invokes gate.py/oracle.sh
+# ---------------------------------------------------------------------------
+
+class OptInBoundaryTests(unittest.TestCase):
+    def test_hand_written_ac_set_skips_from_goal_and_enters_at_triage(self):
+        """AC6: an author with hand-written ACs enters straight at 008-01
+        triage -- from-goal is never on the critical path."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+            proc = _run_cli(["triage", str(plan_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertTrue((_out_dir(root) / "triage.json").is_file())
+
+    def test_from_goal_never_touches_oracle_sh_or_gate_py(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            bindir = root / "bin"
+            home = _isolated_home(root)
+            spec_dir = root / "specs"
+            spec_dir.mkdir()
+
+            # A fully scaffolded, unrelated target -- from-goal writes its own
+            # artifact into a DIFFERENT directory (`spec_dir`), so this proves
+            # the run has zero side effects near any real oracle.sh/gate.py
+            # managed target.
+            target = root / "target"
+            _make_stub_target(target)
+            oracle_before = (target / "oracle.sh").read_bytes()
+            manifest_before = (target / ".servo" / "install.json").read_bytes()
+
+            _make_mock_claude_sequence(bindir, [CLEAN_EXPANSION_REPLY, CLEAN_REVIEW_REPLY])
+            goal = "Make the summary faithful"
+            proc = _run_cli(
+                ["from-goal", goal, "--spec-dir", str(spec_dir)],
+                mock_bindir=bindir, extra_env={"HOME": str(home)},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            self.assertEqual((target / "oracle.sh").read_bytes(), oracle_before)
+            self.assertEqual(
+                (target / ".servo" / "install.json").read_bytes(), manifest_before)
+            # The goal's own artifact directory never grows a `.servo` either.
+            self.assertFalse((spec_dir / ".servo").exists())
+            goal_slug = ea._goal_slug(goal)
+            self.assertFalse((spec_dir / goal_slug / ".servo").exists())
 
 
 if __name__ == "__main__":
