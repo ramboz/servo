@@ -753,3 +753,13 @@ functional for both of its own documented use cases.
 **Resolution trigger:** the first real authored eval whose judge-audit surfaces an untrustworthy judge (provisional: fail-precision < 0.70 or pass-miss-rate > 0.20 on a ≥20-case sample) that a human would want the composite to reflect automatically. At that point a new ADR decides the demotion semantics (does `confirmed-only` zero the component, down-weight it, or force `env_error`?) and a follow-on spec 008 slice implements it.
 
 **Surfaced by:** ADR-0027 frame-critique (rounds 1–2, 2026-07-11) — the reviewer flagged that an advisory-only audit leaves the false-pass-via-untrusted-judge hole open; kept advisory in the MVP by design, with the gating decision parked here rather than rushed into the gate contract. Referenced by spec 008 Open questions and slice 008-06 AC4.
+
+---
+
+## eval-authoring `triage` — untested `plan_path_layout_mismatch` guard branches
+
+**Deferred:** Spec 008 slice 008-01 added `_spec_dir_from_plan_path` in `skills/eval-authoring/eval_authoring.py`, which fails closed with `EnvError("plan_path_layout_mismatch", …)` when a well-formed plan sits at a non-conforming on-disk layout (too shallow for `parents[2]`, or a `source_spec_path` basename absent from the derived spec dir). Those two guard branches have no direct test — the existing malformed-plan tests all bail earlier in `load_plan`, and the colocation tests use conforming layouts. Defensive code beyond slice 008-01's AC6 coverage requirement; low-risk.
+
+**Resolution trigger:** the next slice that touches `eval_authoring.py`'s path-resolution (e.g. 008-05's spec-shaped-artifact input, which re-enters `triage` from a different on-disk shape) — add a fixture writing a valid plan one directory too shallow, and one whose `source_spec_path` basename is absent, asserting exit 2 on both.
+
+**Surfaced by:** slice 008-01 craft re-review + reconciliation review (2026-07-12) — a disclosed, non-blocking coverage gap, not a defect.
