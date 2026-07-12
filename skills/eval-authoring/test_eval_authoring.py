@@ -2628,5 +2628,319 @@ class OptInBoundaryTests(unittest.TestCase):
             self.assertFalse((spec_dir / goal_slug / ".servo").exists())
 
 
+# ---------------------------------------------------------------------------
+# Slice 008-06 (judge-audit) — AC1-AC6: a light, ADVISORY judge-trust audit.
+# Reports + recommends; never gates the composite or touches
+# oracle.sh/gate.py (AC4). Metrics/recommendation tests drive `audit_target`
+# directly against a hand-built eval dir (mirrors `DatasetCompositeScoreTests`'
+# `_write_config` idiom); the composite/ledger tests run the FULL pipeline —
+# triage -> rubric -> dataset -> emit --target -> a real `score.py` run —
+# so the audited scoring run is genuine, not hand-authored.
+# ---------------------------------------------------------------------------
+
+def _write_audit_eval_dir(root: Path, *, threshold: float = 0.8, case_scores: dict) -> Path:
+    """A minimal eval directory (`config.json` + a score.py-shaped
+    `ledger.jsonl` scoring record) sufficient to exercise `audit_target`
+    without running the full triage->rubric->dataset->emit->score pipeline."""
+    eval_dir = root / "audit-eval"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    config = _base_rubric_config()
+    config["threshold"] = threshold
+    (eval_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+    record = {
+        "at": "2026-01-01T00:00:00Z", "model": config["judge"]["model"], "transport": "api",
+        "composite": 0.75, "definition_hash": "sha256:deadbeef",
+        "cases": [{"id": cid, "samples": [s], "score": s} for cid, s in case_scores.items()],
+    }
+    (eval_dir / "ledger.jsonl").write_text(json.dumps(record) + "\n")
+    return eval_dir
+
+
+def _write_labels_file(root: Path, name: str, labels: dict) -> Path:
+    path = root / name
+    path.write_text(json.dumps(labels))
+    return path
+
+
+def _emit_and_score_component(root: Path, *, scores: dict = None) -> tuple:
+    """Full pipeline fixture for the judge-audit composite/ledger tests
+    (AC4/AC5): triage -> rubric -> dataset -> emit --target -> a real
+    `score.py` run (via its offline `_FAKE_SCORES_ENV` hook) against the
+    INSTALLED component copy, so `ledger.jsonl` carries a genuine
+    score.py-shaped scoring record to audit -- not a hand-authored one.
+
+    Returns `(comp_dir, target_dir, scored_case_ids)` -- `scored_case_ids`
+    excludes any `skip_case` (never scored, per AC2/AC6 of 008-03).
+    """
+    target_dir = root / "target"
+    _make_stub_target(target_dir)
+    plan_path, _rubric_dir, proc = _triage_shape_and_dataset(root, spec_text=NO_HEADINGS_SPEC_MD)
+    assert proc.returncode == 0, proc.stderr
+
+    proc2 = _run_cli([
+        "emit", str(plan_path), "--ac", "AC-042-demo-1", "--target", str(target_dir),
+    ])
+    assert proc2.returncode == 0, proc2.stderr
+
+    component = ea.component_name("042-demo", "AC-042-demo-1")
+    comp_dir = target_dir / ".servo" / component
+    config = json.loads((comp_dir / "config.json").read_text())
+    scored_case_ids = [c["id"] for c in config["cases"] if c.get("category") != "skip_case"]
+
+    scores = scores if scores is not None else {cid: 0.9 for cid in scored_case_ids}
+    env = dict(os.environ)
+    env[score._FAKE_SCORES_ENV] = json.dumps({cid: [s] for cid, s in scores.items()})
+    proc3 = subprocess.run(
+        [sys.executable, str(comp_dir / "score.py"), str(target_dir)],
+        capture_output=True, text=True, env=env,
+    )
+    assert proc3.returncode == 0, proc3.stderr
+
+    return comp_dir, target_dir, scored_case_ids
+
+
+class JudgeAuditRecommendationTests(unittest.TestCase):
+    """AC2/AC3/AC6: fail-precision/pass-miss-rate drive the auto vs
+    confirmed-only recommendation."""
+
+    def test_trustworthy_judge_yields_auto(self):
+        """A judge whose verdicts agree with every human label clears both
+        provisional thresholds -> `auto` (AC6)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            case_scores, labels = {}, {}
+            for i in range(5):
+                cid = f"pass-{i}"
+                case_scores[cid] = 0.9
+                labels[cid] = "pass"
+            for i in range(5):
+                cid = f"fail-{i}"
+                case_scores[cid] = 0.5
+                labels[cid] = "fail"
+            eval_dir = _write_audit_eval_dir(root, threshold=0.8, case_scores=case_scores)
+            labels_path = _write_labels_file(root, "labels.json", labels)
+
+            record = ea.audit_target(eval_dir, labels_path=labels_path)
+            metrics = record["metrics"]
+            self.assertEqual(metrics["fail_precision"], 1.0)
+            self.assertEqual(metrics["pass_miss_rate"], 0.0)
+            self.assertEqual(record["recommendation"], ea.RECOMMENDATION_AUTO)
+
+    def test_judge_disagreeing_with_human_labels_yields_confirmed_only(self):
+        """A judge whose fail/pass calls the human largely disagrees with
+        misses both provisional thresholds -> `confirmed-only` (AC6)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            case_scores, labels = {}, {}
+            # 5 judge-pass cases -- human disagrees (says fail) on 2 of them.
+            for i in range(5):
+                cid = f"pass-{i}"
+                case_scores[cid] = 0.9
+                labels[cid] = "fail" if i < 2 else "pass"
+            # 5 judge-fail cases -- human disagrees (says pass) on 4 of them.
+            for i in range(5):
+                cid = f"fail-{i}"
+                case_scores[cid] = 0.5
+                labels[cid] = "pass" if i < 4 else "fail"
+            eval_dir = _write_audit_eval_dir(root, threshold=0.8, case_scores=case_scores)
+            labels_path = _write_labels_file(root, "labels.json", labels)
+
+            record = ea.audit_target(eval_dir, labels_path=labels_path)
+            metrics = record["metrics"]
+            self.assertLess(metrics["fail_precision"], ea.AUDIT_FAIL_PRECISION_MIN)
+            self.assertGreater(metrics["pass_miss_rate"], ea.AUDIT_PASS_MISS_RATE_MAX)
+            self.assertEqual(record["recommendation"], ea.RECOMMENDATION_CONFIRMED_ONLY)
+
+    def test_below_floor_sample_suppresses_drift_with_a_caveat(self):
+        """A labeled sample under the provisional 20-case floor suppresses
+        the score-vs-human drift metric with a stated caveat -- never a
+        spurious number -- while fail-precision/pass-miss-rate (which have
+        no such floor) still report (AC2/AC6)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            case_scores, labels = {}, {}
+            for i in range(5):
+                cid = f"pass-{i}"
+                case_scores[cid] = 0.9
+                labels[cid] = {"verdict": "pass", "score": 0.88}
+            for i in range(5):
+                cid = f"fail-{i}"
+                case_scores[cid] = 0.5
+                labels[cid] = {"verdict": "fail", "score": 0.52}
+            eval_dir = _write_audit_eval_dir(root, threshold=0.8, case_scores=case_scores)
+            labels_path = _write_labels_file(root, "labels.json", labels)
+
+            record = ea.audit_target(eval_dir, labels_path=labels_path)
+            metrics = record["metrics"]
+            self.assertEqual(metrics["n_labeled"], 10)
+            self.assertLess(metrics["n_labeled"], ea.AUDIT_DRIFT_MIN_SAMPLE)
+            self.assertIsNone(metrics["drift"])
+            self.assertIn("floor", metrics["drift_note"])
+            self.assertIsNotNone(metrics["fail_precision"])
+            self.assertIsNotNone(metrics["pass_miss_rate"])
+
+    def test_drift_computed_when_sample_clears_the_floor(self):
+        """>=20 labeled cases that each carry a numeric human score exercise
+        the drift-COMPUTED branch, not just the below-floor suppression
+        caveat (AC2) -- proving the `sum(drift_inputs) / len(drift_inputs)`
+        arithmetic itself against an independently hand-computed expected
+        mean-absolute-difference, rather than only implying it works."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            case_scores, labels = {}, {}
+            expected_diffs = []
+            # 10 judge-pass cases: judge=1.0, human=0.75 -> |diff| = 0.25.
+            for i in range(10):
+                cid = f"pass-{i}"
+                judge_score, human_score = 1.0, 0.75
+                case_scores[cid] = judge_score
+                labels[cid] = {"verdict": "pass", "score": human_score}
+                expected_diffs.append(abs(judge_score - human_score))
+            # 10 judge-fail cases: judge=0.25, human=0.5 -> |diff| = 0.25.
+            for i in range(10):
+                cid = f"fail-{i}"
+                judge_score, human_score = 0.25, 0.5
+                case_scores[cid] = judge_score
+                labels[cid] = {"verdict": "fail", "score": human_score}
+                expected_diffs.append(abs(judge_score - human_score))
+            eval_dir = _write_audit_eval_dir(root, threshold=0.8, case_scores=case_scores)
+            labels_path = _write_labels_file(root, "labels.json", labels)
+
+            record = ea.audit_target(eval_dir, labels_path=labels_path)
+            metrics = record["metrics"]
+            self.assertEqual(metrics["n_labeled"], 20)
+            self.assertGreaterEqual(metrics["drift_n"], ea.AUDIT_DRIFT_MIN_SAMPLE)
+            expected_drift = sum(expected_diffs) / len(expected_diffs)
+            self.assertEqual(expected_drift, 0.25)  # hand-computed: every case diffs by 0.25
+            self.assertEqual(metrics["drift"], expected_drift)
+            self.assertIsNone(metrics["drift_note"])
+
+    def test_empty_judge_fail_and_empty_human_fail_report_na_not_a_crash(self):
+        """Honesty over a degenerate all-agree-pass sample: both ratios'
+        denominators are empty, so each reports a stated 'n/a' note rather
+        than raising `ZeroDivisionError` (AC2)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            case_scores = {f"pass-{i}": 0.9 for i in range(3)}
+            labels = {cid: "pass" for cid in case_scores}
+            eval_dir = _write_audit_eval_dir(root, threshold=0.8, case_scores=case_scores)
+            labels_path = _write_labels_file(root, "labels.json", labels)
+
+            record = ea.audit_target(eval_dir, labels_path=labels_path)
+            metrics = record["metrics"]
+            self.assertIsNone(metrics["fail_precision"])
+            self.assertIn("n/a", metrics["fail_precision_note"])
+            self.assertIsNone(metrics["pass_miss_rate"])
+            self.assertIn("n/a", metrics["pass_miss_note"])
+            # Fail-closed (AC3): undefined metrics never default to `auto`.
+            self.assertEqual(record["recommendation"], ea.RECOMMENDATION_CONFIRMED_ONLY)
+
+
+class SelectAuditSampleMixedTests(unittest.TestCase):
+    """AC1: `select_audit_sample` samples a MIXED pass/fail set of judged
+    cases -- asserted directly against the function itself, rather than only
+    implied by the recommendation fixtures above (which happen to pass mixed
+    scores through `audit_target` for other reasons)."""
+
+    def test_sample_contains_both_judge_pass_and_judge_fail_cases(self):
+        judged_scores = {f"pass-{i}": 0.9 for i in range(5)}
+        judged_scores.update({f"fail-{i}": 0.5 for i in range(5)})
+
+        sample = ea.select_audit_sample(judged_scores, threshold=0.8)
+        verdicts = {cid: ea._judge_verdict(judged_scores[cid], 0.8) for cid in sample}
+        self.assertGreaterEqual(sum(1 for v in verdicts.values() if v == "pass"), 1)
+        self.assertGreaterEqual(sum(1 for v in verdicts.values() if v == "fail"), 1)
+
+        # Still mixed once capped by an explicit --sample-size, not just when
+        # every judged case is eligible by default.
+        capped = ea.select_audit_sample(judged_scores, threshold=0.8, sample_size=4)
+        capped_verdicts = {cid: ea._judge_verdict(judged_scores[cid], 0.8) for cid in capped}
+        self.assertGreaterEqual(sum(1 for v in capped_verdicts.values() if v == "pass"), 1)
+        self.assertGreaterEqual(sum(1 for v in capped_verdicts.values() if v == "fail"), 1)
+
+
+class JudgeAuditCompositeUnchangedTests(unittest.TestCase):
+    """AC4: an audit run never alters the composite, the frozen
+    `config.json`, or `oracle.sh` -- proved byte-for-byte, over a genuine
+    installed-component scoring run (not a hand-authored ledger record)."""
+
+    def test_composite_config_and_oracle_are_byte_identical_before_and_after(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            comp_dir, target_dir, scored_case_ids = _emit_and_score_component(root)
+
+            config_before = (comp_dir / "config.json").read_bytes()
+            oracle_before = (target_dir / "oracle.sh").read_bytes()
+
+            labels_path = _write_labels_file(
+                root, "labels.json", {cid: "pass" for cid in scored_case_ids})
+            proc = _run_cli(["audit", str(comp_dir), "--labels", str(labels_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            self.assertEqual((comp_dir / "config.json").read_bytes(), config_before)
+            self.assertEqual((target_dir / "oracle.sh").read_bytes(), oracle_before)
+
+
+class JudgeAuditLedgerAppendTests(unittest.TestCase):
+    """AC5: the audit result appends to `ledger.jsonl` as a distinct
+    `"kind": "judge_audit"` record, distinguishable from score.py's own
+    scoring records."""
+
+    def test_audit_record_appended_to_ledger(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            comp_dir, _target_dir, scored_case_ids = _emit_and_score_component(root)
+
+            ledger_path = comp_dir / "ledger.jsonl"
+            lines_before = ledger_path.read_text().splitlines()
+            self.assertEqual(len(lines_before), 1)  # the score.py run's own record
+
+            labels_path = _write_labels_file(
+                root, "labels.json", {cid: "pass" for cid in scored_case_ids})
+            proc = _run_cli(["audit", str(comp_dir), "--labels", str(labels_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            lines_after = ledger_path.read_text().splitlines()
+            self.assertEqual(len(lines_after), len(lines_before) + 1)
+            score_record = json.loads(lines_after[0])
+            audit_record = json.loads(lines_after[-1])
+            self.assertNotIn("kind", score_record)
+            self.assertEqual(audit_record["kind"], "judge_audit")
+            self.assertIn(audit_record["recommendation"],
+                          (ea.RECOMMENDATION_AUTO, ea.RECOMMENDATION_CONFIRMED_ONLY))
+            self.assertEqual(audit_record["metrics"]["n_labeled"], len(scored_case_ids))
+
+
+class JudgeAuditEnvErrorTests(unittest.TestCase):
+    """Fail-clean, not fail-crash: a missing/malformed input is a clean
+    `EnvError` (exit 2), never a stack trace."""
+
+    def test_audit_without_a_prior_score_run_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            eval_dir = root / "eval"
+            eval_dir.mkdir()
+            config = _base_rubric_config()
+            (eval_dir / "config.json").write_text(json.dumps(config))
+            proc = _run_cli(["audit", str(eval_dir)])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("error:", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_audit_missing_config_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            proc = _run_cli(["audit", d])
+            self.assertEqual(proc.returncode, 2)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_malformed_label_verdict_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            eval_dir = _write_audit_eval_dir(root, threshold=0.8, case_scores={"case-1": 0.9})
+            labels_path = _write_labels_file(root, "labels.json", {"case-1": "maybe"})
+            with self.assertRaises(ea.EnvError):
+                ea.audit_target(eval_dir, labels_path=labels_path)
+
+
 if __name__ == "__main__":
     unittest.main()

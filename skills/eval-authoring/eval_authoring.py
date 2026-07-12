@@ -1,8 +1,8 @@
 """
 servo eval-authoring — slices 008-01 (residual-triage), 008-02
 (rubric-shaping), 008-03 (reference-set), 008-04 (frozen-params-and-emit),
-and 008-05 (goal-to-criteria), the self-contained core of the single
-servo-owned guided skill `/servo:eval-authoring` (ADR-0019 / ADR-0026).
+008-05 (goal-to-criteria), and 008-06 (judge-audit), the self-contained core
+of the single servo-owned guided skill `/servo:eval-authoring` (ADR-0019 / ADR-0026).
 Durable artifacts are co-located with the spec (ADR-0023), mirroring
 `skills/spec-oracle/oracle_plan.py`'s convention.
 
@@ -137,6 +137,22 @@ Usage:
         no target signal or reference set yet, so a full verdict would be
         `needs_evidence` across the board (ADR-0018) — this surfaces only the
         half goal→eval can legitimately claim.
+
+    python3 eval_authoring.py audit <eval> [--labels <file>] [--scores <file>]
+                                    [--sample-size N]
+        (Slice 008-06.) A light, ADVISORY judge-trust audit over an eval
+        directory (`<eval>`, holding `config.json` and, once scored,
+        `ledger.jsonl`): samples a mixed pass/fail set of the eval's judged
+        cases for human spot-checking, records the `--labels` file's human
+        verdicts alongside the judge scores, and computes fail-precision /
+        pass-miss-rate / (above a provisional ≥20-labeled-case floor)
+        score-vs-human drift, recommending `auto` (trust the judge) or
+        `confirmed-only` — advisory output only, never enforced. Never
+        alters the composite, the frozen `config.json`, or `oracle.sh`/
+        `gate.py`; auto-demoting an untrusted judge is deferred (see
+        `docs/refinement-todo.md`). Appends the audit record to
+        `ledger.jsonl` (a `"kind": "judge_audit"` record, distinguishable
+        from `score.py`'s own scoring records).
 
 Architecture note — no spec-006 compile step (this slice's correction)
 ------------------------------------------------------------------------
@@ -1379,6 +1395,324 @@ def uninstall_target(plan_path: Path, ac_id: str, target) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Judge-audit (slice 008-06) — a light, ADVISORY judge-trust audit. Samples an
+# eval's already-judged cases for human spot-checking, computes agreement
+# metrics against the human labels, and recommends `auto` (trust the judge)
+# vs `confirmed-only` (require human confirmation). Reports and recommends
+# only: it never alters the composite, the frozen `config.json` definition,
+# or `oracle.sh`/`gate.py` (AC4). Auto-demoting an untrusted judge in the
+# composite is explicitly deferred — see
+# `docs/refinement-todo.md` ("Judge-audit -> composite gating") and spec 008's
+# Open questions — pending a future ADR + slice.
+# ---------------------------------------------------------------------------
+
+AUDIT_SCHEMA_VERSION = 1
+
+# Provisional (AC2/AC3, borrowed from the surveyed prior art's judge-
+# monitoring) — starting numbers, not derived ones, exactly like
+# `MIN_DATASET_SIZE` above; expected to be re-tuned once a real judge audit
+# has run end-to-end.
+AUDIT_DRIFT_MIN_SAMPLE = 20
+AUDIT_FAIL_PRECISION_MIN = 0.70
+AUDIT_PASS_MISS_RATE_MAX = 0.20
+
+RECOMMENDATION_AUTO = "auto"
+RECOMMENDATION_CONFIRMED_ONLY = "confirmed-only"
+
+
+def _judge_verdict(score_value: float, threshold: float) -> str:
+    """A case's judge verdict (AC1): `pass` iff its judged score >= the
+    eval's threshold, else `fail`."""
+    return "pass" if score_value >= threshold else "fail"
+
+
+def load_judged_scores(eval_dir: Path, scores_path: Path | None = None) -> dict:
+    """The judged case scores to audit (AC1): `{case_id: score}`.
+
+    From an explicit `--scores` override file when given (a JSON object
+    mapping `case_id -> score`), else the most recent *scoring* run recorded
+    in `<eval_dir>/ledger.jsonl` — the last record with no `"kind"` marker
+    (score.py's own `_ledger` writer never sets one; only this module's own
+    audit records do, via `"kind": "judge_audit"` below — so a re-audit never
+    mistakes a prior audit record for a fresh scoring run to audit against).
+
+    Raises `EnvError` when neither is available or either is malformed —
+    never fabricates a score to audit (mirrors ADR-0005's honesty posture,
+    extended to authoring-time).
+    """
+    if scores_path is not None:
+        if not scores_path.is_file():
+            raise EnvError("scores_missing", f"--scores file not found: {scores_path}")
+        try:
+            payload = json.loads(scores_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise EnvError(
+                "scores_malformed_json", f"--scores file is not valid JSON: {scores_path} ({exc})"
+            ) from exc
+        if not isinstance(payload, dict) or not payload:
+            raise EnvError(
+                "scores_malformed",
+                "--scores file must be a non-empty JSON object of case_id -> score",
+            )
+        try:
+            return {str(k): float(v) for k, v in payload.items()}
+        except (TypeError, ValueError) as exc:
+            raise EnvError(
+                "scores_malformed", f"--scores file has a non-numeric score: {exc}"
+            ) from exc
+
+    ledger_path = eval_dir / "ledger.jsonl"
+    if not ledger_path.is_file():
+        raise EnvError(
+            "ledger_missing",
+            f"no ledger.jsonl at {ledger_path} — run the eval at least once (or pass "
+            "--scores) before auditing",
+        )
+    latest = None
+    for line in ledger_path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if (isinstance(record, dict) and record.get("kind") is None
+                and isinstance(record.get("cases"), list)):
+            latest = record
+    if latest is None:
+        raise EnvError(
+            "no_score_run",
+            f"no scoring run found in {ledger_path} — run the eval at least once before "
+            "auditing",
+        )
+    scores = {}
+    for case in latest["cases"]:
+        if isinstance(case, dict) and case.get("id") is not None and case.get("score") is not None:
+            scores[str(case["id"])] = float(case["score"])
+    if not scores:
+        raise EnvError(
+            "no_score_run", f"the most recent scoring run in {ledger_path} scored no cases")
+    return scores
+
+
+def select_audit_sample(judged_scores: dict, threshold: float, sample_size=None) -> list:
+    """AC1: a mixed pass/fail selection of judged case ids for human spot-
+    checking, stably ordered so a re-run over the same scores is
+    deterministic. With no `sample_size`, every judged case is eligible
+    (the provisional reference-set floor, `MIN_DATASET_SIZE` above, is small
+    enough that capping is unnecessary by default); with one given, splits it
+    evenly across the pass/fail groups so the sample stays mixed rather than
+    exhausting one group first."""
+    passes = sorted(
+        cid for cid, s in judged_scores.items() if _judge_verdict(s, threshold) == "pass")
+    fails = sorted(
+        cid for cid, s in judged_scores.items() if _judge_verdict(s, threshold) == "fail")
+    if sample_size is None:
+        return sorted(passes + fails)
+    half = max(1, sample_size // 2)
+    return sorted(passes[:half] + fails[:half])
+
+
+def parse_labels(payload: dict) -> dict:
+    """AC1: parse a `--labels` file's payload into `{case_id: {"verdict":
+    "pass"|"fail", "score": float|None}}`.
+
+    Each entry is either a bare `"pass"`/`"fail"` string (verdict only, no
+    drift input) or an object `{"verdict": ..., "score": <optional numeric
+    human score, for AC2's drift metric>}`. Raises `EnvError` on an invalid
+    verdict or a non-numeric score — never silently drops or guesses a
+    label."""
+    labels = {}
+    for case_id, raw in payload.items():
+        if isinstance(raw, str):
+            verdict, human_score = raw, None
+        elif isinstance(raw, dict):
+            verdict, human_score = raw.get("verdict"), raw.get("score")
+        else:
+            raise EnvError(
+                "label_malformed",
+                f"label for {case_id!r} must be a 'pass'/'fail' string or an object",
+            )
+        if verdict not in ("pass", "fail"):
+            raise EnvError(
+                "label_malformed",
+                f"label for {case_id!r} has verdict {verdict!r} — must be 'pass' or 'fail'",
+            )
+        if human_score is not None:
+            try:
+                human_score = float(human_score)
+            except (TypeError, ValueError) as exc:
+                raise EnvError(
+                    "label_malformed", f"label for {case_id!r} has a non-numeric score: {exc}"
+                ) from exc
+        labels[str(case_id)] = {"verdict": verdict, "score": human_score}
+    return labels
+
+
+def compute_audit_metrics(
+    judged_scores: dict, threshold: float, labels: dict, sample_ids: list,
+) -> dict:
+    """AC2: fail-precision, pass-miss-rate, and (only above the provisional
+    floor) score-vs-human drift, over the **labeled** sample — the sampled
+    ids that actually carry a human label (an author may sample more cases
+    than they have gotten around to labeling yet).
+
+    - **fail-precision** = |judge-fail ∩ human-fail| / |judge-fail|.
+    - **pass-miss-rate** = |human-fail ∩ judge-pass| / |human-fail|.
+    - **drift** = mean |judge score − human score| over labeled cases that
+      carry a numeric human score, computed ONLY when that count clears
+      `AUDIT_DRIFT_MIN_SAMPLE` — below it, suppressed with a stated caveat
+      rather than reporting a spurious number (AC2).
+
+    Both ratios handle an empty denominator cleanly: a stated "n/a" note,
+    never a `ZeroDivisionError`. Every `*_note` field is `None` exactly when
+    its paired metric is itself not `None`.
+    """
+    labeled_ids = [cid for cid in sample_ids if cid in labels]
+    judge_fail = {
+        cid for cid in labeled_ids if _judge_verdict(judged_scores[cid], threshold) == "fail"}
+    judge_pass = {
+        cid for cid in labeled_ids if _judge_verdict(judged_scores[cid], threshold) == "pass"}
+    human_fail = {cid for cid in labeled_ids if labels[cid]["verdict"] == "fail"}
+
+    if judge_fail:
+        fail_precision = len(judge_fail & human_fail) / len(judge_fail)
+        fail_precision_note = None
+    else:
+        fail_precision = None
+        fail_precision_note = "n/a — no judge-fail cases in the labeled sample"
+
+    if human_fail:
+        pass_miss_rate = len(human_fail & judge_pass) / len(human_fail)
+        pass_miss_note = None
+    else:
+        pass_miss_rate = None
+        pass_miss_note = "n/a — no human-fail cases in the labeled sample"
+
+    drift_inputs = [
+        abs(judged_scores[cid] - labels[cid]["score"])
+        for cid in labeled_ids if labels[cid]["score"] is not None
+    ]
+    if len(drift_inputs) >= AUDIT_DRIFT_MIN_SAMPLE:
+        drift = sum(drift_inputs) / len(drift_inputs)
+        drift_note = None
+    else:
+        drift = None
+        drift_note = (
+            f"suppressed — only {len(drift_inputs)} labeled case(s) carry a numeric human "
+            f"score, below the provisional minimum floor of {AUDIT_DRIFT_MIN_SAMPLE}; a "
+            "score-vs-human drift estimate below this floor would be spurious"
+        )
+
+    return {
+        "n_labeled": len(labeled_ids),
+        "fail_precision": fail_precision,
+        "fail_precision_note": fail_precision_note,
+        "pass_miss_rate": pass_miss_rate,
+        "pass_miss_note": pass_miss_note,
+        "drift": drift,
+        "drift_n": len(drift_inputs),
+        "drift_note": drift_note,
+    }
+
+
+def recommend_judge_trust(metrics: dict) -> str:
+    """AC3: `auto` (trust the judge) when both fail-precision and pass-miss-
+    rate clear the provisional thresholds; `confirmed-only` otherwise —
+    including when either metric is undefined (`n/a`), fail-closed exactly
+    like `classify_entry`'s own "when uncertain, the safer side" posture
+    above. Advisory only — the caller prints/returns this, never enforces
+    it (AC3/AC4)."""
+    fp, pmr = metrics["fail_precision"], metrics["pass_miss_rate"]
+    if (fp is not None and pmr is not None
+            and fp >= AUDIT_FAIL_PRECISION_MIN and pmr <= AUDIT_PASS_MISS_RATE_MAX):
+        return RECOMMENDATION_AUTO
+    return RECOMMENDATION_CONFIRMED_ONLY
+
+
+def audit_target(
+    eval_dir: Path, *, labels_path: Path | None = None, scores_path: Path | None = None,
+    sample_size=None,
+) -> dict:
+    """AC1/AC2/AC3/AC5: run one advisory judge-trust audit over
+    `<eval_dir>/config.json` + its judged scores, append the result to
+    `<eval_dir>/ledger.jsonl`, and return the audit record.
+
+    Reads ONLY `config.json` (for `threshold`) and `ledger.jsonl` (for the
+    judged scores, or `scores_path`'s override) — never writes to either, and
+    never touches `oracle.sh` (AC4: the composite / frozen definition / gate
+    machinery are unaffected by an audit run; auto-demotion is deferred, see
+    this section's module comment above).
+    """
+    config_path = eval_dir / "config.json"
+    if not config_path.is_file():
+        raise EnvError(
+            "config_missing",
+            f"no config.json at {config_path} — not an eval-authoring eval directory",
+        )
+    try:
+        config = json.loads(config_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise EnvError(
+            "config_malformed_json", f"config.json is not valid JSON: {config_path} ({exc})"
+        ) from exc
+    threshold = config.get("threshold")
+    if threshold is None:
+        raise EnvError("config_missing_threshold", f"{config_path} has no 'threshold'")
+
+    judged_scores = load_judged_scores(eval_dir, scores_path)
+    sample_ids = select_audit_sample(judged_scores, threshold, sample_size)
+
+    labels = {}
+    if labels_path is not None:
+        if not labels_path.is_file():
+            raise EnvError("labels_missing", f"--labels file not found: {labels_path}")
+        try:
+            raw_labels = json.loads(labels_path.read_text())
+        except json.JSONDecodeError as exc:
+            raise EnvError(
+                "labels_malformed_json", f"--labels file is not valid JSON: {labels_path} ({exc})"
+            ) from exc
+        if not isinstance(raw_labels, dict):
+            raise EnvError(
+                "labels_malformed",
+                "--labels file must be a JSON object mapping case_id -> label",
+            )
+        labels = parse_labels(raw_labels)
+
+    metrics = compute_audit_metrics(judged_scores, threshold, labels, sample_ids)
+    recommendation = recommend_judge_trust(metrics)
+
+    record = {
+        "kind": "judge_audit",
+        "schema_version": AUDIT_SCHEMA_VERSION,
+        "at": _iso_now(),
+        "threshold": threshold,
+        "sample": [
+            {
+                "id": cid,
+                "judge_score": judged_scores[cid],
+                "judge_verdict": _judge_verdict(judged_scores[cid], threshold),
+                "human_label": labels.get(cid),
+            }
+            for cid in sample_ids
+        ],
+        "metrics": metrics,
+        "recommendation": recommendation,
+        "recommendation_thresholds": {
+            "fail_precision_min": AUDIT_FAIL_PRECISION_MIN,
+            "pass_miss_rate_max": AUDIT_PASS_MISS_RATE_MAX,
+        },
+        "drift_min_sample": AUDIT_DRIFT_MIN_SAMPLE,
+    }
+
+    score_mod = _load_score()
+    score_mod._fe.write_ledger(eval_dir, record)  # AC5 — append-only, never a composite change
+    return record
+
+
+# ---------------------------------------------------------------------------
 # Goal-to-criteria (slice 008-05, ADR-0027) — an authoring ASSIST, never an
 # autonomous step (Decision #1). Expands a free-form goal into a *proposed*
 # tagged AC set via a fresh one-shot `claude -p` call, runs a SECOND fresh
@@ -2294,12 +2628,86 @@ def _criteria_split_main(argv: list) -> int:
     return 0
 
 
+def _audit_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py audit",
+        description=(
+            "Advisory judge-trust audit: sample judged cases for human spot-checking, "
+            "compute agreement metrics, and recommend auto vs confirmed-only. Reports and "
+            "recommends only -- never alters the composite, config.json, or oracle.sh/gate.py."
+        ),
+    )
+    parser.add_argument(
+        "eval_dir", metavar="eval",
+        help="Path to the eval directory (holds config.json and, once scored, ledger.jsonl).",
+    )
+    parser.add_argument(
+        "--labels", default=None,
+        help=(
+            "Path to a JSON file mapping case_id -> human verdict ('pass'/'fail', or an "
+            "object {'verdict':..., 'score':...} carrying an optional numeric human score "
+            "for drift)."
+        ),
+    )
+    parser.add_argument(
+        "--scores", default=None,
+        help=(
+            "Optional override: a JSON file mapping case_id -> judged score, in place of "
+            "reading the most recent ledger.jsonl scoring run."
+        ),
+    )
+    parser.add_argument(
+        "--sample-size", type=int, default=None, dest="sample_size",
+        help="Cap the mixed pass/fail sample size (default: every judged case is eligible).",
+    )
+    args = parser.parse_args(argv)
+
+    eval_dir = Path(args.eval_dir).resolve()
+    labels_path = Path(args.labels).resolve() if args.labels else None
+    scores_path = Path(args.scores).resolve() if args.scores else None
+    try:
+        record = audit_target(
+            eval_dir, labels_path=labels_path, scores_path=scores_path,
+            sample_size=args.sample_size,
+        )
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    metrics = record["metrics"]
+    print(
+        f"servo: judge audit over {len(record['sample'])} sampled case(s), "
+        f"{metrics['n_labeled']} labeled -> {eval_dir / 'ledger.jsonl'}"
+    )
+    fp_text = (
+        f"{metrics['fail_precision']:.2f}" if metrics["fail_precision"] is not None
+        else metrics["fail_precision_note"]
+    )
+    pmr_text = (
+        f"{metrics['pass_miss_rate']:.2f}" if metrics["pass_miss_rate"] is not None
+        else metrics["pass_miss_note"]
+    )
+    print(f"servo: fail-precision = {fp_text} (provisional threshold: >= "
+          f"{AUDIT_FAIL_PRECISION_MIN})")
+    print(f"servo: pass-miss-rate = {pmr_text} (provisional threshold: <= "
+          f"{AUDIT_PASS_MISS_RATE_MAX})")
+    if metrics["drift"] is not None:
+        print(f"servo: score-vs-human drift = {metrics['drift']:.4f} (n={metrics['drift_n']})")
+    else:
+        print(f"servo: score-vs-human drift = {metrics['drift_note']}")
+    print(
+        f"servo: recommendation = {record['recommendation']} (advisory only -- does not gate "
+        "the composite; see docs/refinement-todo.md 'Judge-audit -> composite gating')"
+    )
+    return 0
+
+
 def main(argv: list | None = None) -> int:
     # Hand-rolled subcommand dispatch (mirrors `oracle_plan.py` / `gate.py`).
     # `triage` (008-01), `rubric` (008-02), `dataset` (008-03),
-    # `params`/`emit`/`uninstall` (008-04), and
-    # `from-goal`/`criteria-check`/`criteria-split` (008-05) make up the full
-    # guided-skill surface.
+    # `params`/`emit`/`uninstall` (008-04),
+    # `from-goal`/`criteria-check`/`criteria-split` (008-05), and `audit`
+    # (008-06) make up the full guided-skill surface.
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "triage":
@@ -2320,9 +2728,11 @@ def main(argv: list | None = None) -> int:
         return _criteria_check_main(argv[1:])
     if argv and argv[0] == "criteria-split":
         return _criteria_split_main(argv[1:])
+    if argv and argv[0] == "audit":
+        return _audit_main(argv[1:])
     print(
         "error: unknown or missing subcommand (expected: triage, rubric, dataset, params, "
-        "emit, uninstall, from-goal, criteria-check, criteria-split)",
+        "emit, uninstall, from-goal, criteria-check, criteria-split, audit)",
         file=sys.stderr,
     )
     return 2
