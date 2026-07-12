@@ -1,6 +1,6 @@
 {
   "name": "servo",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Evaluation-driven development and closed-loop quality automation for Codex",
   "author": {
     "name": "ramboz"

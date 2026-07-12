@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.7.0](https://github.com/ramboz/servo/compare/v0.6.0...v0.7.0) (2026-07-12)
+
+
+### Features
+
+* **agent-loop:** complete spec 021 headless agent discipline ([b28bc8c](https://github.com/ramboz/servo/commit/b28bc8ca741fd8990944921d34f376f98d5ddbe7))
+* **eval-authoring:** implement spec 008 — generic eval-authoring skill (008-01..06) ([#19](https://github.com/ramboz/servo/issues/19)) ([dc6b1e0](https://github.com/ramboz/servo/commit/dc6b1e0a38d87f00f5c023000b9c9336f051963d))
+* **execution-planner:** /servo:execution-planner skill surface + compile --json (016-04) ([95be40f](https://github.com/ramboz/servo/commit/95be40f431d0a42ec52b105a65b49200f3c64c17))
+* **execution-planner:** clamp-and-review — plan clamp/validate/preserve (016-03) ([56968c1](https://github.com/ramboz/servo/commit/56968c195e6dc37e5d6af294759b9710f4195f35))
+* **release:** add dual-host plugin delivery ([97cade5](https://github.com/ramboz/servo/commit/97cade560bf970826c5e61da71d4804676068db2))
+
+
+### Bug Fixes
+
+* **agent-loop:** goal_unavailable refusal echoes plan-resolved budget ([794eb62](https://github.com/ramboz/servo/commit/794eb62bff091affb7920420f0531c4b08c9dcb6))
+* **execution-planner:** dual-path resolve evaluation_model overlay (bug 005) ([c632bff](https://github.com/ramboz/servo/commit/c632bfff864c061789056bc58ee2f7cc8ea3cc02))
+
+
+### Documentation
+
+* **008:** accept ADR-0026/0027 and activate the eval-authoring spec ([fcab17e](https://github.com/ramboz/servo/commit/fcab17ee31b59934d2abe0d4a0d2659f89e365bf))
+* **008:** resolve analyze review findings on the eval-authoring spec ([643c1ee](https://github.com/ramboz/servo/commit/643c1eead64d47277a27cfdccd03b100de499ed2))
+* **021:** file headless-agent-investigation spec + ADR-0025 (Proposed) ([cde7a93](https://github.com/ramboz/servo/commit/cde7a93cecf3982402f5293cff8785ce72f50fca))
+* **readme:** add logo ([48ee0a1](https://github.com/ramboz/servo/commit/48ee0a19018605695311165950d9f3523b417941))
+* **specs:** flesh 016-03 clamp-and-review ACs, amend ADR-0016 (016-03) ([514d90c](https://github.com/ramboz/servo/commit/514d90ce3e08f64a72c61ad6f2da7f118b5833a6))
+
 ## [0.6.0](https://github.com/ramboz/servo/compare/v0.5.1...v0.6.0) (2026-07-04)
 
 
