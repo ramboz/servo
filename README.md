@@ -1,4 +1,4 @@
-# servo
+![Servo](./servo.jpg)
 
 > A Claude Code plugin that **compiles engineering intent into executable evaluation** — an Evaluation-Driven Development engine.
 
