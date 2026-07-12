@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: [006, 015, adr-0005, adr-0019, adr-0024, adr-0026, adr-0027]
 last_verified:
 ---
@@ -18,7 +18,7 @@ last_verified:
 > [ADR-0024](../../decisions/adr-0024-extract-frozen-eval-harness.md) harness —
 > no parallel infrastructure.
 
-> **Status: DRAFT — activated 2026-07-11** by the eval-authoring thrust
+> **Status: READY_FOR_REVIEW** (all six slices queued for plan review; activated 2026-07-11) by the eval-authoring thrust
 > ([ADR-0026](../../decisions/adr-0026-generic-eval-authoring-surface.md),
 > [ADR-0027](../../decisions/adr-0027-goal-to-eval-assisted-authoring.md)). The
 > former "parked until a first EDD spec" trigger is retired: the decision to make
@@ -26,7 +26,7 @@ last_verified:
 > the trigger, made deliberately, with a mature external system (Mystique, studied
 > as inspiration — not a target, not a dependency) supplying the grounding a
 > hypothetical single consumer would have. Slices 008-01..06 are cut as real,
-> buildable work; ACs below are first-draft and sharpen at READY_FOR_REVIEW.
+> buildable work; ACs below are first-draft, to be sharpened during this review.
 
 ## Why this spec
 

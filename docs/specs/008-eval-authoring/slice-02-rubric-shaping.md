@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: READY_FOR_REVIEW
 dependencies: [008-01, adr-0005, adr-0019, adr-0026]
 last_verified:
 ---

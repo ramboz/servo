@@ -70,12 +70,12 @@
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-03 — scaffold-runtime | **DONE** | 23 scaffold-runtime + 9 scaffold-verifier tests; `scripts/scaffold_runtime.py` vendors servo- prefixed skills/agents/templates into `<target>/.claude/` + `scaffold-install.json`; `verify_install.py scaffold`; review PASS; 2 fidelity gaps deferred to 007-04 |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-04 — scaffold-fidelity | **DONE** | 27 new tests; scaffold-aware `_templates_root` makes vendored oracle-install self-contained (closes 007-03 gap); SKILL.md `${CLAUDE_PLUGIN_ROOT}`→`.claude/skills/servo-*` rewrite; vendored-`.md` unresolved-link strip; new `stale_source_reference` verifier reason (distinct from `artifact_missing`); AC2 in-test command classification; review PASS |
 | [007-install-surfaces](007-install-surfaces/spec.md) | 007-05 — docs-and-ci | **DONE** | 9 doc-guard tests; README "Installing servo" (3 surfaces + release recipe); two-layer model in vision/architecture/specs; `scripts/verify_install_surfaces.sh` (one command) wired to CI via `.github/workflows/verify.yml`; review PASS — **spec 007 complete** |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-01 — residual-triage | DRAFT |  |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-02 — rubric-shaping | DRAFT |  |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-03 — reference-set | DRAFT |  |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-04 — frozen-params-and-emit | DRAFT |  |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-05 — goal-to-criteria | DRAFT |  |
-| [008-eval-authoring](008-eval-authoring/spec.md) | 008-06 — judge-audit | DRAFT |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-01 — residual-triage | READY_FOR_REVIEW |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-02 — rubric-shaping | READY_FOR_REVIEW |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-03 — reference-set | READY_FOR_REVIEW |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-04 — frozen-params-and-emit | READY_FOR_REVIEW |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-05 — goal-to-criteria | READY_FOR_REVIEW |  |
+| [008-eval-authoring](008-eval-authoring/spec.md) | 008-06 — judge-audit | READY_FOR_REVIEW |  |
 | [009-ci-hardening](009-ci-hardening/spec.md) | 009-01 — full-suite-in-ci | **DONE** | New `ci.yml`: `test` job runs the full pytest suite (pyproject testpaths) on a `3.11`/`3.12` matrix (`fail-fast: false`) + distinct `install-surfaces` job; retired `verify.yml` (docs-guard retargeted); `requires-python >=3.11` via `[project]` dynamic-version (no 2nd version source); CI green run 27376015624; canary proved the suite gates CI (run 27376167269, failed at "Run full test suite"); review PASS |
 | [009-ci-hardening](009-ci-hardening/spec.md) | 009-02 — ruff-lint-floor | **DONE** | `ruff.toml` = jig ruleset (line-length 100, `F/E/W/I/B`, ignore `E402`); 85 findings → 0, all pure-style & behavior-neutral (27 import-sort + 4 unused-import auto; 26 wraps, 24 `l`→`line`, 2 `zip(strict=False)`, 1 loop-var, 1 `raise...from`); CI lint step pinned `ruff==0.15.17` via pipx (deliberate vs jig's float); lint-block proven (run 27376383980, failed at "Lint (ruff)" with pytest green); review PASS — **spec 009 complete** |
 | [010-release-automation](010-release-automation/spec.md) | 010-01 — conventional-commit-gate | **DONE** | `pr-title.yml` conventional-commit gate (jig ruleset: jig type set, `requireScope`, lowercase/no-period subject); squash-merge already the repo's only mode (squash subject = PR title); AC4 proven live on PR #2 — good title passes (27378113585), bad `Update stuff.` fails (27378162745); review PASS |
