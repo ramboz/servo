@@ -1,15 +1,17 @@
 """
-AC verification tests for slice 008-01 (residual-triage) of
-`/servo:eval-authoring`.
+AC verification tests for slices 008-01 (residual-triage) and 008-02
+(rubric-shaping) of `/servo:eval-authoring`.
 
 Run from the repo root:
     python3 -m pytest skills/eval-authoring/test_eval_authoring.py -q
 
 All of spec 008's tests accrete in this one file (see spec.md "Test
-surface") — this is the first tranche, covering slice 008-01's six ACs
-only. Classification is deterministic (keyword/substring matching over the
-AC statement text, no LLM/network call), so every fixture below is stable
-and offline.
+surface"). The 008-01 tranche (classification) is deterministic
+(keyword/substring matching over the AC statement text, no LLM/network
+call), so every fixture there is stable and offline. The 008-02 tranche
+(rubric shaping + the judge path in `score.py`) is also offline: the judge
+HTTP call is monkeypatched exactly as `skills/content-fidelity/
+test_content_fidelity.py` does (no real API key / network access needed).
 
 Test idiom mirrors `skills/spec-oracle/test_oracle_plan.py` /
 `skills/edd-suitability/test_suitability.py`:
@@ -17,8 +19,8 @@ Test idiom mirrors `skills/spec-oracle/test_oracle_plan.py` /
   - `REPO_ROOT = Path(__file__).resolve().parents[2]`,
   - fixtures written into a `tempfile.TemporaryDirectory()`,
   - the CLI driven as a subprocess for end-to-end (AC4/AC5/AC6) paths,
-  - the pure classification logic (AC1/AC2) imported directly for fast
-    unit assertions, via the `importlib`/load-by-path idiom (the skill
+  - the pure classification/shaping logic imported directly for fast unit
+    assertions, via the `importlib`/load-by-path idiom (the skill
     directory names are hyphenated and not importable Python packages).
 """
 
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -34,6 +37,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 EVAL_AUTHORING = REPO_ROOT / "skills" / "eval-authoring" / "eval_authoring.py"
+EVAL_AUTHORING_SCORE = REPO_ROOT / "skills" / "eval-authoring" / "score.py"
 
 
 def _load_module():
@@ -43,7 +47,15 @@ def _load_module():
     return module
 
 
+def _load_score_module():
+    spec = importlib.util.spec_from_file_location("eval_authoring_score", EVAL_AUTHORING_SCORE)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 ea = _load_module()
+score = _load_score_module()
 
 ORACLE_PLAN = REPO_ROOT / "skills" / "spec-oracle" / "oracle_plan.py"
 
@@ -503,6 +515,308 @@ class MalformedPlanTests(unittest.TestCase):
             proc = _run_cli(["triage", str(root)])
             self.assertEqual(proc.returncode, 2)
             self.assertNotIn("Traceback", proc.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-02 (rubric-shaping) — AC1/AC3/AC4/AC5: the `rubric` subcommand
+# ---------------------------------------------------------------------------
+
+def _triage_then_shape(root: Path, ac_id: str = "AC-042-demo-1", archetype=None):
+    """Shared fixture flow: write a mixed-residual plan, run `triage`, then
+    run `rubric` for `ac_id`. Returns `(plan_path, rubric_dir)`."""
+    plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+    proc = _run_cli(["triage", str(plan_path)])
+    assert proc.returncode == 0, proc.stderr
+
+    args = ["rubric", str(plan_path), "--ac", ac_id]
+    if archetype is not None:
+        args += ["--archetype", archetype]
+    proc2 = _run_cli(args)
+    assert proc2.returncode == 0, proc2.stderr
+
+    rubric_dir = _out_dir(root) / ea._slug(ac_id)
+    return plan_path, rubric_dir
+
+
+class RubricArchetypeTests(unittest.TestCase):
+    """AC1/AC3/AC6: each of the three archetypes produces a valid rubric
+    (named criteria + an explicit scale + a judge prompt) and a well-formed
+    `config.json` in the shared harness shape."""
+
+    def test_each_archetype_produces_a_named_criteria_and_scale_rubric(self):
+        for archetype in sorted(ea.ARCHETYPES):
+            with self.subTest(archetype=archetype):
+                with tempfile.TemporaryDirectory() as d:
+                    root = Path(d)
+                    _plan_path, rubric_dir = _triage_then_shape(root, archetype=archetype)
+
+                    config = json.loads((rubric_dir / "config.json").read_text())
+                    rubric_md = (rubric_dir / "rubric.md").read_text()
+
+                    # Well-formed config.json (AC5's harness shape, checked
+                    # in full by DefinitionHashRoundTripTests below).
+                    self.assertEqual(config["archetype"], archetype)
+                    for key in ("judge", "samples", "threshold", "rubric", "cases"):
+                        self.assertIn(key, config)
+                    self.assertEqual(config["cases"], [])
+                    self.assertEqual(config["approval_status"], "draft")
+
+                    # AC1: named criteria + an explicit scale in the rubric text.
+                    self.assertIn("criteri", config["rubric"].lower())
+                    self.assertIn("scale", config["rubric"].lower())
+
+                    # AC4: rubric.md makes the human-gate nature explicit.
+                    self.assertIn("proposal", rubric_md.lower())
+                    self.assertIn("approve", rubric_md.lower())
+                    self.assertIn(config["rubric"], rubric_md)
+
+    def test_comparative_archetype_frames_proposed_vs_baseline(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = _triage_then_shape(root, archetype="comparative")
+            config = json.loads((rubric_dir / "config.json").read_text())
+            self.assertIn("proposed", config["rubric"].lower())
+            self.assertIn("baseline", config["rubric"].lower())
+
+    def test_multi_criteria_archetype_is_weighted(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = _triage_then_shape(root, archetype="multi_criteria")
+            config = json.loads((rubric_dir / "config.json").read_text())
+            self.assertIn("weight", config["rubric"].lower())
+
+    def test_default_archetype_is_single_dimension(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = _triage_then_shape(root)  # no --archetype
+            config = json.loads((rubric_dir / "config.json").read_text())
+            self.assertEqual(config["archetype"], "single_dimension")
+
+    def test_unknown_archetype_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+            proc = _run_cli(["triage", str(plan_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            proc2 = _run_cli(
+                ["rubric", str(plan_path), "--ac", "AC-042-demo-1", "--archetype", "bogus"])
+            self.assertNotEqual(proc2.returncode, 0)
+            self.assertNotIn("Traceback", proc2.stderr)
+
+
+class RubricEligibilityTests(unittest.TestCase):
+    """AC1/AC2 (extended to 008-02): only an eval-able AC gets a rubric
+    shaped for it — a human-residual AC or an unknown id is a clean
+    env_error, never a silently-shaped rubric."""
+
+    def test_human_residual_ac_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+            proc = _run_cli(["triage", str(plan_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            # AC-042-demo-2 is TASTE-reasoned -> human-residual (see MIXED_RESIDUAL).
+            proc2 = _run_cli(["rubric", str(plan_path), "--ac", "AC-042-demo-2"])
+            self.assertEqual(proc2.returncode, 2)
+            self.assertIn("error:", proc2.stderr)
+            self.assertNotIn("Traceback", proc2.stderr)
+
+    def test_unknown_ac_id_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+            proc = _run_cli(["triage", str(plan_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            proc2 = _run_cli(["rubric", str(plan_path), "--ac", "AC-does-not-exist"])
+            self.assertEqual(proc2.returncode, 2)
+            self.assertNotIn("Traceback", proc2.stderr)
+
+    def test_missing_triage_json_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+            # No `triage` run first — no triage.json to read.
+            proc = _run_cli(["rubric", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc.returncode, 2)
+            self.assertNotIn("Traceback", proc.stderr)
+
+
+class RubricColocationTests(unittest.TestCase):
+    """AC4: the rubric artifact is project-owned and colocated beside the
+    spec, under the triage dir — never target/plugin state."""
+
+    def test_rubric_dir_lives_under_the_eval_dir_not_dot_servo(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = _triage_then_shape(root)
+            self.assertTrue((rubric_dir / "config.json").is_file())
+            self.assertTrue((rubric_dir / "rubric.md").is_file())
+            self.assertEqual(rubric_dir.parent, _out_dir(root))
+            self.assertFalse((root / ".servo").exists())
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-02 (rubric-shaping) — AC5: exact harness-shape fidelity
+# ---------------------------------------------------------------------------
+
+class DefinitionHashRoundTripTests(unittest.TestCase):
+    """AC5: the emitted `config.json` round-trips through
+    `fidelity_eval.definition_hash` (via `score.py`'s thin wrapper) with no
+    reshaping — proving 008-04/spec-006 can freeze/compile it as-is."""
+
+    def test_emitted_config_round_trips_through_definition_hash(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = _triage_then_shape(root)
+            config = json.loads((rubric_dir / "config.json").read_text())
+
+            digest = score.definition_hash(config)
+            self.assertTrue(digest.startswith("sha256:"))
+            # Deterministic: re-hashing the same config reproduces the digest.
+            self.assertEqual(digest, score.definition_hash(config))
+
+    def test_round_trip_holds_for_every_archetype(self):
+        for archetype in sorted(ea.ARCHETYPES):
+            with self.subTest(archetype=archetype):
+                with tempfile.TemporaryDirectory() as d:
+                    root = Path(d)
+                    _plan_path, rubric_dir = _triage_then_shape(root, archetype=archetype)
+                    config = json.loads((rubric_dir / "config.json").read_text())
+                    self.assertTrue(score.definition_hash(config).startswith("sha256:"))
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-02 (rubric-shaping) — AC2/AC6: the structured judge-output
+# contract in `score.py`, offline (monkeypatched HTTP, no real judge call)
+# ---------------------------------------------------------------------------
+
+def _base_rubric_config():
+    return {
+        "schema_version": 1,
+        "approval_status": "draft",
+        "archetype": "single_dimension",
+        "judge": {
+            "model": "claude-sonnet-4-6", "transport": "api",
+            "temperature": 0.0, "max_tokens": 1024,
+        },
+        "samples": {"n": 4, "k": 1.0, "delta": 0.03},
+        "threshold": 0.8,
+        "rubric": "Score, in [0,1], how well the candidate satisfies the criterion.",
+        "cases": [],
+    }
+
+
+class StructuredJudgeOutputTests(unittest.TestCase):
+    """AC2: the judge prompt targets `{score, reasoning, strengths,
+    weaknesses}` JSON at low temperature; a malformed/unreachable/
+    unparseable reply raises `EnvError` — never a silent `0.0`."""
+
+    def setUp(self):
+        os.environ["ANTHROPIC_API_KEY"] = "test-key"
+
+    def tearDown(self):
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    def test_prompt_requests_the_four_field_structured_output(self):
+        prompt = score._prompt("candidate text", _base_rubric_config())
+        self.assertIn("score", prompt)
+        self.assertIn("reasoning", prompt)
+        self.assertIn("strengths", prompt)
+        self.assertIn("weaknesses", prompt)
+        self.assertIn("candidate text", prompt)
+
+    def test_wellformed_reply_parses_to_clamped_score_and_captures_the_rest(self):
+        def fake_post(req, timeout, attempts=3):
+            return {"content": [{"type": "text", "text": json.dumps({
+                "score": 1.4, "reasoning": "solid", "strengths": ["a"], "weaknesses": ["b"],
+            })}]}
+
+        orig = score._post_with_retry
+        score._post_with_retry = fake_post
+        try:
+            result = score._judge_api("candidate", _base_rubric_config())
+        finally:
+            score._post_with_retry = orig
+        self.assertEqual(result["score"], 1.0)  # clamped from 1.4
+        self.assertEqual(result["reasoning"], "solid")
+        self.assertEqual(result["strengths"], ["a"])
+        self.assertEqual(result["weaknesses"], ["b"])
+
+    def test_low_temperature_request_body(self):
+        captured = {}
+
+        def fake_post(req, timeout, attempts=3):
+            captured["body"] = json.loads(req.data)
+            return {"content": [{"type": "text", "text": '{"score": 0.5}'}]}
+
+        orig = score._post_with_retry
+        score._post_with_retry = fake_post
+        try:
+            score._judge_api("candidate", _base_rubric_config())
+        finally:
+            score._post_with_retry = orig
+        self.assertAlmostEqual(captured["body"]["temperature"], 0.0)
+
+    def test_missing_score_field_is_env_error_not_zero(self):
+        def fake_post(req, timeout, attempts=3):
+            return {"content": [{"type": "text",
+                                  "text": json.dumps({"reasoning": "no score here"})}]}
+        orig = score._post_with_retry
+        score._post_with_retry = fake_post
+        try:
+            with self.assertRaises(score.EnvError):
+                score._judge_api("candidate", _base_rubric_config())
+        finally:
+            score._post_with_retry = orig
+
+    def test_non_numeric_score_field_is_env_error_not_zero(self):
+        def fake_post(req, timeout, attempts=3):
+            return {"content": [{"type": "text", "text": json.dumps({"score": "not-a-number"})}]}
+        orig = score._post_with_retry
+        score._post_with_retry = fake_post
+        try:
+            with self.assertRaises(score.EnvError):
+                score._judge_api("candidate", _base_rubric_config())
+        finally:
+            score._post_with_retry = orig
+
+    def test_malformed_json_reply_is_env_error_not_zero(self):
+        def fake_post(req, timeout, attempts=3):
+            return {"content": [{"type": "text", "text": "I refuse to answer in JSON."}]}
+        orig = score._post_with_retry
+        score._post_with_retry = fake_post
+        try:
+            with self.assertRaises(score.EnvError):
+                score._judge_api("candidate", _base_rubric_config())
+        finally:
+            score._post_with_retry = orig
+
+    def test_unreachable_judge_is_env_error_not_zero(self):
+        def fake_post(req, timeout, attempts=3):
+            raise score.EnvError("judge request failed: retries exhausted")
+        orig = score._post_with_retry
+        score._post_with_retry = fake_post
+        try:
+            with self.assertRaises(score.EnvError):
+                score._judge_api("candidate", _base_rubric_config())
+        finally:
+            score._post_with_retry = orig
+
+    def test_unknown_transport_is_env_error(self):
+        config = _base_rubric_config()
+        config["judge"]["transport"] = "carrier-pigeon"
+        with self.assertRaises(score.EnvError):
+            score.judge("candidate", config)
+
+    def test_api_missing_key_is_env_error(self):
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        with self.assertRaises(score.EnvError):
+            score._judge_api("candidate", _base_rubric_config())
+
+    def test_extract_json_from_noisy_reply(self):
+        self.assertEqual(
+            score._extract_json('Sure! {"score": 0.8, "reasoning": "x"} done'),
+            '{"score": 0.8, "reasoning": "x"}')
 
 
 if __name__ == "__main__":

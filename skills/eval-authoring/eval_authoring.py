@@ -1,7 +1,8 @@
 """
-servo eval-authoring — slice 008-01 (residual-triage), the self-contained core
-of the single servo-owned guided skill `/servo:eval-authoring`
-(ADR-0019 / ADR-0026). Durable artifacts are co-located with the spec
+servo eval-authoring — slices 008-01 (residual-triage) + 008-02 (rubric-shaping),
+the self-contained core of the single servo-owned guided skill
+`/servo:eval-authoring` (ADR-0019 / ADR-0026). Durable artifacts are co-located
+with the spec
 (ADR-0023), mirroring `skills/spec-oracle/oracle_plan.py`'s convention.
 
 Given a spec-006 evidence plan (`checks.json`, produced by
@@ -25,6 +26,20 @@ Usage:
         `<spec-dir>/oracle/<spec-id>/checks.json`), never from the plan's
         `source_spec_path` field (a display path, CWD-dependent under
         `.resolve()`) or plugin/target state (ADR-0023).
+
+    python3 eval_authoring.py rubric <plan> --ac <id> [--archetype ...]
+        (Slice 008-02.) Resolve the same `<spec-dir>/eval/<spec-id>/`
+        colocation dir `triage` wrote to, read its `triage.json`, and shape a
+        rubric — named scoring criteria, an explicit scale, and a judge
+        prompt — for one `eval-able` AC (`--ac`), from an editable starting
+        archetype (`--archetype`: `single_dimension` | `multi_criteria` |
+        `comparative`; default `single_dimension`). Writes `config.json` (the
+        `fidelity_eval.py`-shaped eval definition — judge/samples/threshold/
+        rubric/cases, `cases` empty until 008-03) and `rubric.md`
+        (human-reviewable) under `<spec-dir>/eval/<spec-id>/<eval-name>/`,
+        where `<eval-name>` is a slug of `--ac` (becomes `score_<name>` once
+        008-04 emits + spec-006 compiles). The tool proposes; the human edits
+        and approves before anything is frozen (008-04's job, not this one).
 
 Design decision — classification stays deterministic, never LLM-assisted
 -------------------------------------------------------------------------
@@ -414,6 +429,208 @@ def triage_target(plan_path: Path):
 
 
 # ---------------------------------------------------------------------------
+# Rubric shaping (slice 008-02 — AC1 / AC2 / AC3 / AC4 / AC5)
+# ---------------------------------------------------------------------------
+
+# Low-temperature judge defaults (AC2). Model/transport/max_tokens follow
+# content-fidelity's `config.example.json` (the closest existing precedent for a
+# text-judged rubric); temperature is pinned to 0.0 here — lower than
+# content-fidelity's 0.6 — because AC2 calls for a low-temperature judge and the
+# n-sample lower bound already absorbs the residual stochasticity.
+DEFAULT_JUDGE = {
+    "model": "claude-sonnet-4-6", "transport": "api", "temperature": 0.0, "max_tokens": 1024,
+}
+DEFAULT_SAMPLES = {"n": 4, "k": 1.0, "delta": 0.03}
+DEFAULT_THRESHOLD = 0.8
+
+_SCALE_TEXT = (
+    "Scale: 1.0 = fully meets the criterion; 0.5 = partially meets it with a "
+    "significant gap; 0.0 = does not meet it at all. Score anywhere between "
+    "these anchors to reflect partial credit."
+)
+
+
+def _render_single_dimension(statement: str) -> str:
+    """Archetype 1/3 (AC3): one holistic named criterion over the AC as a
+    whole."""
+    return (
+        f'Score, in [0,1], how well the CANDIDATE UNDER TEST satisfies this '
+        f'acceptance criterion: "{statement}"\n\n'
+        "Named criterion: overall satisfaction of the acceptance criterion above.\n"
+        f"{_SCALE_TEXT}\n\n"
+        "EDIT ME: sharpen the criterion wording, add a concrete pass/fail "
+        "example, and adjust the scale anchors to this AC's specifics before "
+        "this rubric is used for real scoring."
+    )
+
+
+def _render_multi_criteria(statement: str) -> str:
+    """Archetype 2/3 (AC3): several named, weighted sub-criteria combined
+    into one overall score."""
+    return (
+        f'Score, in [0,1], how well the CANDIDATE UNDER TEST satisfies this '
+        f'acceptance criterion: "{statement}"\n\n'
+        "Named criteria (weighted; combine sub-scores into one overall [0,1] score):\n"
+        "- Criterion A (weight 0.5): EDIT ME — name and describe the first "
+        "sub-criterion this AC implies.\n"
+        "- Criterion B (weight 0.3): EDIT ME — name and describe the second "
+        "sub-criterion.\n"
+        "- Criterion C (weight 0.2): EDIT ME — name and describe the third "
+        "sub-criterion.\n\n"
+        f"{_SCALE_TEXT} Weight each criterion's sub-score by the weights above.\n\n"
+        "EDIT ME: replace the placeholder criteria and weights with the real "
+        "sub-criteria this AC implies before this rubric is used for real "
+        "scoring."
+    )
+
+
+def _render_comparative(statement: str) -> str:
+    """Archetype 3/3 (AC3): proposed-vs-baseline comparison."""
+    return (
+        f'Compare a PROPOSED candidate against a BASELINE reference for this '
+        f'acceptance criterion: "{statement}"\n\n'
+        "Named criterion: does PROPOSED satisfy the acceptance criterion at "
+        "least as well as BASELINE?\n"
+        "Scale: 1.0 = PROPOSED clearly better than or equal to BASELINE on "
+        "the criterion; 0.5 = roughly on par, a mixed picture; 0.0 = "
+        "PROPOSED is clearly worse than BASELINE.\n\n"
+        "EDIT ME: describe what 'better' means for this specific AC, and any "
+        "dimension PROPOSED must not regress even while improving on others."
+    )
+
+
+ARCHETYPES = {
+    "single_dimension": _render_single_dimension,
+    "multi_criteria": _render_multi_criteria,
+    "comparative": _render_comparative,
+}
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slug(text: str) -> str:
+    """AC4's `<eval-name>` derivation: lowercase, non-alnum runs collapsed to
+    one underscore, leading/trailing underscores stripped — becomes the
+    `score_<name>` component name once 008-04 emits + spec-006 compiles."""
+    slug = _SLUG_RE.sub("_", (text or "").lower()).strip("_")
+    return slug or "eval"
+
+
+def build_rubric_config(ac_entry: dict, archetype: str) -> dict:
+    """Pure construction of the `config.json` payload for one eval-able AC +
+    archetype (AC1/AC3). No I/O.
+
+    In the *exact* shape `skills/_common/fidelity_eval.py`'s
+    `definition_hash`/`validate_freeze` consume (AC5): `judge` / `samples` /
+    `threshold` / `rubric` / `cases`, unchanged — `cases` starts empty (008-03
+    fills it) so 008-04 can freeze this and spec-006 can compile it with no
+    reshaping.
+    """
+    if archetype not in ARCHETYPES:
+        raise EnvError(
+            "unknown_archetype",
+            f"unknown archetype {archetype!r} (expected one of {sorted(ARCHETYPES)})",
+        )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "approval_status": "draft",
+        "archetype": archetype,
+        "source_ac": {"id": ac_entry.get("id"), "statement": ac_entry.get("statement", "")},
+        "judge": dict(DEFAULT_JUDGE),
+        "samples": dict(DEFAULT_SAMPLES),
+        "threshold": DEFAULT_THRESHOLD,
+        "rubric": ARCHETYPES[archetype](ac_entry.get("statement", "")),
+        "cases": [],
+    }
+
+
+def _render_rubric_md(config: dict, ac_entry: dict) -> str:
+    """Render the human-reviewable `rubric.md` (AC4). Makes the human-gate
+    explicit: the tool proposes this shape from a borrowed archetype; the
+    human owns the wording, edits it, and approves — approval + freeze happen
+    in 008-04, not here."""
+    lines = [
+        f"# Eval rubric — {ac_entry.get('id')}",
+        "",
+        f"- **Source AC:** {ac_entry.get('statement', '')}",
+        f"- **Archetype:** `{config['archetype']}`",
+        "",
+        "> **This is a proposal, not a decision.** The skill scaffolds the "
+        "shape — named criteria, an explicit scale, a judge prompt — from a "
+        "borrowed archetype template; you own the wording. Edit the rubric "
+        "prose below (keep `config.json`'s `rubric` field in sync — they "
+        "must match) and approve it before it is used for real scoring; "
+        "approval and freezing happen in 008-04, not here.",
+        "",
+        "## Rubric",
+        "",
+        "```",
+        config["rubric"],
+        "```",
+        "",
+        "## Judge defaults (edit in `config.json`, not here)",
+        "",
+        f"- Model: `{config['judge']['model']}`",
+        f"- Transport: `{config['judge']['transport']}`",
+        f"- Temperature: `{config['judge']['temperature']}`",
+        f"- Samples (n): `{config['samples']['n']}`",
+        f"- Threshold: `{config['threshold']}`",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def rubric_target(plan_path: Path, ac_id: str, archetype: str):
+    """Load the plan, resolve the same `<spec-dir>/eval/<spec-id>/`
+    colocation dir `triage_target` wrote to (AC4), read that dir's
+    `triage.json`, pick the entry named `ac_id`, and shape a rubric for it
+    under `<eval-dir>/<eval-name>/` (AC1/AC3/AC4).
+
+    Refuses (`EnvError`) an unknown AC id or one that isn't classified
+    `eval-able` — mirrors triage's own fail-closed spirit (AC2): only an
+    eval-able AC gets a rubric shaped for it. (The per-AC human-approval gate
+    is the freeze step in 008-04, not this `classification`-only check; triage's
+    `confirmed` flag is not consulted here.)
+
+    Returns `(config, out_dir)`.
+    """
+    plan = load_plan(plan_path)
+    spec_dir = _spec_dir_from_plan_path(plan_path, plan)
+    eval_dir = eval_dir_for_spec(spec_dir, plan["spec_id"])
+
+    triage_path = eval_dir / "triage.json"
+    if not triage_path.is_file():
+        raise EnvError(
+            "triage_missing",
+            f"no triage.json at {triage_path} — run `triage` on this plan first",
+        )
+    try:
+        triage = json.loads(triage_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise EnvError(
+            "triage_malformed_json", f"triage.json is not valid JSON: {triage_path} ({exc})"
+        ) from exc
+
+    entries_by_id = {e.get("id"): e for e in triage.get("entries", [])}
+    entry = entries_by_id.get(ac_id)
+    if entry is None:
+        raise EnvError("ac_not_found", f"AC {ac_id!r} not found in {triage_path}'s entries")
+    if entry.get("classification") != CLASSIFICATION_EVAL_ABLE:
+        raise EnvError(
+            "ac_not_eval_able",
+            f"AC {ac_id!r} is classified {entry.get('classification')!r}, not "
+            f"{CLASSIFICATION_EVAL_ABLE!r} — only eval-able ACs get a rubric shaped",
+        )
+
+    config = build_rubric_config(entry, archetype)
+    out_dir = eval_dir / _slug(ac_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+    (out_dir / "rubric.md").write_text(_render_rubric_md(config, entry))
+    return config, out_dir
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -448,15 +665,50 @@ def _triage_main(argv: list) -> int:
     return 0
 
 
+def _rubric_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py rubric",
+        description=(
+            "Shape a rubric (named criteria, an explicit scale, a judge "
+            "prompt) for one eval-able AC from triage.json."
+        ),
+    )
+    parser.add_argument(
+        "plan_path", metavar="plan",
+        help="Path to the same spec-006 checks.json plan passed to `triage`.",
+    )
+    parser.add_argument(
+        "--ac", required=True,
+        help="The eval-able AC id to shape a rubric for (from triage.json's eval_able list).",
+    )
+    parser.add_argument(
+        "--archetype", choices=sorted(ARCHETYPES), default="single_dimension",
+        help="Which rubric archetype template to start from (default: single_dimension).",
+    )
+    args = parser.parse_args(argv)
+
+    plan_path = Path(args.plan_path).resolve()
+    try:
+        config, out_dir = rubric_target(plan_path, args.ac, args.archetype)
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"servo: shaped a {config['archetype']} rubric for {args.ac} -> {out_dir}")
+    return 0
+
+
 def main(argv: list | None = None) -> int:
     # Hand-rolled subcommand dispatch (mirrors `oracle_plan.py` / `gate.py`).
-    # Only `triage` exists yet (slice 008-01); later slices add
-    # `from-goal`/`rubric`/`dataset`/`emit`/`audit` alongside it.
+    # `triage` (008-01) and `rubric` (008-02) exist so far; later slices add
+    # `from-goal`/`dataset`/`emit`/`audit` alongside them.
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "triage":
         return _triage_main(argv[1:])
-    print("error: unknown or missing subcommand (expected: triage)", file=sys.stderr)
+    if argv and argv[0] == "rubric":
+        return _rubric_main(argv[1:])
+    print("error: unknown or missing subcommand (expected: triage, rubric)", file=sys.stderr)
     return 2
 
 
