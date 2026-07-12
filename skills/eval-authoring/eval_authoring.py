@@ -1,9 +1,10 @@
 """
 servo eval-authoring — slices 008-01 (residual-triage), 008-02
-(rubric-shaping), and 008-03 (reference-set), the self-contained core of the
-single servo-owned guided skill `/servo:eval-authoring` (ADR-0019 / ADR-0026).
-Durable artifacts are co-located with the spec
-(ADR-0023), mirroring `skills/spec-oracle/oracle_plan.py`'s convention.
+(rubric-shaping), 008-03 (reference-set), and 008-04 (frozen-params-and-emit),
+the self-contained core of the single servo-owned guided skill
+`/servo:eval-authoring` (ADR-0019 / ADR-0026). Durable artifacts are
+co-located with the spec (ADR-0023), mirroring
+`skills/spec-oracle/oracle_plan.py`'s convention.
 
 Given a spec-006 evidence plan (`checks.json`, produced by
 `oracle_plan.py`) — or a curated AC set that has already round-tripped
@@ -57,6 +58,54 @@ Usage:
         toward it. Writes the updated `config.json` and a human-reviewable
         `dataset.md` under the same `<eval-name>/` directory `rubric` used.
 
+    python3 eval_authoring.py params <plan> --ac <id> [--n N] [--delta D]
+                                     [--threshold T] [--model M]
+                                     [--temperature X] [--max-tokens N]
+                                     [--transport api|cli]
+        (Slice 008-04.) Set/confirm the frozen `n` / `δ` (samples.delta) /
+        threshold / judge model+params for one already-rubric-shaped AC's
+        `config.json` (AC1). Every flag left unset keeps the value `rubric`
+        already seeded from the shipped fidelity presets' defaults — so
+        accepting every default is just running this with no flags at all.
+        Prints a one-line plain-language trade-off note per knob (the
+        ADR-0005 knobs: too-wide δ never passes, too-narrow flaps; more
+        samples cost more but stabilize; threshold trades false-pass vs
+        false-fail) before writing the confirmed values back.
+
+    python3 eval_authoring.py emit <plan> --ac <id> [--target <dir>] [--weight W]
+        (Slice 008-04.) Freeze the AC's `config.json` — the human-approval
+        gate (AC4): validates the dataset's shape, pins
+        `hashes`/`approved_content_hash`, and flips `approval_status` to
+        `approved`. With no `--target`, this is the stopping point: "an
+        approved, compilable definition" (AC4) and nothing more. With
+        `--target <dir>`, additionally installs the resulting
+        `score_<name>` component into `<dir>` — splicing it into
+        `<dir>/oracle.sh` and copying the runtime (`score.py` +
+        `fidelity_eval.py`) plus the frozen `config.json` into
+        `<dir>/.servo/<name>/` (AC2/AC3) — but never *runs* it (AC4);
+        running is `gate.py`'s job once installed. Idempotent: a re-`emit`
+        with the same `--target` refreshes the SEED block + weight in place
+        rather than duplicating either.
+
+    python3 eval_authoring.py uninstall <plan> --ac <id> --target <dir>
+        (Slice 008-04.) Symmetric with `emit --target`: removes the
+        `score_<name>` SEED block + COMPONENTS entry from `<dir>/oracle.sh`
+        and deregisters it from the install manifest, keeping the frozen
+        artifacts under `<dir>/.servo/<name>/` untouched.
+
+Architecture note — no spec-006 compile step (this slice's correction)
+------------------------------------------------------------------------
+Spec 008's prose describes `/servo:spec-oracle`'s "eval-family compile step"
+freezing the authored definition into `score_<name>`. That step does not
+exist: `skills/spec-oracle/oracle_overlay.py` only freezes deterministic
+overlays. The real mechanism — already used by both shipped presets
+(`content-fidelity`, `design-eval`) — is that the authoring skill itself
+freezes + installs its `score_<name>` component via the shared
+`fidelity_eval.py` splice machinery (ADR-0024): `freeze_dataset_config` +
+`install_component` below mirror `content_fidelity.py`'s own
+`freeze`/`install` almost line for line. `emit` is this slice's single
+guided verb over both.
+
 Design decision — classification stays deterministic, never LLM-assisted
 -------------------------------------------------------------------------
 Like spec-006's own classifier, this triage is keyword/substring matching
@@ -79,8 +128,10 @@ Python stdlib only.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -1004,6 +1055,282 @@ def dataset_target(plan_path: Path, ac_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Same-skill-dir load of score.py (slice 008-04). Not a cross-skill import
+# (see the "classification stays deterministic" note above) — score.py is
+# the other half of this same skill directory. Reused for its
+# `definition_hash`/`artifact_hashes` wrappers (so `freeze_dataset_config`
+# hashes the *exact* shape `score.py`'s own `validate_freeze` will later
+# check) and its already-loaded `_fe` (the shared `fidelity_eval.py`
+# splice/manifest primitives) — mirrors `content_fidelity.py::_load_score()`.
+# ---------------------------------------------------------------------------
+
+def _load_score():
+    here = Path(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location("eval_authoring_score", here / "score.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# ---------------------------------------------------------------------------
+# Frozen params (slice 008-04 — AC1)
+# ---------------------------------------------------------------------------
+
+# One-line plain-language trade-off note per frozen knob (AC1, the ADR-0005
+# knobs), paired with a getter over the *confirmed* (current) value so the
+# guidance always reflects what is actually about to be written, not a
+# static example.
+_PARAM_TRADEOFFS = (
+    ("samples.n", lambda c: c["samples"]["n"],
+     "more judge samples cost more (n x judge calls per case) but stabilize the "
+     "lower-bound score against a noisy judge"),
+    ("samples.delta (δ)", lambda c: c["samples"].get("delta"),
+     "the noise-floor plateau: too wide and the eval can plateau below threshold and "
+     "never pass; too narrow and a noisy judge flaps pass/fail run to run"),
+    ("threshold", lambda c: c["threshold"],
+     "the pass/fail cutoff: a higher threshold trades more false-fails for fewer "
+     "false-passes, and vice versa"),
+    ("judge.model", lambda c: c["judge"]["model"],
+     "a stronger judge model reads subtler failures but costs more per sample"),
+    ("judge.temperature", lambda c: c["judge"].get("temperature"),
+     "low (near 0) keeps repeated judgments consistent, which the n-sample lower "
+     "bound assumes"),
+)
+
+
+def apply_params(
+    config: dict, *, n=None, delta=None, threshold=None, model=None,
+    temperature=None, max_tokens=None, transport=None,
+) -> dict:
+    """AC1: set/confirm the frozen knobs. Every argument left `None` keeps
+    whatever `rubric` already seeded from `DEFAULT_JUDGE`/`DEFAULT_SAMPLES`/
+    `DEFAULT_THRESHOLD` — so accepting every default is just calling this
+    with no overrides at all. Mutates and returns `config`."""
+    if n is not None:
+        config["samples"]["n"] = n
+    if delta is not None:
+        config["samples"]["delta"] = delta
+    if threshold is not None:
+        config["threshold"] = threshold
+    if model is not None:
+        config["judge"]["model"] = model
+    if temperature is not None:
+        config["judge"]["temperature"] = temperature
+    if max_tokens is not None:
+        config["judge"]["max_tokens"] = max_tokens
+    if transport is not None:
+        config["judge"]["transport"] = transport
+    return config
+
+
+def render_params_guidance(config: dict) -> list:
+    """AC1's one-line plain-language trade-off note per knob, over the
+    *confirmed* value of each — printed by the CLI so a human sees the
+    rationale before accepting/overriding."""
+    return [f"- {label} = {getter(config)} — {note}" for label, getter, note in
+            _PARAM_TRADEOFFS]
+
+
+def params_target(plan_path: Path, ac_id: str, **overrides):
+    """Load the plan, resolve the same rubric `config.json` `rubric_target`
+    wrote, and set/confirm its frozen knobs (AC1). Returns `(config,
+    out_dir)`."""
+    plan = load_plan(plan_path)
+    spec_dir = _spec_dir_from_plan_path(plan_path, plan)
+    eval_dir = eval_dir_for_spec(spec_dir, plan["spec_id"])
+    out_dir = eval_dir / _slug(ac_id)
+    config_path = out_dir / "config.json"
+    if not config_path.is_file():
+        raise EnvError(
+            "rubric_missing",
+            f"no config.json at {config_path} — run `rubric` for {ac_id!r} first",
+        )
+    try:
+        config = json.loads(config_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise EnvError(
+            "config_malformed_json", f"config.json is not valid JSON: {config_path} ({exc})"
+        ) from exc
+
+    apply_params(config, **overrides)
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    return config, out_dir
+
+
+# ---------------------------------------------------------------------------
+# Freeze + install (slice 008-04 — AC2 / AC3 / AC4). See the module
+# docstring's architecture note: there is no spec-006 compile step — this
+# skill self-freezes + self-installs via the shared fidelity_eval.py splice
+# machinery, exactly like the two shipped presets.
+# ---------------------------------------------------------------------------
+
+def component_name(spec_id: str, ac_id: str) -> str:
+    """Disambiguates the installed `score_<name>` component across specs (an
+    008-03 carry-forward): two different specs' AC ids can slug to the same
+    string (e.g. both simply "AC-1"), which would collide if both were
+    installed into the same target's `oracle.sh` side by side. Namespacing
+    by the spec id too keeps the component name — and its
+    `.servo/<component>/` directory — unique across every spec authored
+    against the same target, while staying a shell-safe suffix for the
+    `score_<component>` bash function name (never starts with a digit once
+    the fixed `score_` prefix is prepended)."""
+    return f"{_slug(spec_id)}_{_slug(ac_id)}"
+
+
+def freeze_dataset_config(config: dict, out_dir: Path, score_mod) -> dict:
+    """The human-approval gate (AC4): validate the dataset's shape, pin the
+    frozen artifact hashes + definition hash, and flip `approval_status` to
+    `approved`. Mutates and returns `config`; the caller persists it.
+
+    Refuses (`EnvError`) an empty dataset — freezing zero cases would
+    produce a component `score()` can never actually score (its own "no
+    scored cases" guard would always fire) — but does *not* block on the
+    provisional minimum-viable-size floor (AC3's floor is an advisory
+    warning, not a freeze precondition; a human who has already seen it may
+    still choose to freeze deliberately).
+    """
+    cases = config.get("cases") or []
+    validate_dataset(cases)
+    if not cases:
+        raise EnvError(
+            "dataset_empty",
+            "cannot freeze an eval with no cases — run `dataset` to grow the reference "
+            "set first",
+        )
+    config["hashes"] = score_mod.artifact_hashes(config, out_dir)
+    config["approved_content_hash"] = score_mod.definition_hash(config)
+    config["approval_status"] = "approved"
+    config["approved_at"] = score_mod._fe.iso_now()
+    return config
+
+
+def _install_fragment(component: str) -> str:
+    """The `score_<component>` shell function spliced into the target's
+    `oracle.sh` (mirrors `content_fidelity.py`'s own `_FRAGMENT`,
+    parameterized by the disambiguated component name — AC2/AC3)."""
+    return (
+        f"# SEED:start {component}\n"
+        f"score_{component}() {{\n"
+        "  if ! command -v python3 >/dev/null 2>&1; then\n"
+        f'    echo "missing: python3 ({component})" >&2\n'
+        "    return 2\n"
+        "  fi\n"
+        f'  python3 .servo/{component}/score.py "$PWD"\n'
+        "}\n"
+        f"# SEED:end {component}\n"
+    )
+
+
+def install_component(
+    config: dict, component: str, target: Path, weight: float, score_mod,
+) -> None:
+    """Splice `score_<component>` into `<target>/oracle.sh` and copy the
+    runtime (AC2/AC3): `score.py` + `fidelity_eval.py`, plus the frozen
+    `config.json` itself, into `<target>/.servo/<component>/` — mirrors
+    `content_fidelity.py::install()`'s splice/copy mechanics exactly (no
+    parallel harness). Idempotent: a re-install refreshes the SEED block +
+    weight in place rather than duplicating either. Refuses (`EnvError`) an
+    unapproved config — `emit` (freeze) must run first (AC4: nothing is
+    installed without the human-approval gate having already fired) — and a
+    missing target `oracle.sh` (scaffold the target first).
+    """
+    if config.get("approval_status") != "approved":
+        raise EnvError(
+            "not_approved",
+            "cannot install an unapproved eval definition — run `emit` (without --target) "
+            "to freeze it first",
+        )
+    oracle = target / "oracle.sh"
+    if not oracle.is_file():
+        raise EnvError(
+            "oracle_missing", f"oracle.sh not found: {oracle} (scaffold the target first)")
+
+    comp_dir = target / ".servo" / component
+    comp_dir.mkdir(parents=True, exist_ok=True)
+    here = Path(__file__).resolve().parent
+    shutil.copyfile(here / "score.py", comp_dir / "score.py")
+    shutil.copyfile(here.parent / "_common" / "fidelity_eval.py", comp_dir / "fidelity_eval.py")
+    (comp_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+
+    text = oracle.read_text()
+    text = score_mod._fe.splice_component(text, component, _install_fragment(component))
+    text = score_mod._fe.splice_components_entry(text, component, weight)
+    oracle.write_text(text)
+    score_mod._fe.register_manifest(target, component)
+
+
+def uninstall_component(target: Path, component: str, score_mod) -> None:
+    """Symmetric with `install_component`: removes the SEED block +
+    COMPONENTS entry and deregisters the manifest; keeps the frozen
+    artifacts under `<target>/.servo/<component>/` (mirrors
+    `content_fidelity.py::uninstall`)."""
+    oracle = target / "oracle.sh"
+    if not oracle.is_file():
+        raise EnvError("oracle_missing", f"oracle.sh not found: {oracle}")
+    text = oracle.read_text()
+    text = score_mod._fe.unsplice_component(text, component)
+    oracle.write_text(text)
+    score_mod._fe.deregister_manifest(target, component)
+
+
+def emit_target(plan_path: Path, ac_id: str, target=None, weight: float = 1.0):
+    """AC2/AC3/AC4: freeze `<eval-dir>/<name>/config.json` (the
+    human-approval gate) and — when `target` is given — install the
+    resulting `score_<name>` component into it (AC2's "a frozen
+    score_<name>"). No `target` freezes only, leaving "an approved,
+    compilable definition" (AC4) for a later call; this collapses
+    `content_fidelity.py`'s separate `freeze`/`install` steps into one
+    guided CLI verb, since the shipped fidelity presets self-install via the
+    same `fidelity_eval.py` splice machinery rather than any spec-006
+    compile step (see the module docstring's architecture note).
+
+    Never runs the eval (AC4's "does not run") — that is `gate.py`'s job
+    once installed.
+
+    Returns `(config, out_dir, component, installed)`.
+    """
+    plan = load_plan(plan_path)
+    spec_dir = _spec_dir_from_plan_path(plan_path, plan)
+    eval_dir = eval_dir_for_spec(spec_dir, plan["spec_id"])
+    out_dir = eval_dir / _slug(ac_id)
+    config_path = out_dir / "config.json"
+    if not config_path.is_file():
+        raise EnvError(
+            "config_missing",
+            f"no config.json at {config_path} — run `rubric` (then `dataset`) for "
+            f"{ac_id!r} first",
+        )
+    try:
+        config = json.loads(config_path.read_text())
+    except json.JSONDecodeError as exc:
+        raise EnvError(
+            "config_malformed_json", f"config.json is not valid JSON: {config_path} ({exc})"
+        ) from exc
+
+    score_mod = _load_score()
+    freeze_dataset_config(config, out_dir, score_mod)
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+
+    component = component_name(plan["spec_id"], ac_id)
+    installed = False
+    if target is not None:
+        install_component(config, component, Path(target), weight, score_mod)
+        installed = True
+    return config, out_dir, component, installed
+
+
+def uninstall_target(plan_path: Path, ac_id: str, target) -> str:
+    """Resolve the same disambiguated component name `emit_target` installed
+    under, and remove it from `target` (AC6's round-trip)."""
+    plan = load_plan(plan_path)
+    _validate_spec_id(plan["spec_id"])
+    component = component_name(plan["spec_id"], ac_id)
+    score_mod = _load_score()
+    uninstall_component(Path(target), component, score_mod)
+    return component
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -1103,10 +1430,115 @@ def _dataset_main(argv: list) -> int:
     return 0
 
 
+def _params_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py params",
+        description=(
+            "Set/confirm the frozen n/delta/threshold/judge params for one "
+            "AC's config.json, with a one-line trade-off note per knob."
+        ),
+    )
+    parser.add_argument(
+        "plan_path", metavar="plan",
+        help="Path to the same spec-006 checks.json plan passed to `rubric`.",
+    )
+    parser.add_argument("--ac", required=True, help="The AC id to set params for.")
+    parser.add_argument("--n", type=int, default=None, help="Judge samples per case.")
+    parser.add_argument("--delta", type=float, default=None, help="Noise-floor delta.")
+    parser.add_argument("--threshold", type=float, default=None, help="Pass/fail threshold.")
+    parser.add_argument("--model", default=None, help="Judge model.")
+    parser.add_argument("--temperature", type=float, default=None, help="Judge temperature.")
+    parser.add_argument(
+        "--max-tokens", type=int, default=None, dest="max_tokens", help="Judge max_tokens.")
+    parser.add_argument(
+        "--transport", choices=("api", "cli"), default=None, help="Judge transport.")
+    args = parser.parse_args(argv)
+
+    plan_path = Path(args.plan_path).resolve()
+    try:
+        config, out_dir = params_target(
+            plan_path, args.ac, n=args.n, delta=args.delta, threshold=args.threshold,
+            model=args.model, temperature=args.temperature, max_tokens=args.max_tokens,
+            transport=args.transport,
+        )
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"servo: params set for {args.ac} -> {out_dir}")
+    for line in render_params_guidance(config):
+        print(line)
+    return 0
+
+
+def _emit_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py emit",
+        description=(
+            "Freeze the AC's config.json (the human-approval gate) and, when "
+            "--target is given, install the resulting score_<name> component."
+        ),
+    )
+    parser.add_argument(
+        "plan_path", metavar="plan",
+        help="Path to the same spec-006 checks.json plan passed to `rubric`/`dataset`.",
+    )
+    parser.add_argument("--ac", required=True, help="The AC id to emit.")
+    parser.add_argument(
+        "--target", default=None,
+        help="Optional project root to install the component into.",
+    )
+    parser.add_argument(
+        "--weight", type=float, default=1.0,
+        help="Weight for the installed component's oracle.sh entry.",
+    )
+    args = parser.parse_args(argv)
+
+    plan_path = Path(args.plan_path).resolve()
+    target = Path(args.target).resolve() if args.target else None
+    try:
+        _config, out_dir, component, installed = emit_target(
+            plan_path, args.ac, target=target, weight=args.weight)
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"servo: emitted {args.ac} as score_{component} (approved) -> {out_dir}")
+    if installed:
+        print(f"servo: installed score_{component} into {target}")
+    return 0
+
+
+def _uninstall_main(argv: list) -> int:
+    parser = argparse.ArgumentParser(
+        prog="eval_authoring.py uninstall",
+        description="Remove a previously-installed score_<name> component from a target.",
+    )
+    parser.add_argument(
+        "plan_path", metavar="plan",
+        help="Path to the same spec-006 checks.json plan passed to `emit`.",
+    )
+    parser.add_argument("--ac", required=True, help="The AC id whose component to remove.")
+    parser.add_argument("--target", required=True, help="Project root to remove it from.")
+    args = parser.parse_args(argv)
+
+    plan_path = Path(args.plan_path).resolve()
+    target = Path(args.target).resolve()
+    try:
+        component = uninstall_target(plan_path, args.ac, target)
+    except EnvError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"servo: uninstalled score_{component} from {target}")
+    return 0
+
+
 def main(argv: list | None = None) -> int:
     # Hand-rolled subcommand dispatch (mirrors `oracle_plan.py` / `gate.py`).
-    # `triage` (008-01), `rubric` (008-02), and `dataset` (008-03) exist so
-    # far; later slices add `from-goal`/`emit`/`audit` alongside them.
+    # `triage` (008-01), `rubric` (008-02), `dataset` (008-03), and
+    # `params`/`emit`/`uninstall` (008-04) exist so far; a later slice adds
+    # `from-goal` (008-05) alongside them.
     if argv is None:
         argv = sys.argv[1:]
     if argv and argv[0] == "triage":
@@ -1115,8 +1547,15 @@ def main(argv: list | None = None) -> int:
         return _rubric_main(argv[1:])
     if argv and argv[0] == "dataset":
         return _dataset_main(argv[1:])
+    if argv and argv[0] == "params":
+        return _params_main(argv[1:])
+    if argv and argv[0] == "emit":
+        return _emit_main(argv[1:])
+    if argv and argv[0] == "uninstall":
+        return _uninstall_main(argv[1:])
     print(
-        "error: unknown or missing subcommand (expected: triage, rubric, dataset)",
+        "error: unknown or missing subcommand (expected: triage, rubric, dataset, params, "
+        "emit, uninstall)",
         file=sys.stderr,
     )
     return 2

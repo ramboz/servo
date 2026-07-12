@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generic judge-scorer core for a servo-authored eval component
-(`/servo:eval-authoring`, slices 008-02/008-03).
+(`/servo:eval-authoring`, slices 008-02/008-03/008-04).
 
 Grows across 008-02 -> 008-04:
 - **008-02** shipped the **judge path** — turn a rubric plus one candidate
@@ -8,10 +8,10 @@ Grows across 008-02 -> 008-04:
   output `{score, reasoning, strengths, weaknesses}` this generic surface
   targets (a broader schema than `content-fidelity/score.py`'s `{score,
   reasoning}` — AC2).
-- **008-03** (this slice's addition) adds the **dataset composite**,
-  `score()`: iterate `config["cases"]` (excluding `skip_case`, which is out
-  of the denominator entirely), aggregate each scored case's `n` judged
-  samples to a conservative lower bound (`aggregate_lower_bound`, shared with
+- **008-03** added the **dataset composite**, `score()`: iterate
+  `config["cases"]` (excluding `skip_case`, which is out of the denominator
+  entirely), aggregate each scored case's `n` judged samples to a
+  conservative lower bound (`aggregate_lower_bound`, shared with
   `content-fidelity`), gate that lower bound by any per-case
   `expected_output.constraints` via the DSL (`evaluate_constraint` —
   AC2's "cheap deterministic sub-checks alongside the judged score"), and
@@ -19,30 +19,46 @@ Grows across 008-02 -> 008-04:
   Composition rule: a **failed hard constraint zeroes that case's
   contribution** (multiplies its lower bound by `0.0`); a rubric-only case
   (no `expected_output`) has no constraints to gate on and is judged by the
-  rubric alone. `score()` deliberately does **not** call `validate_freeze` —
-  it scores whatever `config.json` currently holds, approved or still
-  `draft`; freeze-enforcement is 008-04 AC5's stale-gate to add at its own
-  call site.
-- **008-04** still owns: enforcing the freeze (calling `validate_freeze`
-  before scoring for real), the real candidate-gather (running the system
-  under test on a case's `input` to produce the text `judge()` scores — see
-  `_gather_candidate` below, a documented no-op seam until then), the real
-  per-candidate `actual_values` extraction the constraint DSL compares
-  against (see `_case_constraint_score` below, same seam), the ledger's
-  `oracle.sh` install splice, and the `emit` CLI step. Deliberately not built
-  here (see the module-end note).
+  rubric alone.
+- **008-04** (this slice) wires in the freeze enforcement 008-03 left open:
+  `score()` now calls `validate_freeze` first, so a change to the rubric /
+  dataset / model / n / delta / threshold since the last `eval_authoring.py
+  emit` refuses as `StaleError` (exit 2), never a silent score (AC5).
+  It also: guards the per-case `weight` parse (a hand-edited non-numeric
+  weight now raises this module's own clean `EnvError`, not a bare
+  `ValueError` — an 008-03 carry-forward); vendors the constraint DSL
+  (`parse_constraint`/`evaluate_constraint`) as a local copy instead of
+  importing `eval_authoring.py` (another 008-03 carry-forward — see the
+  "Constraint DSL" section below for why); and adds `main()` so this file
+  runs standalone as the `score_<name>` oracle.sh component
+  `eval_authoring.py install_component` splices in (mirrors
+  `content-fidelity/score.py::main()` exactly).
+
+  Still a documented, deliberately-unbuilt seam (out of this slice's scope
+  — see the spec's non-goals): the real candidate-gather (running the
+  system under test on a case's `input` to produce the text `judge()`
+  scores — see `_gather_candidate` below) and the real per-candidate
+  `actual_values` extraction the constraint DSL compares against (see
+  `_case_constraint_score` below). Both raise `EnvError` today rather than
+  fabricating a candidate/actual, which is why a *live* (no-fake-scores)
+  `score()` call always ends in `env_error`, never a placeholder score. The
+  comparative archetype's PROPOSED-vs-BASELINE judging (the `baseline`
+  per-case field 008-02/008-03 already carry in the case shape) is the same
+  kind of seam: widening `judge()`'s signature to consume it is deferred
+  until a real candidate-gather exists to feed it — half-wiring it now
+  would add a signature nobody can drive yet.
 
 Honesty (servo ADR-0005): a malformed/unparseable/unreachable judge reply,
-a missing judged sample, or a case with constraints but no actual values to
-evaluate them against, all raise `EnvError` — **never a silent 0.0** (mirrors
-content-fidelity's own contract exactly; see AC2/AC6 and this module's tests
-in `test_eval_authoring.py`).
+a missing judged sample, a stale/unapproved definition, or a case with
+constraints but no actual values to evaluate them against, all raise
+`EnvError`/`StaleError` — **never a silent 0.0** (mirrors content-fidelity's
+own contract exactly; see AC2/AC5/AC6 and this module's tests in
+`test_eval_authoring.py`).
 
 Reuses `skills/_common/fidelity_eval.py` (ADR-0024) for `_extract_json` /
 `_post_with_retry` / `EnvError` / the freeze+hash primitives, so a rubric
 authored here slots into the exact shape the harness already hashes/freezes
-(AC5) — no reshaping when 008-04 emits the final definition or spec-006
-compiles it.
+(AC5) — no reshaping when `eval_authoring.py`'s `emit` freezes it.
 
 Python 3.9+ standard library only (servo constraint, ADR-0020).
 """
@@ -51,12 +67,17 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import time  # noqa: F401 — re-exposed as `score.time` for test monkeypatching (see _post_with_retry)
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+EXIT_OK = 0
+EXIT_ENV_ERROR = 2  # -> oracle.sh treats rc=2 as a missing component -> gate env_error
 
 # Offline-test hooks for the composite scorer below (mirror content-fidelity's
 # own `_FAKE_SCORES_ENV` idiom exactly): `_FAKE_SCORES_ENV` maps a case id to
@@ -116,32 +137,7 @@ def _load_fidelity_eval():
         "fidelity_eval.py not found next to score.py nor at ../_common/fidelity_eval.py")
 
 
-def _load_eval_authoring():
-    """Load the sibling `eval_authoring.py` (same directory, same skill —
-    not a cross-skill import) purely for its pure constraint-DSL functions
-    (`parse_constraint` / `evaluate_constraint`), so the composite scorer
-    below evaluates a case's `expected_output.constraints` with the exact
-    same logic `validate_case` already validated them with at authoring
-    time — one DSL, not two.
-
-    Whether this same-directory dependency needs to travel when 008-04
-    wires the real candidate-gather (potentially copying `score.py` into a
-    target's `.servo/<eval-name>/`, the way `content_fidelity.py::init()`
-    copies `content-fidelity/score.py` alongside `fidelity_eval.py`) is
-    008-04's call to make — e.g. copy `eval_authoring.py` alongside too, or
-    fold the two DSL functions into the shared `fidelity_eval.py` harness.
-    Not resolved here: this slice's live (non-fake) scoring path never
-    reaches constraint evaluation anyway — `_gather_candidate` raises first.
-    """
-    here = Path(__file__).resolve().parent
-    spec = importlib.util.spec_from_file_location("eval_authoring", here / "eval_authoring.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 _fe = _load_fidelity_eval()
-_ea = _load_eval_authoring()
 
 EnvError = _fe.EnvError
 StaleError = _fe.StaleError
@@ -166,6 +162,83 @@ def validate_freeze(config: dict, base_dir: Path) -> None:
 
 def aggregate_lower_bound(samples, k: float) -> float:
     return _fe.aggregate_lower_bound(samples, k)
+
+
+# --------------------------------------------------------------------------- #
+# Constraint DSL (AC2) — a **vendored copy** of `eval_authoring.py`'s
+# `parse_constraint` / `evaluate_constraint` (an 008-03 carry-forward this
+# slice resolves: the two functions are duplicated here rather than
+# imported).
+#
+# Why duplicate instead of import: `eval_authoring.py`'s `install_component`
+# copies only this file + `fidelity_eval.py` into a target's
+# `.servo/<component>/` — not the whole authoring CLI — so a standalone
+# installed `score.py` has zero cross-file dependency beyond the shared
+# harness (mirrors content-fidelity's own two-file install footprint
+# exactly). `eval_authoring.py`'s copy remains canonical — it is what
+# `validate_case` validates a constraint string against at authoring time;
+# this copy only re-evaluates an already-validated string at score time, so
+# a drift between the two could only ever affect *which side* (author-time
+# validation vs score-time evaluation) catches a malformed expression first,
+# never silently pass a bad one. `test_eval_authoring.py`'s
+# `VendoredConstraintDSLDriftGuardTests` pins the two copies behaviourally
+# equal (mirrors `eval_authoring.py`'s own `RESIDUAL_REASON_*` mirroring
+# idiom).
+# --------------------------------------------------------------------------- #
+_CONSTRAINT_OPS = ("==", ">=", "<=")
+_CONSTRAINT_RE = re.compile(
+    r"^\s*(?P<field>[A-Za-z_][A-Za-z0-9_]*)\s*(?P<op>==|>=|<=)\s*(?P<value>.+?)\s*$"
+)
+
+
+def parse_constraint(text: str) -> dict:
+    """Vendored copy of `eval_authoring.py::parse_constraint` — see this
+    module's "Constraint DSL" section note above for why it is duplicated
+    rather than imported. Identical parsing rules: `==`'s value stays a bare
+    string (never float-coerced); `>=`/`<=` require a numeric value."""
+    if not isinstance(text, str) or not text.strip():
+        raise EnvError(f"empty or non-string constraint: {text!r}")
+    m = _CONSTRAINT_RE.match(text)
+    if not m:
+        raise EnvError(
+            f"malformed constraint {text!r} — expected '<field> <op> <value>' "
+            f"with <op> one of {_CONSTRAINT_OPS}"
+        )
+    field = m.group("field")
+    op = m.group("op")
+    raw_value = m.group("value").strip()
+    if not raw_value:
+        raise EnvError(f"malformed constraint {text!r} — missing a value")
+    if op == "==":
+        value = raw_value.strip("\"'")
+    else:
+        try:
+            value = float(raw_value)
+        except ValueError as exc:
+            raise EnvError(
+                f"malformed constraint {text!r} — {op!r} requires a numeric value, "
+                f"got {raw_value!r}"
+            ) from exc
+    return {"field": field, "op": op, "value": value}
+
+
+def evaluate_constraint(constraint: dict, actual_values: dict) -> bool:
+    """Vendored copy of `eval_authoring.py::evaluate_constraint` — see this
+    module's "Constraint DSL" section note above."""
+    field, op, expected = constraint["field"], constraint["op"], constraint["value"]
+    if field not in actual_values:
+        raise EnvError(
+            f"cannot evaluate constraint on field {field!r} — no actual value supplied")
+    actual = actual_values[field]
+    if op == "==":
+        return str(actual) == expected
+    try:
+        actual_num = float(actual)
+    except (TypeError, ValueError) as exc:
+        raise EnvError(
+            f"cannot compare field {field!r} with operator {op!r} against a non-numeric value"
+        ) from exc
+    return actual_num >= expected if op == ">=" else actual_num <= expected
 
 
 # --------------------------------------------------------------------------- #
@@ -328,15 +401,16 @@ def _gather_candidate(base_dir: Path, case: dict) -> str:
     """The candidate-gather seam: running the system under test on
     `case["input"]` to obtain the text this case's judged score is over
     (mirrors content-fidelity's `gather_text`, generalized past a
-    file-or-command `source`). **Not yet implemented** — 008-04 wires in the
-    real gather once the frozen params + emit step exist to drive it. Until
-    then, a live (no-fake-scores) `score()` call raises `EnvError` here
-    rather than silently judging a placeholder candidate — honest about the
-    missing capability (ADR-0005) rather than fabricating one.
+    file-or-command `source`). **Not yet implemented** — a documented,
+    deliberately-unbuilt seam (out of every slice's scope so far — see the
+    spec's non-goals: this skill authors, it does not run). A live
+    (no-fake-scores) `score()` call raises `EnvError` here rather than
+    silently judging a placeholder candidate — honest about the missing
+    capability (ADR-0005) rather than fabricating one.
     """
     raise EnvError(
         f"case {case.get('id')!r}: candidate-gather is not yet implemented "
-        f"(008-04) — set {_FAKE_SCORES_ENV} for offline scoring until then"
+        f"— set {_FAKE_SCORES_ENV} for offline scoring until then"
     )
 
 
@@ -351,15 +425,15 @@ def _case_constraint_score(case: dict, fake_actuals) -> float:
     fails a stated hard requirement can never still "mostly" pass on the
     strength of a good judged score.
 
-    The real `actual_values` a live candidate produces are 008-04's
-    candidate-gather job to extract (see `_gather_candidate`); this slice's
+    The real `actual_values` a live candidate produces are the same
+    candidate-gather seam's job to extract (see `_gather_candidate`); the
     live path never reaches here (it raises first, in `_gather_candidate`),
     so only the `_FAKE_ACTUALS_ENV` offline test hook exercises this today.
     A case with constraints but no actuals supplied is an `EnvError` (never
     a silent pass or fail) — as is a malformed constraint or an
-    evaluate-time DSL error (`eval_authoring.py`'s own `EnvError` is caught
-    and re-raised as this module's `EnvError`, so callers only ever need to
-    catch one exception type from `score()`).
+    evaluate-time DSL error (`parse_constraint`/`evaluate_constraint` above,
+    this module's own vendored copy, so no cross-module exception type to
+    reconcile).
     """
     constraints = ((case.get("expected_output") or {}).get("constraints")) or []
     if not constraints:
@@ -369,16 +443,28 @@ def _case_constraint_score(case: dict, fake_actuals) -> float:
         raise EnvError(
             f"case {case['id']!r} has constraints but no actual values to evaluate them "
             f"against (set {_FAKE_ACTUALS_ENV} for offline scoring; live actual-value "
-            "extraction from a candidate is 008-04's candidate-gather job)"
+            "extraction from a candidate is the candidate-gather seam's job)"
         )
-    try:
-        for raw_constraint in constraints:
-            constraint = _ea.parse_constraint(raw_constraint)
-            if not _ea.evaluate_constraint(constraint, actual_values):
-                return 0.0
-    except _ea.EnvError as exc:
-        raise EnvError(f"case {case['id']!r}: {exc}") from exc
+    for raw_constraint in constraints:
+        constraint = parse_constraint(raw_constraint)
+        if not evaluate_constraint(constraint, actual_values):
+            return 0.0
     return 1.0
+
+
+def _case_weight(case: dict) -> float:
+    """Guarded per-case weight parse (AC5/an 008-03 carry-forward this
+    slice resolves): `weight` is not part of AC2's case shape and is
+    unvalidated at authoring time, so a hand-edited non-numeric value must
+    raise this module's own clean `EnvError`, not a bare `ValueError`
+    bubbling out of `score()`. The `total_w <= 0` guard below stays as its
+    own explicit check (a numerically valid but degenerate all-zero-weight
+    dataset is a distinct failure mode from a malformed weight)."""
+    raw = case.get("weight", 1.0)
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as exc:
+        raise EnvError(f"case {case.get('id')!r}: weight must be numeric, got {raw!r}") from exc
 
 
 def score(base_dir: Path) -> float:
@@ -398,16 +484,19 @@ def score(base_dir: Path) -> float:
       to `1.0`, exactly as `content-fidelity/score.py`'s own composite),
       clamped to `[0,1]`.
 
-    Deliberately does **not** call `validate_freeze` — this slice scores
-    whatever `config.json` currently holds, `draft` or `approved`; enforcing
-    the freeze before scoring for real is 008-04 AC5's stale-gate, added at
-    its own call site once the frozen params + emit step exist.
+    Enforces the freeze first (AC5, this slice's resolution of 008-03's
+    carry-forward): `validate_freeze` runs before anything else, so a
+    change to the rubric / dataset / model / n / delta / threshold since
+    the last `eval_authoring.py emit` refuses as `StaleError` (exit 2) —
+    mirrors `content-fidelity/score.py::score()`'s own first line exactly.
 
-    Honesty (ADR-0005): a missing judged sample, an unreachable/malformed
-    judge reply, or a case with constraints but no actual values, all raise
-    `EnvError` — never a silent `0.0`.
+    Honesty (ADR-0005): a stale/unapproved definition, a missing judged
+    sample, an unreachable/malformed judge reply, a non-numeric per-case
+    `weight`, or a case with constraints but no actual values, all raise
+    `EnvError`/`StaleError` — never a silent `0.0`.
     """
     config = json.loads((base_dir / "config.json").read_text())
+    validate_freeze(config, base_dir)  # StaleError -> exit 2 (AC5)
     n = int(config["samples"]["n"])
     k = float(config["samples"].get("k", 1.0))
     fake_scores = _fake_scores()
@@ -422,7 +511,7 @@ def score(base_dir: Path) -> float:
                 raise EnvError(f"fake scores missing case {case['id']!r}")
             samples = [float(x) for x in fake_scores[case["id"]]]
         else:
-            # Gather is not yet implemented (008-04) — see _gather_candidate.
+            # Gather is not yet implemented — see _gather_candidate.
             candidate = _gather_candidate(base_dir, case)
             samples = [judge(candidate, config)["score"] for _ in range(n)]
         lower_bound = aggregate_lower_bound(samples, k)
@@ -431,10 +520,10 @@ def score(base_dir: Path) -> float:
 
     if not per_case:
         raise EnvError("no scored cases (every case is skip_case, or cases is empty)")
-    total_w = sum(float(c.get("weight", 1.0)) for c, _, _ in per_case)
+    total_w = sum(_case_weight(c) for c, _, _ in per_case)
     if total_w <= 0:
         raise EnvError("total case weight is zero")
-    composite = sum(cs * float(c.get("weight", 1.0)) for c, _, cs in per_case) / total_w
+    composite = sum(cs * _case_weight(c) for c, _, cs in per_case) / total_w
     _ledger(base_dir, config, per_case, composite)
     return max(0.0, min(1.0, composite))
 
@@ -454,11 +543,37 @@ def _ledger(base_dir: Path, config: dict, per_case, composite: float) -> None:
     _fe.write_ledger(base_dir, record)
 
 
+def main(argv=None) -> int:
+    """The `score_<name>` oracle.sh component entrypoint (mirrors
+    `content-fidelity/score.py::main()` exactly). The component invokes
+    `score.py <target>`, but the frozen eval this copy scores lives beside
+    this file (`eval_authoring.py install_component` copies it there), so
+    the base dir is always this script's own directory — the arg is
+    accepted for the oracle.sh contract and intentionally ignored. `argv`
+    stays in the signature so tests can call `main([])` without touching
+    `sys.argv`."""
+    base_dir = Path(__file__).resolve().parent
+    try:
+        composite = score(base_dir)
+    except StaleError as e:
+        print(f"eval-authoring: stale — {e}", file=sys.stderr)
+        return EXIT_ENV_ERROR
+    except EnvError as e:
+        print(f"eval-authoring: env_error — {e}", file=sys.stderr)
+        return EXIT_ENV_ERROR
+    print(f"{composite:.4f}")
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
 # --------------------------------------------------------------------------- #
-# Seam for 008-04: enforcing the freeze (a `validate_freeze` call site ahead
-# of `score()`), the real candidate-gather (`_gather_candidate`) and actual-
-# value extraction (`_case_constraint_score`), the `oracle.sh` install
-# splice, and the `emit` CLI step all build on the primitives above once the
-# frozen parameters exist to drive them. Deliberately not built here — see
-# the module docstring.
+# Remaining seam (deliberately unbuilt — see the module docstring): the real
+# candidate-gather (`_gather_candidate`) and actual-value extraction
+# (`_case_constraint_score`), plus widening `judge()` to carry a case's
+# `baseline` for the comparative archetype. Both need a real "system under
+# test" to drive them, which is out of scope for the authoring skill (spec
+# 008's non-goal: this skill authors, it does not run).
 # --------------------------------------------------------------------------- #

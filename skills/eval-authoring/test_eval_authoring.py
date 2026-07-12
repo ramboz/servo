@@ -1,6 +1,7 @@
 """
 AC verification tests for slices 008-01 (residual-triage), 008-02
-(rubric-shaping), and 008-03 (reference-set) of `/servo:eval-authoring`.
+(rubric-shaping), 008-03 (reference-set), and 008-04 (frozen-params-and-emit)
+of `/servo:eval-authoring`.
 
 Run from the repo root:
     python3 -m pytest skills/eval-authoring/test_eval_authoring.py -q
@@ -33,6 +34,7 @@ import copy
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1212,11 +1214,22 @@ class DatasetCompositeScoreTests(unittest.TestCase):
         os.environ.pop(score._FAKE_SCORES_ENV, None)
         os.environ.pop(score._FAKE_ACTUALS_ENV, None)
 
-    def _write_config(self, base_dir: Path, cases: list, n: int = 1) -> None:
+    def _write_config(self, base_dir: Path, cases: list, n: int = 1, approve: bool = True) -> dict:
+        """`approve=True` (the default) freezes the config before writing it
+        — 008-04 AC5 wires `validate_freeze` into `score()` (see
+        `test_score_enforces_freeze_stale_on_unapproved_config` below), so
+        every test in this class that expects `score()` to actually run the
+        composite needs an approved, hashed config, not a bare draft."""
         config = _base_rubric_config()
         config["samples"] = {"n": n, "k": 1.0, "delta": 0.03}
         config["cases"] = cases
+        if approve:
+            config["hashes"] = score.artifact_hashes(config, base_dir)
+            config["approved_content_hash"] = score.definition_hash(config)
+            config["approval_status"] = "approved"
+            config["approved_at"] = "2026-01-01T00:00:00Z"
         (base_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+        return config
 
     def test_mixed_labeled_and_rubric_only_dataset_scores_end_to_end(self):
         """AC6: a mixed labeled + rubric-only dataset, scored end-to-end,
@@ -1321,17 +1334,111 @@ class DatasetCompositeScoreTests(unittest.TestCase):
             with self.assertRaises(score.EnvError):
                 score.score(base_dir)
 
-    def test_score_does_not_enforce_freeze_on_a_draft_config(self):
-        """This slice's `score()` deliberately never calls `validate_freeze`
-        — enforcing the freeze is 008-04 AC5's job. A still-`draft`
-        (unapproved) config.json scores successfully here."""
+    def test_score_enforces_freeze_stale_on_unapproved_config(self):
+        """008-04 AC5 (resolves the 008-03 carry-forward): `score()` now
+        calls `validate_freeze` first, so a still-`draft` (unapproved)
+        config.json refuses as `StaleError` rather than silently scoring —
+        the flip side of `test_score_does_not_enforce_freeze_on_a_draft_config`
+        this slice supersedes."""
         with tempfile.TemporaryDirectory() as d:
             base_dir = Path(d)
-            self._write_config(base_dir, [_dataset_case("case-a", expected_output=None)])
+            self._write_config(
+                base_dir, [_dataset_case("case-a", expected_output=None)], approve=False)
             config = json.loads((base_dir / "config.json").read_text())
             self.assertEqual(config["approval_status"], "draft")
             os.environ[score._FAKE_SCORES_ENV] = json.dumps({"case-a": [0.8]})
-            self.assertAlmostEqual(score.score(base_dir), 0.8)
+            with self.assertRaises(score.StaleError):
+                score.score(base_dir)
+
+
+# ---------------------------------------------------------------------------
+# 008-04 carry-forward: guard the per-case `weight` parse (008-03 flagged
+# this — a hand-edited non-numeric weight must raise the module's own clean
+# `EnvError`, not a bare `ValueError`). Also closes the listed coverage
+# follow-ups: mixed per-case weights, and the `total_w <= 0` guard.
+# ---------------------------------------------------------------------------
+
+class WeightGuardTests(unittest.TestCase):
+    def setUp(self):
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+
+    def tearDown(self):
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+
+    def _write_config(self, base_dir: Path, cases: list, n: int = 1) -> None:
+        config = _base_rubric_config()
+        config["samples"] = {"n": n, "k": 1.0, "delta": 0.03}
+        config["cases"] = cases
+        config["hashes"] = score.artifact_hashes(config, base_dir)
+        config["approved_content_hash"] = score.definition_hash(config)
+        config["approval_status"] = "approved"
+        config["approved_at"] = "2026-01-01T00:00:00Z"
+        (base_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
+
+    def test_non_numeric_weight_is_a_clean_env_error_not_a_bare_value_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [
+                _dataset_case("case-a", expected_output=None, weight="not-a-number"),
+            ])
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps({"case-a": [0.9]})
+            with self.assertRaises(score.EnvError):
+                score.score(base_dir)
+
+    def test_mixed_case_weights_combine_into_a_weighted_mean(self):
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [
+                _dataset_case("case-a", expected_output=None, weight=3.0),
+                _dataset_case("case-b", category="edge_case", expected_output=None, weight=1.0),
+            ])
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"case-a": [0.9], "case-b": [0.1]})
+            composite = score.score(base_dir)
+            # weighted mean: (0.9*3 + 0.1*1) / 4 = 0.7
+            self.assertAlmostEqual(composite, 0.7, places=6)
+
+    def test_zero_total_weight_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            base_dir = Path(d)
+            self._write_config(base_dir, [
+                _dataset_case("case-a", expected_output=None, weight=0.0),
+                _dataset_case("case-b", category="edge_case", expected_output=None, weight=0.0),
+            ])
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"case-a": [0.9], "case-b": [0.5]})
+            with self.assertRaises(score.EnvError):
+                score.score(base_dir)
+
+
+# ---------------------------------------------------------------------------
+# 008-04 carry-forward: the constraint DSL vendored into score.py (so a
+# standalone-installed score.py has zero cross-file dependency beyond
+# fidelity_eval.py) must stay behaviourally identical to eval_authoring.py's
+# canonical copy (mirrors the module's own RESIDUAL_REASON_* drift guard).
+# ---------------------------------------------------------------------------
+
+class VendoredConstraintDSLDriftGuardTests(unittest.TestCase):
+    def test_vendored_parse_constraint_matches_canonical(self):
+        for text in ("tone == warm", "length >= 100", "length <= 500", "version == 3.10"):
+            with self.subTest(text=text):
+                self.assertEqual(ea.parse_constraint(text), score.parse_constraint(text))
+
+    def test_vendored_evaluate_constraint_matches_canonical(self):
+        constraint_text = "length >= 100"
+        canonical = ea.parse_constraint(constraint_text)
+        vendored = score.parse_constraint(constraint_text)
+        for actuals in ({"length": 142}, {"length": 50}):
+            with self.subTest(actuals=actuals):
+                self.assertEqual(
+                    ea.evaluate_constraint(canonical, actuals),
+                    score.evaluate_constraint(vendored, actuals),
+                )
+
+    def test_vendored_malformed_constraint_also_errors_cleanly(self):
+        with self.assertRaises(score.EnvError):
+            score.parse_constraint("length !! 100")
 
 
 # ---------------------------------------------------------------------------
@@ -1361,6 +1468,461 @@ class DatasetColocationTests(unittest.TestCase):
             self.assertTrue((rubric_dir / "config.json").is_file())
             self.assertTrue((rubric_dir / "dataset.md").is_file())
             self.assertFalse((root / ".servo").exists())
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-04 (frozen-params-and-emit) — AC1: the `params` subcommand
+# ---------------------------------------------------------------------------
+
+class ParamsDefaultsTests(unittest.TestCase):
+    """AC1: a sane provisional default already applied by `rubric`; accepting
+    every default (no override flags) leaves the config unchanged, and the
+    guidance prints a one-line plain-language trade-off note per knob."""
+
+    def test_accepting_defaults_leaves_config_unchanged(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path, rubric_dir = _triage_then_shape(root)
+            before = json.loads((rubric_dir / "config.json").read_text())
+
+            proc = _run_cli(["params", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            after = json.loads((rubric_dir / "config.json").read_text())
+            self.assertEqual(before["judge"], after["judge"])
+            self.assertEqual(before["samples"], after["samples"])
+            self.assertEqual(before["threshold"], after["threshold"])
+
+    def test_guidance_covers_every_knob_with_a_tradeoff_note(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path, _rubric_dir = _triage_then_shape(root)
+            proc = _run_cli(["params", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            out = proc.stdout.lower()
+            for token in ("n =", "delta", "threshold", "model", "temperature"):
+                self.assertIn(token, out)
+            # plain-language trade-off language (ADR-0005 knobs), not just numbers
+            self.assertIn("false-fail", out)
+
+    def test_params_before_rubric_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+            proc = _run_cli(["triage", str(plan_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            proc2 = _run_cli(["params", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc2.returncode, 2)
+            self.assertIn("error:", proc2.stderr)
+            self.assertNotIn("Traceback", proc2.stderr)
+
+
+class ParamsOverrideTests(unittest.TestCase):
+    """AC1: n/delta/threshold/judge model+params are settable, not just
+    confirmable."""
+
+    def test_overrides_are_written_into_config_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path, rubric_dir = _triage_then_shape(root)
+            proc = _run_cli([
+                "params", str(plan_path), "--ac", "AC-042-demo-1",
+                "--n", "6", "--delta", "0.05", "--threshold", "0.9",
+                "--model", "claude-haiku-4-5-20251001", "--temperature", "0.2",
+                "--max-tokens", "2048", "--transport", "cli",
+            ])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            config = json.loads((rubric_dir / "config.json").read_text())
+            self.assertEqual(config["samples"]["n"], 6)
+            self.assertEqual(config["samples"]["delta"], 0.05)
+            self.assertEqual(config["threshold"], 0.9)
+            self.assertEqual(config["judge"]["model"], "claude-haiku-4-5-20251001")
+            self.assertEqual(config["judge"]["temperature"], 0.2)
+            self.assertEqual(config["judge"]["max_tokens"], 2048)
+            self.assertEqual(config["judge"]["transport"], "cli")
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-04 — AC2/AC3/AC4: `emit` (freeze [+ install]) — the human-
+# approval gate. Architecture note: there is no spec-006 eval-family compile
+# step (verified against the current codebase) — the authoring skill
+# self-freezes + self-installs the score_<name> component via the shared
+# fidelity_eval.py splice machinery, exactly like the two shipped presets
+# (content-fidelity / design-eval). `emit` with no --target freezes only
+# (AC4's "approved, compilable definition" stopping point); `emit --target`
+# additionally installs (never runs) the component (AC2/AC3).
+# ---------------------------------------------------------------------------
+
+class EmitFreezeTests(unittest.TestCase):
+    def test_emit_without_target_freezes_only(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path, rubric_dir, proc = _triage_shape_and_dataset(
+                root, spec_text=NO_HEADINGS_SPEC_MD)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            proc2 = _run_cli(["emit", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+
+            config = json.loads((rubric_dir / "config.json").read_text())
+            self.assertEqual(config["approval_status"], "approved")
+            self.assertIn("approved_content_hash", config)
+            self.assertIn("hashes", config)
+            score.validate_freeze(config, rubric_dir)  # no raise
+
+    def test_emit_refuses_an_empty_dataset(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path, _rubric_dir = _triage_then_shape(root)  # no `dataset` run -> cases == []
+            proc = _run_cli(["emit", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("error:", proc.stderr)
+            self.assertNotIn("Traceback", proc.stderr)
+
+    def test_emit_before_rubric_is_a_clean_env_error(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            plan_path = _make_plan(root, residual=MIXED_RESIDUAL)
+            proc = _run_cli(["triage", str(plan_path)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            proc2 = _run_cli(["emit", str(plan_path), "--ac", "AC-042-demo-1"])
+            self.assertEqual(proc2.returncode, 2)
+            self.assertNotIn("Traceback", proc2.stderr)
+
+
+class ComponentNameCollisionTests(unittest.TestCase):
+    """008-03 carry-forward: distinct AC ids across different specs must not
+    collide to the same `score_<name>` component/dir."""
+
+    def test_same_ac_id_across_different_specs_gets_distinct_component_names(self):
+        name_a = ea.component_name("008-spec-a", "AC-1")
+        name_b = ea.component_name("008-spec-b", "AC-1")
+        self.assertNotEqual(name_a, name_b)
+
+    def test_component_name_is_a_shell_safe_function_suffix(self):
+        name = ea.component_name("008-eval-authoring", "AC-042-demo-1")
+        self.assertRegex(f"score_{name}", r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+ORACLE_STUB = (
+    "#!/usr/bin/env bash\nset -euo pipefail\nTHRESHOLD=\"${THRESHOLD:-0.5}\"\n"
+    "COMPONENTS=(\n  \"vitest:1.0\"\n)\n\nweighted_sum=\"0\"\ntotal_weight=\"0\"\n"
+)
+
+
+def _make_stub_target(target: Path) -> None:
+    """A minimal (non-runnable) oracle.sh + manifest, sufficient to exercise
+    the splice/registration mechanics — mirrors content-fidelity's own
+    `InstallTests._target()` fixture."""
+    (target / ".servo").mkdir(parents=True, exist_ok=True)
+    (target / "oracle.sh").write_text(ORACLE_STUB)
+    (target / ".servo" / "install.json").write_text(json.dumps({"components": ["vitest"]}))
+
+
+class InstallUninstallRoundTripTests(unittest.TestCase):
+    """AC6: the freeze/install/uninstall round-trip is idempotent and
+    baseline components stay untouched (mirrors content-fidelity's own
+    InstallTests)."""
+
+    def test_emit_with_target_freezes_and_installs(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target_dir = Path(d) / "target"
+            _make_stub_target(target_dir)
+            plan_path, _rubric_dir, proc = _triage_shape_and_dataset(
+                root, spec_text=NO_HEADINGS_SPEC_MD)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            proc2 = _run_cli([
+                "emit", str(plan_path), "--ac", "AC-042-demo-1",
+                "--target", str(target_dir), "--weight", "2.0",
+            ])
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+
+            component = ea.component_name("042-demo", "AC-042-demo-1")
+            text = (target_dir / "oracle.sh").read_text()
+            self.assertIn(f"# SEED:start {component}", text)
+            self.assertIn(f"score_{component}()", text)
+            self.assertIn(f'"{component}:2.0"', text)
+            self.assertIn('"vitest:1.0"', text)  # baseline untouched
+
+            comp_dir = target_dir / ".servo" / component
+            self.assertTrue((comp_dir / "score.py").is_file())
+            self.assertTrue((comp_dir / "fidelity_eval.py").is_file())
+            frozen_config = json.loads((comp_dir / "config.json").read_text())
+            self.assertEqual(frozen_config["approval_status"], "approved")
+
+            manifest = json.loads((target_dir / ".servo" / "install.json").read_text())
+            self.assertIn(component, manifest["components"])
+
+    def test_reemit_with_target_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target_dir = Path(d) / "target"
+            _make_stub_target(target_dir)
+            plan_path, _rubric_dir, proc = _triage_shape_and_dataset(
+                root, spec_text=NO_HEADINGS_SPEC_MD)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            for weight in ("1.0", "3.0"):
+                proc2 = _run_cli([
+                    "emit", str(plan_path), "--ac", "AC-042-demo-1",
+                    "--target", str(target_dir), "--weight", weight,
+                ])
+                self.assertEqual(proc2.returncode, 0, proc2.stderr)
+
+            component = ea.component_name("042-demo", "AC-042-demo-1")
+            text = (target_dir / "oracle.sh").read_text()
+            self.assertEqual(text.count(f"# SEED:start {component}"), 1)
+            self.assertIn(f'"{component}:3.0"', text)
+            self.assertNotIn(f'"{component}:1.0"', text)
+
+    def test_uninstall_removes_component_keeps_baseline(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target_dir = Path(d) / "target"
+            _make_stub_target(target_dir)
+            plan_path, _rubric_dir, proc = _triage_shape_and_dataset(
+                root, spec_text=NO_HEADINGS_SPEC_MD)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            proc2 = _run_cli([
+                "emit", str(plan_path), "--ac", "AC-042-demo-1", "--target", str(target_dir),
+            ])
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+
+            proc3 = _run_cli([
+                "uninstall", str(plan_path), "--ac", "AC-042-demo-1",
+                "--target", str(target_dir),
+            ])
+            self.assertEqual(proc3.returncode, 0, proc3.stderr)
+
+            component = ea.component_name("042-demo", "AC-042-demo-1")
+            text = (target_dir / "oracle.sh").read_text()
+            self.assertNotIn(component, text)
+            self.assertIn('"vitest:1.0"', text)
+            manifest = json.loads((target_dir / ".servo" / "install.json").read_text())
+            self.assertNotIn(component, manifest["components"])
+            self.assertIn("vitest", manifest["components"])
+
+    def test_install_refuses_an_unapproved_config(self):
+        """Defensive unit coverage of the approval-gate guard: the CLI's
+        `emit --target` always freezes before installing, so this state is
+        unreachable via the CLI — verified directly against
+        `install_component`."""
+        with tempfile.TemporaryDirectory() as d:
+            target_dir = Path(d) / "target"
+            _make_stub_target(target_dir)
+            draft_config = _base_rubric_config()
+            draft_config["cases"] = [_dataset_case("case-1")]
+            score_mod = ea._load_score()
+            with self.assertRaises(ea.EnvError):
+                ea.install_component(draft_config, "some_component", target_dir, 1.0, score_mod)
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-04 — AC5: a rubric / dataset / param change after `emit` refuses
+# as stale (the `validate_freeze` carry-forward this slice wires into
+# `score()`) — mirrors content-fidelity's own "changed X is stale" battery.
+# ---------------------------------------------------------------------------
+
+class EmitStaleOnChangeTests(unittest.TestCase):
+    def _emit(self, root: Path, ac_id: str = "AC-042-demo-1"):
+        plan_path, rubric_dir, proc = _triage_shape_and_dataset(
+            root, spec_text=NO_HEADINGS_SPEC_MD, ac_id=ac_id)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        proc2 = _run_cli(["emit", str(plan_path), "--ac", ac_id])
+        self.assertEqual(proc2.returncode, 0, proc2.stderr)
+        return plan_path, rubric_dir
+
+    def test_changed_rubric_is_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = self._emit(root)
+            config_path = rubric_dir / "config.json"
+            config = json.loads(config_path.read_text())
+            config["rubric"] = "a completely different rubric"
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(config, rubric_dir)
+
+    def test_changed_samples_n_is_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = self._emit(root)
+            config = json.loads((rubric_dir / "config.json").read_text())
+            config["samples"]["n"] = config["samples"]["n"] + 4
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(config, rubric_dir)
+
+    def test_changed_delta_is_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = self._emit(root)
+            config = json.loads((rubric_dir / "config.json").read_text())
+            config["samples"]["delta"] = config["samples"]["delta"] + 0.5
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(config, rubric_dir)
+
+    def test_changed_threshold_is_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = self._emit(root)
+            config = json.loads((rubric_dir / "config.json").read_text())
+            config["threshold"] = 0.99
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(config, rubric_dir)
+
+    def test_changed_judge_model_is_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = self._emit(root)
+            config = json.loads((rubric_dir / "config.json").read_text())
+            config["judge"]["model"] = "a-different-model"
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(config, rubric_dir)
+
+    def test_changed_case_is_stale(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            _plan_path, rubric_dir = self._emit(root)
+            config = json.loads((rubric_dir / "config.json").read_text())
+            config["cases"][0]["scenario"] = "a completely different scenario"
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(config, rubric_dir)
+
+    def test_stale_config_exits_2_via_score_py_main_not_zero(self):
+        """The full CLI contract (mirrors content-fidelity's own
+        `test_stale_exits_2_not_zero`): a stale config's installed score.py
+        never prints a composite, exits 2, and says "stale" on stderr."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target_dir = Path(d) / "target"
+            _make_stub_target(target_dir)
+            plan_path, _rubric_dir, proc = _triage_shape_and_dataset(
+                root, spec_text=NO_HEADINGS_SPEC_MD)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            proc2 = _run_cli([
+                "emit", str(plan_path), "--ac", "AC-042-demo-1", "--target", str(target_dir),
+            ])
+            self.assertEqual(proc2.returncode, 0, proc2.stderr)
+
+            component = ea.component_name("042-demo", "AC-042-demo-1")
+            comp_dir = target_dir / ".servo" / component
+            config_path = comp_dir / "config.json"
+            config = json.loads(config_path.read_text())
+            config["threshold"] = 0.999  # tamper post-install, without re-emitting
+            config_path.write_text(json.dumps(config, indent=2) + "\n")
+
+            proc3 = subprocess.run(
+                [sys.executable, str(comp_dir / "score.py"), str(target_dir)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(proc3.returncode, 2, proc3.stderr)
+            self.assertEqual(proc3.stdout.strip(), "")  # never a 0.0 on the stale path
+            self.assertIn("stale", proc3.stderr.lower())
+
+
+# ---------------------------------------------------------------------------
+# Slice 008-04 — AC6: the emitted+installed component runs under gate.py's
+# real ADR-0002 0/1/2 contract (a real gate.py invocation over the genuine
+# oracle.sh driver loop, not a stub).
+# ---------------------------------------------------------------------------
+
+class GateContractTests(unittest.TestCase):
+    GATE = REPO_ROOT / "skills" / "quality-gate" / "gate.py"
+    ORACLE_TEMPLATE = REPO_ROOT / "templates" / "oracle.sh.template"
+
+    def setUp(self):
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+
+    def tearDown(self):
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+
+    def _scaffold_bare_target(self, target: Path) -> None:
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".servo").mkdir(parents=True, exist_ok=True)
+        (target / ".servo" / "install.json").write_text(json.dumps({
+            "installed_tier": "tier-0", "components": [],
+        }))
+        text = self.ORACLE_TEMPLATE.read_text()
+        text = (text
+                .replace("{{COMPONENTS_LIST}}", "  # (no components — no signals detected)")
+                .replace("{{SEED_BLOCKS}}", "# (no SEED blocks)")
+                .replace("{{NO_COMPONENTS_MESSAGE}}", "no components registered"))
+        oracle = target / "oracle.sh"
+        oracle.write_text(text)
+        mode = oracle.stat().st_mode
+        oracle.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    def _emit_and_install(self, root: Path, target: Path, threshold: float = 0.8) -> str:
+        plan_path, _rubric_dir, proc = _triage_shape_and_dataset(
+            root, spec_text=NO_HEADINGS_SPEC_MD)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # `params --threshold` writes the author's intended bar into the
+        # frozen definition (pinned into the hash — a later change trips
+        # stale), but the pass/fail *decision* is oracle.sh's own global
+        # $THRESHOLD env var (see templates/oracle.sh.template) — a
+        # per-component score is always a bare [0,1], never self-judged
+        # against its own config's threshold (content-fidelity's score.py
+        # has the same split). `_run_gate` below passes THRESHOLD to match.
+        proc2 = _run_cli(["params", str(plan_path), "--ac", "AC-042-demo-1",
+                           "--threshold", str(threshold)])
+        self.assertEqual(proc2.returncode, 0, proc2.stderr)
+        proc3 = _run_cli([
+            "emit", str(plan_path), "--ac", "AC-042-demo-1", "--target", str(target),
+        ])
+        self.assertEqual(proc3.returncode, 0, proc3.stderr)
+        return ea.component_name("042-demo", "AC-042-demo-1")
+
+    def _run_gate(self, target: Path, threshold: float = 0.8) -> subprocess.CompletedProcess:
+        env = dict(os.environ)
+        env["THRESHOLD"] = str(threshold)
+        return subprocess.run(
+            [sys.executable, str(self.GATE), str(target)],
+            capture_output=True, text=True, env=env)
+
+    def test_gate_passes_when_composite_meets_threshold(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = Path(d) / "target"
+            self._scaffold_bare_target(target)
+            self._emit_and_install(root, target, threshold=0.8)
+
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps({
+                "case-1": [0.9, 0.9, 0.9, 0.9], "case-2": [0.9, 0.9, 0.9, 0.9],
+            })
+            result = self._run_gate(target, threshold=0.8)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("status=pass", result.stdout)
+
+    def test_gate_reports_below_threshold(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = Path(d) / "target"
+            self._scaffold_bare_target(target)
+            self._emit_and_install(root, target, threshold=0.8)
+
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps({
+                "case-1": [0.5, 0.5, 0.5, 0.5], "case-2": [0.5, 0.5, 0.5, 0.5],
+            })
+            result = self._run_gate(target)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("status=below_threshold", result.stdout)
+
+    def test_gate_reports_env_error_with_no_fake_scores(self):
+        """No fake-scores hook and no real candidate-gather yet (still a
+        documented seam — see score.py's module docstring): the installed
+        component's live path raises EnvError deterministically, regardless
+        of ambient judge credentials, so gate.py reports env_error (rc=2)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = Path(d) / "target"
+            self._scaffold_bare_target(target)
+            self._emit_and_install(root, target, threshold=0.8)
+
+            result = self._run_gate(target)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("status=env_error", result.stdout)
 
 
 if __name__ == "__main__":
