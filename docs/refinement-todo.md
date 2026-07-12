@@ -743,3 +743,13 @@ guessing further shapes now.
 its compliance review (2026-07-03) — a disclosed, non-blocking scope
 question, not a defect; the shipped `file`/`command` shape is fully
 functional for both of its own documented use cases.
+
+---
+
+## Judge-audit → composite gating (auto-demote an untrusted judge)
+
+**Deferred:** Spec 008 slice 008-06 ships the judge-trust audit as **advisory only** — it computes fail-precision / pass-miss-rate / drift and recommends `auto` vs `confirmed-only`, but does **not** alter the composite or `gate.py`/`oracle.sh` behavior. Auto-*demoting* an untrusted judge's contribution would touch the ADR-0005 frozen-eval gate contract, so it is deliberately out of the MVP (the MVP makes judge-trust *visible*, not *enforced*).
+
+**Resolution trigger:** the first real authored eval whose judge-audit surfaces an untrustworthy judge (provisional: fail-precision < 0.70 or pass-miss-rate > 0.20 on a ≥20-case sample) that a human would want the composite to reflect automatically. At that point a new ADR decides the demotion semantics (does `confirmed-only` zero the component, down-weight it, or force `env_error`?) and a follow-on spec 008 slice implements it.
+
+**Surfaced by:** ADR-0027 frame-critique (rounds 1–2, 2026-07-11) — the reviewer flagged that an advisory-only audit leaves the false-pass-via-untrusted-judge hole open; kept advisory in the MVP by design, with the gating decision parked here rather than rushed into the gate contract. Referenced by spec 008 Open questions and slice 008-06 AC4.
