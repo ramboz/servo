@@ -753,3 +753,25 @@ functional for both of its own documented use cases.
 **Resolution trigger:** the first real authored eval whose judge-audit surfaces an untrustworthy judge (provisional: fail-precision < 0.70 or pass-miss-rate > 0.20 on a ≥20-case sample) that a human would want the composite to reflect automatically. At that point a new ADR decides the demotion semantics (does `confirmed-only` zero the component, down-weight it, or force `env_error`?) and a follow-on spec 008 slice implements it.
 
 **Surfaced by:** ADR-0027 frame-critique (rounds 1–2, 2026-07-11) — the reviewer flagged that an advisory-only audit leaves the false-pass-via-untrusted-judge hole open; kept advisory in the MVP by design, with the gating decision parked here rather than rushed into the gate contract. Referenced by spec 008 Open questions and slice 008-06 AC4.
+
+---
+
+## eval-authoring `triage` — untested `plan_path_layout_mismatch` guard branches
+
+**Deferred:** Spec 008 slice 008-01 added `_spec_dir_from_plan_path` in `skills/eval-authoring/eval_authoring.py`, which fails closed with `EnvError("plan_path_layout_mismatch", …)` when a well-formed plan sits at a non-conforming on-disk layout (too shallow for `parents[2]`, or a `source_spec_path` basename absent from the derived spec dir). Those two guard branches have no direct test — the existing malformed-plan tests all bail earlier in `load_plan`, and the colocation tests use conforming layouts. Defensive code beyond slice 008-01's AC6 coverage requirement; low-risk.
+
+**Resolution trigger:** the next slice that touches `eval_authoring.py`'s path-resolution (e.g. 008-05's spec-shaped-artifact input, which re-enters `triage` from a different on-disk shape) — add a fixture writing a valid plan one directory too shallow, and one whose `source_spec_path` basename is absent, asserting exit 2 on both.
+
+**Surfaced by:** slice 008-01 craft re-review + reconciliation review (2026-07-12) — a disclosed, non-blocking coverage gap, not a defect.
+
+---
+
+## eval-authoring — candidate-gather (running the system under test) is unbuilt
+
+**Deferred:** Spec 008 ships `/servo:eval-authoring` end to end (goal→criteria → triage → rubric → reference-set → freeze → install → judge-audit), but `skills/eval-authoring/score.py::_gather_candidate` is a documented, deliberately-unbuilt seam. An installed `score_<name>` component can score **fake** samples (the `SERVO_EVAL_AUTHORING_FAKE_SCORES` / `SERVO_EVAL_AUTHORING_FAKE_ACTUALS` test hooks) but a **live** `score()` — running the system under test on a case's `input` to produce the text the judge scores, and extracting the constraint-DSL `actual_values` from it — always raises `env_error` today (never a placeholder score, honoring ADR-0005). The skill *authors* the eval; it does not yet *run* a real candidate through it. The two presets (design-eval `capture_app`, content-fidelity `gather_text`) each ship a real modality-specific gather step; the generic surface needs a generic one.
+
+**Resolution trigger:** the first real eval-authoring consumer that needs to score a live (non-fake) candidate — design the generic candidate-gather then (likely a per-case `source: {type: file|command}` descriptor mirroring content-fidelity's, plus the constraint-DSL `actual_values` extraction), informed by what that project actually needs.
+
+**Also parked here (minor, non-blocking, from the 008 review passes):** `criteria-split`'s `oracle_plan classify` subprocess has no `timeout` (008-05); unmatched `--labels` ids in `audit` are silently dropped — an advisory count would help (008-06); the `--scores` override loader + a numeric `==` constraint value are untested edge paths.
+
+**Surfaced by:** spec 008 slice 008-04/05/06 deviation logs + reconciliation reviews (2026-07-12). Documented as a named limitation in `skills/eval-authoring/SKILL.md`.

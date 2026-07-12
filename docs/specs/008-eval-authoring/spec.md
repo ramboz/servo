@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [006, 015, adr-0005, adr-0019, adr-0024, adr-0026, adr-0027]
 last_verified:
 ---
@@ -13,20 +13,26 @@ last_verified:
 > are eval-able; shapes the scoring rubric; collects the statistical reference
 > set; sets the frozen parameters (`n`, `δ`, threshold, judge model) that
 > [ADR-0005](../../decisions/adr-0005-eval-oracle-component.md) requires; and
-> hands a compilable definition to `/servo:spec-oracle`. A light advisory
-> judge-audit reports whether the judge can be trusted. All on the shared
+> freezes + installs the resulting `score_<name>` component that `gate.py` runs.
+> A light advisory judge-audit reports whether the judge can be trusted. All on
+> the shared
 > [ADR-0024](../../decisions/adr-0024-extract-frozen-eval-harness.md) harness —
 > no parallel infrastructure.
 
-> **Status: READY_FOR_IMPLEMENTATION** (all six slices reviewed clean via a jig:analyze pass — 8 findings resolved; activated 2026-07-11) by the eval-authoring thrust
-> ([ADR-0026](../../decisions/adr-0026-generic-eval-authoring-surface.md),
+> **Status: DONE** (all six slices 008-01..06 implemented, reviewed
+> compliance+craft+reconciliation, and landed 2026-07-12) by the eval-authoring
+> thrust ([ADR-0026](../../decisions/adr-0026-generic-eval-authoring-surface.md),
 > [ADR-0027](../../decisions/adr-0027-goal-to-eval-assisted-authoring.md)). The
-> former "parked until a first EDD spec" trigger is retired: the decision to make
+> former "parked until a first EDD spec" trigger was retired: the decision to make
 > general non-deterministic eval authoring servo's differentiated capability *is*
 > the trigger, made deliberately, with a mature external system (Mystique, studied
 > as inspiration — not a target, not a dependency) supplying the grounding a
-> hypothetical single consumer would have. Slices 008-01..06 are cut as real,
-> buildable work; ACs below are first-draft, to be sharpened during this review.
+> hypothetical single consumer would have. Ships as one guided skill
+> `/servo:eval-authoring` (SKILL.md + `eval_authoring.py` + `score.py` +
+> `eval-frame-review.md`). The one load-bearing correction found during
+> implementation is recorded in Goal 5 + slice 008-04: there is no spec-006
+> "eval-family compile step" — the emit self-freezes + self-installs via the shared
+> ADR-0024 harness, exactly as the `design-eval` / `content-fidelity` presets do.
 
 ## Why this spec
 
@@ -92,10 +98,19 @@ authoring surface that lowers the barrier end to end.
    truth; the skill never fabricates ground truth.
 4. **Set the frozen parameters.** Pick `n`, `δ`, threshold, and judge model+params
    with sane defaults and plain-language trade-off guidance.
-5. **Emit a compilable definition.** Produce the eval definition in the exact shape
-   `/servo:spec-oracle`'s eval-family extension compiles into a frozen
-   `score_<name>` per ADR-0005 — built on the shared harness (ADR-0024). This skill
-   **authors**; spec-006 **compiles + freezes**; `gate.py` **runs**.
+5. **Emit a frozen, installable component.** Produce the eval definition in the
+   shape the shared harness ([ADR-0024](../../decisions/adr-0024-extract-frozen-eval-harness.md))
+   freezes + splices into a `score_<name>` `oracle.sh` component per
+   [ADR-0005](../../decisions/adr-0005-eval-oracle-component.md) — self-freezing
+   and self-installing via `fidelity_eval.py` exactly as the two presets
+   (`design-eval` / `content-fidelity`) do. This skill **authors + freezes +
+   installs** the component; `gate.py` **runs** it. **Correction (008-04):** an
+   earlier draft of this goal routed the freeze through "`/servo:spec-oracle`'s
+   eval-family compile step," but spec-006 has no such step — its
+   `oracle_overlay.py` freezes only *deterministic* overlays
+   (`score_spec_oracle_<id>`). The frozen-eval path is the ADR-0024 harness the
+   presets already ride; spec-006 still *classifies* the ACs (the
+   `residual_judgment` bucket 008-01 triages) but does not compile judged evals.
 6. **Stay honest and reviewable.** The authored rubric + dataset are inspectable
    project artifacts; the human approves before anything is frozen.
 7. **Report judge trust (light advisory audit).** Sample judged cases for human
@@ -105,9 +120,12 @@ authoring surface that lowers the barrier end to end.
 
 ## Non-goals
 
-- **Not running or freezing evals.** Compilation + freeze is spec-006 + ADR-0005;
-  execution is `gate.py`/`loop.py`. This skill stops at an approved, compilable
-  definition (plus the advisory audit).
+- **Not running evals.** This skill authors, freezes, and installs the
+  `score_<name>` component (the ADR-0005 clause-2 approval + the ADR-0024
+  harness splice); **execution** is `gate.py`/`loop.py`. It stops at an
+  approved, installed component (plus the advisory audit) — it never runs the
+  eval itself. (The freeze/install is the shared-harness path the two presets
+  ride, not a spec-006 step — see Goal 5's correction.)
 - **Not autonomous goal→eval.** Goal expansion is an assist gated by independent
   review + human curation (ADR-0027); it never freezes a criterion on its own.
 - **Not a heavy eval framework.** No Langfuse/pipeline/dashboard stack (the
@@ -142,14 +160,14 @@ GOAL (free text)                                           human-only ACs
   → [008-03: collect reference set]                       │
   → [008-04: set n/δ/threshold/model + emit]              │
   → eval definition (human-approved)                      │
-  → [006 eval-family: compile + freeze, per ADR-0005, on ADR-0024 harness]
-  → frozen score_<name>
+  → [008-04 emit: freeze + install, per ADR-0005, on ADR-0024 harness]
+  → frozen score_<name> spliced into oracle.sh
   → [gate.py composite / loop.py halting]
   → * [008-06: judge-audit]  advisory trust metrics + auto/confirmed-only rec
 ```
 
-008 is the human-in-the-loop authoring span; everything from compile onward is the
-ADR-0005 contract operating mechanically on what 008 produced. The independent
+008 is the human-in-the-loop authoring span; everything from freeze/install onward
+is the ADR-0005 contract operating mechanically on what 008 produced. The independent
 review (008-05) and the judge-audit (008-06) both live in the authoring/agent
 layer — advisory, never an oracle gate (ADR-0021 / ADR-0011 / ADR-0005).
 
@@ -184,7 +202,7 @@ slice number because triage (008-01) is the smaller, self-contained core that
 | [008-01](slice-01-residual-triage.md) | residual-triage | Path | DRAFT | Classify each `residual_judgment` AC as eval-able vs human-residual, with rationale; never auto-promote a taste call. |
 | [008-02](slice-02-rubric-shaping.md) | rubric-shaping | Path | DRAFT | Turn an eval-able AC into a rubric + structured judge prompt (borrowed archetypes), human-reviewed. |
 | [008-03](slice-03-reference-set.md) | reference-set | Path | DRAFT | Scaffold + grow the dataset (local-file-as-truth, `happy/edge/skip` taxonomy, min-size guidance); the big lift; never fabricate ground truth. |
-| [008-04](slice-04-frozen-params-and-emit.md) | frozen-params-and-emit | Path | DRAFT | Set `n`/`δ`/threshold/model with defaults; emit the ADR-0005-shaped definition on the ADR-0024 harness for `/servo:spec-oracle` to compile+freeze. |
+| [008-04](slice-04-frozen-params-and-emit.md) | frozen-params-and-emit | Path | DRAFT | Set `n`/`δ`/threshold/model with defaults; freeze + install the ADR-0005-shaped `score_<name>` component via the ADR-0024 harness (self-install like the presets — not a spec-006 step; see Goal 5). |
 | [008-05](slice-05-goal-to-criteria.md) | goal-to-criteria | Path | DRAFT | Expand a goal → proposed tagged ACs → independent review → human curate; emit a spec-shaped AC artifact into 015 + 006 ([ADR-0027](../../decisions/adr-0027-goal-to-eval-assisted-authoring.md)). |
 | [008-06](slice-06-judge-audit.md) | judge-audit | Path | DRAFT | Light advisory judge-trust audit: spot-check sample, fail-precision / pass-miss / drift, recommend auto vs confirmed-only; no composite gating (MVP). |
 
@@ -224,5 +242,5 @@ slice number because triage (008-01) is the smaller, self-contained core that
 - [ADR-0019 — eval authoring stays entirely servo-owned](../../decisions/adr-0019-eval-authoring-servo-owned.md) — one servo skill, jig attest-only.
 - [ADR-0009 — design-fidelity eval recipe](../../decisions/adr-0009-design-fidelity-eval-recipe.md) / [Spec 012](../012-design-eval/spec.md) / [Spec 020 — content-fidelity](../020-content-fidelity-eval/spec.md) — the two presets the generic surface sits beside.
 - [ADR-0015 — EDD suitability gate](../../decisions/adr-0015-edd-suitability-gate.md) / [Spec 015](../015-edd-suitability/spec.md) — the eval-compatibility verdict the curated ACs feed.
-- [Spec 006 — spec-oracle](../006-spec-oracle/spec.md) — the classifier (the `residual_judgment` bucket) and the compiler this hands off to.
+- [Spec 006 — spec-oracle](../006-spec-oracle/spec.md) — the classifier whose `residual_judgment` bucket 008-01 triages. (It classifies ACs; it does **not** compile judged evals — those self-install via the ADR-0024 harness. See Goal 5's correction.)
 - Mystique (`/Users/ramboz/Projects/spacecat/mystique`) — external inspiration only (template-first authoring UX, structured judge output, local-dataset-as-truth, judge-audit metrics); its Langfuse/blackboard-coupled infra is deliberately not borrowed. Not vendored, not a dependency.
