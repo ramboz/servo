@@ -35,6 +35,8 @@
 - [ADR-0026: Eval authoring generalizes to one kind-agnostic authoring surface](adr-0026-generic-eval-authoring-surface.md) — Three ADRs already bound the non-deterministic eval story: (Accepted)
 - [ADR-0027: Goal→eval is assisted authoring, gated by independent review and human curation](adr-0027-goal-to-eval-assisted-authoring.md) — Servo's eval pipeline is **spec/AC-centric**. (Accepted)
 - [ADR-0028: Commit generated Claude and Codex plugin packages](adr-0028-committed-dual-host-plugin-packages.md) — Servo's canonical repository is also its Claude install payload, while its release pipeline publishes one Claude-shaped archive and has no Codex plugin manifest or native Codex marketplace bundle. (2026-07-12, Accepted)
+- [ADR-0029: Autonomy-readiness pre-flight gate](adr-0029-autonomy-readiness-gate.md) — Servo's Compile phase asks "can this spec be evaluated?" but nothing asks whether the scope and initial prompt are precise and bounded enough to hand to an unattended long-horizon loop. (2026-08-04, Proposed)
+- [ADR-0030: Durable cross-run quarantine and a lifecycle-aware coordinator](adr-0030-durable-quarantine-and-lifecycle-coordinator.md) — Thrash is only bounded per-run and the heartbeat coordinator is FIFO and lifecycle-blind; both block a safe, bounded, long-horizon run. (2026-08-04, Proposed)
 
 ## Pending
 
@@ -55,7 +57,10 @@ entirely servo-owned), and `0020` is Accepted (minimum supported Python is
 `0022` is Accepted (freeze against parsed ACs), `0023` is Accepted
 (co-locate durable spec-oracle artifacts), and `0024` is Accepted (extract
 the frozen-eval harness), `0025` is reserved (Proposed) by the
-runner-records / judge-verifies-assumptions ADR, `0026` is Accepted (generic eval-authoring-surface), `0027` is Accepted (goal→eval assisted authoring), and `0028` is reserved by the dual-host package ADR, so the next free number is `0029`:
+runner-records / judge-verifies-assumptions ADR, `0026` is Accepted (generic eval-authoring-surface), `0027` is Accepted (goal→eval assisted authoring), and `0028` is Accepted (the
+dual-host package ADR), `0029` is reserved (Proposed) by the autonomy-readiness
+gate ADR, and `0030` is reserved (Proposed) by the durable-quarantine /
+lifecycle-coordinator ADR, so the next free number is `0031`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone proposes a Python or Node oracle alternative.
 

@@ -111,6 +111,9 @@
 | [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-01 - diff-anchored, narrow-first investigation | **DONE** |  |
 | [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-02 - record and verify load-bearing assumptions | **DONE** |  |
 | [022-dual-host-release-parity](022-dual-host-release-parity/spec.md) | 022-01 — dual-host release boundary | **DONE** | Dual-host install, CI, release, and documentation parity landed with all 11 current skills, including eval-authoring. |
+| [023-autonomy-readiness-gate](023-autonomy-readiness-gate/spec.md) | 023-01 — readiness verdict, artifact, and human approval | DRAFT |  |
+| [024-durable-cross-run-quarantine](024-durable-cross-run-quarantine/spec.md) | 024-01 — cross-run quarantine record, heartbeat skip, and release rule | DRAFT |  |
+| [025-lifecycle-aware-coordinator](025-lifecycle-aware-coordinator/spec.md) | 025-01 — priority ranking and lifecycle-aware normalization | DRAFT |  |
 
 ## Deferred slices
 
