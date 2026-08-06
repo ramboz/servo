@@ -102,8 +102,12 @@ to evaluate repeatably. They want to:
 Servo is **not** a substitute for deciding what to build, and generated criteria
 must never silently become product truth. The prerequisite is *evaluable intent*:
 human-approved success criteria and evidence capable of distinguishing success
-from failure. Unattended execution additionally requires the suitability gate,
-composable quality signals, and hard budget/termination controls.
+from failure. Unattended execution additionally requires the **autonomy-readiness
+gate** (upstream of suitability — is the goal's scope and initial prompt precise
+and bounded enough to hand to a long-horizon run, and is the run identity separated
+from the merge identity? — [ADR-0029](decisions/adr-0029-autonomy-readiness-gate.md)),
+the suitability gate, composable quality signals, and hard budget/termination
+controls.
 
 Continuous evaluation extends that audience to teams that want scheduled,
 read-only discovery with explicitly opted-in, oracle-gated follow-up. Servo

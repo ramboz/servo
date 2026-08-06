@@ -7,16 +7,16 @@
 
 ## Index
 
-- [ADR-0001: (untitled)](adr-0001-reuse-jig-test-detector.md) — Servo's slice 001-03 needs to classify a target project's test framework so the scaffolded `oracle.sh` includes the right `score_<framework>` block. ((unknown))
-- [ADR-0002: (untitled)](adr-0002-gate-caller-contract.md) — Spec 002 (`/servo:quality-gate`) ships `gate.py`, the runtime wrapper around the scaffolded `oracle.sh`. ((unknown))
-- [ADR-0003: (untitled)](adr-0003-fresh-subagent-roster.md) — Servo is a Claude Code plugin and a sibling to [jig](https://github.com/ramboz/jig). ((unknown))
-- [ADR-0004: (untitled)](adr-0004-session-state-file-format.md) — Spec 003 (`/servo:agent-loop`) ships `loop.py`, a headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails (iteration cap, cumulative cost ceiling, context-fill refusal gate, stuck-loop detection). ((unknown))
-- [ADR-0005: Eval as a frozen oracle component](adr-0005-eval-oracle-component.md) — servo's oracle is deterministic by construction. ((unknown))
-- [ADR-0006: (untitled)](adr-0006-meta-judge-output-contract.md) — Spec 004 (`/servo:oracle-hook`) installs a Claude Code `Stop` hook — the "meta-judge" — that scores every assistant turn against the scaffolded oracle (via `gate.py`, ADR-0002) and feeds a retry hint back when the work is below threshold. ((unknown))
-- [ADR-0007: (untitled)](adr-0007-align-release-with-jig.md) — Servo releases are entirely manual: a maintainer hand-edits the version in `.claude-plugin/plugin.json`, runs `python3 scripts/build_release_zip.py` to build and smoke-test `dist/servo-v<version>.zip`, and stops there. ((unknown))
-- [ADR-0008: (untitled)](adr-0008-loop-on-autonomy-primitives.md) — Servo's agent-loop (spec 003, DONE) is a hand-rolled headless iteration driver. ((unknown))
-- [ADR-0009: Design-fidelity as a first-class eval recipe (`/servo:design-eval`)](adr-0009-design-fidelity-eval-recipe.md) — [ADR-0005](adr-0005-eval-oracle-component.md) settled *under what contract* a non-deterministic eval may enter servo's oracle: a frozen `score_<name>` component with a hashed definition, confidence-lower-bound scoring, a plateau noise floor, and `env_error`-never-a-silent-zero honesty. ((unknown))
-- [ADR-0010: (untitled)](adr-0010-triage-inbox-schema.md) — Spec 011 (`/servo:heartbeat`) is the scheduled front-end of the servo loop. ((unknown))
+- [ADR-0001: (untitled)](adr-0001-reuse-jig-test-detector.md) — Servo's slice 001-03 needs to classify a target project's test framework so the scaffolded `oracle.sh` includes the right `score_<framework>` block. (Accepted)
+- [ADR-0002: (untitled)](adr-0002-gate-caller-contract.md) — Spec 002 (`/servo:quality-gate`) ships `gate.py`, the runtime wrapper around the scaffolded `oracle.sh`. (Accepted)
+- [ADR-0003: (untitled)](adr-0003-fresh-subagent-roster.md) — Servo is a Claude Code plugin and a sibling to [jig](https://github.com/ramboz/jig). (Accepted)
+- [ADR-0004: (untitled)](adr-0004-session-state-file-format.md) — Spec 003 (`/servo:agent-loop`) ships `loop.py`, a headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails (iteration cap, cumulative cost ceiling, context-fill refusal gate, stuck-loop detection). (Accepted)
+- [ADR-0005: Eval as a frozen oracle component](adr-0005-eval-oracle-component.md) — servo's oracle is deterministic by construction. (Accepted)
+- [ADR-0006: (untitled)](adr-0006-meta-judge-output-contract.md) — Spec 004 (`/servo:oracle-hook`) installs a Claude Code `Stop` hook — the "meta-judge" — that scores every assistant turn against the scaffolded oracle (via `gate.py`, ADR-0002) and feeds a retry hint back when the work is below threshold. (Accepted)
+- [ADR-0007: (untitled)](adr-0007-align-release-with-jig.md) — Servo releases are entirely manual: a maintainer hand-edits the version in `.claude-plugin/plugin.json`, runs `python3 scripts/build_release_zip.py` to build and smoke-test `dist/servo-v<version>.zip`, and stops there. (Accepted)
+- [ADR-0008: (untitled)](adr-0008-loop-on-autonomy-primitives.md) — Servo's agent-loop (spec 003, DONE) is a hand-rolled headless iteration driver. (Accepted)
+- [ADR-0009: Design-fidelity as a first-class eval recipe (`/servo:design-eval`)](adr-0009-design-fidelity-eval-recipe.md) — [ADR-0005](adr-0005-eval-oracle-component.md) settled *under what contract* a non-deterministic eval may enter servo's oracle: a frozen `score_<name>` component with a hashed definition, confidence-lower-bound scoring, a plateau noise floor, and `env_error`-never-a-silent-zero honesty. (Accepted)
+- [ADR-0010: (untitled)](adr-0010-triage-inbox-schema.md) — Spec 011 (`/servo:heartbeat`) is the scheduled front-end of the servo loop. (Accepted)
 - [ADR-0011: Host-native phase hints stay advisory under servo's oracle authority](adr-0011-host-native-phase-hints.md) — Servo orchestrates autonomous coding loops by keeping deterministic authority outside the LLM host: `gate.py` invokes the project-owned `oracle.sh`, loop state is written under `.servo/runs/`, and heartbeat triage state is written under `.servo/triage/`. (2026-07-01, Accepted)
 - [ADR-0012: Heartbeat uses one whole-pass cost ceiling](adr-0012-heartbeat-whole-pass-cost-ceiling.md) — Spec 011 turns servo into a scheduled front-end: `heartbeat.py run` discovers project signals, dispatches actionable findings into isolated loop worktrees, and records outcomes back to the triage inbox. (Accepted)
 - [ADR-0013: Servo availability breadcrumb](adr-0013-servo-available-breadcrumb.md) — Jig wants to nudge a user toward `/servo:scaffold-init` when servo is available on the machine but the current project has not yet been servo-scaffolded. (Accepted)
@@ -30,13 +30,13 @@
 - [ADR-0021: Servo is oracle-first; the agent-loop is one optional consumer](adr-0021-oracle-first-agent-loop-optional-consumer.md) — The agent-loop ([spec 003](../specs/003-agent-loop/spec.md), [ADR-0008](adr-0008-loop-on-autonomy-primitives.md)) drives edits by shelling out to `claude -p`. (2026-07-02, Accepted)
 - [ADR-0022: Freeze the spec-oracle against parsed ACs, not the raw spec file](adr-0022-freeze-against-parsed-acs.md) — `checks.py --enforce-freeze` ([spec 006-04](../specs/006-spec-oracle/spec.md)) freezes a spec-oracle and refuses to score (`spec_oracle_stale`) when the source spec has changed since approval. (2026-07-02, Accepted)
 - [ADR-0023: Co-locate durable spec-oracle artifacts with the spec; keep only ephemeral state under .servo/](adr-0023-colocate-durable-spec-oracle-artifacts.md) — A spec-oracle's durable artifacts (`plan.md`, `checks.json`) live under `<target>/.servo/spec-oracles/<spec-id>/`, spatially disconnected from the spec they evaluate (`docs/specs/<spec>/slice-NN.md`). (2026-07-02, Accepted)
-- [ADR-0024: Extract the frozen-eval harness into a shared module for the second eval kind](adr-0024-extract-frozen-eval-harness.md) — [ADR-0005](adr-0005-eval-oracle-component.md) fixed the *contract* a non-deterministic eval must satisfy to enter servo'… (2026-07-03, Accepted)
+- [ADR-0024: Extract the frozen-eval harness into a shared module for the second eval kind](adr-0024-extract-frozen-eval-harness.md) — (no description) (2026-07-03, Accepted)
 - [ADR-0025: Runner records load-bearing assumptions; judge verifies them](adr-0025-runner-records-judge-verifies-assumptions.md) — servo's agent-loop is **headless**. (2026-07-12, Accepted)
-- [ADR-0026: Eval authoring generalizes to one kind-agnostic authoring surface](adr-0026-generic-eval-authoring-surface.md) — Three ADRs already bound the non-deterministic eval story: (Accepted)
+- [ADR-0026: Eval authoring generalizes to one kind-agnostic authoring surface](adr-0026-generic-eval-authoring-surface.md) — (no description) (Accepted)
 - [ADR-0027: Goal→eval is assisted authoring, gated by independent review and human curation](adr-0027-goal-to-eval-assisted-authoring.md) — Servo's eval pipeline is **spec/AC-centric**. (Accepted)
 - [ADR-0028: Commit generated Claude and Codex plugin packages](adr-0028-committed-dual-host-plugin-packages.md) — Servo's canonical repository is also its Claude install payload, while its release pipeline publishes one Claude-shaped archive and has no Codex plugin manifest or native Codex marketplace bundle. (2026-07-12, Accepted)
-- [ADR-0029: Autonomy-readiness pre-flight gate](adr-0029-autonomy-readiness-gate.md) — Servo's Compile phase asks "can this spec be evaluated?" but nothing asks whether the scope and initial prompt are precise and bounded enough to hand to an unattended long-horizon loop. (2026-08-04, Proposed)
-- [ADR-0030: Durable cross-run quarantine and a lifecycle-aware coordinator](adr-0030-durable-quarantine-and-lifecycle-coordinator.md) — Thrash is only bounded per-run and the heartbeat coordinator is FIFO and lifecycle-blind; both block a safe, bounded, long-horizon run. (2026-08-04, Proposed)
+- [ADR-0029: Autonomy-readiness pre-flight gate](adr-0029-autonomy-readiness-gate.md) — Servo's Compile phase already asks *"can this spec be evaluated?"* — the `edd-suitability` gate ([ADR-0015](adr-0015-edd-suitability-gate.md), [ADR-0018](adr-0018-suitability-gates-compile-not-heartbeat.md)) emits a three-state verdict and gates Compile. (2026-08-06, Accepted)
+- [ADR-0030: Durable cross-run quarantine and a lifecycle-aware coordinator](adr-0030-durable-quarantine-and-lifecycle-coordinator.md) — Two gaps block servo's heartbeat from being a safe, bounded, long-horizon coordinator. (2026-08-04, Proposed)
 
 ## Pending
 
@@ -58,8 +58,8 @@ entirely servo-owned), and `0020` is Accepted (minimum supported Python is
 (co-locate durable spec-oracle artifacts), and `0024` is Accepted (extract
 the frozen-eval harness), `0025` is reserved (Proposed) by the
 runner-records / judge-verifies-assumptions ADR, `0026` is Accepted (generic eval-authoring-surface), `0027` is Accepted (goal→eval assisted authoring), and `0028` is Accepted (the
-dual-host package ADR), `0029` is reserved (Proposed) by the autonomy-readiness
-gate ADR, and `0030` is reserved (Proposed) by the durable-quarantine /
+dual-host package ADR), `0029` is Accepted (autonomy-readiness pre-flight
+gate), and `0030` is reserved (Proposed) by the durable-quarantine /
 lifecycle-coordinator ADR, so the next free number is `0031`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone proposes a Python or Node oracle alternative.
