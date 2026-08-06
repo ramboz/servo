@@ -1892,31 +1892,40 @@ def _read_quarantine_record(target: Path, finding_id: str) -> Optional[dict]:
 def _reconcile_quarantine(target: Path, findings: list[dict]) -> list[dict]:
     """Evidence-gated re-admission of quarantined findings (spec 024 AC3).
 
-    For each `quarantined` finding with a live quarantine record, recompute the
-    `evidence_pointer` from the finding's *current* evidence. If it differs from
-    the recorded pointer (new diagnostic evidence), re-admit the finding
-    (`quarantined -> open`) and remove the record; an unchanged pointer keeps it
-    parked. A quarantined finding with no record is left parked (nothing to
-    compare against — conservative). Mutates and returns `findings`.
+    The record IS the quarantine, so its presence gates the park:
+    - **No live record** (the human deleted it — the release gesture — or it was
+      torn / unreadable): re-admit (`quarantined -> open`). This is also why a
+      record-write failure falls back to `tried` in `run_dispatch` rather than
+      parking record-less.
+    - **Live record, pointer changed** (new diagnostic evidence): re-admit and
+      remove the record.
+    - **Live record, pointer unchanged**: stay parked.
+
+    Note (v1 disclosure): for today's actionable sources the *stable* evidence
+    projection equals the finding_id's own inputs (CI: workflow+branch; issue:
+    number), so the pointer does not change via natural discover — automatic
+    re-admission is a forward hook, and the human quarantine queue (delete the
+    record to release) is the real v1 release valve. Mutates and returns
+    `findings`.
     """
     for rec in findings:
         if rec.get("status") != STATUS_QUARANTINED:
             continue
         fid = str(rec.get("finding_id", ""))
         record = _read_quarantine_record(target, fid)
+        released_reason: Optional[str] = None
         if record is None:
+            released_reason = "quarantine_released_no_record"
+        elif _evidence_pointer(rec.get("evidence")) != record.get("evidence_pointer"):
+            released_reason = "quarantine_released_new_evidence"
+        if released_reason is None:
             continue
-        current = _evidence_pointer(rec.get("evidence"))
-        if current != record.get("evidence_pointer"):
-            rec["status"] = STATUS_OPEN
-            try:
-                _quarantine_record_path(target, fid).unlink()
-            except OSError:
-                pass  # best-effort; the status flip is the load-bearing change
-            _emit_breadcrumb(
-                f"re-admitting quarantined finding {fid}: evidence pointer "
-                f"changed (quarantine_released_new_evidence)"
-            )
+        rec["status"] = STATUS_OPEN
+        try:
+            _quarantine_record_path(target, fid).unlink()
+        except OSError:
+            pass  # best-effort; the status flip is the load-bearing change
+        _emit_breadcrumb(f"re-admitting quarantined finding {fid} ({released_reason})")
     return findings
 
 
@@ -2143,11 +2152,19 @@ def run_dispatch(
                 rec["attempts"] = int(rec.get("attempts", 0)) + 1
                 rec["outcome"] = outcome
                 if new_status == STATUS_QUARANTINED:
-                    _write_quarantine_record(
+                    # The record IS the quarantine (a `quarantined` status always
+                    # implies a live record; re-admission keys off record presence
+                    # + evidence). If the durable write fails, fall back to `tried`
+                    # rather than park the finding without a record — a
+                    # record-less `quarantined` would otherwise never re-admit.
+                    written = _write_quarantine_record(
                         target, rec,
                         failure_signature=REASON_ORACLE_PLATEAU,
                         run_id=outcome.get("run_id"),
                     )
+                    if written is None:
+                        new_status = STATUS_TRIED
+                        rec["status"] = STATUS_TRIED
                 locked_records[idx] = _normalize_record(rec)
                 # Incremental atomic write: each outcome is durable immediately.
                 try:

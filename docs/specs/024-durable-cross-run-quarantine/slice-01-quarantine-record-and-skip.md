@@ -48,14 +48,19 @@ as reframed by its 2026-08-06 frame-critique.
    state is read from the **real** target's `.servo/quarantine/`. Observable: a
    second tick over the same inbox witnesses no-redispatch for the quarantined
    finding; an `open` finding beside it dispatches.
-3. **Evidence-gated re-admission.** On a discover pass, a `quarantined` finding
-   whose current `evidence_pointer` (hash of the `evidence` dict minus `run_url`
-   and any `*_url` / `*_at` key) **differs** from the recorded one is re-admitted
-   (`quarantined -> open`, the quarantine file removed); an **unchanged** pointer
-   keeps it `quarantined`. Observable: re-discovering with the same stable
-   evidence keeps it quarantined + not dispatched; re-discovering with a changed
-   stable-evidence field re-admits it and it dispatches on the next tick. A
-   mechanical `run_url`-only change does **not** re-admit.
+3. **Evidence-gated re-admission (record presence + pointer change).** On a
+   discover pass, a `quarantined` finding is re-admitted (`quarantined -> open`,
+   record removed) when **either** its quarantine record is gone (the human
+   release gesture / a torn record — the record *is* the quarantine) **or** its
+   current `evidence_pointer` (hash of the `evidence` dict minus `url` / `*_url` /
+   `*_at`) **differs** from the recorded one; an unchanged pointer with a live
+   record keeps it `quarantined`. A failed record write falls back to `tried`
+   (never park record-less). Observable: same stable evidence + live record → stays
+   quarantined; a changed stable-evidence pointer → re-admitted; a deleted record →
+   re-admitted; a `run_url`-only change → does **not** re-admit.
+   **v1 disclosure:** for today's CI/issue sources the stable projection equals the
+   finding_id inputs, so the *automatic* (pointer-change) path is a forward hook —
+   the human quarantine queue (delete the record) is the real v1 release valve.
 4. **Servo-owned attest legibility.** The quarantine record validates against a
    servo-owned schema fixture and exposes exactly the projection a future jig
    reader needs (the `finding_id <-> bug` mapping key + the evidence location) for

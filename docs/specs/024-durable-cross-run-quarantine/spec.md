@@ -40,10 +40,14 @@ re-admission — the servo mirror of jig ADR-0050's release rule.
    `quarantine/` is added to `_NON_PROVISIONED_SERVO_DIRS` so it is never copied
    into a dispatch worktree; the skip reads the **real** target's quarantine dir.
 3. A `quarantined` finding is **re-admitted** (`quarantined -> open`, record
-   removed) only when its `evidence_pointer` — a hash over the finding's *stable*
-   evidence projection (the `evidence` dict minus `run_url` and any `*_url` /
-   `*_at` key, so a mechanical CI re-run does not change it) — differs from the
-   recorded one.
+   removed) when its record is gone (the human release gesture / a torn record)
+   **or** its `evidence_pointer` — a hash over the finding's *stable* evidence
+   projection (the `evidence` dict minus `url` and any `*_url` / `*_at` key, so a
+   mechanical CI re-run does not change it) — differs from the recorded one. A
+   failed record write falls back to `tried` (never parked record-less). For
+   today's CI/issue sources the stable projection equals the finding_id inputs, so
+   the automatic path is a forward hook — the human quarantine queue (delete the
+   record) is the v1 release valve.
 4. Attest-only legibility: the record exposes exactly the `finding_id <-> bug` +
    evidence-location projection a future jig reader needs (jig ADR-0050), and
    validates against a **servo-owned** schema fixture. servo owns the schema; no

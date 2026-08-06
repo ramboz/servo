@@ -94,8 +94,21 @@ a `quarantined` finding whose current `evidence_pointer` **differs** from the
 recorded one is **re-admitted** (`quarantined → open`, the quarantine file
 removed) — the single principled `→ open` reset, safe because unchanged evidence
 keeps it parked. An unchanged pointer keeps it `quarantined` (the witnessed
-no-redispatch). This is the servo-side mirror of jig ADR-0050's "retry requires
-new diagnostic evidence."
+no-redispatch). Deleting the record is also a release (the record *is* the
+quarantine): a `quarantined` finding with no live record re-admits, which is the
+human release gesture and self-heals a torn record; correspondingly a failed
+record write falls back to `tried` rather than parking record-less.
+
+> **v1 disclosure (frame-critique / arch-review).** For *today's* actionable
+> sources the stable evidence projection equals the finding_id's own inputs (CI:
+> workflow + branch; issue: number), so the pointer does **not** change via
+> natural discover — **automatic** evidence-gated re-admission is a *forward hook*
+> that fires for essentially no real finding in v1. The real v1 release valve is
+> the **human quarantine queue**: a reviewer deletes the record to re-admit
+> (ADR-0030 Consequences). The automatic path activates for free once a source
+> grows a diagnostic evidence field that varies independently of its identity.
+> This is the servo-side mirror of jig ADR-0050's "retry requires new diagnostic
+> evidence."
 
 **B. Lifecycle-aware coordinator (ladder narrowed to computable rungs).** The
 heartbeat inbox schema gains a `priority` field — an ADR-0010 **`SCHEMA_VERSION`

@@ -3609,6 +3609,21 @@ class QuarantineWriteTests(unittest.TestCase):
         self.assertEqual(_finding_by_id(self.target, fid)["status"], "passed")
         self.assertFalse(_quarantine_path(self.target, fid).exists())
 
+    def test_record_write_failure_falls_back_to_tried(self):
+        # A `quarantined` status must always imply a live record: if the durable
+        # write fails, fall back to `tried` rather than park record-less.
+        fid = "7777000writefail1"
+        loop_py = _plateau_loop(self.root, self.loop_log, fid, run_id="20260806T000000-wf01")
+        # Make `.servo/quarantine` a FILE so mkdir() raises → write returns None.
+        servo = self.target / ".servo"
+        servo.mkdir(parents=True, exist_ok=True)
+        (servo / "quarantine").write_text("not a dir")
+        _write_inbox(self.target, [_open_ci(fid)])
+        res = _run_dispatch(self.target, loop_py=loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(_finding_by_id(self.target, fid)["status"], "tried",
+                         "a failed quarantine write must fall back to tried, not park")
+
     def test_non_plateau_failure_is_tried_not_quarantined(self):
         fid = "cccc0000tried0001"
         loop_py = _write_mock_loop(
@@ -3740,6 +3755,17 @@ class QuarantineReadmitTests(unittest.TestCase):
         self.assertFalse(_quarantine_path(self.target, self.fid).exists(),
                          "the quarantine record is removed on re-admission")
 
+    def test_no_record_readmits(self):
+        # The human release gesture: delete the quarantine record → the finding
+        # re-admits on the next discover (also self-heals a torn/unreadable record).
+        _write_inbox(self.target, [
+            _open_ci(self.fid, status="quarantined", attempts=1, evidence=dict(self.evidence)),
+        ])  # NOTE: no quarantine record file written.
+        res = _run_discover(self.target, self.empty_bin)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(_finding_by_id(self.target, self.fid)["status"], "open",
+                         "a quarantined finding with no record must re-admit")
+
     def test_run_url_only_change_does_not_readmit(self):
         # Stored pointer is correct for the ORIGINAL evidence; then only run_url
         # changes in the inbox. Because run_url is a volatile key excluded from the
@@ -3762,6 +3788,24 @@ class QuarantineReadmitTests(unittest.TestCase):
         self.assertEqual(_finding_by_id(self.target, self.fid)["status"], "quarantined",
                          "a run_url-only change is not new diagnostic evidence")
         self.assertTrue(_quarantine_path(self.target, self.fid).exists())
+
+
+class QuarantineContractTests(unittest.TestCase):
+    """024-01 — the `oracle_plateau` trigger is a cross-skill string contract.
+
+    heartbeat mirrors loop.py's terminal_reason as a literal (no import). Guard
+    against silent drift: if loop.py renames the reason, quarantine would quietly
+    degrade to `tried` with no other test catching it (arch-review follow-up).
+    """
+
+    def test_plateau_reason_matches_loop_py(self):
+        loop_path = REPO_ROOT / "skills" / "agent-loop" / "loop.py"
+        spec = _importlib_util.spec_from_file_location("loop_mod", loop_path)
+        loop_mod = _importlib_util.module_from_spec(spec)
+        spec.loader.exec_module(loop_mod)
+        self.assertEqual(_hb.REASON_ORACLE_PLATEAU, "oracle_plateau")
+        self.assertEqual(loop_mod.REASON_ORACLE_PLATEAU, _hb.REASON_ORACLE_PLATEAU,
+                         "heartbeat's plateau trigger must match loop.py's terminal_reason")
 
 
 class QuarantineSchemaTests(unittest.TestCase):
