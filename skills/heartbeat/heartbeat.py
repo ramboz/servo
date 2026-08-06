@@ -125,10 +125,16 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts
 # 1 → 2 at slice 011-02: the record gained required fields (provenance,
 # attempts, outcome, last_seen_at, actionable, actionable_reason), the meaning
 # of `discovered_at` changed (now first-seen, preserved across merge), and the
-# write discipline changed from overwrite to merge (ADR-0010). All records in a
-# file MUST carry the same version; a mixed-version file is corruption (a
-# reader refuses with rc=2). Always emitted as the FIRST key of each record.
-SCHEMA_VERSION = 2
+# write discipline changed from overwrite to merge (ADR-0010). Bumped 2 → 3 at
+# slice 025-01 (ADR-0030): the record gained a materialized-derived `priority`
+# rung (the last volatile field) used to rank the dispatch candidate set. The
+# 2 → 3 migration is UPGRADE-IN-PLACE, not drop-and-rederive: a v2 record can
+# carry sticky lifecycle (`tried`/`passed`/`skipped`/`quarantined`) that must
+# NOT be lost, so `discover` re-normalizes a v2 record to v3 (backfilling
+# priority, preserving sticky) rather than dropping it. All records in a file
+# MUST carry the same version; a mixed-version file is corruption (a reader
+# refuses with rc=2). Always emitted as the FIRST key of each record.
+SCHEMA_VERSION = 3
 
 # Closed exit-code contract (AC11), aligned with gate.py / loop.py but with a
 # narrower set — neither verb gates, so there is no "below threshold":
@@ -146,6 +152,10 @@ EXIT_ENV_ERROR = 2
 SOURCE_CI = "ci"
 SOURCE_ISSUE = "issue"
 SOURCE_COMMIT = "commit"
+# The closed set of servo-discovered sources. Used to clamp a (possibly
+# hand-edited) `source` before it appears in a servo-authored, trusted-position
+# label (slice 025-01 normalization) so an arbitrary value can never leak there.
+_KNOWN_SOURCES = frozenset({SOURCE_CI, SOURCE_ISSUE, SOURCE_COMMIT})
 
 # Finding status lifecycle (ADR-0010). 011-02 mints findings `open` and the
 # retention rule below keys off the sticky (non-open) set; the open → tried /
@@ -195,6 +205,27 @@ REASON_CI_NON_ACTIONABLE_EVENT = "ci_non_actionable_event"
 REASON_ISSUE_OPEN = "issue_open"
 REASON_ISSUE_LABEL_PREFIX = "issue_label_"   # + the matched label name
 REASON_COMMIT_CONTEXT_ONLY = "commit_context_only"
+
+# Priority ladder (slice 025-01, ADR-0030). A materialized-derived rung stored on
+# each record and computed at discover time from today's signals, so the
+# coordinator spends each tick on the highest-value work. The ladder is
+# security/data-loss > failing-CI > new work > idle; ties fall through to the
+# existing (`discovered_at`, `finding_id`) order so a pass stays reproducible.
+_PRIORITY_SECURITY = 3   # an open issue carrying a critical severity label
+_PRIORITY_CI = 2         # an actionable default-branch CI failure
+_PRIORITY_NEW = 1        # a plain actionable open issue (new work)
+_PRIORITY_IDLE = 0       # non-actionable / context-only (commits, suppressed)
+
+# Issue labels (case-insensitive NAME match) that mark an open issue CRITICAL
+# (security / data-loss), lifting it to the top rung. Configurable via
+# `SERVO_HEARTBEAT_CRITICAL_LABELS` (comma-separated, case-insensitive) so an
+# operator can tune the set without a code change (ADR-0030 "configurable
+# critical-label set"); mis-triage is cheap to correct because the inbox is
+# reviewable.
+_CRITICAL_ISSUE_LABELS = frozenset(
+    {"security", "critical", "data-loss", "dataloss", "vulnerability", "p0"}
+)
+_CRITICAL_LABELS_ENV = "SERVO_HEARTBEAT_CRITICAL_LABELS"
 
 # Reserved triage artifact dir + filenames, beside `runs/` and `races/`.
 TRIAGE_DIRNAME = "triage"
@@ -495,6 +526,40 @@ def _classify_issue(labels: list) -> tuple[bool, str]:
     return True, REASON_ISSUE_OPEN
 
 
+def _critical_issue_labels() -> frozenset:
+    """The configurable critical-label set (slice 025-01, ADR-0030).
+
+    Defaults to `_CRITICAL_ISSUE_LABELS`; `SERVO_HEARTBEAT_CRITICAL_LABELS`
+    (comma-separated, case-insensitive) OVERRIDES the default set entirely when
+    present and non-empty, so an operator tunes what counts as security/data-loss
+    without a code change. Blank / whitespace-only entries are ignored; an env
+    var set to only separators falls back to the built-in default.
+    """
+    raw = os.environ.get(_CRITICAL_LABELS_ENV)
+    if raw is None:
+        return _CRITICAL_ISSUE_LABELS
+    names = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    return frozenset(names) if names else _CRITICAL_ISSUE_LABELS
+
+
+def _classify_issue_severity(labels: list) -> bool:
+    """True iff an issue carries a critical (security / data-loss) label.
+
+    A label NAME match (case-insensitive) against the configurable critical set
+    lifts the issue to the top of the priority ladder. Independent of the
+    actionability gate (`_classify_issue`): a critical label is a severity
+    signal, not an actionability one.
+    """
+    critical = _critical_issue_labels()
+    for label in labels or []:
+        if not isinstance(label, dict):
+            continue
+        name = str(label.get("name", "") or "")
+        if name.lower() in critical:
+            return True
+    return False
+
+
 def _discover_ci(target: Path) -> tuple[Optional[list[dict]], Optional[str]]:
     """Enumerate recent failed CI runs via `gh run list` (AC1a).
 
@@ -554,6 +619,9 @@ def _discover_ci(target: Path) -> tuple[Optional[list[dict]], Optional[str]]:
         if conclusion:
             detail_parts.append(f"conclusion={conclusion}")
         actionable, reason = _classify_ci(branch, event, default_branch)
+        # Priority (slice 025-01): an actionable default-branch CI failure sits on
+        # the failing-CI rung; a non-actionable run is idle.
+        priority = _PRIORITY_CI if actionable else _PRIORITY_IDLE
         findings.append(_build_finding(
             source=SOURCE_CI,
             finding_id=_fingerprint(SOURCE_CI, workflow, branch),
@@ -567,6 +635,7 @@ def _discover_ci(target: Path) -> tuple[Optional[list[dict]], Optional[str]]:
             },
             actionable=actionable,
             actionable_reason=reason,
+            priority=priority,
         ))
     return findings, None
 
@@ -618,6 +687,14 @@ def _discover_issues(target: Path) -> tuple[Optional[list[dict]], Optional[str]]
         # regardless.)
         detail = body.strip().splitlines()[0][:200] if body.strip() else ""
         actionable, reason = _classify_issue(labels)
+        # Priority (slice 025-01): a critical (security / data-loss) label lifts
+        # the issue to the top rung regardless of the actionability heuristic; a
+        # plain actionable issue is new work; a suppressed one is idle.
+        security = _classify_issue_severity(labels)
+        priority = (
+            _PRIORITY_SECURITY if security
+            else (_PRIORITY_NEW if actionable else _PRIORITY_IDLE)
+        )
         findings.append(_build_finding(
             source=SOURCE_ISSUE,
             finding_id=_fingerprint(SOURCE_ISSUE, str(number)),
@@ -629,6 +706,7 @@ def _discover_issues(target: Path) -> tuple[Optional[list[dict]], Optional[str]]
             },
             actionable=actionable,
             actionable_reason=reason,
+            priority=priority,
         ))
     return findings, None
 
@@ -671,6 +749,8 @@ def _discover_commits(target: Path) -> tuple[Optional[list[dict]], Optional[str]
             evidence={"commit_sha": sha},
             actionable=False,
             actionable_reason=REASON_COMMIT_CONTEXT_ONLY,
+            # A commit is history/context, never a dispatch candidate — idle rung.
+            priority=_PRIORITY_IDLE,
         ))
     return findings, None
 
@@ -684,8 +764,9 @@ def _build_finding(
     evidence: dict,
     actionable: bool,
     actionable_reason: str,
+    priority: int = _PRIORITY_IDLE,
 ) -> dict:
-    """Construct one FRESHLY-seen v2 finding record (AC1).
+    """Construct one FRESHLY-seen v3 finding record (AC1).
 
     Key insertion order is load-bearing (ADR-0010): `schema_version` first
     (mirrors gate.py / loop.py / ADR-0004), then the IMMUTABLE identity fields
@@ -693,7 +774,8 @@ def _build_finding(
     lifecycle fields at their first-seen defaults (`status: open`/`attempts:
     0`/`outcome: null`), then the VOLATILE fields refreshed every pass
     (`title`/`detail`/`evidence`/`last_seen_at`/`actionable`/
-    `actionable_reason`). `discovered_at == last_seen_at == now` at first sight.
+    `actionable_reason`/`priority` — `priority` last, slice 025-01).
+    `discovered_at == last_seen_at == now` at first sight.
 
     This builds a NEW finding; the merge (`_merge_findings`) preserves the
     immutable + sticky fields of an EXISTING finding and overwrites only the
@@ -718,6 +800,7 @@ def _build_finding(
         "last_seen_at": now,
         "actionable": actionable,
         "actionable_reason": actionable_reason,
+        "priority": priority,
     }
 
 
@@ -739,20 +822,32 @@ _DISCOVERY_SOURCES = (
 # and it stays classified as immutable.
 _VOLATILE_FIELDS = (
     "title", "detail", "evidence", "last_seen_at",
-    "actionable", "actionable_reason",
+    "actionable", "actionable_reason", "priority",
 )
 
 
 def _read_inbox_for_discover(jsonl_path: Path) -> dict[str, dict]:
     """Load the existing inbox keyed by finding_id, for the discover merge (AC3/AC10).
 
-    Migration (write path, ADR-0010): a record whose `schema_version` is not the
-    current version is DROPPED — it is re-derived from live signals this pass.
-    This is lossless for the v1→v2 step (a v1 record carried no sticky lifecycle;
-    011-01 wrote `status: open` always) and friendlier than a hard refuse for a
-    fully re-derivable artifact. A missing / torn / unreadable inbox is treated
-    as empty (rebuild from scratch) — the atomic-write discipline means a torn
-    file is not expected, but discovery must never hard-fail on a bad read.
+    Migration (write path, ADR-0010 + slice 025-01). A record is handled by its
+    `schema_version`:
+
+    - **current (v3)** — kept as-is.
+    - **v2** — UPGRADED IN PLACE via `_normalize_record` (sets `schema_version`
+      to 3, backfills `priority`, PRESERVES the sticky lifecycle
+      `status`/`attempts`/`outcome`), then kept. This is deliberately NOT a
+      drop-and-rederive: a v2 record can carry sticky state a fresh discover
+      cannot reconstruct — a `tried`/`passed`/`skipped` audit trail, and (spec
+      024) a durable `quarantined` park. Dropping it would silently reset that
+      lifecycle (a quarantined finding would re-open and be re-dispatched),
+      which is exactly the loss the upgrade avoids.
+    - **v1 / unknown** — DROPPED (re-derived from live signals this pass). Lossless
+      only for the pre-sticky v1 record (011-01 wrote `status: open` always), and
+      friendlier than a hard refuse for a fully re-derivable artifact.
+
+    A missing / torn / unreadable inbox is treated as empty (rebuild from
+    scratch) — the atomic-write discipline means a torn file is not expected, but
+    discovery must never hard-fail on a bad read.
     """
     if not jsonl_path.exists():
         return {}
@@ -770,9 +865,15 @@ def _read_inbox_for_discover(jsonl_path: Path) -> dict[str, dict]:
             continue  # skip a torn line; the rest of the inbox still loads
         if not isinstance(rec, dict):
             continue
-        # Drop any non-current-version record — it is re-derived this pass.
-        if rec.get("schema_version") != SCHEMA_VERSION:
-            continue
+        version = rec.get("schema_version")
+        if version == SCHEMA_VERSION:
+            pass  # current — keep as-is
+        elif version == 2:
+            # Upgrade in place so sticky lifecycle (incl. a spec-024 quarantine)
+            # survives the schema bump — a drop would silently reset it.
+            rec = _normalize_record(rec)
+        else:
+            continue  # v1 / unknown — drop, re-derive from live signals this pass
         fid = rec.get("finding_id")
         if isinstance(fid, str):
             existing[fid] = rec
@@ -841,11 +942,12 @@ def _merge_one(prior: dict, fresh: dict) -> dict:
 
 
 def _normalize_record(rec: dict) -> dict:
-    """Return `rec` re-emitted in the canonical v2 key order (ADR-0010).
+    """Return `rec` re-emitted in the canonical v3 key order (ADR-0010).
 
     Used for both merged and retained records so the inbox is byte-stable under
-    re-serialization. Missing sticky defaults are backfilled defensively (a
-    well-formed v2 record already has them).
+    re-serialization, and as the 2->3 upgrade path (backfilling the `priority`
+    rung on a v2 record). Missing sticky defaults are backfilled defensively (a
+    well-formed record already has them).
     """
     source = rec.get("source", "")
     return {
@@ -863,6 +965,10 @@ def _normalize_record(rec: dict) -> dict:
         "last_seen_at": rec.get("last_seen_at", rec.get("discovered_at", "")),
         "actionable": bool(rec.get("actionable", False)),
         "actionable_reason": rec.get("actionable_reason", ""),
+        # priority is the new final volatile field (slice 025-01); a v2 record
+        # carries none, so it backfills to the idle rung and is recomputed on the
+        # next discover pass that re-observes the finding.
+        "priority": rec.get("priority", _PRIORITY_IDLE),
     }
 
 
@@ -1383,19 +1489,34 @@ def _render_status_human(summary: dict, target: Path) -> str:
 def _select_candidates(records: list[dict]) -> list[dict]:
     """Select the dispatch candidate set: `actionable == true AND status == open` (AC1).
 
-    Ordered deterministically by (`discovered_at`, then `finding_id`) so a pass
-    is reproducible and a `--max-candidates` cap is stable across runs. Findings
-    that are `tried` / `passed` / `skipped` or `actionable == false` are NEVER
-    candidates — the resume discipline (the set shrinks across runs).
+    Ordered by the priority ladder (slice 025-01, ADR-0030): highest `priority`
+    first (security/data-loss > failing-CI > new work > idle), with the existing
+    (`discovered_at`, then `finding_id`) as the stable tie-break — so equal-rung
+    candidates keep their reproducible FIFO order and a `--max-candidates` cap is
+    stable across runs. Findings that are `tried` / `passed` / `skipped` /
+    `quarantined` or `actionable == false` are NEVER candidates — the resume
+    discipline (the set shrinks across runs).
     """
     candidates = [
         r for r in records
         if r.get("actionable") and r.get("status") == STATUS_OPEN
     ]
     candidates.sort(
-        key=lambda r: (str(r.get("discovered_at", "")), str(r.get("finding_id", "")))
+        key=lambda r: (
+            -_record_priority(r),
+            str(r.get("discovered_at", "")),
+            str(r.get("finding_id", "")),
+        )
     )
     return candidates
+
+
+def _record_priority(rec: dict) -> int:
+    """Return a record's priority rung, tolerating a missing / hand-edited value."""
+    try:
+        return int(rec.get("priority", _PRIORITY_IDLE))
+    except (TypeError, ValueError):
+        return _PRIORITY_IDLE
 
 
 def _resolve_helper(env_var: str, default_path: Path) -> Path:
@@ -1584,23 +1705,190 @@ _UNTRUSTED_PREAMBLE = (
 _UNTRUSTED_BEGIN = ">>> BEGIN UNTRUSTED FINDING DATA"
 _UNTRUSTED_END = "<<< END UNTRUSTED FINDING DATA"
 
+# jig's bug board lives at `<target>/docs/bugs/` (filesystem-only detection per
+# ADR-0011 — servo never imports or invokes jig; a soft cross-tool dependency).
+_JIG_BUGS_DIRNAME = "bugs"
+_JIG_DOCS_DIRNAME = "docs"
 
-def _build_dispatch_prompt(finding: dict) -> str:
+# jig bug statuses that make servo SKIP dispatch of a mapped finding (slice
+# 025-01, AC3). Configurably narrow: jig's own `VALID_BUG_STATUSES` has no
+# `QUARANTINED` today (unlanded jig ADR-0050), so servo reads a forward-compatible
+# skip set rather than hard-coding jig's current vocabulary.
+_JIG_SKIP_STATUSES = frozenset({"QUARANTINED"})
+
+# The jig-bug frontmatter field that maps a bug back to a servo finding (forward-
+# compatible with jig ADR-0050); a bug carrying `servo_finding_id: <fid>` claims
+# that finding.
+_JIG_FINDING_ID_FIELD = "servo_finding_id"
+
+
+def _jig_present(target: Path) -> bool:
+    """True iff a co-installed jig bug board (`<target>/docs/bugs/`) exists.
+
+    Filesystem-only detection (ADR-0011): servo never imports or subprocesses
+    jig. Presence flips dispatch normalization to a jig-bug-record-shaped block;
+    absence yields servo's built-in structured block. Either way the dispatched
+    item is a structured work-item, never raw free text.
+    """
+    return (target / _JIG_DOCS_DIRNAME / _JIG_BUGS_DIRNAME).is_dir()
+
+
+def _normalize_finding(finding: dict, *, jig_present: bool) -> str:
+    """Render a finding as a STRUCTURED work-item block (slice 025-01, AC2).
+
+    Both shapes carry a TITLE, an ACCEPTANCE CRITERIA section (never raw free
+    text), and a SECURITY NOTES section. The acceptance criteria always include
+    the project oracle threshold (the load-bearing servo gate) plus a
+    finding-derived line; security notes are populated only for a top-rung
+    (security / data-loss) finding, else "none noted".
+
+    When `jig_present`, the block mirrors jig's `docs/bugs` record conventions
+    (a `status: REPORTED` frontmatter-ish header + `## Acceptance Criteria`), so
+    a co-installed jig reader recognises the shape; otherwise a servo built-in
+    structured block.
+
+    Security (load-bearing): the finding's DISCOVERED text (its untrusted
+    `title` / `detail` / `evidence`) is NEVER interpolated into this block — it
+    is carried separately, and ONLY, inside the untrusted-data frame
+    (`_build_dispatch_prompt`). The work-item TITLE here is a servo-authored
+    label over the finding's TRUSTED fields (`source` — a closed enum — and the
+    content-hashed `finding_id`), so nothing attacker-influenceable escapes the
+    frame into instruction position.
+    """
+    # Clamp `source` to the closed enum before it enters the trusted-position
+    # label — a hand-edited inbox could otherwise carry an arbitrary value (#6).
+    raw_source = str(finding.get("source", "") or "")
+    source = raw_source if raw_source in _KNOWN_SOURCES else "unknown"
+    fid = str(finding.get("finding_id", "") or "unknown")
+    # Trusted, servo-authored label — deliberately NOT the untrusted finding title.
+    title = f"servo work item — {source} finding {fid}"
+    is_security = _record_priority(finding) == _PRIORITY_SECURITY
+    oracle_ac = (
+        "the project oracle (oracle.sh via gate.py) passes its threshold"
+    )
+    derived_ac = (
+        f"the reported {source} finding no longer reproduces "
+        "(see the untrusted finding data below for specifics)"
+    )
+    security_notes = (
+        "treat as a security / data-loss defect: prefer the smallest correct fix, "
+        "add a regression guard, and do not widen scope"
+        if is_security else "none noted"
+    )
+    if jig_present:
+        return "\n".join([
+            "status: REPORTED",
+            f"servo_source: {source}",
+            f"# {title}",
+            "",
+            "## Acceptance Criteria",
+            f"- {oracle_ac}",
+            f"- {derived_ac}",
+            "",
+            "## Security Notes",
+            f"- {security_notes}",
+        ])
+    return "\n".join([
+        f"WORK ITEM: {title}",
+        f"source: {source}",
+        "",
+        "ACCEPTANCE CRITERIA:",
+        f"- {oracle_ac}",
+        f"- {derived_ac}",
+        "",
+        "SECURITY NOTES:",
+        f"- {security_notes}",
+    ])
+
+
+def _read_frontmatter(text: str) -> dict:
+    """Parse a leading `---`-fenced frontmatter block into a flat dict.
+
+    Dependency-free (no yaml import): a tiny line-based reader for the simple
+    `key: value` frontmatter jig bug records use. Only the first fenced block is
+    read; scalar values only (nested structures are ignored). Returns `{}` when
+    there is no leading fence. Values are stripped of surrounding whitespace and
+    matching quotes.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fm: dict = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        fm[key] = value
+    return fm
+
+
+def _claimed_in_jig_board(target: Path, finding: dict) -> bool:
+    """True iff a mapped jig bug SKIPS this finding — else False (fail-open, AC3).
+
+    Fail-open contract: no readable `<target>/docs/bugs/` board, no mapped bug,
+    or any parse error → False (dispatch normally). A bug MAPS to this finding
+    when its `servo_finding_id` frontmatter field equals the finding's
+    `finding_id` (forward-compatible with jig ADR-0050). A mapped bug is a SKIP
+    when its `claimed_by` is non-empty OR its `status` is in the servo-configured
+    `_JIG_SKIP_STATUSES`. Dependency-free (no jig import; a line-based frontmatter
+    reader) so servo never couples to jig's code.
+    """
+    bugs_dir = target / _JIG_DOCS_DIRNAME / _JIG_BUGS_DIRNAME
+    if not bugs_dir.is_dir():
+        return False
+    fid = str(finding.get("finding_id", "") or "")
+    if not fid:
+        return False
+    try:
+        bug_files = sorted(bugs_dir.glob("*.md"))
+    except OSError:
+        return False
+    for bug in bug_files:
+        try:
+            # `errors="replace"` so a non-UTF-8 foreign bug file (jig owns these,
+            # not servo) can never raise UnicodeDecodeError and crash an
+            # unattended pass — the fail-open contract + the {0,2} exit contract.
+            fm = _read_frontmatter(bug.read_text(errors="replace"))
+        except OSError:
+            continue  # unreadable bug file — fail-open past it
+        if str(fm.get(_JIG_FINDING_ID_FIELD, "") or "") != fid:
+            continue
+        if str(fm.get("claimed_by", "") or "").strip():
+            return True
+        if str(fm.get("status", "") or "").strip() in _JIG_SKIP_STATUSES:
+            return True
+        return False  # mapped but neither claimed nor skip-status → dispatch
+    return False  # no mapped bug
+
+
+def _build_dispatch_prompt(finding: dict, *, jig_present: bool = False) -> str:
     """Frame a finding as a `loop.py --prompt` string (AC5, Guardrail #4).
 
-    Structure: servo-authored task → injection-resistant preamble → a single
-    delimited, provenance-labelled UNTRUSTED DATA block carrying the finding's
-    discovered `title` / `detail` / `evidence`. The discovered text appears ONLY
-    inside the block — it is never string-interpolated into instruction position.
-    Both provenances get the same framing (defense in depth — a `first_party` CI
-    `displayTitle` can still carry crafted branch/PR text); the block labels the
-    provenance so a reader sees the trust level. loop.py does not sanitize
-    `--prompt`, so the dispatcher owns this framing.
+    Structure: servo-authored task → the NORMALIZED, structured work-item
+    (slice 025-01, AC2 — a jig-record-shaped or built-in block carrying the
+    acceptance criteria + security notes) → injection-resistant preamble → a
+    single delimited, provenance-labelled UNTRUSTED DATA block carrying the
+    finding's discovered `title` / `detail` / `evidence`. The discovered text
+    appears ONLY inside the untrusted block — it is never string-interpolated
+    into instruction position, and the normalization NEVER replaces that framing
+    (security is load-bearing). Both provenances get the same framing (defense in
+    depth — a `first_party` CI `displayTitle` can still carry crafted branch/PR
+    text); the block labels the provenance so a reader sees the trust level.
+    loop.py does not sanitize `--prompt`, so the dispatcher owns this framing.
     """
     provenance = str(finding.get("provenance", PROVENANCE_CONTRIBUTOR))
     title = str(finding.get("title", "") or "")
     detail = str(finding.get("detail", "") or "")
     evidence = json.dumps(finding.get("evidence", {}) or {}, sort_keys=True)
+    work_item = _normalize_finding(finding, jig_present=jig_present)
     block = "\n".join([
         f"{_UNTRUSTED_BEGIN} (provenance: {provenance})",
         f"title: {title}",
@@ -1608,7 +1896,7 @@ def _build_dispatch_prompt(finding: dict) -> str:
         f"evidence: {evidence}",
         _UNTRUSTED_END,
     ])
-    return "\n\n".join([_DISPATCH_TASK, _UNTRUSTED_PREAMBLE, block])
+    return "\n\n".join([_DISPATCH_TASK, work_item, _UNTRUSTED_PREAMBLE, block])
 
 
 def _run_loop(
@@ -1986,8 +2274,10 @@ def _dispatch_one(
         )
         return _env_error_outcome(), None
 
-    # AC5/AC6 — dispatch loop.py with the untrusted-data-framed prompt.
-    prompt = _build_dispatch_prompt(finding)
+    # AC5/AC6 — dispatch loop.py with the untrusted-data-framed prompt, prefixed
+    # by the normalized structured work-item (slice 025-01: jig-record-shaped when
+    # a co-installed jig board is present, else servo's built-in structured block).
+    prompt = _build_dispatch_prompt(finding, jig_present=_jig_present(target))
     summary = _run_loop(
         worktree, prompt,
         cost_ceiling=cost_ceiling, max_iterations=max_iterations,
@@ -2103,6 +2393,19 @@ def run_dispatch(
             if locked_cause is not None:
                 _emit_breadcrumb(f"cannot read triage inbox: {locked_cause}")
                 return EXIT_ENV_ERROR
+            # Slice 025-01: upgrade any BELOW-current-version record to the current
+            # schema version in memory before any partial write-back.
+            # `_read_inbox_for_status` accepts a uniform lower-version (v2) inbox but
+            # does not migrate it; normalizing only the dispatched records would
+            # leave a MIXED-version file that the next read refuses (rc=2). A
+            # current-version record is left byte-identical (`else r`), preserving
+            # the untouched-record invariant; only a genuine migration rewrites it
+            # (discover migrates the same way — this covers a bare `dispatch` on a
+            # not-yet-discovered v2 inbox).
+            locked_records = [
+                _normalize_record(r) if r.get("schema_version") != SCHEMA_VERSION else r
+                for r in locked_records
+            ]
             candidates = _select_candidates(locked_records)
             capped = (
                 candidates if max_candidates is None
@@ -2115,14 +2418,40 @@ def run_dispatch(
             }
             processed = 0
             env_errors = 0
+            skipped = 0
             budget_halted = False
             budget_deferred = 0
             for finding in capped:
+                fid = str(finding.get("finding_id"))
+                # Slice 025-01 (AC3): a finding whose mapped jig bug is claimed or
+                # in the servo-configured skip-status set is SKIPPED before any
+                # dispatch work — set `skipped`, persist it, do NOT loop, do NOT
+                # count it as processed. Fail-open (no readable board → dispatch).
+                if _claimed_in_jig_board(target, finding):
+                    idx = index.get(fid)
+                    if idx is not None:
+                        rec = dict(locked_records[idx])
+                        rec["status"] = STATUS_SKIPPED
+                        locked_records[idx] = _normalize_record(rec)
+                        try:
+                            _atomic_write(jsonl_path, _render_jsonl(locked_records))
+                        except OSError as exc:
+                            _emit_breadcrumb(
+                                f"cannot write inbox under {triage_dir}: {exc} "
+                                f"(triage_dir_unwritable)"
+                            )
+                            return EXIT_ENV_ERROR
+                    skipped += 1
+                    _emit_breadcrumb(
+                        f"finding {fid} is claimed or skip-status in the jig board; "
+                        f"not dispatching (claimed_or_skipped_in_jig_board)"
+                    )
+                    continue
                 loop_cost_ceiling = cost_ceiling
                 if whole_cost_ceiling is not None:
                     if _heartbeat_budget_exhausted(whole_cost_ceiling, spent):
                         budget_halted = True
-                        budget_deferred = len(capped) - processed
+                        budget_deferred = len(capped) - processed - skipped
                         break
                     remaining = _remaining_heartbeat_budget(whole_cost_ceiling, spent)
                     loop_cost_ceiling = (
@@ -2143,7 +2472,6 @@ def run_dispatch(
                     new_status = STATUS_PASSED
                 else:
                     new_status = STATUS_TRIED
-                fid = str(finding.get("finding_id"))
                 idx = index.get(fid)
                 if idx is None:  # pragma: no cover - finding vanished mid-pass
                     continue
@@ -2193,6 +2521,7 @@ def run_dispatch(
     _emit_breadcrumb(
         f"processed {processed} candidate{'' if processed == 1 else 's'} serially"
         + (f" ({env_errors} env-error, no loop run)" if env_errors else "")
+        + (f"; {skipped} skipped (claimed/skip-status in jig board)" if skipped else "")
         + (
             "; whole-heartbeat cost ceiling reached "
             f"(spent ${spent:.2f} / ${whole_cost_ceiling:.2f}); "

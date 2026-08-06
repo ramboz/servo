@@ -707,7 +707,8 @@ class FindingRecordShapeTests(unittest.TestCase):
 
     def test_schema_version_is_first_key_and_int_two(self):
         # Re-parse preserving key order to assert schema_version is first.
-        # Bumped 1 → 2 at slice 011-02 (the state-spine record shape; ADR-0010).
+        # Bumped 1 → 2 at slice 011-02 (the state-spine record shape; ADR-0010),
+        # then 2 → 3 at slice 025-01 (the priority rung).
         lines = [
             line for line in
             (_triage_dir(self.target) / "inbox.jsonl").read_text().splitlines()
@@ -717,7 +718,7 @@ class FindingRecordShapeTests(unittest.TestCase):
             obj = json.loads(line)
             first_key = next(iter(obj))
             self.assertEqual(first_key, "schema_version", f"schema_version not first: {line}")
-            self.assertEqual(obj["schema_version"], 2)
+            self.assertEqual(obj["schema_version"], 3)
             self.assertIsInstance(obj["schema_version"], int)
 
     def test_source_enum(self):
@@ -1349,7 +1350,7 @@ class SchemaV2RecordShapeTests(unittest.TestCase):
         "finding_id", "source", "provenance", "discovered_at",
         "status", "attempts", "outcome",
         "title", "detail", "evidence", "last_seen_at",
-        "actionable", "actionable_reason",
+        "actionable", "actionable_reason", "priority",
     )
 
     def setUp(self):
@@ -1388,7 +1389,7 @@ class SchemaV2RecordShapeTests(unittest.TestCase):
     def test_schema_version_first_and_two(self):
         for f in self.findings:
             self.assertEqual(next(iter(f)), "schema_version")
-            self.assertEqual(f["schema_version"], 2)
+            self.assertEqual(f["schema_version"], 3)
 
     def test_sticky_defaults_on_fresh_discovery(self):
         # A freshly-discovered finding has the dispatch defaults reserved for
@@ -1422,7 +1423,7 @@ class SchemaV2RecordShapeTests(unittest.TestCase):
 
     def test_all_records_same_schema_version(self):
         versions = {f["schema_version"] for f in self.findings}
-        self.assertEqual(versions, {2})
+        self.assertEqual(versions, {3})
 
     def test_mixed_version_file_rejected_by_status(self):
         # A file with two different schema_versions is corruption; the reader
@@ -2058,7 +2059,7 @@ class StatusSubcommandTests(unittest.TestCase):
         res = _run_status(self.target, as_json=True)
         self.assertEqual(res.returncode, 0, res.stderr)
         payload = json.loads(res.stdout)
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 3)
         # Machine summary carries the by-status / by-source / actionable counts.
         self.assertIn("counts", payload)
 
@@ -2139,8 +2140,8 @@ class SchemaMigrationTests(unittest.TestCase):
         findings = _read_jsonl(_triage_dir(self.target) / "inbox.jsonl")
         ids = {f["finding_id"] for f in findings}
         self.assertNotIn("1111111111111111", ids, "v1 record was not discarded")
-        # All surviving records are v2.
-        self.assertEqual({f["schema_version"] for f in findings}, {2})
+        # All surviving records are the current schema (v3).
+        self.assertEqual({f["schema_version"] for f in findings}, {3})
 
     def test_discover_writes_v2_over_v1_inbox(self):
         # Even when a v1 finding_id WOULD collide with a discovered one, the
@@ -2157,7 +2158,7 @@ class SchemaMigrationTests(unittest.TestCase):
         _run_discover(self.target, self.bindir)
         rec = {f["finding_id"]: f
                for f in _read_jsonl(_triage_dir(self.target) / "inbox.jsonl")}[cid]
-        self.assertEqual(rec["schema_version"], 2)
+        self.assertEqual(rec["schema_version"], 3)
         # discovered_at is re-derived (a v1 record's first-seen is not trusted as
         # v2 sticky state), so it is the fresh pass time, not 2025.
         self.assertNotEqual(rec["discovered_at"], "2025-01-01T00:00:00+00:00")
@@ -3088,16 +3089,21 @@ class DispatchConcurrencyTests(unittest.TestCase):
         self.assertEqual(leftovers, [], f"orphaned .tmp staging files: {leftovers}")
 
     def test_other_findings_preserved_byte_for_byte(self):
-        # Dispatching one candidate must preserve every OTHER record verbatim and
-        # touch only status/attempts/outcome of the dispatched one.
-        other = _v2_record(finding_id="other000000keep1", source="commit",
-                           provenance="contributor", status="passed", attempts=1,
-                           actionable=False, actionable_reason="commit_context_only",
-                           evidence={"commit_sha": "ab" * 8},
-                           outcome={"run_id": "x", "oracle_status": "pass",
-                                    "oracle_composite": 0.9, "cost_usd": 0.0,
-                                    "dispatched_at": "2026-06-01T00:00:00+00:00"})
-        _write_inbox(self.target, [_open_ci("cand000000000001"), other])
+        # Dispatching one candidate must preserve every OTHER CURRENT-version record
+        # verbatim and touch only status/attempts/outcome of the dispatched one.
+        # (Records are seeded at the current schema version so the invariant is
+        # tested independently of the 2->3 migration, which legitimately rewrites a
+        # stale-version record — slice 025-01.)
+        other = _hb._normalize_record(_v2_record(
+            finding_id="other000000keep1", source="commit",
+            provenance="contributor", status="passed", attempts=1,
+            actionable=False, actionable_reason="commit_context_only",
+            evidence={"commit_sha": "ab" * 8},
+            outcome={"run_id": "x", "oracle_status": "pass",
+                     "oracle_composite": 0.9, "cost_usd": 0.0,
+                     "dispatched_at": "2026-06-01T00:00:00+00:00"}))
+        cand = _hb._normalize_record(_open_ci("cand000000000001"))
+        _write_inbox(self.target, [cand, other])
         before = _finding_by_id(self.target, "other000000keep1")
         _run_dispatch(self.target, loop_py=self.loop_py)
         after = _finding_by_id(self.target, "other000000keep1")
@@ -3112,7 +3118,7 @@ class DispatchConcurrencyTests(unittest.TestCase):
             list(rec.keys()),
             ["schema_version", "finding_id", "source", "provenance", "discovered_at",
              "status", "attempts", "outcome", "title", "detail", "evidence",
-             "last_seen_at", "actionable", "actionable_reason"],
+             "last_seen_at", "actionable", "actionable_reason", "priority"],
         )
 
     def test_reuses_flock_lock_ex_nb(self):
@@ -3370,7 +3376,7 @@ class HeartbeatDogfoodTests(unittest.TestCase):
         self.assertIn("dogfood failure 0", prompt)
 
         rec = _finding_by_id(self.target, fid)
-        self.assertEqual(rec["schema_version"], 2)
+        self.assertEqual(rec["schema_version"], 3)
         self.assertEqual(rec["source"], "ci")
         self.assertEqual(rec["status"], "passed")
         self.assertEqual(rec["attempts"], 1)
@@ -3837,6 +3843,438 @@ class QuarantineSchemaTests(unittest.TestCase):
             {**base, "run_url": "https://ci/2"}))
         # Changing a STABLE key does change the pointer.
         self.assertNotEqual(p_stable, _hb._evidence_pointer({**base, "branch": "release"}))
+
+
+# ===========================================================================
+# Slice 025-01 (ADR-0030) — priority ranking + lifecycle-aware normalization
+# ===========================================================================
+#
+# AC1 → PriorityLadderTests + PrioritySelectUnitTests + IssueSeverityUnitTests
+#       + SchemaV3MigrationTests
+# AC2 → NormalizationDispatchTests
+# AC3 → JigClaimSkipTests
+# AC4 → RankingBoundednessTests
+
+
+def _cand(fid, *, priority, source="ci", **overrides):
+    """A v3 actionable+open candidate carrying an EXPLICIT priority rung.
+
+    Used for the ranking-order tests: seeding the `priority` field directly keeps
+    the test hermetic (no live gh with crafted labels needed) — the ladder is
+    exercised via `_select_candidates`' read of the stored rung.
+    """
+    base = dict(
+        schema_version=3, finding_id=fid, source=source,
+        provenance="first_party" if source == "ci" else "contributor",
+        status="open", actionable=True,
+        actionable_reason="ci_default_branch" if source == "ci" else "issue_open",
+        title=f"work {fid}", detail="", priority=priority,
+        evidence=({"workflow": "build", "branch": "main"} if source == "ci"
+                  else {"issue_number": 1, "url": "u"}),
+    )
+    base.update(overrides)
+    return _v2_record(**base)
+
+
+def _write_jig_bug(target, name, *, finding_id=None, claimed_by=None, status=None):
+    """Write a minimal jig-shaped bug record under `<target>/docs/bugs/`."""
+    bugs = target / "docs" / "bugs"
+    bugs.mkdir(parents=True, exist_ok=True)
+    lines = ["---"]
+    if finding_id is not None:
+        lines.append(f"servo_finding_id: {finding_id}")
+    if claimed_by is not None:
+        lines.append(f"claimed_by: {claimed_by}")
+    if status is not None:
+        lines.append(f"status: {status}")
+    lines.append("---")
+    lines.append("# a bug")
+    (bugs / name).write_text("\n".join(lines) + "\n")
+
+
+class PriorityLadderTests(unittest.TestCase):
+    """025-01 AC1 — dispatch selects highest priority first (observable via order)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-025-ac1-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+        self.loop_py = _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_dispatch_order_follows_priority_ladder(self):
+        # FIFO (discovered_at) is the REVERSE of priority, so a pass that ranks by
+        # priority must invert the seed order: security > failing-CI > new work.
+        seeded = [
+            _cand("newwork00000c001", priority=1, source="issue",
+                  discovered_at="2026-06-01T00:00:00+00:00"),
+            _cand("cifail0000000b01", priority=2, source="ci",
+                  discovered_at="2026-06-02T00:00:00+00:00"),
+            _cand("security00000a01", priority=3, source="issue",
+                  discovered_at="2026-06-03T00:00:00+00:00"),
+        ]
+        _write_inbox(self.target, seeded)
+        res = _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        order = [e["fid"] for e in _loop_log(self.loop_log)]
+        # Security before plain new-work; failing-CI before plain new-work.
+        self.assertEqual(
+            order,
+            ["security00000a01", "cifail0000000b01", "newwork00000c001"],
+            "candidates must dispatch highest-priority first",
+        )
+
+
+class PrioritySelectUnitTests(unittest.TestCase):
+    """025-01 AC1 — `_select_candidates` ranks by (-priority, discovered_at, id)."""
+
+    def test_select_orders_by_priority_then_fifo(self):
+        recs = [
+            {"finding_id": "a", "actionable": True, "status": "open",
+             "priority": 1, "discovered_at": "2026-06-01"},
+            {"finding_id": "b", "actionable": True, "status": "open",
+             "priority": 3, "discovered_at": "2026-06-03"},
+            {"finding_id": "c", "actionable": True, "status": "open",
+             "priority": 3, "discovered_at": "2026-06-02"},
+        ]
+        order = [r["finding_id"] for r in _hb._select_candidates(recs)]
+        # Both priority-3 first (c before b by the discovered_at tie-break), then 1.
+        self.assertEqual(order, ["c", "b", "a"])
+
+    def test_missing_priority_defaults_idle(self):
+        recs = [
+            {"finding_id": "hi", "actionable": True, "status": "open",
+             "priority": 2, "discovered_at": "2026-06-05"},
+            {"finding_id": "lo", "actionable": True, "status": "open",
+             "discovered_at": "2026-06-01"},  # no priority key → idle rung (0)
+        ]
+        order = [r["finding_id"] for r in _hb._select_candidates(recs)]
+        self.assertEqual(order, ["hi", "lo"])
+
+
+class JigBoardRobustnessUnitTests(unittest.TestCase):
+    """025-01 AC3 — foreign jig-board files never crash the pass (fail-open)."""
+
+    def test_non_utf8_bug_file_fails_open_not_crash(self):
+        # A non-UTF-8 bug file must not raise UnicodeDecodeError out of dispatch
+        # (craft review #1) — `_claimed_in_jig_board` returns False (dispatch).
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d)
+            bugs = target / "docs" / "bugs"
+            bugs.mkdir(parents=True)
+            (bugs / "bad.md").write_bytes(b"---\nservo_finding_id: \xff\xfe bad\n---\n")
+            # Must return a bool (fail-open False), never raise.
+            self.assertIs(
+                _hb._claimed_in_jig_board(target, {"finding_id": "abc"}), False)
+
+    def test_frontmatter_edge_cases(self):
+        # No fence → {} ; quoted values stripped ; second fence ends the block.
+        self.assertEqual(_hb._read_frontmatter("no frontmatter here"), {})
+        fm = _hb._read_frontmatter('---\nstatus: "REPORTED"\nclaimed_by: me\n---\nbody: x\n')
+        self.assertEqual(fm.get("status"), "REPORTED")
+        self.assertEqual(fm.get("claimed_by"), "me")
+        self.assertNotIn("body", fm, "keys after the closing fence are not frontmatter")
+
+    def test_arbitrary_source_clamped_in_normalized_title(self):
+        # A hand-edited `source` must not leak into the trusted-position label (#6).
+        block = _hb._normalize_finding(
+            {"source": "evil\ninjected", "finding_id": "f1"}, jig_present=False)
+        self.assertNotIn("evil", block)
+        self.assertIn("unknown", block)
+
+
+class CriticalLabelsWhitespaceEnvTests(unittest.TestCase):
+    """025-01 AC1 — a whitespace-only env override falls back to the default set."""
+
+    def test_whitespace_only_env_falls_back_to_default(self):
+        prev = os.environ.get("SERVO_HEARTBEAT_CRITICAL_LABELS")
+        try:
+            os.environ["SERVO_HEARTBEAT_CRITICAL_LABELS"] = " , ,  "
+            # Empty override → the built-in default set still applies.
+            self.assertTrue(_hb._classify_issue_severity([{"name": "security"}]))
+        finally:
+            if prev is None:
+                os.environ.pop("SERVO_HEARTBEAT_CRITICAL_LABELS", None)
+            else:
+                os.environ["SERVO_HEARTBEAT_CRITICAL_LABELS"] = prev
+
+
+class IssueSeverityUnitTests(unittest.TestCase):
+    """025-01 AC1 — configurable critical-label severity gate."""
+
+    def test_critical_label_detected(self):
+        self.assertTrue(_hb._classify_issue_severity([{"name": "Security"}]))
+        self.assertTrue(_hb._classify_issue_severity([{"name": "p0"}]))
+        self.assertFalse(_hb._classify_issue_severity([{"name": "bug"}]))
+        self.assertFalse(_hb._classify_issue_severity([]))
+
+    def test_env_override_replaces_default_set(self):
+        prev = os.environ.get("SERVO_HEARTBEAT_CRITICAL_LABELS")
+        try:
+            os.environ["SERVO_HEARTBEAT_CRITICAL_LABELS"] = "urgent, Regression"
+            self.assertTrue(_hb._classify_issue_severity([{"name": "URGENT"}]))
+            self.assertTrue(_hb._classify_issue_severity([{"name": "regression"}]))
+            # A default critical label is no longer critical once overridden.
+            self.assertFalse(_hb._classify_issue_severity([{"name": "security"}]))
+        finally:
+            if prev is None:
+                os.environ.pop("SERVO_HEARTBEAT_CRITICAL_LABELS", None)
+            else:
+                os.environ["SERVO_HEARTBEAT_CRITICAL_LABELS"] = prev
+
+
+class SchemaV3MigrationTests(unittest.TestCase):
+    """025-01 AC1 — the 2→3 migration is UPGRADE-IN-PLACE (sticky preserved)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-025-mig-")
+        self.root = Path(self.tmp.name)
+        self.target = self.root / "demo"
+        self.target.mkdir()
+        _make_oracle_and_manifest(self.target)
+        self.bindir = self.root / "bin"
+        # All sources fail → discover finds nothing fresh; it only migrates the
+        # existing inbox, so the test isolates the migration from re-derivation.
+        _make_mock_gh(self.bindir, run_fail=True, issue_fail=True)
+        _make_mock_git(self.bindir, fail=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_v2_inbox_upgraded_in_place_preserves_sticky(self):
+        tried = {  # a v2 record carrying sticky lifecycle + NO priority key
+            "schema_version": 2, "finding_id": "aaaa000000000001",
+            "source": "ci", "provenance": "first_party",
+            "discovered_at": "2026-06-01T00:00:00+00:00",
+            "status": "tried", "attempts": 2, "outcome": None,
+            "title": "tried finding", "detail": "",
+            "evidence": {"workflow": "w", "branch": "main"},
+            "last_seen_at": "2026-06-01T00:00:00+00:00",
+            "actionable": True, "actionable_reason": "ci_default_branch",
+        }
+        openf = dict(tried, finding_id="bbbb000000000002", status="open", attempts=0)
+        _write_inbox(self.target, [tried, openf])
+        res = _run_discover(self.target, self.bindir)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        findings = _read_jsonl(_triage_dir(self.target) / "inbox.jsonl")
+        self.assertTrue(findings, "migration must not empty the inbox")
+        # Every surviving record is now v3 and carries a priority key.
+        self.assertEqual({f["schema_version"] for f in findings}, {3})
+        for f in findings:
+            self.assertIn("priority", f, f"record missing priority key: {f}")
+        # The sticky `tried` finding is PRESERVED — not dropped, not reset to open.
+        kept = {f["finding_id"]: f for f in findings}
+        self.assertIn("aaaa000000000001", kept,
+                      "sticky tried finding was lost on migration (drop, not upgrade)")
+        self.assertEqual(kept["aaaa000000000001"]["status"], "tried")
+        self.assertEqual(kept["aaaa000000000001"]["attempts"], 2)
+
+    def test_v3_inbox_status_ok_and_v4_refused(self):
+        v3 = _v2_record(finding_id="cccc000000000003", schema_version=3)
+        _write_inbox(self.target, [v3])
+        ok = _run_status(self.target)
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        # A higher-unknown version (v4) is refused rc=2 (invariant preserved).
+        v4 = _v2_record(finding_id="dddd000000000004", schema_version=4)
+        _write_inbox(self.target, [v4])
+        refused = _run_status(self.target)
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("schema_version_unsupported", refused.stderr)
+
+
+class DispatchVersionUniformityTests(unittest.TestCase):
+    """025-01 AC1 — a partial dispatch on a v2 inbox must not leave a MIXED file.
+
+    Regression guard: the schema bump + per-record normalize-on-write would leave
+    dispatched records v3 and undispatched ones v2 → the next read refuses
+    (schema_version_mixed, rc=2). `run_dispatch` upgrades the whole set on read.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-025-unif-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+        self.loop_py = _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_partial_dispatch_of_v2_inbox_stays_uniform_v3(self):
+        # Three uniform-v2 candidates; dispatch only 2 (cap) → the 3rd is undispatched.
+        _write_inbox(self.target, [
+            _open_ci("a1a1a1a1a1a1a1a1"), _open_ci("b2b2b2b2b2b2b2b2"),
+            _open_ci("c3c3c3c3c3c3c3c3"),
+        ])
+        res = _run_dispatch(self.target, loop_py=self.loop_py, max_candidates=2)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        # The on-disk inbox is uniformly v3 (no mixed-version file).
+        findings = _read_jsonl(_triage_dir(self.target) / "inbox.jsonl")
+        self.assertEqual({f["schema_version"] for f in findings}, {3},
+                         "a partial dispatch must leave a uniform-version inbox")
+        # And a subsequent read does NOT refuse (schema_version_mixed would be rc=2).
+        st = _run_status(self.target)
+        self.assertEqual(st.returncode, 0, st.stderr)
+        self.assertNotIn("schema_version_mixed", st.stderr)
+
+
+class NormalizationDispatchTests(unittest.TestCase):
+    """025-01 AC2 — dispatched item is a STRUCTURED record, never raw free text."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-025-ac2-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+        self.loop_py = _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _prompt(self):
+        res = _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 1)
+        return _loop_prompt(log[0])
+
+    def test_builtin_structured_record_when_no_jig_board(self):
+        fid = "nojig00000000001"
+        _write_inbox(self.target, [_open_ci(fid, title="raw crash text")])
+        prompt = self._prompt()
+        self.assertIn("acceptance criteria", prompt.lower())
+        self.assertIn("oracle.sh via gate.py", prompt)
+        self.assertIn("SECURITY NOTES", prompt)
+        # Not JUST the raw finding title — a structured item was produced.
+        self.assertNotEqual(prompt.strip(), "raw crash text")
+        self.assertNotIn("# raw crash text", prompt)
+
+    def test_jig_record_shape_when_board_present(self):
+        (self.target / "docs" / "bugs").mkdir(parents=True)
+        fid = "withjig000000001"
+        _write_inbox(self.target, [_open_ci(fid, title="raw crash text")])
+        prompt = self._prompt()
+        self.assertIn("acceptance criteria", prompt.lower())
+        # jig-bug-record markers.
+        self.assertIn("status: REPORTED", prompt)
+        self.assertIn("## Acceptance Criteria", prompt)
+        # The untrusted-data framing is PRESERVED (security is load-bearing).
+        self.assertIn(">>> BEGIN UNTRUSTED FINDING DATA", prompt)
+
+    def test_security_finding_surfaces_security_notes(self):
+        fid = "sec00000000000x1"
+        _write_inbox(self.target, [_open_ci(
+            fid, priority=3, source="issue", provenance="contributor",
+            evidence={"issue_number": 9, "url": "u"})])
+        prompt = self._prompt()
+        self.assertIn("security / data-loss", prompt.lower())
+
+
+class JigClaimSkipTests(unittest.TestCase):
+    """025-01 AC3 — skip quarantined + claimed (fail-open when no board)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-025-ac3-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+        self.loop_py = _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _dispatched(self):
+        return {e["fid"] for e in _loop_log(self.loop_log)}
+
+    def test_claimed_bug_skips_finding_sibling_dispatches(self):
+        claimed = "claimed000000001"
+        free = "freefinding00001"
+        _write_jig_bug(self.target, "1-x.md", finding_id=claimed,
+                       claimed_by="someone", status="REPORTED")
+        _write_inbox(self.target, [_open_ci(claimed), _open_ci(free)])
+        res = _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertNotIn(claimed, self._dispatched(), "a claimed finding must not dispatch")
+        self.assertIn(free, self._dispatched(), "an unclaimed sibling must dispatch")
+        self.assertEqual(_finding_by_id(self.target, claimed)["status"], "skipped")
+
+    def test_quarantined_status_bug_skips_finding(self):
+        fid = "qbug000000000001"
+        _write_jig_bug(self.target, "2-q.md", finding_id=fid, status="QUARANTINED")
+        _write_inbox(self.target, [_open_ci(fid)])
+        res = _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self._dispatched(), set(), "a QUARANTINED-status bug must skip")
+        self.assertEqual(_finding_by_id(self.target, fid)["status"], "skipped")
+
+    def test_no_board_dispatches_fail_open(self):
+        fid = "noboard000000001"
+        _write_inbox(self.target, [_open_ci(fid)])
+        res = _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn(fid, self._dispatched(), "no board present → dispatch (fail-open)")
+        self.assertEqual(_finding_by_id(self.target, fid)["status"], "passed")
+
+    def test_unmapped_bug_does_not_skip(self):
+        # A readable board whose bug does NOT map to the finding → dispatch.
+        _write_jig_bug(self.target, "3-other.md", finding_id="zzzznotamatch001",
+                       claimed_by="someone")
+        fid = "mappednone000001"
+        _write_inbox(self.target, [_open_ci(fid)])
+        res = _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertIn(fid, self._dispatched())
+
+    def test_quarantined_finding_still_not_dispatched(self):
+        # Spec 024 skip is preserved under 025's ranking: a `quarantined` finding
+        # is never a candidate (open-only selection); an open sibling dispatches.
+        q = "quar000000000001"
+        openf = "openfinding00001"
+        _write_inbox(self.target, [
+            _open_ci(q, status="quarantined", attempts=1),
+            _open_ci(openf),
+        ])
+        res = _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(self._dispatched(), {openf})
+        self.assertEqual(_finding_by_id(self.target, q)["status"], "quarantined")
+
+
+class RankingBoundednessTests(unittest.TestCase):
+    """025-01 AC4 — ranking reorders only; `--max-candidates` still bounds the pass."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-025-ac4-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+        self.loop_py = _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_ranking_plus_cap_dispatches_two_highest(self):
+        seeded = [
+            _cand("newwork00000c001", priority=1, source="issue",
+                  discovered_at="2026-06-01T00:00:00+00:00"),
+            _cand("cifail0000000b01", priority=2, source="ci",
+                  discovered_at="2026-06-02T00:00:00+00:00"),
+            _cand("security00000a01", priority=3, source="issue",
+                  discovered_at="2026-06-03T00:00:00+00:00"),
+        ]
+        _write_inbox(self.target, seeded)
+        res = _run_dispatch(self.target, loop_py=self.loop_py, max_candidates=2)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        order = [e["fid"] for e in _loop_log(self.loop_log)]
+        # The cap bounds the pass to 2 dispatches — ranking does not increase it.
+        self.assertEqual(len(order), 2)
+        # And they are the 2 HIGHEST-priority ones, ranked (cap composes with rank).
+        self.assertEqual(order, ["security00000a01", "cifail0000000b01"])
+        # The lowest-priority candidate is deferred by the cap, left open.
+        self.assertEqual(_finding_by_id(self.target, "newwork00000c001")["status"], "open")
 
 
 if __name__ == "__main__":

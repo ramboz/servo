@@ -1,5 +1,5 @@
 ---
-status: READY_FOR_IMPLEMENTATION
+status: RECONCILED
 dependencies: [adr-0030, 024-01]
 arch_review: true
 last_verified: 2026-08-06
@@ -42,12 +42,16 @@ as reframed by its 2026-08-06 frame-critique.
    plain new-work finding, and a default-branch CI failure before new work; a v2
    inbox is transparently rebuilt to v3 on the next discover; a v2 reader refuses a
    v3 inbox rc=2.
-2. **Lifecycle-aware normalization.** When jig is co-installed, a new defect is
-   dispatched as a structured record (ACs present, security notes) produced via
-   jig's `bug-fix` entry over the filesystem; when jig is absent, a servo built-in
-   structured record is produced — never raw free text, and never a hard failure.
-   Observable: the dispatched item is a normalized record in the co-installed
-   fixture and a built-in record in the jig-absent fixture.
+2. **Lifecycle-aware normalization.** A new defect is dispatched as a structured
+   record (acceptance-criteria section + security notes), never raw free text:
+   **jig-bug-record-shaped** when a `docs/bugs/` board is co-installed (detected
+   over the filesystem), a servo built-in structured block otherwise — never a hard
+   failure. Per ADR-0011 servo **shapes** the record itself and never imports or
+   subprocesses jig's `bug-fix` entry (the "via jig's bug-fix entry" intent is
+   realized as filesystem-only detection + jig-shaped output). Observable: the
+   dispatched prompt carries an acceptance-criteria section in both the co-installed
+   and jig-absent fixtures; the finding's untrusted text stays inside the delimited
+   untrusted block.
 3. **Skip quarantined + claimed (fail-open).** The coordinator does not dispatch a
    `quarantined` finding (spec 024) and, **when a readable jig board is present**,
    does not dispatch a finding whose mapped jig bug is claimed or in the
@@ -62,15 +66,18 @@ as reframed by its 2026-08-06 frame-critique.
    candidate set (reordered) is eligible.
 
 **DoD:**
-- [ ] All ACs pass; test suite green (no regressions).
-- [ ] Each AC covered by ≥1 fixture; each new test shown capable of failing.
-- [ ] Reviewed (compliance + craft; +arch — changes the dispatch contract, bumps
-      the inbox schema, and adds a soft cross-tool dependency).
-- [ ] Host packages regenerated (`hosts/claude`, `hosts/codex`) + manifests valid.
-- [ ] Deviation log + reconciliation sweep recorded under this slice.
+- [x] All ACs pass; test suite green (210 heartbeat tests, no regressions).
+- [x] Each AC covered by ≥1 fixture; each new test shown capable of failing
+      (ranking tests seed reverse-FIFO order; the uniformity + must-fix tests
+      were shown red pre-fix).
+- [x] Reviewed (compliance ✅ + craft ✅ + arch ✅ — craft + arch re-verified
+      after fixes; the sole arch blocker was the deferred host regen, now done).
+- [x] Host packages regenerated (`hosts/claude`, `hosts/codex`) + `--check` in
+      sync + manifests valid.
+- [x] Deviation log + reconciliation sweep recorded under this slice.
 
 ### Close-out (post-DONE)
-- [ ] `docs/specs/README.md` regenerated (status-board).
+- [x] `docs/specs/README.md` regenerated (status-board).
 
 **Anti-horizontal-phasing check:** After this slice lands, an unattended heartbeat
 run works the most important findings first and hands its edit-drivers normalized
@@ -79,11 +86,38 @@ spec 024.
 
 ### Deviation log (after reconciliation)
 
-_TBD — filled at reconciliation._
+1. **Normalization is jig-record-*shaped*, not jig-*invoked*.** Per ADR-0011 servo
+   never imports/subprocesses jig's `bug-fix` entry; `_jig_present` is a
+   filesystem `docs/bugs/` check and `_normalize_finding` emits the jig-shaped block
+   itself. AC2 prose updated to match ("via jig's bug-fix entry" → filesystem-only
+   detection + jig-shaped output).
+2. **`_JIG_SKIP_STATUSES` is a hard-coded `frozenset({"QUARANTINED"})`**, not an
+   env-configurable set (unlike the critical-label set). Scoped down deliberately —
+   forward-compatible with jig ADR-0050; a real operator knob is deferred until a
+   consumer needs it.
+3. **`priority` is a materialized-derived VOLATILE field** (computed at discover,
+   refreshed on re-observation, backfilled on migration) rather than computed at
+   selection time — labels are only available at discover, so the rung is stored.
+4. **`SCHEMA_VERSION` 2→3 migration is upgrade-in-place** (not the v1→v2
+   drop-and-rederive), because v2 carries sticky lifecycle (incl. `quarantined`)
+   that a drop would lose. `run_dispatch` normalizes the whole locked set on read
+   so a partial dispatch of a v2 inbox can't leave a mixed-version file
+   (orchestrator-review find + fix; `DispatchVersionUniformityTests` guards it).
+5. **Byte-preservation invariant re-scoped to current-version records.** The
+   pre-existing `test_other_findings_preserved_byte_for_byte` was updated to seed
+   v3 records; migration legitimately rewrites a stale-version untouched record.
+6. **Review-driven hardening** (post-review, in the impl): non-UTF-8 jig-board
+   files read with `errors="replace"` (fail-open, not crash); `source` clamped to
+   `_KNOWN_SOURCES` before the trusted-position label.
 
 ### Reconciliation sweep
 
 | Artifact | Disposition | Rationale |
 |----------|-------------|-----------|
-| `docs/specs/README.md` | `updated` | _TBD — regenerate at close._ |
-| `docs/decisions/README.md` | `no-op` | _ADR-0030 already indexed._ |
+| `skills/heartbeat/heartbeat.py` + `test_heartbeat.py` | `updated` | Priority ladder, 2→3 migration, normalization, claim-skip + 24 tests. |
+| `hosts/{claude,codex}/.../heartbeat.py` | `updated` | Regenerated from source (`--check` in sync; dual-host parity). |
+| `docs/specs/025-.../{spec.md,slice-01}` | `updated` | ACs reframed (ADR-0030); AC2 prose corrected to ADR-0011 posture. |
+| `docs/specs/025-.../reviews/*` | `added` | compliance/craft/arch/reconciliation verdicts (ADR-0014). |
+| `docs/specs/README.md` | `updated` | status-board regenerated. |
+| `docs/decisions/adr-0030-...md` | `no-op` | Reframed + accepted in the 024 PR (#25); 025 consumes it unchanged. |
+| `docs/decisions/README.md` | `no-op` | ADR-0030 already indexed. |
