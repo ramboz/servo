@@ -154,10 +154,18 @@ STATUS_OPEN = "open"
 STATUS_TRIED = "tried"
 STATUS_PASSED = "passed"
 STATUS_SKIPPED = "skipped"
+# Spec 024 (ADR-0030): a dispatched finding whose loop plateaued
+# (`terminal_reason == oracle_plateau`) is durably parked here — distinct from
+# `tried` so the plateau is legible to a reviewer / a future jig reader, and so
+# it can only return to dispatch via the evidence-gated re-admission below. Like
+# the other non-`open` statuses it is never selected for dispatch.
+STATUS_QUARANTINED = "quarantined"
 # Sticky (lifecycle-bearing) statuses: retained indefinitely as an audit trail
 # even after their signal disappears. Everything NOT in this set (i.e. `open`)
 # is evicted when not re-observed in a pass (the uniform retention bound, AC5).
-_STICKY_STATUSES = frozenset({STATUS_TRIED, STATUS_PASSED, STATUS_SKIPPED})
+_STICKY_STATUSES = frozenset(
+    {STATUS_TRIED, STATUS_PASSED, STATUS_SKIPPED, STATUS_QUARANTINED}
+)
 
 # Provenance — an immutable trust *fact* about who produced a finding's text
 # (Guardrail #4, ADR-0010). A pure function of `source` (which is part of the
@@ -202,23 +210,49 @@ INBOX_MD_NAME = "inbox.md"
 DISPATCH_DIRNAME = "dispatch"
 HEARTBEAT_BRANCH_PREFIX = "servo/heartbeat/"
 
+# Reserved durable cross-run quarantine dir (spec 024 / ADR-0030), beside
+# `triage/`. `heartbeat.py` writes `<target>/.servo/quarantine/<finding_id>.json`
+# on a dispatched-loop `oracle_plateau`; the record is keyed by the stable,
+# content-derived `finding_id` (identical across run-ids for the same finding).
+QUARANTINE_DIRNAME = "quarantine"
+# The quarantine record's own schema version (independent of the inbox's).
+QUARANTINE_SCHEMA_VERSION = 1
+# The loop.py terminal_reason (loop.py:REASON_ORACLE_PLATEAU) that triggers a
+# quarantine write. Matched as a string across the subprocess boundary — servo
+# never imports loop.py (the dependency-free invariant).
+REASON_ORACLE_PLATEAU = "oracle_plateau"
+
+
+# Evidence-projection keys dropped before computing an `evidence_pointer` (spec
+# 024 AC3): volatile per-run identifiers (a GitHub Actions `run_url` re-mints on
+# every mechanical re-run; any `*_url` link or `*_at` timestamp is likewise
+# run-varying). Excluding them makes "new diagnostic evidence" mean a change in
+# the finding's *stable* descriptor, not a mechanical re-run.
+def _is_volatile_evidence_key(key: str) -> bool:
+    return key == "url" or key.endswith("_url") or key.endswith("_at")
+
+
 # `.servo/` subdirs that are NEVER provisioned into a candidate worktree (AC4).
 # `dispatch` is a recursion hazard (it *contains* the worktrees); `runs`/`races`
 # are other tools' volatile per-run output; `triage` is the dispatcher's own
-# inbox (the worktree's loop must not see or mutate it). Everything else under
-# `.servo/` IS copied — `install.json` (the manifest gate.py requires) plus any
-# oracle sidecars (`spec-oracles/<id>/checks.py` + `checks.json` + frozen
-# baselines, `hooks/`), so a spec-oracle-overlaid target reproduces its composite.
-# The post-provision `gate.py <worktree>` verification (AC4) is the completeness
-# self-check — an incomplete copy surfaces as a worktree `exit 2` and the
-# candidate is skipped, never silently mis-scored.
+# inbox (the worktree's loop must not see or mutate it); `quarantine` is durable
+# *real-target* cross-run state (spec 024) whose skip must always read the real
+# target, never a stale worktree copy. Everything else under `.servo/` IS copied
+# — `install.json` (the manifest gate.py requires) plus any oracle sidecars
+# (`spec-oracles/<id>/checks.py` + `checks.json` + frozen baselines, `hooks/`),
+# so a spec-oracle-overlaid target reproduces its composite. The post-provision
+# `gate.py <worktree>` verification (AC4) is the completeness self-check — an
+# incomplete copy surfaces as a worktree `exit 2` and the candidate is skipped,
+# never silently mis-scored.
 #
 # Post-ADR-0023 (slice 019-02): this sidecar copy only matters for a
 # *legacy* `.servo/spec-oracles/<id>/` install. A colocated overlay lives
 # under the spec's own (git-tracked) `docs/specs/<spec>/oracle/<id>/`
 # directory, so `git worktree add`'s checkout already reproduces it — no
 # provisioning step needed for the new layout.
-_NON_PROVISIONED_SERVO_DIRS = frozenset({"runs", "races", TRIAGE_DIRNAME, DISPATCH_DIRNAME})
+_NON_PROVISIONED_SERVO_DIRS = frozenset(
+    {"runs", "races", TRIAGE_DIRNAME, DISPATCH_DIRNAME, QUARANTINE_DIRNAME}
+)
 
 # Sibling-skill resolution for the subprocessed `gate.py` / `loop.py` (never
 # imported — the dependency-free invariant). Defaults to the sibling skill path
@@ -900,7 +934,10 @@ def _render_jsonl(findings: list[dict]) -> str:
 
 def _status_counts(findings: list[dict]) -> dict[str, int]:
     """Count findings by lifecycle status, over the full lifecycle vocabulary."""
-    counts = {STATUS_OPEN: 0, STATUS_TRIED: 0, STATUS_PASSED: 0, STATUS_SKIPPED: 0}
+    counts = {
+        STATUS_OPEN: 0, STATUS_TRIED: 0, STATUS_PASSED: 0,
+        STATUS_SKIPPED: 0, STATUS_QUARANTINED: 0,
+    }
     for f in findings:
         st = f.get("status", STATUS_OPEN)
         counts[st] = counts.get(st, 0) + 1
@@ -954,7 +991,8 @@ def _render_markdown(
     lines.append(
         f"- open: {counts[STATUS_OPEN]} "
         f"(actionable: {actionable_open}) · tried: {counts[STATUS_TRIED]} · "
-        f"passed: {counts[STATUS_PASSED]} · skipped: {counts[STATUS_SKIPPED]}"
+        f"passed: {counts[STATUS_PASSED]} · skipped: {counts[STATUS_SKIPPED]} · "
+        f"quarantined: {counts[STATUS_QUARANTINED]}"
     )
     lines.append("")
 
@@ -1109,6 +1147,12 @@ def run_discover(target: Path) -> int:
             # writer can't slip an update between our read and write.
             existing = _read_inbox_for_discover(jsonl_path)
             findings = _merge_findings(existing, fresh)
+            # Spec 024 (ADR-0030): evidence-gated re-admission — a `quarantined`
+            # finding whose stable evidence pointer has changed since it was
+            # parked is re-admitted (`quarantined -> open`, record removed); an
+            # unchanged pointer keeps it parked. Runs on the merged set so a
+            # retained (not re-observed) quarantined finding is still evaluated.
+            findings = _reconcile_quarantine(target, findings)
             try:
                 _atomic_write(jsonl_path, _render_jsonl(findings))
                 _atomic_write(
@@ -1299,12 +1343,13 @@ def _render_status_human(summary: dict, target: Path) -> str:
     lines.append(f"total findings: {summary['total']}")
     lines.append("")
     lines.append("by status:")
-    for st in (STATUS_OPEN, STATUS_TRIED, STATUS_PASSED, STATUS_SKIPPED):
+    for st in (STATUS_OPEN, STATUS_TRIED, STATUS_PASSED, STATUS_SKIPPED,
+               STATUS_QUARANTINED):
         lines.append(f"  {st}: {by_status.get(st, 0)}")
     # Any non-standard status (e.g. a hand-edit) is surfaced rather than hidden.
     for st in sorted(s for s in by_status
-                     if s not in (STATUS_OPEN, STATUS_TRIED,
-                                  STATUS_PASSED, STATUS_SKIPPED)):
+                     if s not in (STATUS_OPEN, STATUS_TRIED, STATUS_PASSED,
+                                  STATUS_SKIPPED, STATUS_QUARANTINED)):
         lines.append(f"  {st}: {by_status[st]}")
     lines.append("")
     lines.append("by source:")
@@ -1716,18 +1761,179 @@ def _heartbeat_budget_exhausted(ceiling: float, spent: float) -> bool:
     return _remaining_heartbeat_budget(ceiling, spent) < MIN_HEARTBEAT_BUDGET_FLOOR_USD
 
 
+# ---------------------------------------------------------------------------
+# Spec 024 (ADR-0030) — durable cross-run quarantine
+# ---------------------------------------------------------------------------
+# `heartbeat.py` (not `loop.py`) is the writer: it owns the `finding_id` and the
+# real target path, while a dispatched `loop.py` runs against an ephemeral
+# worktree and has no `finding_id`. On a dispatched loop whose summary carries
+# `terminal_reason == oracle_plateau`, `run_dispatch` writes a record here and
+# marks the finding `quarantined`; `_select_candidates` (open-only) then never
+# re-dispatches it. A record clears only on evidence-gated re-admission (below).
+
+
+def _quarantine_dir(target: Path) -> Path:
+    return target / ".servo" / QUARANTINE_DIRNAME
+
+
+def _quarantine_record_path(target: Path, finding_id: str) -> Path:
+    """`<target>/.servo/quarantine/<finding_id>.json` — keyed by the stable id."""
+    return _quarantine_dir(target) / f"{finding_id}.json"
+
+
+def _stable_evidence_projection(evidence: object) -> dict:
+    """The finding's `evidence` minus volatile per-run keys (spec 024 AC3).
+
+    Drops `url` / `*_url` / `*_at` so a mechanical CI re-run (which re-mints
+    `run_url`) does not read as new diagnostic evidence. A non-dict `evidence`
+    (hand-edit) projects to `{}` — defensive, never raises.
+    """
+    if not isinstance(evidence, dict):
+        return {}
+    return {
+        k: v for k, v in evidence.items()
+        if not _is_volatile_evidence_key(str(k))
+    }
+
+
+def _evidence_pointer(evidence: object) -> str:
+    """Stable 16-hex pointer over the finding's stable evidence projection.
+
+    Reuses `_fingerprint` (sha256[:16]) over the canonical JSON of the projection
+    so two runs observing the same stable evidence yield the same pointer; the
+    re-admission rule (AC3) releases a quarantine only when this pointer changes.
+    """
+    projection = _stable_evidence_projection(evidence)
+    return _fingerprint(json.dumps(projection, sort_keys=True))
+
+
+# Canonical key order for a quarantine record (spec 024 AC4). `finding_id` is the
+# `finding_id <-> bug` mapping key a future jig reader (jig ADR-0050) needs;
+# `evidence_location` is where the evidence lives. servo owns this schema and
+# validates it against its own fixture — jig is never invoked to produce it.
+_QUARANTINE_RECORD_KEYS = (
+    "schema_version", "finding_id", "source", "failure_signature",
+    "evidence_pointer", "evidence_location", "run_id", "quarantined_at",
+    "bug_ref",
+)
+
+
+def _evidence_location(finding: dict) -> str:
+    """A human/jig-readable pointer to where the finding's evidence lives.
+
+    Prefers a `run_url` / `url` link from the finding's `evidence`; falls back to
+    the empty string when the finding carries no link (never raises).
+    """
+    evidence = finding.get("evidence")
+    if isinstance(evidence, dict):
+        for key in ("run_url", "url"):
+            val = evidence.get(key)
+            if isinstance(val, str) and val:
+                return val
+    return ""
+
+
+def _build_quarantine_record(
+    finding: dict, *, failure_signature: str, run_id: object,
+) -> dict:
+    """Assemble a quarantine record in canonical key order (spec 024 AC1/AC4)."""
+    return {
+        "schema_version": QUARANTINE_SCHEMA_VERSION,
+        "finding_id": str(finding.get("finding_id", "")),
+        "source": str(finding.get("source", "")),
+        "failure_signature": failure_signature,
+        "evidence_pointer": _evidence_pointer(finding.get("evidence")),
+        "evidence_location": _evidence_location(finding),
+        "run_id": run_id if isinstance(run_id, str) else None,
+        "quarantined_at": _now_iso(),
+        # Reserved for a future jig reader to fill on attest-only ingest; servo
+        # never derives a jig bug id, so it writes null (ADR-0011 boundary).
+        "bug_ref": None,
+    }
+
+
+def _write_quarantine_record(
+    target: Path, finding: dict, *, failure_signature: str, run_id: object,
+) -> Optional[Path]:
+    """Atomically write the quarantine record for `finding` (spec 024 AC1).
+
+    Returns the record path on success, or None if the quarantine dir is
+    unwritable (a durable-state write failure is a breadcrumb, never fatal to the
+    pass — the finding is still marked `quarantined` in the inbox).
+    """
+    record = _build_quarantine_record(
+        finding, failure_signature=failure_signature, run_id=run_id,
+    )
+    path = _quarantine_record_path(target, record["finding_id"])
+    try:
+        _quarantine_dir(target).mkdir(parents=True, exist_ok=True)
+        _atomic_write(path, json.dumps(record, indent=2) + "\n")
+    except OSError as exc:
+        _emit_breadcrumb(
+            f"cannot write quarantine record {path}: {exc} "
+            f"(quarantine_dir_unwritable)"
+        )
+        return None
+    return path
+
+
+def _read_quarantine_record(target: Path, finding_id: str) -> Optional[dict]:
+    """Read a quarantine record; None on absent / unreadable / non-dict."""
+    path = _quarantine_record_path(target, finding_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _reconcile_quarantine(target: Path, findings: list[dict]) -> list[dict]:
+    """Evidence-gated re-admission of quarantined findings (spec 024 AC3).
+
+    For each `quarantined` finding with a live quarantine record, recompute the
+    `evidence_pointer` from the finding's *current* evidence. If it differs from
+    the recorded pointer (new diagnostic evidence), re-admit the finding
+    (`quarantined -> open`) and remove the record; an unchanged pointer keeps it
+    parked. A quarantined finding with no record is left parked (nothing to
+    compare against — conservative). Mutates and returns `findings`.
+    """
+    for rec in findings:
+        if rec.get("status") != STATUS_QUARANTINED:
+            continue
+        fid = str(rec.get("finding_id", ""))
+        record = _read_quarantine_record(target, fid)
+        if record is None:
+            continue
+        current = _evidence_pointer(rec.get("evidence"))
+        if current != record.get("evidence_pointer"):
+            rec["status"] = STATUS_OPEN
+            try:
+                _quarantine_record_path(target, fid).unlink()
+            except OSError:
+                pass  # best-effort; the status flip is the load-bearing change
+            _emit_breadcrumb(
+                f"re-admitting quarantined finding {fid}: evidence pointer "
+                f"changed (quarantine_released_new_evidence)"
+            )
+    return findings
+
+
 def _dispatch_one(
     target: Path, finding: dict, dispatch_dir: Path, *,
     cost_ceiling: Optional[float], max_iterations: Optional[int],
-) -> dict:
-    """Isolate → provision → verify → dispatch one candidate; return its outcome.
+) -> tuple[dict, Optional[str]]:
+    """Isolate → provision → verify → dispatch one candidate; return (outcome, terminal_reason).
 
     The per-candidate pipeline (AC3 → AC4 → AC5 → AC6). Any env error at any stage
     (non-git target, worktree creation failure, oracle verification `exit 2`, or a
     loop with no parseable summary) records an `env_error` outcome and returns —
     never raising, so the serial pass continues over the rest (AC10). On success
-    the loop's summary becomes the outcome. The worktree is RETAINED (v1) so a
-    human can inspect/land the result; GC is out of scope.
+    the loop's summary becomes the outcome. The second element is the loop's
+    `terminal_reason` (spec 024: `oracle_plateau` triggers a quarantine write) —
+    None for every env-error path that never reached a loop summary. The worktree
+    is RETAINED (v1) so a human can inspect/land the result; GC is out of scope.
     """
     fid = str(finding["finding_id"])
 
@@ -1737,7 +1943,7 @@ def _dispatch_one(
             f"target is not a git work tree; cannot isolate finding {fid} "
             f"(dispatch_env_error: non_git_target)"
         )
-        return _env_error_outcome()
+        return _env_error_outcome(), None
 
     worktree = dispatch_dir / fid
     branch = HEARTBEAT_BRANCH_PREFIX + fid
@@ -1750,7 +1956,7 @@ def _dispatch_one(
             f"worktree creation failed for finding {fid}: {err} "
             f"(dispatch_env_error: worktree_create_failed)"
         )
-        return _env_error_outcome()
+        return _env_error_outcome(), None
 
     # AC4 — provision the oracle + manifest (+ sidecars), then VERIFY with gate.py.
     try:
@@ -1760,7 +1966,7 @@ def _dispatch_one(
             f"oracle provisioning failed for finding {fid}: {exc} "
             f"(dispatch_env_error: provision_failed)"
         )
-        return _env_error_outcome()
+        return _env_error_outcome(), None
     gate = _run_gate_json(worktree)
     if gate is None or gate.get("exit_code") == EXIT_ENV_ERROR:
         reason = (gate or {}).get("reason", "gate_uninvocable")
@@ -1769,7 +1975,7 @@ def _dispatch_one(
             f"(gate reason={reason}); skipping "
             f"(dispatch_env_error: worktree_oracle_unverified)"
         )
-        return _env_error_outcome()
+        return _env_error_outcome(), None
 
     # AC5/AC6 — dispatch loop.py with the untrusted-data-framed prompt.
     prompt = _build_dispatch_prompt(finding)
@@ -1782,8 +1988,9 @@ def _dispatch_one(
             f"loop.py emitted no parseable summary for finding {fid}; "
             f"recording env-error (dispatch_env_error: no_loop_summary)"
         )
-        return _env_error_outcome()
-    return _outcome_from_summary(summary)
+        return _env_error_outcome(), None
+    terminal_reason = str(summary.get("terminal_reason") or "") or None
+    return _outcome_from_summary(summary), terminal_reason
 
 
 def run_dispatch(
@@ -1913,15 +2120,20 @@ def run_dispatch(
                         remaining if cost_ceiling is None
                         else min(cost_ceiling, remaining)
                     )
-                outcome = _dispatch_one(
+                outcome, terminal_reason = _dispatch_one(
                     target, finding, dispatch_dir,
                     cost_ceiling=loop_cost_ceiling, max_iterations=max_iterations,
                 )
-                new_status = (
-                    STATUS_PASSED
-                    if outcome["oracle_status"] == _ORACLE_STATUS_PASS
-                    else STATUS_TRIED
-                )
+                # Spec 024 (ADR-0030): a plateaued loop parks the finding
+                # `quarantined` (distinct from `tried`) + writes a durable
+                # cross-run record keyed by finding_id, so it stops being a
+                # candidate (open-only selection) until new evidence re-admits it.
+                if terminal_reason == REASON_ORACLE_PLATEAU:
+                    new_status = STATUS_QUARANTINED
+                elif outcome["oracle_status"] == _ORACLE_STATUS_PASS:
+                    new_status = STATUS_PASSED
+                else:
+                    new_status = STATUS_TRIED
                 fid = str(finding.get("finding_id"))
                 idx = index.get(fid)
                 if idx is None:  # pragma: no cover - finding vanished mid-pass
@@ -1930,6 +2142,12 @@ def run_dispatch(
                 rec["status"] = new_status
                 rec["attempts"] = int(rec.get("attempts", 0)) + 1
                 rec["outcome"] = outcome
+                if new_status == STATUS_QUARANTINED:
+                    _write_quarantine_record(
+                        target, rec,
+                        failure_signature=REASON_ORACLE_PLATEAU,
+                        run_id=outcome.get("run_id"),
+                    )
                 locked_records[idx] = _normalize_record(rec)
                 # Incremental atomic write: each outcome is durable immediately.
                 try:

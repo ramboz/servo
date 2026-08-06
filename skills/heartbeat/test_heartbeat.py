@@ -3533,5 +3533,267 @@ class DispatchStdlibOnlyTests(unittest.TestCase):
         self.assertIn("LOOP_PY_PATH", text)
 
 
+# ===========================================================================
+# Spec 024 (ADR-0030) — durable cross-run quarantine
+# ===========================================================================
+
+import importlib.util as _importlib_util  # noqa: E402
+
+# Load heartbeat.py as a module so the pure quarantine helpers can be unit-tested
+# and used to compute expected evidence pointers deterministically. This does NOT
+# violate the dependency-free invariant (that guards heartbeat importing
+# loop/gate — the reverse); the CLI-integration tests below still drive the real
+# `dispatch` / `discover` subprocess paths.
+_hb_spec = _importlib_util.spec_from_file_location("heartbeat_mod", HEARTBEAT)
+_hb = _importlib_util.module_from_spec(_hb_spec)
+_hb_spec.loader.exec_module(_hb)
+
+
+def _quarantine_path(target: Path, fid: str) -> Path:
+    return target / ".servo" / "quarantine" / f"{fid}.json"
+
+
+def _read_quarantine(target: Path, fid: str) -> dict:
+    return json.loads(_quarantine_path(target, fid).read_text())
+
+
+def _plateau_loop(root: Path, log_path: Path, fid: str, *, run_id: str) -> Path:
+    """A mock loop.py that plateaus (`terminal_reason=oracle_plateau`) for `fid`."""
+    return _write_mock_loop(
+        root / "mock_loop.py", log_path=log_path,
+        by_fid={fid: {
+            "status": "below_threshold", "composite": 0.4, "cost": 0.5,
+            "terminal_reason": "oracle_plateau", "run_id": run_id,
+        }},
+    )
+
+
+class QuarantineWriteTests(unittest.TestCase):
+    """024-01 AC1 — a plateaued loop parks the finding `quarantined` + writes a record."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-q-ac1-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_plateau_writes_record_and_marks_quarantined(self):
+        fid = "aaaa0000plateau01"
+        loop_py = _plateau_loop(self.root, self.loop_log, fid, run_id="20260806T000000-aaaa")
+        _write_inbox(self.target, [_open_ci(fid)])
+        res = _run_dispatch(self.target, loop_py=loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rec = _finding_by_id(self.target, fid)
+        self.assertEqual(rec["status"], "quarantined")
+        self.assertEqual(rec["attempts"], 1)
+        # The durable record exists, keyed by finding_id, with the AC4 schema.
+        self.assertTrue(_quarantine_path(self.target, fid).exists())
+        q = _read_quarantine(self.target, fid)
+        self.assertEqual(q["schema_version"], 1)
+        self.assertEqual(q["finding_id"], fid)
+        self.assertEqual(q["source"], "ci")
+        self.assertEqual(q["failure_signature"], "oracle_plateau")
+        self.assertEqual(q["run_id"], "20260806T000000-aaaa")
+        self.assertRegex(q["evidence_pointer"], r"^[0-9a-f]{16}$")
+        self.assertIn("quarantined_at", q)
+        self.assertIsNone(q["bug_ref"])
+
+    def test_pass_is_passed_not_quarantined(self):
+        fid = "bbbb0000passed001"
+        loop_py = _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log)
+        _write_inbox(self.target, [_open_ci(fid)])
+        _run_dispatch(self.target, loop_py=loop_py)
+        self.assertEqual(_finding_by_id(self.target, fid)["status"], "passed")
+        self.assertFalse(_quarantine_path(self.target, fid).exists())
+
+    def test_non_plateau_failure_is_tried_not_quarantined(self):
+        fid = "cccc0000tried0001"
+        loop_py = _write_mock_loop(
+            self.root / "mock_loop.py", log_path=self.loop_log,
+            by_fid={fid: {"status": "below_threshold", "composite": 0.4,
+                          "terminal_reason": "max_iterations_reached"}},
+        )
+        _write_inbox(self.target, [_open_ci(fid)])
+        _run_dispatch(self.target, loop_py=loop_py)
+        self.assertEqual(_finding_by_id(self.target, fid)["status"], "tried")
+        self.assertFalse(_quarantine_path(self.target, fid).exists())
+
+    def test_key_is_finding_id_stable_across_run_ids(self):
+        # Same finding, two independent targets/run-ids → same file KEY (finding_id),
+        # different recorded run_id. Proves the key is run-id-independent (AC1).
+        fid = "dddd0000stableid1"
+        _write_inbox(self.target, [_open_ci(fid)])
+        loop1 = _plateau_loop(self.root, self.loop_log, fid, run_id="20260806T000000-r1r1")
+        _run_dispatch(self.target, loop_py=loop1)
+        q1 = _read_quarantine(self.target, fid)
+
+        target2 = _dispatch_git_init(self.root / "demo2")
+        _write_inbox(target2, [_open_ci(fid)])
+        loop2 = _plateau_loop(
+            self.root, self.root / "loop2.log", fid, run_id="20260806T000000-r2r2")
+        _run_dispatch(target2, loop_py=loop2)
+        q2 = _read_quarantine(target2, fid)
+
+        self.assertTrue(_quarantine_path(self.target, fid).name == f"{fid}.json")
+        self.assertTrue(_quarantine_path(target2, fid).name == f"{fid}.json")
+        self.assertEqual(q1["finding_id"], q2["finding_id"])
+        self.assertNotEqual(q1["run_id"], q2["run_id"])
+
+
+class QuarantineSkipTests(unittest.TestCase):
+    """024-01 AC2 — a quarantined finding is never re-dispatched (open-only selection)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-q-ac2-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+        self.loop_py = _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_quarantined_not_dispatched_open_is(self):
+        q_fid = "eeee0000quaranti1"
+        open_fid = "ffff0000openone01"
+        # A live quarantine record beside the quarantined inbox finding.
+        qdir = self.target / ".servo" / "quarantine"
+        qdir.mkdir(parents=True, exist_ok=True)
+        (qdir / f"{q_fid}.json").write_text(json.dumps({
+            "schema_version": 1, "finding_id": q_fid, "source": "ci",
+            "failure_signature": "oracle_plateau", "evidence_pointer": "0" * 16,
+            "evidence_location": "", "run_id": "run-x",
+            "quarantined_at": "2026-08-06T00:00:00+00:00", "bug_ref": None,
+        }))
+        _write_inbox(self.target, [
+            _open_ci(q_fid, status="quarantined", attempts=1),
+            _open_ci(open_fid),
+        ])
+        res = _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        dispatched = {e["fid"] for e in _loop_log(self.loop_log)}
+        self.assertEqual(dispatched, {open_fid},
+                         "only the open finding may dispatch; quarantined is skipped")
+        self.assertEqual(_finding_by_id(self.target, q_fid)["status"], "quarantined")
+
+    def test_quarantine_dir_not_provisioned_into_worktree(self):
+        open_fid = "1111000openwork01"
+        qdir = self.target / ".servo" / "quarantine"
+        qdir.mkdir(parents=True, exist_ok=True)
+        (qdir / "some0other0fid00.json").write_text(json.dumps({"schema_version": 1}))
+        _write_inbox(self.target, [_open_ci(open_fid)])
+        _run_dispatch(self.target, loop_py=self.loop_py)
+        worktree_servo = self.target / ".servo" / "dispatch" / open_fid / ".servo"
+        self.assertTrue((worktree_servo / "install.json").exists(),
+                        "the manifest IS provisioned into the worktree")
+        self.assertFalse((worktree_servo / "quarantine").exists(),
+                         "quarantine/ must NOT be copied into the dispatch worktree")
+
+
+class QuarantineReadmitTests(unittest.TestCase):
+    """024-01 AC3 — evidence-gated re-admission on a discover pass."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-q-ac3-")
+        self.root = Path(self.tmp.name)
+        self.target = self.root / "demo"
+        self.target.mkdir()
+        _make_oracle_and_manifest(self.target)
+        self.empty_bin = self.root / "emptybin"
+        self.empty_bin.mkdir()
+        self.fid = "9999000readmit001"
+        self.evidence = {"run_url": "https://ci/run/1", "workflow": "build", "branch": "main"}
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _seed_quarantined(self, *, stored_pointer: str) -> None:
+        _write_inbox(self.target, [
+            _open_ci(self.fid, status="quarantined", attempts=1, evidence=dict(self.evidence)),
+        ])
+        qdir = self.target / ".servo" / "quarantine"
+        qdir.mkdir(parents=True, exist_ok=True)
+        (qdir / f"{self.fid}.json").write_text(json.dumps({
+            "schema_version": 1, "finding_id": self.fid, "source": "ci",
+            "failure_signature": "oracle_plateau", "evidence_pointer": stored_pointer,
+            "evidence_location": self.evidence["run_url"], "run_id": "run-x",
+            "quarantined_at": "2026-08-06T00:00:00+00:00", "bug_ref": None,
+        }))
+
+    def test_unchanged_pointer_stays_quarantined(self):
+        correct = _hb._evidence_pointer(self.evidence)
+        self._seed_quarantined(stored_pointer=correct)
+        res = _run_discover(self.target, self.empty_bin)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(_finding_by_id(self.target, self.fid)["status"], "quarantined")
+        self.assertTrue(_quarantine_path(self.target, self.fid).exists())
+
+    def test_changed_pointer_readmits_and_removes_record(self):
+        self._seed_quarantined(stored_pointer="0" * 16)  # ≠ current → new evidence
+        res = _run_discover(self.target, self.empty_bin)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(_finding_by_id(self.target, self.fid)["status"], "open",
+                         "a changed evidence pointer re-admits the finding")
+        self.assertFalse(_quarantine_path(self.target, self.fid).exists(),
+                         "the quarantine record is removed on re-admission")
+
+    def test_run_url_only_change_does_not_readmit(self):
+        # Stored pointer is correct for the ORIGINAL evidence; then only run_url
+        # changes in the inbox. Because run_url is a volatile key excluded from the
+        # projection, the recomputed pointer is unchanged → stays quarantined.
+        correct = _hb._evidence_pointer(self.evidence)
+        mutated = dict(self.evidence, run_url="https://ci/run/2")
+        _write_inbox(self.target, [
+            _open_ci(self.fid, status="quarantined", attempts=1, evidence=mutated),
+        ])
+        qdir = self.target / ".servo" / "quarantine"
+        qdir.mkdir(parents=True, exist_ok=True)
+        (qdir / f"{self.fid}.json").write_text(json.dumps({
+            "schema_version": 1, "finding_id": self.fid, "source": "ci",
+            "failure_signature": "oracle_plateau", "evidence_pointer": correct,
+            "evidence_location": "https://ci/run/1", "run_id": "run-x",
+            "quarantined_at": "2026-08-06T00:00:00+00:00", "bug_ref": None,
+        }))
+        res = _run_discover(self.target, self.empty_bin)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(_finding_by_id(self.target, self.fid)["status"], "quarantined",
+                         "a run_url-only change is not new diagnostic evidence")
+        self.assertTrue(_quarantine_path(self.target, self.fid).exists())
+
+
+class QuarantineSchemaTests(unittest.TestCase):
+    """024-01 AC4 — servo owns the record schema; no jig invoked; the legible projection."""
+
+    def test_record_schema_roundtrips_and_exposes_projection(self):
+        finding = {
+            "finding_id": "abc123", "source": "ci",
+            "evidence": {"run_url": "https://ci/run/9", "workflow": "build", "branch": "main"},
+        }
+        rec = _hb._build_quarantine_record(
+            finding, failure_signature="oracle_plateau", run_id="20260806T000000-zzzz",
+        )
+        # Canonical key order + JSON round-trip.
+        self.assertEqual(list(rec.keys()), list(_hb._QUARANTINE_RECORD_KEYS))
+        self.assertEqual(json.loads(json.dumps(rec)), rec)
+        # The finding_id<->bug mapping key + evidence location a jig reader needs.
+        self.assertEqual(rec["finding_id"], "abc123")
+        self.assertEqual(rec["evidence_location"], "https://ci/run/9")
+        self.assertIsNone(rec["bug_ref"])
+
+    def test_volatile_keys_excluded_from_pointer(self):
+        base = {"workflow": "build", "branch": "main"}
+        p_stable = _hb._evidence_pointer(base)
+        # Adding/altering only volatile keys must not change the pointer.
+        self.assertEqual(p_stable, _hb._evidence_pointer(
+            {**base, "run_url": "https://ci/1", "url": "https://x", "seen_at": "2026"}))
+        self.assertEqual(p_stable, _hb._evidence_pointer(
+            {**base, "run_url": "https://ci/2"}))
+        # Changing a STABLE key does change the pointer.
+        self.assertNotEqual(p_stable, _hb._evidence_pointer({**base, "branch": "release"}))
+
+
 if __name__ == "__main__":
     unittest.main()
