@@ -21,7 +21,8 @@ Every skill belongs to a phase:
 
 | Phase | Skill | Role |
 |---|---|---|
-| **Compile** | `/servo:edd-suitability` (015, done) | EDD suitability gate + missing-evidence — the first Compile step ([ADR-0015](decisions/adr-0015-edd-suitability-gate.md)) |
+| **Compile** | `/servo:autonomy-readiness` (023, 023-01 done) | Autonomy-readiness gate — the first Compile step, **upstream of** `edd-suitability`: scores a long-horizon goal's scope + initial prompt and refuses to hand a bad premise (or an identity-collapsed setup) to an unattended run ([ADR-0029](decisions/adr-0029-autonomy-readiness-gate.md)) |
+| **Compile** | `/servo:edd-suitability` (015, done) | EDD suitability gate + missing-evidence — asks "is this evaluable?" once the premise is ready ([ADR-0015](decisions/adr-0015-edd-suitability-gate.md)) |
 | **Compile** | `/servo:scaffold-init` (001) | Oracle synthesis from detected signals |
 | **Compile** | `/servo:spec-oracle` (006) | Compile a spec/slice into an AC-mapped evidence overlay |
 | **Compile** | `/servo:design-eval` (012) | Compile UI-vs-mockup intent into a frozen eval component |

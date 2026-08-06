@@ -775,3 +775,13 @@ functional for both of its own documented use cases.
 **Also parked here (minor, non-blocking, from the 008 review passes):** `criteria-split`'s `oracle_plan classify` subprocess has no `timeout` (008-05); unmatched `--labels` ids in `audit` are silently dropped — an advisory count would help (008-06); the `--scores` override loader + a numeric `==` constraint value are untested edge paths.
 
 **Surfaced by:** spec 008 slice 008-04/05/06 deviation logs + reconciliation reviews (2026-07-12). Documented as a named limitation in `skills/eval-authoring/SKILL.md`.
+
+---
+
+## autonomy-readiness — Routine recurrence re-verifies premise only, not deterministic preconditions
+
+**Deferred:** Spec 023 slice 023-02 will gate `loop.py --emit-routine-prompt` on an `approved` readiness artifact at **emit time** (the last servo-owned moment before the brief escapes into a scheduler servo no longer controls). But the emitted recurring Routine re-runs on a schedule where the *deterministic* preconditions the readiness gate scored — clean tree, oracle freeze, mutation perimeter — are not re-verified per recurrence. The premise-quality checks (Precision / Scope / Stop / Safety / Contradiction) remain valid across recurrences (the brief is fixed), so this is a disclosed limit, not a hole: a Routine whose target has since gone dirty or whose oracle was un-frozen would not be re-refused by readiness (though `gate.py`, the in-Routine authority per the 003-08 design, still governs evaluability each run).
+
+**Resolution trigger:** a scheduled-Routine consumer that needs per-recurrence precondition re-verification — likely a lightweight `readiness check --deterministic-only` re-run wired into the vendored in-Routine gate, informed by what the Routine host can actually observe.
+
+**Surfaced by:** ADR-0029 frame-critique (2026-08-06, pass) + spec 023-01 reconciliation; carried in slice 023-02's DoD.
