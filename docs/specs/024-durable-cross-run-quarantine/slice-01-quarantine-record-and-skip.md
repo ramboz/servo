@@ -1,9 +1,8 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 dependencies: [adr-0030]
 arch_review: true
 last_verified: 2026-08-06
-claimed_by: claude/specs-024-025-impl-ee19c4
 ---
 
 ## Slice 024-01 — cross-run quarantine record, quarantined status, and evidence-gated re-admission
@@ -70,15 +69,15 @@ as reframed by its 2026-08-06 frame-critique.
    carries `finding_id` + `evidence_location`; jig is never invoked to produce it.
 
 **DoD:**
-- [ ] All ACs pass; test suite green (no regressions).
-- [ ] Each AC covered by ≥1 fixture; each new test shown capable of failing.
-- [ ] Reviewed (compliance + craft; +arch — new durable state + a cross-tool
-      boundary contract).
-- [ ] Host packages regenerated (`hosts/claude`, `hosts/codex`) + manifests valid.
-- [ ] Deviation log + reconciliation sweep recorded under this slice.
+- [x] All ACs pass; test suite green (189 heartbeat tests, no regressions).
+- [x] Each AC covered by ≥1 fixture; each new test shown capable of failing
+      (8/11 original failed pre-impl; 3 new behaviours added post-review).
+- [x] Reviewed (compliance ✅ + craft ✅ + arch ✅ — re-verified after fixes).
+- [x] Host packages regenerated (`hosts/claude`, `hosts/codex`) + manifests valid.
+- [x] Deviation log + reconciliation sweep recorded under this slice.
 
 ### Close-out (post-DONE)
-- [ ] `docs/specs/README.md` regenerated (status-board).
+- [x] `docs/specs/README.md` regenerated (status-board).
 
 **Anti-horizontal-phasing check:** After this slice lands, a plateaued finding is
 attempted once, then durably quarantined + legible across ticks, and can only
@@ -87,11 +86,39 @@ coordinator, independent of the priority work in spec 025.
 
 ### Deviation log (after reconciliation)
 
-_TBD — filled at reconciliation._
+1. **Writer is `heartbeat.py`, not `loop.py`** (vs the *original* recorded spec;
+   matches the reframed ADR-0030/spec). loop.py runs against an ephemeral worktree
+   and has no `finding_id`; heartbeat owns both. `loop.py` is byte-unchanged.
+2. **New `quarantined` inbox status value, no `SCHEMA_VERSION` bump.** A status
+   *value* (not a structural field) is a tolerated vocabulary extension —
+   `_status_counts`/renderers surface it via `.get`, `_select_candidates` stays
+   open-only, `_STICKY_STATUSES` gained it. (Contrast 025-01's `priority` *field*,
+   which does bump 2→3.)
+3. **`bug_ref: null` reserved field** in the record beyond AC1's enumerated keys —
+   the `finding_id ↔ bug` slot AC4 requires for a future jig reader; servo never
+   derives a jig id, so it writes null (ADR-0011 boundary).
+4. **Record-presence release + write-failure fallback** (arch-review response):
+   AC3 re-admits on a *missing* record (human release gesture / self-heal), not
+   only a changed pointer; a failed record write falls back to `tried` rather than
+   parking record-less. AC3 wording updated to match; disclosure added that the
+   automatic pointer path is a v1 forward hook (stable CI/issue evidence carries no
+   diagnostic content today).
+5. **Test-side `importlib` load of `heartbeat.py` / `loop.py`** — a new test
+   pattern (the file is otherwise subprocess-driven), justified for unit-testing
+   pure helpers and the loop↔heartbeat plateau-string contract test. Does not
+   violate the dependency-free invariant (that guards *heartbeat* importing
+   loop/gate — the reverse).
 
 ### Reconciliation sweep
 
 | Artifact | Disposition | Rationale |
 |----------|-------------|-----------|
-| `docs/specs/README.md` | `updated` | _TBD — regenerate at close._ |
-| `docs/decisions/README.md` | `no-op` | _ADR-0030 already indexed._ |
+| `docs/decisions/adr-0030-...md` | `updated` | Reframed via frame-critique (writer, anti-thrash premise, ladder, release rule, jig contract, schema) + v1 disclosure. |
+| `docs/decisions/reviews/adr-0030-frame-critique.md` | `added` | Frame-critique evidence (ADR-0020 OQ2 gate). |
+| `docs/specs/024-.../{spec.md,slice-01}` | `updated` | DRAFT → reframed READY_FOR_IMPLEMENTATION → IN_PROGRESS; ACs rewritten to the buildable contract. |
+| `docs/specs/025-.../{spec.md,slice-01}` | `updated` | Same ADR reframe (ladder narrowed, schema bump, fail-open jig); code lands in the stacked 025 PR. |
+| `skills/heartbeat/heartbeat.py` + `test_heartbeat.py` | `updated` | Quarantine impl + 14 tests. |
+| `hosts/{claude,codex}/.../heartbeat.py` | `updated` | Regenerated from source (dual-host parity). |
+| `docs/specs/README.md` | `updated` | status-board regenerated. |
+| `skills/agent-loop/loop.py` | `no-op` | Unchanged — heartbeat is the writer. |
+| `docs/decisions/README.md` | `no-op` | ADR-0030 already indexed. |
