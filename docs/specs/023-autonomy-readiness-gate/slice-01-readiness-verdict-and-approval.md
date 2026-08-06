@@ -1,9 +1,8 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [adr-0029]
 arch_review: true
 last_verified: 2026-08-06
-claimed_by: claude/spec-023-jig-ceremony-9bffc1
 ---
 
 ## Slice 023-01 — readiness verdict, artifact, and human approval
@@ -86,9 +85,10 @@ burned. Implements [ADR-0029](../../decisions/adr-0029-autonomy-readiness-gate.m
 - [x] Deviation log + reconciliation sweep recorded under this slice.
 
 ### Close-out (post-DONE)
-- [ ] `docs/specs/README.md` regenerated (status-board).
-- [ ] Skill surface documented; README/product-vision Compile-phase order updated
-      to place readiness upstream of `edd-suitability`.
+- [x] `docs/specs/README.md` regenerated (status-board).
+- [x] Skill surface documented (`skills/autonomy-readiness/SKILL.md`);
+      `docs/architecture.md` phase table + `docs/product-vision.md` updated to
+      place readiness upstream of `edd-suitability`.
 
 **Anti-horizontal-phasing check:** After this slice lands, a user can run
 `autonomy-readiness` on a real goal and get an actionable, human-approvable

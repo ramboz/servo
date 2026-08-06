@@ -1,20 +1,21 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [adr-0029, adr-0015, adr-0018, adr-0026]
 last_verified: 2026-08-04
 ---
 
 # Spec 023 — autonomy-readiness-gate
 
-> **Status: in build (2026-08-06).** Implements [ADR-0029](../../decisions/adr-0029-autonomy-readiness-gate.md)
-> (**Accepted**, frame-critique pass recorded — four frame flaws caught and fixed
-> before code). Slice **023-01** (the `autonomy-readiness` skill: verdict, tiers,
-> identity posture, human approval, `check` contract) is being taken through the
-> jig ceremony this session; slice **023-02** (the `loop.py`
-> `--background`/`--emit-routine-prompt` preflight) is split out and DEFERRED
-> until 023-01 is DONE. Part of the long-horizon autonomy bridge (the `oh-my-cli`
-> follow-on); mirrors jig ADR-0051 / jig spec 106 on identity separation,
-> conditioned on servo's execution model (see Notes).
+> **Status: 023-01 DONE (2026-08-06); 023-02 DEFERRED.** Implements
+> [ADR-0029](../../decisions/adr-0029-autonomy-readiness-gate.md) (**Accepted**,
+> frame-critique pass recorded — four frame flaws caught and fixed before code).
+> Slice **023-01** — the `autonomy-readiness` skill (verdict, deterministic +
+> model-judged tiers, conditional identity posture, human `proposed→approved`
+> gate, `check` consumer contract) — is landed. Slice **023-02** (the `loop.py`
+> `--background`/`--emit-routine-prompt` preflight that auto-consults `check`) is
+> split out and **DEFERRED** until picked up. Part of the long-horizon autonomy
+> bridge (the `oh-my-cli` follow-on); mirrors jig ADR-0051 / jig spec 106 on
+> identity separation, conditioned on servo's execution model (see Notes).
 
 ## Why this spec
 
