@@ -114,7 +114,7 @@
 | [023-autonomy-readiness-gate](023-autonomy-readiness-gate/spec.md) | 023-01 — readiness verdict, artifact, and human approval | **DONE** | `/servo:autonomy-readiness` — Compile-phase gate upstream of `edd-suitability`. 3-state verdict (`ready`/`needs_tightening`/`unsafe_for_autonomy`) + atomic `<target>/.servo/readiness/<goal-id>.json`; deterministic + model-judged (2-call expand→independent-review) + conditional identity tiers; human `proposed→approved` + `check` consumer contract. ADR-0029 amended via 5 frame-critique passes (4 load-bearing flaws) then Accepted; `loop.py` wiring split to 023-02. 39 tests; compliance+craft+arch+reconciliation PASS. |
 | [023-autonomy-readiness-gate](023-autonomy-readiness-gate/spec.md) | 023-02 — loop.py readiness preflight (the two unattended surfaces) | DEFERRED |  |
 | [024-durable-cross-run-quarantine](024-durable-cross-run-quarantine/spec.md) | 024-01 — cross-run quarantine record, quarantined status, and evidence-gated re-admission | RECONCILED |  |
-| [025-lifecycle-aware-coordinator](025-lifecycle-aware-coordinator/spec.md) | 025-01 — priority ranking and lifecycle-aware normalization | READY_FOR_IMPLEMENTATION |  |
+| [025-lifecycle-aware-coordinator](025-lifecycle-aware-coordinator/spec.md) | 025-01 — priority ranking and lifecycle-aware normalization | RECONCILED |  |
 
 ## Deferred slices
 
