@@ -250,6 +250,13 @@ EXIT_INTERRUPTED = 130
 # repeated `subprocess.run` cost stays trivial.
 GATE_PATH = Path(__file__).resolve().parent.parent / "quality-gate" / "gate.py"
 
+# Slice 023-02: readiness.py (the 023-01 autonomy-readiness skill) lives at a
+# sibling skill path, same layout convention as GATE_PATH. loop.py subprocesses
+# its `check` verb rather than importing/re-deriving `_goal_id`'s sha256 scheme
+# (arch-review note, readiness.py:_goal_id) — a single source of truth for the
+# readiness artifact path.
+READINESS_PATH = Path(__file__).resolve().parent.parent / "autonomy-readiness" / "readiness.py"
+
 # This file's own path. Slice 003-08 re-execs it as the detached child of a
 # `--background` launch: `sys.executable <_LOOP_PY> <target> --driver goal …`
 # runs the goal loop in a new OS session (see `_build_detached_child_argv`).
@@ -343,6 +350,17 @@ REASON_GATE_VENDOR_FAILED = "gate_vendor_failed"
 # spawned (e.g. the background log can't be opened).
 REASON_DETACHED = "detached"
 REASON_DETACH_FAILED = "detach_failed"
+
+# Slice 023-02 (ADR-0029): the readiness preflight gating `--background` /
+# `--emit-routine-prompt` — the two unattended long-horizon launch surfaces.
+# `readiness_unapproved` mirrors the 023-01 `check` contract's rc=1 (an
+# artifact exists but is missing or `proposed`, not yet human-`approved`).
+# `readiness_check_unavailable` is the fail-CLOSED reason for everything else
+# that keeps the check from returning a clean permit/refuse — rc=2, a spawn
+# failure, or a timeout; a broken readiness install must refuse, never fail
+# open.
+REASON_READINESS_UNAPPROVED = "readiness_unapproved"
+REASON_READINESS_CHECK_UNAVAILABLE = "readiness_check_unavailable"
 
 # `/goal` refusal under hook restrictions (AC6 / ADR-0008 V3). When
 # `disableAllHooks` / `allowManagedHooksOnly` is set, `/goal` refuses verbatim
@@ -1086,6 +1104,108 @@ def _refuse_plan(*, reason: str, message: str) -> int:
     refusal (a single JSON line + a stderr breadcrumb) with the plan-read
     `terminal_reason`; the closed reasons are `plan_missing` / `plan_malformed`
     / `plan_schema_mismatch` / `plan_requires_clamp`.
+    """
+    sys.stderr.write(f"loop: {message}\n")
+    _emit_json({
+        "terminal_reason": reason,
+        "iterations_completed": 0,
+        "cumulative_cost_usd": 0.0,
+        "final_oracle_status": STATUS_ENV_ERROR,
+    })
+    return EXIT_ENV_ERROR
+
+
+# ---------------------------------------------------------------------------
+# Slice 023-02 — readiness preflight (ADR-0029)
+# ---------------------------------------------------------------------------
+
+# The unattended long-horizon launch surfaces the readiness preflight gates —
+# pinned explicitly (AC4) so a future third surface can't silently escape the
+# gate without also updating this tuple (and the test that asserts it).
+_READINESS_GATED_SURFACES = ("--background", "--emit-routine-prompt")
+
+# Bypass seam (AC5): mirrors servo's gate-bypass idiom. Any of these values
+# (case-insensitive) skip the readiness preflight entirely; anything else —
+# including unset — leaves the gate active.
+_READINESS_GATE_ENV_VAR = "SERVO_READINESS_GATE"
+_READINESS_GATE_BYPASS_VALUES = frozenset({"0", "false", "off", "no"})
+
+# Bounded — `readiness.py check` is a local artifact read plus at most a
+# `git status` probe; it should return well under this.
+_READINESS_CHECK_TIMEOUT_SECONDS = 30
+
+
+def _readiness_gated_surface(args: argparse.Namespace) -> Optional[str]:
+    """Which pinned unattended launch surface (`_READINESS_GATED_SURFACES`) is
+    active for these parsed args, or `None`. `--background` and
+    `--emit-routine-prompt` are mutually exclusive at the CLI (validated
+    above), so at most one name is ever returned."""
+    if args.background:
+        return "--background"
+    if args.emit_routine_prompt:
+        return "--emit-routine-prompt"
+    return None
+
+
+def _readiness_gate_bypassed() -> bool:
+    """AC5: `SERVO_READINESS_GATE` set to `0`/`false`/`off`/`no` (any case)
+    skips the readiness preflight. Unset or any other value leaves it active."""
+    value = os.environ.get(_READINESS_GATE_ENV_VAR, "").strip().lower()
+    return value in _READINESS_GATE_BYPASS_VALUES
+
+
+# Bound on the stderr snippet folded into a `readiness_check_unavailable`
+# refusal breadcrumb — enough to show `readiness.py`'s own `error: <reason>:
+# <message>` line without letting a runaway traceback flood stderr.
+_READINESS_CHECK_DETAIL_MAX_CHARS = 500
+
+
+def _readiness_check_rc(
+    target: Path, prompt: str, readiness_path: Path = READINESS_PATH
+) -> tuple[int, str]:
+    """Subprocess 023-01's `check` verb: exit 0 permit / 1 refuse / 2 env-error.
+
+    Deliberately does NOT import or re-derive readiness.py's `_goal_id` hash
+    (arch-review note, readiness.py:_goal_id) — subprocessing `check` keeps a
+    single source of truth for the artifact path. A failure to even spawn the
+    subprocess, or a timeout, folds into `(2, <detail>)` (fail-closed) — a
+    broken readiness install must refuse, never fail open.
+
+    Returns `(rc, detail)`. `detail` is a bounded (last
+    `_READINESS_CHECK_DETAIL_MAX_CHARS`, stripped) snippet of the subprocess's
+    stderr — `readiness.py`'s CLI verbs print their `error: <reason>:
+    <message>` breadcrumb there — so a `readiness_check_unavailable` refusal
+    can name the underlying cause instead of just the bare exit code. Empty
+    when there is nothing to report (a clean rc=0/1, or when the subprocess
+    never ran at all — the timeout/spawn-failure detail covers that case).
+    """
+    try:
+        proc = subprocess.run(
+            [
+                sys.executable, str(readiness_path), "check", str(target),
+                "--prompt", prompt,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=_READINESS_CHECK_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return 2, (
+            f"readiness.py check timed out after "
+            f"{_READINESS_CHECK_TIMEOUT_SECONDS}s"
+        )
+    except OSError as exc:
+        return 2, f"failed to spawn readiness.py check: {exc}"
+    detail = proc.stderr.strip()[-_READINESS_CHECK_DETAIL_MAX_CHARS:]
+    return proc.returncode, detail
+
+
+def _refuse_readiness(*, reason: str, message: str) -> int:
+    """Fail-closed refusal for the readiness preflight (slice 023-02, rc=2).
+
+    Mirrors `_refuse_plan`'s shape: emitted before any run starts (before
+    routing, run-dir creation, or a state.json write, and before the
+    `--emit-routine-prompt` handler runs), so there is no run-id yet and no
+    configured budget to echo.
     """
     sys.stderr.write(f"loop: {message}\n")
     _emit_json({
@@ -3256,6 +3376,43 @@ def main(argv: Optional[list[str]] = None) -> int:
                      "continuation to /goal); --driver loop runs in the "
                      "foreground — detach it with your shell's nohup/&, or use "
                      "--resume for unattended continuation")
+
+    # ---- Readiness preflight (slice 023-02, ADR-0029) -----------------------
+    # Gates ONLY the two unattended long-horizon launch surfaces pinned by
+    # `_READINESS_GATED_SURFACES` (AC4): `--background` refuses to *start*,
+    # `--emit-routine-prompt` refuses to *emit*. The detached child re-exec
+    # (routed via --_detached-run-id below, never --background) and the
+    # synchronous heartbeat `--prompt` path (neither flag) are exempt by
+    # construction (ADR-0018) — neither sets a gated surface, so this block is
+    # a no-op for them. Runs before the --emit-routine-prompt handler so both
+    # gated surfaces are refused from a single place before any real work or
+    # artifact emission; `args.prompt` is guaranteed set by the flag-shape
+    # validation above.
+    readiness_surface = _readiness_gated_surface(args)
+    if readiness_surface is not None and not _readiness_gate_bypassed():
+        readiness_rc, readiness_detail = _readiness_check_rc(target, args.prompt)
+        if readiness_rc == 1:
+            return _refuse_readiness(
+                reason=REASON_READINESS_UNAPPROVED,
+                message=(
+                    f"{readiness_surface} refused: no approved readiness "
+                    f"artifact for this goal — run `readiness.py analyze "
+                    f"{target} --prompt <brief>` then `approve` before an "
+                    "unattended run may start or a Routine prompt may be "
+                    "emitted"
+                ),
+            )
+        if readiness_rc != 0:
+            detail_suffix = f" — {readiness_detail}" if readiness_detail else ""
+            return _refuse_readiness(
+                reason=REASON_READINESS_CHECK_UNAVAILABLE,
+                message=(
+                    f"{readiness_surface} refused: the readiness check could "
+                    f"not be run (readiness.py check exited {readiness_rc}, "
+                    "or failed to spawn / timed out) — failing closed rather "
+                    f"than assuming approval{detail_suffix}"
+                ),
+            )
 
     # --emit-routine-prompt (slice 003-08 AC2): vendor a clone-portable gate.py
     # and print the paste-ready Routine prompt, then exit 0. Handled before
