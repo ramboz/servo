@@ -39,6 +39,11 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOOP = REPO_ROOT / "skills" / "agent-loop" / "loop.py"
+# Slice 023-02: the 023-01 autonomy-readiness skill loop.py's readiness
+# preflight subprocesses. Tests seed artifacts by importing `_goal_id` from
+# this module directly (a test-only shortcut — production loop.py never
+# re-derives the hash; see `_seed_readiness_artifact` below).
+READINESS = REPO_ROOT / "skills" / "autonomy-readiness" / "readiness.py"
 
 # Minimal system PATH for tests. /bin + /usr/bin host bash/env on Linux and
 # macOS; intentionally excludes /usr/local/bin and any nvm/asdf shim dirs
@@ -281,6 +286,12 @@ def _run_loop(
     so these loop-driver tests exercise the driver they target regardless of
     the new `auto` default, and defaults HOME to an isolated empty dir so the
     routing audit's user-settings layer stays hermetic.
+
+    Slice 023-02: defaults `SERVO_READINESS_GATE=0` (the readiness preflight's
+    bypass seam) so these pre-existing surface tests keep testing what they
+    test, unaffected by the new gate on `--background` / `--emit-routine-
+    prompt`. A test exercising the real readiness gate passes `extra_env=
+    {"SERVO_READINESS_GATE": "1"}` (or any non-bypass value) to re-enable it.
     """
     if "--plateau-window" not in extra_args:
         extra_args = ("--plateau-window", "0", *extra_args)
@@ -292,7 +303,8 @@ def _run_loop(
         path = f"{mock_bindir}:{SYSTEM_PATH}"
     else:
         path = SYSTEM_PATH
-    env = {**os.environ, "PATH": path, "HOME": _ISOLATED_HOME}
+    env = {**os.environ, "PATH": path, "HOME": _ISOLATED_HOME,
+           "SERVO_READINESS_GATE": "0"}
     if extra_env:
         env.update(extra_env)
     cmd = [sys.executable, str(LOOP), str(target), *extra_args]
@@ -5648,10 +5660,16 @@ def _run_raw(target, *extra, mock_bindir=None, extra_env=None):
     layer (`SERVO_MANAGED_SETTINGS_PATH=""`) so the routing audit is hermetic
     regardless of the host's real settings hierarchy. A test that wants a managed
     restriction overrides `SERVO_MANAGED_SETTINGS_PATH` via `extra_env`.
+
+    Slice 023-02: defaults `SERVO_READINESS_GATE=0` (the readiness preflight's
+    bypass seam) so pre-existing `--background` / `--emit-routine-prompt`
+    surface tests are unaffected by the new gate. A test exercising the real
+    readiness gate passes `extra_env={"SERVO_READINESS_GATE": "1"}` (or any
+    non-bypass value) to re-enable it.
     """
     path = f"{mock_bindir}:{SYSTEM_PATH}" if mock_bindir else SYSTEM_PATH
     env = {**os.environ, "PATH": path, "HOME": _ISOLATED_HOME,
-           "SERVO_MANAGED_SETTINGS_PATH": ""}
+           "SERVO_MANAGED_SETTINGS_PATH": "", "SERVO_READINESS_GATE": "0"}
     if extra_env:
         env.update(extra_env)
     cmd = [sys.executable, str(LOOP), str(target), *extra]
@@ -7289,6 +7307,374 @@ class PlanClampNoOpTests(unittest.TestCase):
         self.assertAlmostEqual(state["context_fill_threshold"], 0.95, places=6)
         self.assertEqual(state["plateau_window"], 8)
         self.assertNotIn("clamp", result.stderr)
+
+
+# ============================================================================
+# Slice 023-02 — loop.py readiness preflight (ADR-0029)
+#
+# Test classes map 1:1 to the slice's acceptance criteria:
+#   AC1 → ReadinessBackgroundGateTests
+#   AC2 → ReadinessEmitRoutinePromptGateTests
+#   AC3 → ReadinessHeartbeatExemptionTests
+#   AC4 → ReadinessGatedSurfaceSetTests
+#   AC5 → ReadinessGateBypassTests
+# ============================================================================
+
+
+def _load_readiness_module():
+    """Import readiness.py (023-01) as an in-process module — TEST-only, so a
+    test can seed a realistic artifact via `_goal_id` without loop.py ever
+    doing the same (arch-review note, readiness.py:_goal_id: production
+    loop.py subprocesses `check` rather than re-deriving this hash)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("readiness_mod_023_02", READINESS)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def _seed_readiness_artifact(target: Path, prompt: str, *, approval_status: str) -> str:
+    """Write a minimal, schema-valid readiness artifact for `prompt` directly to
+    `<target>/.servo/readiness/<goal-id>.json`. Returns the goal-id.
+
+    TEST-only shortcut (per the 023-02 brief): production loop.py never reads
+    this path or derives the goal-id itself — it always subprocesses
+    `readiness.py check`, which is exercised for real by every test below.
+    """
+    readiness_mod = _load_readiness_module()
+    goal_id = readiness_mod._goal_id(prompt)
+    out_dir = target / ".servo" / "readiness"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    artifact = {
+        "schema_version": 1,
+        "goal_id": goal_id,
+        "verdict": "ready",
+        "approval_status": approval_status,
+        "approved_at": "2026-08-12T00:00:00Z" if approval_status == "approved" else None,
+        "reasons": [{"code": "all_clear", "message": "test fixture"}],
+        "checks": [],
+        "safety_surface": [],
+        "analyzed_at": "2026-08-12T00:00:00Z",
+        "inputs": {},
+    }
+    (out_dir / f"{goal_id}.json").write_text(json.dumps(artifact))
+    return goal_id
+
+
+class ReadinessBackgroundGateTests(_GoalTargetMixin, unittest.TestCase):
+    """AC1 — `--background` refuses to *start* without an approved readiness
+    artifact, and proceeds once `approved`. Gate explicitly ENABLED via
+    `extra_env` (the harness default bypasses it for pre-existing tests)."""
+
+    def test_refuses_with_no_artifact(self):
+        self._setup_target(_passing_oracle())
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x",
+            mock_bindir=self.bindir,
+            extra_env={"SERVO_READINESS_GATE": "1", "SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "readiness_unapproved")
+        # Refused BEFORE any detach — no run dir created.
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+    def test_refuses_with_proposed_artifact(self):
+        self._setup_target(_passing_oracle())
+        _seed_readiness_artifact(self.target, "x", approval_status="proposed")
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x",
+            mock_bindir=self.bindir,
+            extra_env={"SERVO_READINESS_GATE": "1", "SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "readiness_unapproved")
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+    def test_proceeds_once_approved(self):
+        self._setup_target(_passing_oracle())
+        _seed_readiness_artifact(self.target, "x", approval_status="approved")
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(assistant_text=GOAL_PASS_SENTINEL))
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x", "--max-iterations", "2",
+            mock_bindir=self.bindir,
+            extra_env={"SERVO_READINESS_GATE": "1", "SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = self._summary(result)
+        self.assertTrue(summary["detached"])
+        self.assertEqual(summary["terminal_reason"], "detached")
+        # The detached child runs the real goal loop to an authoritative verdict.
+        state = _await_terminal_state(self.target)
+        self.assertEqual(state["terminal_reason"], "oracle_pass")
+
+    def test_refuses_when_the_readiness_check_itself_fails(self):
+        # Compliance follow-up: the fail-CLOSED `readiness_check_unavailable`
+        # branch (rc != 0 and != 1 — env-error, spawn failure, or timeout) had
+        # ZERO coverage; dropping it would let a broken readiness install fail
+        # OPEN. Point --background at a target directory that does not exist:
+        # readiness.py's own `check` verb refuses with a real rc=2
+        # (`_require_target`) BEFORE any of loop.py's other preflight checks
+        # run (this gate fires first) — a genuine end-to-end refusal through
+        # `main()`, no monkeypatching required.
+        #
+        # `self.tmpdir` (not a local) so the base `_GoalTargetMixin.tearDown`
+        # cleans it up — this test deliberately skips `_setup_target` since
+        # the target must NOT exist.
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-readiness-unavailable-")
+        missing_target = Path(self.tmpdir) / "does-not-exist"
+        result = _run_raw(
+            missing_target, "--background", "--prompt", "x",
+            extra_env={"SERVO_READINESS_GATE": "1", "SERVO_CLAUDE_TIMEOUT": "30"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(
+            self._summary(result)["terminal_reason"], "readiness_check_unavailable"
+        )
+        # The underlying readiness.py failure reason is folded into the
+        # breadcrumb (robustness follow-up), not just the bare exit code.
+        self.assertIn("target_missing", result.stderr)
+        # Refused BEFORE any detach — no run dir created.
+        self.assertEqual(list(missing_target.glob(".servo/runs/*")), [])
+
+
+class ReadinessEmitRoutinePromptGateTests(_GoalTargetMixin, unittest.TestCase):
+    """AC2 — `--emit-routine-prompt` refuses to *emit* without an approved
+    readiness artifact, and emits once `approved`."""
+
+    def test_refuses_with_no_artifact(self):
+        self._setup_target(_passing_oracle())
+        result = _run_raw(
+            self.target, "--emit-routine-prompt", "--prompt", "fix the tests",
+            extra_env={"SERVO_READINESS_GATE": "1"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "readiness_unapproved")
+        self.assertNotIn("/goal", result.stdout)
+
+    def test_refuses_with_proposed_artifact(self):
+        self._setup_target(_passing_oracle())
+        _seed_readiness_artifact(self.target, "fix the tests", approval_status="proposed")
+        result = _run_raw(
+            self.target, "--emit-routine-prompt", "--prompt", "fix the tests",
+            extra_env={"SERVO_READINESS_GATE": "1"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(self._summary(result)["terminal_reason"], "readiness_unapproved")
+        self.assertNotIn("/goal", result.stdout)
+
+    def test_emits_once_approved(self):
+        self._setup_target(_passing_oracle())
+        _seed_readiness_artifact(self.target, "fix the tests", approval_status="approved")
+        result = _run_raw(
+            self.target, "--emit-routine-prompt", "--prompt", "fix the tests",
+            extra_env={"SERVO_READINESS_GATE": "1"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("/goal", result.stdout)
+        self.assertIn("fix the tests", result.stdout)
+
+    def test_refuses_when_the_readiness_check_itself_fails(self):
+        # Bonus parallel case (compliance follow-up primarily requires
+        # --background; this exercises the same fail-closed branch for the
+        # other gated surface). Same lever as the --background case: a
+        # nonexistent target makes the real `readiness.py check` return rc=2.
+        #
+        # `self.tmpdir` (not a local) so the base `_GoalTargetMixin.tearDown`
+        # cleans it up — this test deliberately skips `_setup_target` since
+        # the target must NOT exist.
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-readiness-unavailable-emit-")
+        missing_target = Path(self.tmpdir) / "does-not-exist"
+        result = _run_raw(
+            missing_target, "--emit-routine-prompt", "--prompt", "x",
+            extra_env={"SERVO_READINESS_GATE": "1"},
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        self.assertEqual(
+            self._summary(result)["terminal_reason"], "readiness_check_unavailable"
+        )
+        self.assertIn("target_missing", result.stderr)
+        self.assertNotIn("/goal", result.stdout)
+
+
+class ReadinessHeartbeatExemptionTests(unittest.TestCase):
+    """AC3 — loop-layer regression guard: a `loop.py --prompt` run setting
+    NEITHER `--background` nor `--emit-routine-prompt` is not refused for
+    missing readiness, even with the gate explicitly enabled and NO readiness
+    artifact anywhere under the target. This is exactly the shape the
+    heartbeat dispatches (`loop.py <worktree> --prompt`, synchronously)."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-readiness-exempt-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        self.bindir = tmp / "bin"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), tmp / "counter.txt")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_prompt_only_run_not_refused_for_missing_readiness(self):
+        result = _run_loop(
+            self.target, "--prompt", "x",
+            mock_bindir=self.bindir,
+            extra_env={"SERVO_READINESS_GATE": "1"},
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertNotIn(
+            summary["terminal_reason"],
+            ("readiness_unapproved", "readiness_check_unavailable"),
+        )
+        # The exemption is by construction (no gated surface set) — the run
+        # never even consults readiness, so no artifact is written either.
+        self.assertEqual(list(self.target.glob(".servo/readiness/*")), [])
+
+
+class ReadinessGatedSurfaceSetTests(unittest.TestCase):
+    """AC4 — the gate is pinned to an explicit unattended-launch-surface set
+    (frame-critique follow-up #1): a future third surface can't silently
+    escape the gate without also updating `_READINESS_GATED_SURFACES`."""
+
+    def test_pinned_surface_set(self):
+        m = _load_loop_module()
+        self.assertEqual(
+            m._READINESS_GATED_SURFACES, ("--background", "--emit-routine-prompt")
+        )
+
+    def test_readiness_gated_surface_maps_flags_to_names(self):
+        m = _load_loop_module()
+        from argparse import Namespace
+        self.assertEqual(
+            m._readiness_gated_surface(
+                Namespace(background=True, emit_routine_prompt=False)),
+            "--background",
+        )
+        self.assertEqual(
+            m._readiness_gated_surface(
+                Namespace(background=False, emit_routine_prompt=True)),
+            "--emit-routine-prompt",
+        )
+        self.assertIsNone(
+            m._readiness_gated_surface(
+                Namespace(background=False, emit_routine_prompt=False)),
+        )
+
+
+class ReadinessCheckDetailUnitTests(unittest.TestCase):
+    """Robustness follow-up (compliance Medium / craft nit 3 / arch nit 2) —
+    `_readiness_check_rc` returns `(rc, detail)`, not a bare rc: a
+    `readiness_check_unavailable` refusal must name WHY, not just that it
+    failed."""
+
+    def test_missing_readiness_path_reports_a_nonempty_detail(self):
+        # The interpreter itself spawns fine (sys.executable exists) but
+        # errors reading the nonexistent script — a real, non-OSError
+        # failure mode distinct from the spawn-failure case below, and one
+        # that must still surface a detail instead of a bare "exited 2".
+        m = _load_loop_module()
+        rc, detail = m._readiness_check_rc(
+            Path("/tmp"), "x", readiness_path=Path("/nonexistent/readiness.py"),
+        )
+        self.assertEqual(rc, 2)
+        self.assertIn("readiness.py", detail)
+
+    def test_spawn_failure_reports_a_failed_to_spawn_detail(self):
+        from unittest import mock
+        m = _load_loop_module()
+        with mock.patch.object(
+            m.subprocess, "run", side_effect=OSError("no such executable")
+        ):
+            rc, detail = m._readiness_check_rc(Path("/tmp"), "x")
+        self.assertEqual(rc, 2)
+        self.assertIn("failed to spawn", detail)
+
+    def test_timeout_reports_a_timed_out_detail(self):
+        from unittest import mock
+        m = _load_loop_module()
+        with mock.patch.object(
+            m.subprocess, "run",
+            side_effect=m.subprocess.TimeoutExpired(cmd="readiness.py", timeout=30),
+        ):
+            rc, detail = m._readiness_check_rc(Path("/tmp"), "x")
+        self.assertEqual(rc, 2)
+        self.assertIn("timed out", detail)
+
+    def test_real_check_env_error_surfaces_its_own_reason(self):
+        m = _load_loop_module()
+        tmpdir = tempfile.mkdtemp(prefix="servo-readiness-detail-")
+        try:
+            missing_target = Path(tmpdir) / "nope"
+            rc, detail = m._readiness_check_rc(missing_target, "x")
+            self.assertEqual(rc, 2)
+            self.assertIn("target_missing", detail)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def test_approved_check_reports_no_detail(self):
+        # A clean rc=0 has nothing to report — `detail` stays empty so the
+        # (never-emitted, since rc==0 skips both refusal branches) message
+        # would carry no spurious suffix.
+        m = _load_loop_module()
+        tmpdir = tempfile.mkdtemp(prefix="servo-readiness-detail-clean-")
+        try:
+            target = Path(tmpdir)
+            _seed_readiness_artifact(target, "x", approval_status="approved")
+            rc, detail = m._readiness_check_rc(target, "x")
+            self.assertEqual(rc, 0)
+            self.assertEqual(detail, "")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+class ReadinessGateBypassTests(unittest.TestCase):
+    """AC5 — `SERVO_READINESS_GATE` bypass seam (`0`/`false`/`off`/`no`, any
+    case, skips the gate; anything else — including unset — keeps it active)."""
+
+    def test_bypass_values_skip_the_gate(self):
+        m = _load_loop_module()
+        from unittest import mock
+        for value in ("0", "false", "off", "no", "FALSE", "Off", "NO", " 0 "):
+            with mock.patch.dict(os.environ, {"SERVO_READINESS_GATE": value}):
+                self.assertTrue(
+                    m._readiness_gate_bypassed(), msg=f"expected bypass for {value!r}"
+                )
+
+    def test_non_bypass_values_keep_the_gate_active(self):
+        m = _load_loop_module()
+        from unittest import mock
+        for value in ("1", "true", "on", "yes", "garbage"):
+            with mock.patch.dict(os.environ, {"SERVO_READINESS_GATE": value}):
+                self.assertFalse(
+                    m._readiness_gate_bypassed(), msg=f"expected active for {value!r}"
+                )
+
+    def test_unset_keeps_the_gate_active(self):
+        m = _load_loop_module()
+        from unittest import mock
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SERVO_READINESS_GATE", None)
+            self.assertFalse(m._readiness_gate_bypassed())
+
+    def test_bypass_env_var_skips_the_gate_end_to_end(self):
+        tmpdir = tempfile.mkdtemp(prefix="servo-readiness-bypass-")
+        tmp = Path(tmpdir)
+        target = tmp / "demo"
+        target.mkdir()
+        _make_manifest(target)
+        _make_oracle(target, _passing_oracle())
+        try:
+            # No readiness artifact anywhere, yet --emit-routine-prompt
+            # succeeds because SERVO_READINESS_GATE=0 bypasses the preflight.
+            result = _run_raw(
+                target, "--emit-routine-prompt", "--prompt", "x",
+                extra_env={"SERVO_READINESS_GATE": "0"},
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

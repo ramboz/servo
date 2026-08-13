@@ -785,3 +785,27 @@ functional for both of its own documented use cases.
 **Resolution trigger:** a scheduled-Routine consumer that needs per-recurrence precondition re-verification — likely a lightweight `readiness check --deterministic-only` re-run wired into the vendored in-Routine gate, informed by what the Routine host can actually observe.
 
 **Surfaced by:** ADR-0029 frame-critique (2026-08-06, pass) + spec 023-01 reconciliation; carried in slice 023-02's DoD.
+
+---
+
+## loop.py readiness preflight — two defense-in-depth nits (023-02)
+
+**Deferred:** Both surfaced in the 023-02 review passes; non-blocking, recorded rather than fixed inline.
+
+1. **Preflight subprocess isn't signal-forwarded.** `_readiness_check_rc` runs `subprocess.run` without registering the child as `_active_subprocess` the way `_invoke_gate` does, so a SIGINT arriving *during* the readiness preflight waits up to `_READINESS_CHECK_DETAIL_MAX_CHARS`'s sibling timeout (30s) before returning. Benign today: the preflight runs before signal handlers are installed and before any run/run-dir exists, so there is nothing to clean up. (craft nit 2)
+
+2. **AC4 surface-set pin and the surface-detector are parallel literals.** `_READINESS_GATED_SURFACES = ("--background", "--emit-routine-prompt")` and `_readiness_gated_surface()` (which hardcodes `if args.background / if args.emit_routine_prompt`) are two independent statements of the same fact. The tuple-assertion test tripwires the tuple's *value*, but a hypothetical third unattended surface added only to argparse + the detector (not the tuple) would gate correctly and leave the tuple stale with the test still green — so the pin doesn't strictly *force* coverage of a new surface. (arch nit 1)
+
+**Resolution trigger:** whenever a third unattended launch surface is added to `loop.py`, OR opportunistically when `loop.py`'s signal handling is next touched. Fix (2) by deriving the detector from the tuple (a `{surface: args-dest}` map) or asserting every gated dest routes through `_readiness_gated_surface`; fix (1) by registering the preflight child as `_active_subprocess` for symmetry with `_invoke_gate`.
+
+**Surfaced by:** spec 023-02 craft + arch review passes (2026-08-12); recorded in slice 023-02's deviation log.
+
+---
+
+## Spec 023 cites servo ADR-0011 for the servo↔jig subprocess boundary (mis-citation)
+
+**Deferred:** Spec 023's `spec.md` (Goal 5 and the readiness reuse-seam note) cites "ADR-0011 boundary" for the "subprocess + filesystem only" rule governing servo shelling out to jig / a sibling skill. But servo's ADR-0011 is **host-native-phase-hints**, not a cross-tool coupling boundary. The rule the 023-02 code actually honors — "no servo→sibling Python import; consume the `check` contract by subprocess" — is stated correctly in **ADR-0029's Verification section**. The mis-citation is inherited spec-authorship drift from when spec 023 was framed (023-01 already landed on `origin/main`), not introduced by the 023-02 implementation.
+
+**Resolution trigger:** next edit to spec 023's prose, or an owner decision to correct the citation. Fix: point Goal 5 / the reuse-seam at ADR-0029's Verification section (or the correct boundary ADR if one is later written) instead of ADR-0011. Because 023-01 is a landed record, amending the shared spec prose is an owner-authorised edit, not a unilateral reconciliation change.
+
+**Surfaced by:** spec 023-02 arch review pass (2026-08-12).

@@ -112,7 +112,7 @@
 | [021-headless-agent-investigation](021-headless-agent-investigation/spec.md) | 021-02 - record and verify load-bearing assumptions | **DONE** |  |
 | [022-dual-host-release-parity](022-dual-host-release-parity/spec.md) | 022-01 — dual-host release boundary | **DONE** | Dual-host install, CI, release, and documentation parity landed with all 11 current skills, including eval-authoring. |
 | [023-autonomy-readiness-gate](023-autonomy-readiness-gate/spec.md) | 023-01 — readiness verdict, artifact, and human approval | **DONE** | `/servo:autonomy-readiness` — Compile-phase gate upstream of `edd-suitability`. 3-state verdict (`ready`/`needs_tightening`/`unsafe_for_autonomy`) + atomic `<target>/.servo/readiness/<goal-id>.json`; deterministic + model-judged (2-call expand→independent-review) + conditional identity tiers; human `proposed→approved` + `check` consumer contract. ADR-0029 amended via 5 frame-critique passes (4 load-bearing flaws) then Accepted; `loop.py` wiring split to 023-02. 39 tests; compliance+craft+arch+reconciliation PASS. |
-| [023-autonomy-readiness-gate](023-autonomy-readiness-gate/spec.md) | 023-02 — loop.py readiness preflight (the two unattended surfaces) | DEFERRED |  |
+| [023-autonomy-readiness-gate](023-autonomy-readiness-gate/spec.md) | 023-02 — loop.py readiness preflight (the two unattended surfaces) | **DONE** | The launcher now *enforces* readiness: `loop.py --background` refuses-to-start and `--emit-routine-prompt` refuses-to-emit unless an `approved` artifact exists, by subprocessing 023-01's `check` verb (single-source-of-truth goal-id, never re-derived — ADR-0029). Fail-closed (rc≠0/spawn/timeout→`readiness_check_unavailable` with folded stderr; rc1→`readiness_unapproved`). Heartbeat `--prompt` + detached child exempt by construction (ADR-0018). AC4 gated-surface set pinned; `SERVO_READINESS_GATE=0` bypass. 333 tests (20 readiness, fail-closed branch mutation-verified); compliance (re-pass after fail-closed-coverage fix) + craft + arch + reconciliation PASS. Deferred nits + inherited ADR-0011 spec-citation drift &#8594; refinement-todo. |
 | [024-durable-cross-run-quarantine](024-durable-cross-run-quarantine/spec.md) | 024-01 — cross-run quarantine record, quarantined status, and evidence-gated re-admission | **DONE** |  |
 | [025-lifecycle-aware-coordinator](025-lifecycle-aware-coordinator/spec.md) | 025-01 — priority ranking and lifecycle-aware normalization | **DONE** |  |
 
@@ -125,4 +125,11 @@
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | Resume after 013-01 lands and a real caller needs |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | Resume when a second design-eval consumer appears, or |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-05 — prompt-render |  |
-| [023-autonomy-readiness-gate](023-autonomy-readiness-gate/spec.md) | 023-02 — loop.py readiness preflight (the two unattended surfaces) | slice 023-01 is DONE (the `autonomy-readiness` skill + its |
+
+## Richer-skill selection audit (spec 096-05)
+
+Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
+
+- **0** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
+- **2** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
+- **0** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
