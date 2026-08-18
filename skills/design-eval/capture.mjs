@@ -12,17 +12,14 @@ import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { parseFlag, resolveViewport, findScreen, computeClip } from './capture_lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const targetRoot = path.resolve(here, '..', '..'); // <target>/
 const config = JSON.parse(fs.readFileSync(path.join(here, 'config.json'), 'utf8'));
-const vp = config.viewport || { width: 392, height: 812, deviceScaleFactor: 2 };
+const vp = resolveViewport(config);
 
 const argv = process.argv.slice(2);
-const flag = (name) => {
-  const i = argv.indexOf(name);
-  return i >= 0 ? argv[i + 1] : undefined;
-};
 const wantRefs = argv.includes('--refs');
 const fail = (msg) => {
   console.error(`capture: ${msg}`);
@@ -47,13 +44,7 @@ try {
       // bitmap — mockups often lay several screens out in one gallery, past the fold.
       await el.scrollIntoViewIfNeeded();
       const box = await el.boundingBox();
-      const c = rs.crop || {};
-      const clip = {
-        x: box.x + (c.left || 0),
-        y: box.y + (c.top || 0),
-        width: box.width - (c.left || 0) - (c.right || 0),
-        height: box.height - (c.top || 0) - (c.bottom || 0),
-      };
+      const clip = computeClip(box, rs.crop);
       const out = path.join(here, screen.reference);
       fs.mkdirSync(path.dirname(out), { recursive: true });
       await page.screenshot({ path: out, clip });
@@ -61,10 +52,10 @@ try {
       console.error(`ref ${screen.id} -> ${screen.reference}`);
     }
   } else {
-    const id = flag('--screen');
-    const out = flag('--out');
+    const id = parseFlag(argv, '--screen');
+    const out = parseFlag(argv, '--out');
     if (!id || !out) fail('usage: --screen <id> --out <path>');
-    const screen = config.screens.find((s) => s.id === id);
+    const screen = findScreen(config.screens, id);
     if (!screen) fail(`unknown screen: ${id}`);
     const page = await browser.newPage({ deviceScaleFactor: vp.deviceScaleFactor });
     await page.setViewportSize({ width: vp.width, height: vp.height });

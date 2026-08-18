@@ -69,14 +69,15 @@ def init(target: Path) -> Path:
     """Scaffold ``.servo/design-eval/`` with the runtime + a config skeleton.
 
     Copies ``fidelity_eval.py`` from ``skills/_common/`` alongside the
-    existing ``score.py``/``capture.mjs`` copies — ``score.py``'s two-candidate
+    existing ``score.py``/``capture.mjs``/``capture_lib.mjs`` copies — ``score.py``'s two-candidate
     import probe (ADR-0024) resolves it from this same-directory copy once
     installed in an arbitrary target."""
     d = _eval_dir(target)
     for sub in ("", "refs", "setups", "shots"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     for runtime, src_dir in (
-        ("score.py", SKILL_DIR), ("capture.mjs", SKILL_DIR), ("fidelity_eval.py", COMMON_DIR),
+        ("score.py", SKILL_DIR), ("capture.mjs", SKILL_DIR),
+        ("capture_lib.mjs", SKILL_DIR), ("fidelity_eval.py", COMMON_DIR),
     ):
         src = src_dir / runtime
         if src.is_file():

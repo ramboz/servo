@@ -11,6 +11,8 @@ import importlib.util
 import io
 import json
 import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -248,6 +250,259 @@ class InstallTests(unittest.TestCase):
             manifest = json.loads((tmp / ".servo" / "install.json").read_text())
             self.assertNotIn("design_fidelity", manifest["components"])
             self.assertIn("vitest", manifest["components"])  # baseline untouched
+
+
+class InstallHardeningTests(unittest.TestCase):
+    """012-02 depth: the install/uninstall path's structural + fail-closed
+    invariants, not just the happy round-trip.
+
+    Recorded gap (docs/refinement-todo.md, "012-02's install path is thinly
+    asserted"): the original three tests proved a component splices and
+    deregisters, but not that the result is a *valid* oracle.sh, that config is
+    preserved, that the manifest stays duplicate-free, or that the error paths
+    fail closed. These close that gap.
+    """
+
+    ORACLE = InstallTests.ORACLE
+
+    def _target(self, tmp: Path):
+        (tmp / ".servo").mkdir(parents=True, exist_ok=True)
+        (tmp / "oracle.sh").write_text(self.ORACLE)
+        (tmp / ".servo" / "install.json").write_text(json.dumps({"components": ["vitest"]}))
+        _make_eval_dir(tmp)
+
+    # --- AC1: the spliced oracle.sh stays a valid bash program ---------------
+
+    @unittest.skipUnless(shutil.which("bash"), "bash not on PATH")
+    def test_installed_oracle_is_bash_valid(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            self._target(tmp)
+            de.install(tmp, weight=1.0)
+            res = subprocess.run(
+                ["bash", "-n", str(tmp / "oracle.sh")],
+                capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0,
+                             f"spliced oracle.sh is not `bash -n` clean:\n{res.stderr}")
+
+    @unittest.skipUnless(shutil.which("bash"), "bash not on PATH")
+    def test_oracle_is_bash_valid_after_uninstall(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            self._target(tmp)
+            de.install(tmp)
+            de.uninstall(tmp)
+            res = subprocess.run(
+                ["bash", "-n", str(tmp / "oracle.sh")],
+                capture_output=True, text=True)
+            self.assertEqual(res.returncode, 0,
+                             f"oracle.sh not `bash -n` clean after uninstall:\n{res.stderr}")
+
+    # --- the SEED block is well-formed (matched start/end) ------------------
+
+    def test_seed_block_is_balanced(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            self._target(tmp)
+            de.install(tmp)
+            text = (tmp / "oracle.sh").read_text()
+            self.assertEqual(text.count("# SEED:start design_fidelity"), 1)
+            self.assertEqual(text.count("# SEED:end design_fidelity"), 1)
+            self.assertLess(
+                text.index("# SEED:start design_fidelity"),
+                text.index("# SEED:end design_fidelity"),
+                "SEED start must precede SEED end",
+            )
+
+    # --- idempotence at the manifest layer (not just oracle.sh) -------------
+
+    def test_repeated_install_does_not_duplicate_manifest_entry(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            self._target(tmp)
+            de.install(tmp)
+            de.install(tmp)
+            components = json.loads((tmp / ".servo" / "install.json").read_text())["components"]
+            self.assertEqual(components.count("design_fidelity"), 1,
+                             "re-install must not append a duplicate manifest entry")
+
+    def test_uninstall_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            self._target(tmp)
+            de.install(tmp)
+            de.uninstall(tmp)
+            de.uninstall(tmp)  # second uninstall is a clean no-op
+            text = (tmp / "oracle.sh").read_text()
+            self.assertNotIn("design_fidelity", text)
+            components = json.loads((tmp / ".servo" / "install.json").read_text())["components"]
+            self.assertNotIn("design_fidelity", components)
+
+    # --- install must not clobber an authored config.json -------------------
+
+    def test_install_preserves_existing_config(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            self._target(tmp)
+            cfg_path = tmp / ".servo" / "design-eval" / "config.json"
+            authored = json.loads(cfg_path.read_text())
+            authored["threshold"] = 0.91  # a project edit install must not lose
+            cfg_path.write_text(json.dumps(authored, indent=2))
+            de.install(tmp)  # calls init() internally to vendor the runtime
+            after = json.loads(cfg_path.read_text())
+            self.assertEqual(after["threshold"], 0.91,
+                             "install()'s init() step must not overwrite an authored config.json")
+
+    # --- fail-closed error paths --------------------------------------------
+
+    def test_install_without_oracle_raises(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            (tmp / ".servo").mkdir(parents=True, exist_ok=True)
+            _make_eval_dir(tmp)
+            # no oracle.sh
+            with self.assertRaises(FileNotFoundError):
+                de.install(tmp)
+
+    def test_uninstall_without_oracle_raises(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            with self.assertRaises(FileNotFoundError):
+                de.uninstall(tmp)
+
+
+class FreezeCliTests(unittest.TestCase):
+    """012-02 depth: `design_eval.py`'s `freeze()` CLI verb.
+
+    The existing `FreezeTests` exercise `score.py`'s freeze *validator*;
+    `de.freeze()` — which writes the approval fields the validator later reads —
+    had no direct coverage.
+    """
+
+    def test_freeze_approves_and_hashes(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp)
+            d = tmp / ".servo" / "design-eval"
+            # freeze() also requires each screen's setup file to exist.
+            (d / "setups").mkdir(exist_ok=True)
+            cfg = json.loads((d / "config.json").read_text())
+            for s in cfg["screens"]:
+                s["setup"] = f"setups/{s['id']}.mjs"
+                (d / "setups" / f"{s['id']}.mjs").write_text("export default async () => {};\n")
+            (d / "config.json").write_text(json.dumps(cfg, indent=2))
+
+            frozen = de.freeze(tmp)
+            self.assertEqual(frozen["approval_status"], "approved")
+            self.assertIn("approved_content_hash", frozen)
+            self.assertIn("hashes", frozen)
+            self.assertIn("rubric", frozen["hashes"])
+            # the on-disk config reflects the freeze (not just the return value)
+            on_disk = json.loads((d / "config.json").read_text())
+            self.assertEqual(on_disk["approval_status"], "approved")
+
+    def test_freeze_refuses_when_reference_missing(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = tmp / ".servo" / "design-eval"
+            (d / "refs").mkdir(parents=True, exist_ok=True)
+            cfg = _base_config()
+            # reference files deliberately absent
+            (d / "config.json").write_text(json.dumps(cfg, indent=2))
+            with self.assertRaises(FileNotFoundError):
+                de.freeze(tmp)
+
+    def test_freeze_without_config_raises(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            (tmp / ".servo" / "design-eval").mkdir(parents=True, exist_ok=True)
+            with self.assertRaises(FileNotFoundError):
+                de.freeze(tmp)
+
+
+class CliDispatchTests(unittest.TestCase):
+    """012-04 surface: `main()`'s argparse dispatch — the entry point the
+    SKILL.md flow tells a user to invoke. Exercises the verb wiring end-to-end
+    without a browser or a judge."""
+
+    def test_main_requires_a_subcommand(self):
+        with self.assertRaises(SystemExit) as cm:
+            de.main([])
+        self.assertNotEqual(cm.exception.code, 0)
+
+    def test_main_init_scaffolds(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = de.main(["init", str(tmp)])
+            self.assertEqual(rc, 0)
+            self.assertTrue((tmp / ".servo" / "design-eval" / "config.json").is_file())
+
+    def test_main_install_then_uninstall_roundtrip(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            (tmp / ".servo").mkdir(parents=True, exist_ok=True)
+            (tmp / "oracle.sh").write_text(InstallTests.ORACLE)
+            (tmp / ".servo" / "install.json").write_text(json.dumps({"components": ["vitest"]}))
+            _make_eval_dir(tmp)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertEqual(de.main(["install", str(tmp), "--weight", "2.5"]), 0)
+                self.assertEqual(de.main(["uninstall", str(tmp)]), 0)
+            self.assertNotIn("design_fidelity", (tmp / "oracle.sh").read_text())
+
+
+class CaptureLibNodeTests(unittest.TestCase):
+    """Bridge the browser-free capture_lib.mjs node tests into the Python suite.
+
+    `capture.mjs` launches Playwright at import time, so it cannot be unit
+    tested directly; its pure helpers were extracted into `capture_lib.mjs`
+    (imported by capture.mjs, so this exercises the *real* shipped code, not a
+    copy) and are tested with node's built-in runner.
+
+    node is not part of servo's CI image (pytest-only), so this **skips** where
+    node is absent rather than failing — honest partial coverage: it runs on any
+    dev machine with node and in any host that provisions it. Recorded in
+    docs/refinement-todo.md as the reason capture.mjs coverage is dev-local.
+    """
+
+    CAPTURE_LIB = HERE / "capture_lib.mjs"
+    NODE_TEST = HERE / "test_capture_lib.mjs"
+
+    @unittest.skipUnless(shutil.which("node"), "node not on PATH (CI is pytest-only)")
+    def test_capture_lib_node_suite_passes(self):
+        res = subprocess.run(
+            ["node", "--test", str(self.NODE_TEST)],
+            capture_output=True, text=True)
+        self.assertEqual(
+            res.returncode, 0,
+            f"capture_lib.mjs node suite failed:\n{res.stdout}\n{res.stderr}")
+        self.assertIn("# fail 0", res.stdout)
+
+    def test_capture_mjs_imports_the_extracted_lib(self):
+        # Guard the extraction: capture.mjs must delegate to capture_lib.mjs,
+        # not re-inline the geometry (which would silently un-cover it).
+        cap = (HERE / "capture.mjs").read_text()
+        self.assertIn("from './capture_lib.mjs'", cap)
+        self.assertIn("computeClip(", cap)
+        self.assertNotIn("box.width - (c.left", cap,
+                         "the clip math should live in capture_lib.computeClip, not inline")
+
+
+class InitVendorsRuntimeTests(unittest.TestCase):
+    """`init()` must vendor every runtime file the copied capture.mjs needs —
+    including `capture_lib.mjs`, or an installed target's capture.mjs fails to
+    import at run time (the vendored-import contract)."""
+
+    def test_init_copies_capture_lib(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            de.init(tmp)
+            d = tmp / ".servo" / "design-eval"
+            for runtime in ("score.py", "capture.mjs", "capture_lib.mjs", "fidelity_eval.py"):
+                self.assertTrue((d / runtime).is_file(),
+                                f"init() must vendor {runtime} into the target")
 
 
 class _FakeResp:

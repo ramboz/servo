@@ -53,7 +53,11 @@ def _is_runtime_file(path: Path, source_root: Path) -> bool:
         return False
     if path.name in _EXCLUDED_NAMES or path.suffix == ".pyc":
         return False
-    if path.name.startswith("test_") and path.suffix == ".py":
+    # Test files never ship to host packages, regardless of language — the
+    # inventory guard (test_build_host_packages) excludes any `test_*`, so the
+    # `.py`-only filter here would let a `test_*.mjs` (e.g. design-eval's
+    # capture_lib node tests) slip into the package and fail that guard.
+    if path.name.startswith("test_") and path.suffix in (".py", ".mjs", ".js", ".ts"):
         return False
     if path.name == "crew-postmortem.md":
         return False
