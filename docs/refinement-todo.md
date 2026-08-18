@@ -809,3 +809,44 @@ functional for both of its own documented use cases.
 **Resolution trigger:** next edit to spec 023's prose, or an owner decision to correct the citation. Fix: point Goal 5 / the reuse-seam at ADR-0029's Verification section (or the correct boundary ADR if one is later written) instead of ADR-0011. Because 023-01 is a landed record, amending the shared spec prose is an owner-authorised edit, not a unilateral reconciliation change.
 
 **Surfaced by:** spec 023-02 arch review pass (2026-08-12).
+
+---
+
+## Spec 012 (design-eval) shipped without the review-evidence ceremony
+
+**Deferred:** Spec 012's mechanism (012-01..04) has shipped in every release
+through 0.8.0 — it is the code slice 020-01 extracted the shared
+`_common/fidelity_eval.py` harness out of — but it **never went through jig's
+compliance + craft + reconciliation review ceremony**. It predates the
+per-slice DONE-gate machinery and, until 2026-08-18, carried its slice plan as
+an inline `## Slices (SPIDR)` table that `status-board` could not see, so the
+board indexed a shipped, tested skill as an unstarted DRAFT.
+
+The 2026-08-18 reconciliation retro-recorded the five slices file-per-slice and
+placed 012-01..04 at `IN_PROGRESS` (code done, review not) and 012-05 at
+`DEFERRED` (its consumer, food-log, is a separate repo). It deliberately did
+**not** hand-set `DONE` or bypass `JIG_REVIEW_EVIDENCE_GATE` — reaching `DONE`
+requires the real review pass, not a frontmatter edit. Three concrete evidence
+gaps were named in the slice files rather than smoothed over:
+
+1. **`capture.mjs` has zero automated coverage** — the Playwright capture
+   script is verified only by hand. Largest gap in spec 012.
+2. **`design-eval` ships no `SKILL.md` surface tests** — unlike every sibling
+   skill (scaffold-init, quality-gate, oracle-hook, spec-oracle,
+   autonomy-readiness).
+3. **012-02's install/splice path is thinly asserted** — 3 tests cover the
+   round-trip; manifest-registration and splice-idempotence lean on the shared
+   `oracle_overlay` conventions rather than their own assertions.
+
+An **undocumented runtime addition** was also surfaced: `score.py` grew a second
+judge transport (`_resolve_claude` / `_judge_cli`) routing through the `claude`
+CLI when present, which the original spec text (API-only) never described. Now
+recorded in slice 012-03.
+
+**Resolution trigger:** whenever design-eval is next materially touched, OR when
+a real design-mockup→UI consumer adopts it (which also re-opens 012-05). Fix:
+run the compliance + craft + reconciliation reviewers against the shipped code,
+land `capture.mjs` coverage + `test_skill_surface.py`, then transition
+012-01..04 to REVIEWED → RECONCILED → DONE through `workflow.py` on the evidence.
+
+**Surfaced by:** `/jig:orient` + spec-012 reconciliation (2026-08-18).

@@ -29,7 +29,6 @@
 > bulleted list (not a table) so `status-board` regen preserves it as preamble.
 
 - **[005-variant-race](005-variant-race/spec.md)** — DRAFT (parked). Phase 1 (Run): best-of-N worktree race; an optimization, not an EDD prerequisite.
-- **[012-design-eval](012-design-eval/spec.md)** — DRAFT. Phase 2 (Compile): frozen UI design-fidelity eval component ([ADR-0009](../decisions/adr-0009-design-fidelity-eval-recipe.md)).
 - **[017-evaluation-intelligence](017-evaluation-intelligence/spec.md)** — DRAFT (parked). Phase 3: convergence / oracle-debug / adaptive-planning / explainability / cost umbrella.
 - **[018-continuous-evaluation](018-continuous-evaluation/spec.md)** — DRAFT (parked). Phase 4: repo monitoring / auto-recompilation / regression execution (extends 011).
 
@@ -87,6 +86,11 @@
 | [011-heartbeat](011-heartbeat/spec.md) | 011-03 — candidate-dispatch | **DONE** | 56 new tests (168 heartbeat total); new `dispatch` verb — the heartbeat's one **execution** edge. Per `actionable AND open` candidate (ordered `discovered_at`,`finding_id`): `gate.py <target>` oracle preflight (refuse-without-oracle refuses the whole pass, defers to gate's taxonomy — Guardrail #3) → fresh isolated git worktree at HEAD on `servo/heartbeat/<fid>` under git-ignored `.servo/dispatch/<fid>/` (**A1 probed**) → provision oracle + `.servo/` minus `{runs,races,triage,dispatch}` → **verify** with `gate.py <worktree>` (incomplete copy → skip) → `loop.py` with an **untrusted-data-framed** prompt (Guardrail #4 — discovered text is DATA, never instructions) → record ADR-0010 `outcome` (`passed` iff `final_oracle_status==pass` else `tried`) via 011-02's locked atomic merge. Serial; per-loop `--cost-ceiling`; `--max-candidates` cap; closed `{0,2}` exit. `gate.py`/`loop.py` subprocessed (env-override test seam, no live `claude -p`). compliance **PASS** + craft/arch **PASS-WITH-NITS** + reconciliation **PASS** (nits → deviation log + refinement-todo); DONE hand-set (ADR-dep gate prose-only, per 011-02). |
 | [011-heartbeat](011-heartbeat/spec.md) | 011-04 — heartbeat-cost-ceiling | **DONE** |  |
 | [011-heartbeat](011-heartbeat/spec.md) | 011-05 — skill-and-dogfood | **DONE** |  |
+| [012-design-eval](012-design-eval/spec.md) | 012-01 — freeze-and-aggregation-core | IN_PROGRESS | Code DONE + shipped (through 0.8.0), **review never run**. `definition_hash`/`artifact_hashes`/`validate_freeze`/`aggregate_lower_bound` + env_error honesty; 15 tests. Primitives later extracted to `_common/fidelity_eval.py` by 020-01 (ADR-0024); contract unchanged. |
+| [012-design-eval](012-design-eval/spec.md) | 012-02 — authoring-cli-and-install | IN_PROGRESS | Code DONE + shipped, **review never run**. `design_eval.py` init/capture/freeze/install/uninstall, `oracle.sh` SEED splice + manifest (mirrors `oracle_overlay`); only 3 tests — install path thinly asserted. |
+| [012-design-eval](012-design-eval/spec.md) | 012-03 — capture-and-judge-runtime | IN_PROGRESS | Code DONE + shipped, **review never run**. Pinned vision judge, n-sampled, bounded retry, ledger; 5 tests. **`capture.mjs` has zero automated coverage** — largest gap in spec 012. Undocumented 2nd transport found in reconciliation: `_judge_cli` routes via the `claude` CLI. |
+| [012-design-eval](012-design-eval/spec.md) | 012-04 — guided-skill-surface | IN_PROGRESS | Code DONE + shipped, **review never run**. `SKILL.md` + `templates/config.example.json`, on both hosts. **No SKILL.md surface tests** — unlike every sibling skill. |
+| [012-design-eval](012-design-eval/spec.md) | 012-05 — first-consumer-wiring | DEFERRED | DEFERRED — the only *project* (not servo) work in spec 012. Candidate consumer food-log is a separate repo, so servo cannot land it. |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-01 - phase-hint contract | **DONE** | Docs-only: `docs/architecture.md` § Host-native phase hints defines `plan`/`run`/`evaluate`/`triage` as advisory intent, restates `gate.py`/`oracle.sh`/state-file authority, states graceful degradation; cross-linked from agent-loop guardrails, heartbeat triage inbox, and spec 012 design-eval. ADR-0011 Accepted 2026-07-01 (probe-grounded re-verification of Claude Plan Mode + Codex approval modes). compliance+craft+reconciliation reviews PASS. Spec 013 itself stays `DRAFT` (013-02/03 remain `DEFERRED`) rather than mechanically rolling up `DONE` — see spec.md's Status banner. |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | DEFERRED |  |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | DEFERRED |  |
@@ -122,6 +126,7 @@
 
 | Spec | Slice | Resolution trigger |
 |------|-------|--------------------|
+| [012-design-eval](012-design-eval/spec.md) | 012-05 — first-consumer-wiring | Resume when a real design-mockup&#8594;UI |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | Resume after 013-01 lands and a real caller needs |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | Resume when a second design-eval consumer appears, or |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-05 — prompt-render |  |

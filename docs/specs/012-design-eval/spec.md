@@ -1,7 +1,7 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: [002, 003]
-last_verified: 2026-06-12
+last_verified: 2026-08-18
 ---
 
 # Spec 012 — design-eval (UI design-fidelity eval recipe)
@@ -78,19 +78,38 @@ state match, composed mockups, rubric scope).
 
 ## Slices (SPIDR)
 
-| Slice | Scope | Status |
-|---|---|---|
-| 012-01 | **Freeze + aggregation core** — `score.py`: `validate_freeze` / `definition_hash` / `aggregate_lower_bound`; stale + env_error honesty | BUILT + tested (16 tests) |
-| 012-02 | **Authoring CLI + install** — `design_eval.py` init/freeze/install/uninstall; oracle.sh SEED splice + COMPONENTS + manifest (mirrors `oracle_overlay`) | BUILT + tested |
-| 012-03 | **Capture + judge runtime** — `capture.mjs` (Playwright references w/ chrome-crop + seeded app shots); `score.py` vision judge (Anthropic Messages API, pinned model) | BUILT (runtime; exercised live in the loop, not unit-tested) |
-| 012-04 | **Guided skill surface** — `SKILL.md` flow + `templates/config.example.json` | BUILT |
-| 012-05 | **First consumer wiring** — food-log: author `config.json` + per-screen setups, capture refs, freeze, install, run | PENDING (project work) |
+Recorded file-per-slice (see the note below for why this arrived late):
 
-> **Honest status note.** The mechanism (01–04) is implemented and unit-tested
-> under Python 3.12, but this spec has not been through the full jig
-> review-evidence ceremony this session (dogfooding is partial — the formal
-> review/reconcile pass is reserved for the food-log slice in the loop phase).
-> ADR-0005 advances toward Accepted now that it has a built consumer.
+- **[012-01 — freeze-and-aggregation-core](slice-01-freeze-and-aggregation-core.md)**
+  — `score.py`: `definition_hash` / `artifact_hashes` / `validate_freeze` /
+  `aggregate_lower_bound`; stale + `env_error` honesty. 15 tests.
+- **[012-02 — authoring-cli-and-install](slice-02-authoring-cli-and-install.md)**
+  — `design_eval.py` init/capture/freeze/install/uninstall; `oracle.sh` SEED
+  splice + `COMPONENTS` + manifest (mirrors `oracle_overlay`). 3 tests.
+- **[012-03 — capture-and-judge-runtime](slice-03-capture-and-judge-runtime.md)**
+  — `capture.mjs` (chrome-cropped references, seeded app shots) + the pinned
+  vision judge. 5 tests; `capture.mjs` itself is uncovered.
+- **[012-04 — guided-skill-surface](slice-04-guided-skill-surface.md)**
+  — `SKILL.md` flow + `templates/config.example.json`. No surface tests.
+- **[012-05 — first-consumer-wiring](slice-05-first-consumer-wiring.md)**
+  — **DEFERRED**; the consuming project (food-log) is a separate repository.
+
+> **Honest status note (rewritten 2026-08-18).** The mechanism (012-01..04) is
+> implemented, green (23 tests), and has shipped in every release through
+> **0.8.0** — it is also the code that slice
+> [020-01](../020-content-fidelity-eval/slice-01-extract-shared-harness.md)
+> extracted the shared frozen-eval harness *out of*. But spec 012 **never went
+> through jig's review-evidence ceremony**: it predates the per-slice DONE-gate
+> machinery and, until this reconciliation, carried its slice plan as an inline
+> table that `status-board` could not see — so the board indexed a shipped
+> skill as an unstarted draft.
+>
+> The slices above are therefore recorded at `IN_PROGRESS`, not `DONE`. That is
+> the accurate lifecycle state: **the code is done; the review is not.** Three
+> concrete evidence gaps are named in the slice files rather than smoothed over
+> — `capture.mjs` has no automated coverage, `SKILL.md` has no surface tests,
+> and 012-02's install path is thinly asserted. Reaching `DONE` requires a real
+> compliance + craft + reconciliation pass, not a frontmatter edit.
 
 ## Non-goals
 
