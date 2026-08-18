@@ -46,6 +46,25 @@ def _frontmatter(text: str) -> str:
     return m.group(1)
 
 
+def _description(text: str) -> str:
+    """The `description:` scalar only, whitespace-collapsed.
+
+    Trigger assertions must check the *description* (what the host matches on),
+    not the whole frontmatter — a phrase living in `name:` must not satisfy a
+    trigger check. The value is a YAML folded scalar (`>-`): every following
+    indented line is a continuation, joined with spaces.
+    """
+    fm = _frontmatter(text)
+    m = re.search(r"^description:\s*>-?\s*\n((?:[ \t]+.*\n?)+)", fm, flags=re.MULTILINE)
+    if not m:
+        # tolerate a single-line `description: ...`
+        m2 = re.search(r"^description:\s*(.+)$", fm, flags=re.MULTILINE)
+        if not m2:
+            raise AssertionError("SKILL.md frontmatter has no description: field")
+        return re.sub(r"\s+", " ", m2.group(1)).strip()
+    return re.sub(r"\s+", " ", m.group(1)).strip()
+
+
 def _body(text: str) -> str:
     """Everything after the frontmatter fence."""
     m = re.match(r"^---\n.*?\n---\n(.*)$", text, flags=re.DOTALL)
@@ -104,11 +123,10 @@ class DescriptionBoundsTests(unittest.TestCase):
     per-iteration judge agent."""
 
     def setUp(self):
-        # The description is a YAML folded scalar (`>-`): line breaks are
-        # semantic spaces. Collapse whitespace so a trigger phrase that wraps
-        # across two source lines still matches.
-        raw = _frontmatter(_skill_text()).lower()
-        self.description = re.sub(r"\s+", " ", raw)
+        # Assert against the description: scalar specifically (what the host
+        # matches on) — not the whole frontmatter, so a phrase in name: cannot
+        # satisfy a trigger check.
+        self.description = _description(_skill_text()).lower()
 
     def test_positive_triggers_in_description(self):
         for phrase in (
@@ -254,6 +272,35 @@ class DocumentedConfigMatchesTemplateTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 # The honesty contract — the thing this skill must never soften
 # ---------------------------------------------------------------------------
+
+
+class DocumentedFilesMatchInitVendoringTests(unittest.TestCase):
+    """Every runtime file `init()` vendors must appear in SKILL.md's Files table.
+
+    Blocking craft-review finding: after `capture_lib.mjs`/`fidelity_eval.py`
+    were added to `design_eval.py::init()`'s copy tuple, a reader who followed
+    the Files table got a target whose `capture.mjs` cannot import at run time.
+    This parses the copy tuple the same way `DocumentedCliMatchesCodeTests`
+    parses the verb tuple, so the doc can never silently under-list the runtime
+    again.
+    """
+
+    def _vendored_runtime(self) -> set:
+        src = DESIGN_EVAL.read_text()
+        # the `for runtime, src_dir in ( ("score.py", ...), ... ):` tuple
+        m = re.search(r"for runtime, src_dir in \((.*?)\n    \):", src, flags=re.DOTALL)
+        self.assertIsNotNone(m, "could not locate init()'s runtime copy tuple")
+        return set(re.findall(r'"([\w.]+\.(?:py|mjs))"', m.group(1)))
+
+    def test_files_table_lists_every_vendored_runtime_file(self):
+        vendored = self._vendored_runtime()
+        self.assertIn("capture_lib.mjs", vendored, "sanity: extraction is in the copy list")
+        files_section = _section(_skill_text(), "Files (in `<target>/.servo/design-eval/`)")
+        missing = [f for f in vendored if f not in files_section]
+        self.assertEqual(
+            missing, [],
+            f"SKILL.md Files table omits vendored runtime file(s): {missing}",
+        )
 
 
 class HonestyContractTests(unittest.TestCase):

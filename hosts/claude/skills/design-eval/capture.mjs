@@ -21,9 +21,11 @@ const vp = resolveViewport(config);
 
 const argv = process.argv.slice(2);
 const wantRefs = argv.includes('--refs');
+// Throw rather than process.exit(2): exiting here would skip the
+// `finally { browser.close() }` below and leak the chromium process. The catch
+// prints the message and sets the exit code; the finally always runs.
 const fail = (msg) => {
-  console.error(`capture: ${msg}`);
-  process.exit(2);
+  throw new Error(msg);
 };
 
 const browser = await chromium.launch();
@@ -71,7 +73,8 @@ try {
     await page.screenshot({ path: out });
   }
 } catch (err) {
-  fail(String(err && err.message ? err.message : err));
+  console.error(`capture: ${err && err.message ? err.message : err}`);
+  process.exitCode = 2;
 } finally {
   await browser.close();
 }

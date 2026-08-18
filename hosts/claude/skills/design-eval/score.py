@@ -161,7 +161,7 @@ def _judge_cli(app_png: Path, ref_png: Path, config: dict) -> float:
             raise EnvError(f"claude judge error: {str(envelope.get('result'))[:200]}")
         obj = json.loads(_extract_json(envelope.get("result", "")))
         return max(0.0, min(1.0, float(obj["score"])))
-    except (KeyError, ValueError, TypeError, json.JSONDecodeError) as e:
+    except (KeyError, ValueError, TypeError) as e:  # JSONDecodeError ⊂ ValueError
         raise EnvError(f"unparseable claude judge response: {e}") from e
 
 
@@ -221,7 +221,7 @@ def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
             b.get("text", "") for b in payload.get("content", []) if b.get("type") == "text")
         obj = json.loads(_extract_json(text))
         return max(0.0, min(1.0, float(obj["score"])))
-    except (KeyError, ValueError, TypeError, json.JSONDecodeError) as e:
+    except (KeyError, ValueError, TypeError) as e:  # JSONDecodeError ⊂ ValueError
         raise EnvError(f"unparseable judge response: {e}") from e
 
 
@@ -304,6 +304,14 @@ def main(argv=None) -> int:
         return EXIT_ENV_ERROR
     except EnvError as e:
         print(f"design-eval: env_error — {e}", file=sys.stderr)
+        return EXIT_ENV_ERROR
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        # A malformed/missing config.json, or one lacking `judge`/`screens`,
+        # would otherwise escape as a raw traceback. oracle.sh maps any non-zero
+        # rc to env_error anyway, so honesty was never at risk — but the operator
+        # deserves the same `design-eval: env_error — …` line as every other
+        # failure, not a stack trace.
+        print(f"design-eval: env_error — malformed eval definition: {e}", file=sys.stderr)
         return EXIT_ENV_ERROR
     print(f"{composite:.4f}")
     return EXIT_OK

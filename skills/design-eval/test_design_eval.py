@@ -11,11 +11,13 @@ import importlib.util
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 
@@ -158,10 +160,12 @@ class ScoreHonestyTests(unittest.TestCase):
     """Stale / env_error → exit 2; a valid frozen run with fake scores → 0 + float."""
 
     def setUp(self):
+        # Scope the env mutation to this test rather than leaking it into the
+        # rest of the run (craft-review nit): patch.dict restores on cleanup.
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         os.environ.pop("ANTHROPIC_API_KEY", None)
-        os.environ.pop(score._FAKE_SCORES_ENV, None)
-
-    def tearDown(self):
         os.environ.pop(score._FAKE_SCORES_ENV, None)
 
     def test_env_error_when_no_key_and_no_fake(self):
@@ -453,6 +457,233 @@ class CliDispatchTests(unittest.TestCase):
             self.assertNotIn("design_fidelity", (tmp / "oracle.sh").read_text())
 
 
+class MalformedDefinitionHonestyTests(unittest.TestCase):
+    """Craft-review finding: a malformed config.json escaped `main()` as a raw
+    traceback instead of the standard `design-eval: env_error — …` line."""
+
+    def test_malformed_config_is_env_error_not_traceback(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = tmp / ".servo" / "design-eval"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "config.json").write_text("{ this is not json")
+            rc, out, err = _capture_main(d)
+            self.assertEqual(rc, score.EXIT_ENV_ERROR)
+            self.assertEqual(out.strip(), "")   # never a 0.0
+            self.assertIn("env_error", err)
+            self.assertNotIn("Traceback", err)  # a clean line, not a stack trace
+
+    def test_config_missing_screens_is_env_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = tmp / ".servo" / "design-eval"
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "config.json").write_text(json.dumps({"schema_version": 1}))
+            rc, out, err = _capture_main(d)
+            self.assertEqual(rc, score.EXIT_ENV_ERROR)
+            self.assertEqual(out.strip(), "")
+            # An unapproved/empty definition legitimately refuses as *stale*
+            # before it can be malformed. Either way the contract is the same:
+            # rc 2, no score on stdout, and a clean `design-eval: ` line rather
+            # than a traceback.
+            self.assertTrue(err.startswith("design-eval: "), err)
+            self.assertNotIn("Traceback", err)
+
+
+class CaptureAppHonestyTests(unittest.TestCase):
+    """012-01 AC5 / 012-03: `capture_app`'s three failure branches.
+
+    Compliance review flagged these as implemented-but-untested: a capture
+    failure must surface as EnvError (→ rc 2), never a silent 0.0.
+    """
+
+    def _screen(self):
+        return {"id": "home", "reference": "refs/home.png"}
+
+    def test_missing_node_raises_env_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+            orig = score.subprocess.run
+
+            def boom(*a, **k):
+                raise FileNotFoundError("node")
+
+            score.subprocess.run = boom
+            try:
+                with self.assertRaises(score.EnvError) as cm:
+                    score.capture_app(d, self._screen())
+                self.assertIn("node", str(cm.exception).lower())
+            finally:
+                score.subprocess.run = orig
+
+    def test_capture_timeout_raises_env_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+            orig = score.subprocess.run
+
+            def slow(*a, **k):
+                raise score.subprocess.TimeoutExpired(cmd="node", timeout=180)
+
+            score.subprocess.run = slow
+            try:
+                with self.assertRaises(score.EnvError) as cm:
+                    score.capture_app(d, self._screen())
+                self.assertIn("timed out", str(cm.exception))
+            finally:
+                score.subprocess.run = orig
+
+    def test_nonzero_rc_raises_env_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+            orig = score.subprocess.run
+
+            class _P:
+                returncode = 2
+                stderr = "selector not found"
+
+            score.subprocess.run = lambda *a, **k: _P()
+            try:
+                with self.assertRaises(score.EnvError) as cm:
+                    score.capture_app(d, self._screen())
+                self.assertIn("capture failed", str(cm.exception))
+            finally:
+                score.subprocess.run = orig
+
+
+class JudgeCliTransportTests(unittest.TestCase):
+    """012-03 AC4: the `cli` judge transport (`_judge_cli`).
+
+    Compliance review flagged this transport as shipped-but-entirely-untested —
+    and, unlike the `api` path, it has NO retry, so every failure must fail
+    closed on the first attempt rather than degrade to a score.
+    """
+
+    def _png(self, d: Path, name: str) -> Path:
+        # _judge_cli cwd's to app_png.parent.parent, so nest one level down.
+        sub = d / "shots"
+        sub.mkdir(parents=True, exist_ok=True)
+        p = sub / name
+        p.write_bytes(b"\x89PNG")
+        return p
+
+    def _run(self, d: Path, fake):
+        orig_run, orig_resolve = score.subprocess.run, score._resolve_claude
+        score.subprocess.run = fake
+        score._resolve_claude = lambda: "/usr/bin/claude"
+        try:
+            return score._judge_cli(
+                self._png(d, "app.png"), self._png(d, "ref.png"), _base_config())
+        finally:
+            score.subprocess.run, score._resolve_claude = orig_run, orig_resolve
+
+    def test_happy_path_parses_score(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+
+            class _P:
+                returncode = 0
+                stdout = json.dumps({"is_error": False, "result": '{"score": 0.83}'})
+                stderr = ""
+
+            self.assertAlmostEqual(self._run(d, lambda *a, **k: _P()), 0.83)
+
+    def test_score_is_clamped_to_unit_interval(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+
+            class _P:
+                returncode = 0
+                stdout = json.dumps({"is_error": False, "result": '{"score": 4.2}'})
+                stderr = ""
+
+            self.assertEqual(self._run(d, lambda *a, **k: _P()), 1.0)
+
+    def test_nonzero_rc_is_env_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+
+            class _P:
+                returncode = 1
+                stdout = ""
+                stderr = "boom"
+
+            with self.assertRaises(score.EnvError):
+                self._run(d, lambda *a, **k: _P())
+
+    def test_is_error_envelope_is_env_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+
+            class _P:
+                returncode = 0
+                stdout = json.dumps({"is_error": True, "result": "rate limited"})
+                stderr = ""
+
+            with self.assertRaises(score.EnvError):
+                self._run(d, lambda *a, **k: _P())
+
+    def test_unparseable_reply_is_env_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+
+            class _P:
+                returncode = 0
+                stdout = json.dumps({"is_error": False, "result": "I cannot score this."})
+                stderr = ""
+
+            with self.assertRaises(score.EnvError):
+                self._run(d, lambda *a, **k: _P())
+
+    def test_missing_claude_binary_is_env_error(self):
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+
+            def boom(*a, **k):
+                raise FileNotFoundError("claude")
+
+            with self.assertRaises(score.EnvError):
+                self._run(d, boom)
+
+
+class CaptureRefsTests(unittest.TestCase):
+    """012-02 AC2: `capture_refs` — previously the one CLI verb with neither
+    error handling nor a test (compliance-review finding)."""
+
+    def test_passes_through_the_node_return_code(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            de.init(tmp)
+            orig = de.subprocess.run
+
+            class _P:
+                returncode = 0
+
+            de.subprocess.run = lambda *a, **k: _P()
+            try:
+                self.assertEqual(de.capture_refs(tmp), 0)
+            finally:
+                de.subprocess.run = orig
+
+    def test_missing_node_returns_env_error_rc_not_traceback(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            de.init(tmp)
+            orig = de.subprocess.run
+
+            def boom(*a, **k):
+                raise FileNotFoundError("node")
+
+            de.subprocess.run = boom
+            try:
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    rc = de.capture_refs(tmp)
+                self.assertEqual(rc, de.ENV_ERROR_RC)
+                self.assertIn("node unavailable", err.getvalue())
+            finally:
+                de.subprocess.run = orig
+
+
 class CaptureLibNodeTests(unittest.TestCase):
     """Bridge the browser-free capture_lib.mjs node tests into the Python suite.
 
@@ -479,6 +710,12 @@ class CaptureLibNodeTests(unittest.TestCase):
             res.returncode, 0,
             f"capture_lib.mjs node suite failed:\n{res.stdout}\n{res.stderr}")
         self.assertIn("# fail 0", res.stdout)
+        # Pin the count too: "# fail 0" alone also passes for an emptied or
+        # renamed node suite (craft-review nit).
+        m = re.search(r"^# pass (\d+)$", res.stdout, flags=re.MULTILINE)
+        self.assertIsNotNone(m, f"no pass count in node output:\n{res.stdout}")
+        self.assertGreaterEqual(int(m.group(1)), 10,
+                                "capture_lib node suite shrank unexpectedly")
 
     def test_capture_mjs_imports_the_extracted_lib(self):
         # Guard the extraction: capture.mjs must delegate to capture_lib.mjs,
@@ -486,8 +723,14 @@ class CaptureLibNodeTests(unittest.TestCase):
         cap = (HERE / "capture.mjs").read_text()
         self.assertIn("from './capture_lib.mjs'", cap)
         self.assertIn("computeClip(", cap)
-        self.assertNotIn("box.width - (c.left", cap,
-                         "the clip math should live in capture_lib.computeClip, not inline")
+        # The geometry must be *called*, not re-inlined: a real re-inline would
+        # reintroduce the width/height subtraction that now lives only in
+        # capture_lib.computeClip. (The prior `box.width - (c.left` guard was
+        # vacuous — that exact spelling never existed.)
+        self.assertNotIn("box.width -", cap,
+                         "clip width math should live in capture_lib.computeClip, not inline")
+        self.assertNotIn("box.height -", cap,
+                         "clip height math should live in capture_lib.computeClip, not inline")
 
 
 class InitVendorsRuntimeTests(unittest.TestCase):
@@ -605,11 +848,11 @@ def _capture_main(eval_dir: Path):
     # Ensure the eval dir has a score.py copy whose __file__ is in the eval dir,
     # plus its sibling fidelity_eval.py (score.py's two-candidate import probe,
     # ADR-0024/020-01 — the copied-target layout) so the copy runs standalone.
-    import shutil as _sh
     if not (eval_dir / "score.py").is_file():
-        _sh.copyfile(HERE / "score.py", eval_dir / "score.py")
+        shutil.copyfile(HERE / "score.py", eval_dir / "score.py")
     if not (eval_dir / "fidelity_eval.py").is_file():
-        _sh.copyfile(HERE.parent / "_common" / "fidelity_eval.py", eval_dir / "fidelity_eval.py")
+        shutil.copyfile(HERE.parent / "_common" / "fidelity_eval.py",
+                        eval_dir / "fidelity_eval.py")
     mod = _load("design_eval_score_run", str(eval_dir / "score.py"))
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):

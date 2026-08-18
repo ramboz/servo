@@ -23,10 +23,15 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent
 COMMON_DIR = SKILL_DIR.parent / "_common"
+# Mirrors score.py's EXIT_ENV_ERROR: oracle.sh treats rc=2 as a missing
+# component → gate env_error, never a silent 0.0 (ADR-0005).
+ENV_ERROR_RC = 2
+
 COMPONENT = "design_fidelity"
 DEFAULT_WEIGHT = 1.0
 
@@ -90,9 +95,19 @@ def init(target: Path) -> Path:
 
 
 def capture_refs(target: Path) -> int:
-    """Render the mockup references via ``capture.mjs --refs`` (Playwright)."""
+    """Render the mockup references via ``capture.mjs --refs`` (Playwright).
+
+    A missing ``node`` returns the env-error rc rather than escaping as an
+    uncaught ``FileNotFoundError`` traceback — mirroring ``score.capture_app``,
+    which already converts the same failure into an ``EnvError``. servo ships no
+    browser, so "node absent" is an ordinary environment outcome, not a crash.
+    """
     d = _eval_dir(target)
-    proc = subprocess.run(["node", str(d / "capture.mjs"), "--refs"], cwd=str(d))
+    try:
+        proc = subprocess.run(["node", str(d / "capture.mjs"), "--refs"], cwd=str(d))
+    except FileNotFoundError as e:
+        print(f"capture-refs: node unavailable: {e}", file=sys.stderr)
+        return ENV_ERROR_RC
     return proc.returncode
 
 

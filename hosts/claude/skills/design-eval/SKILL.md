@@ -44,8 +44,9 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 ## Flow
 
 1. **`init`** — `python3 design_eval.py init <target>` scaffolds
-   `<target>/.servo/design-eval/` with the runtime (`score.py`, `capture.mjs`)
-   and a `config.json` skeleton (copied from `templates/config.example.json`).
+   `<target>/.servo/design-eval/` with the runtime (`score.py`, `capture.mjs`,
+   `capture_lib.mjs`, and the shared `fidelity_eval.py`) and a `config.json`
+   skeleton (copied from `templates/config.example.json`).
 
 2. **Author `config.json`** (the policy). For each screen set:
    - `id`, `weight`;
@@ -93,7 +94,9 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 |---|---|
 | `config.json` | the frozen policy (screens, rubric, model, n/k/δ, threshold, hashes) |
 | `score.py` | runtime: freeze-validate → capture → judge → aggregate → composite |
+| `fidelity_eval.py` | shared frozen-eval harness (hash/aggregate/ledger/splice), imported by `score.py` (ADR-0024) |
 | `capture.mjs` | Playwright: render references / screenshot the seeded app |
+| `capture_lib.mjs` | pure capture helpers (clip geometry, flag/screen resolution), imported by `capture.mjs` |
 | `setups/<id>.mjs` | per-screen deterministic state + navigation |
 | `refs/<id>.png` | frozen reference screenshots (chrome-cropped) |
 | `ledger.jsonl` | per-run sampled + aggregated scores + hashes (audit) |

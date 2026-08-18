@@ -34,22 +34,55 @@ ordinary citizen of the existing contract.
 **DoD:**
 - [x] `init` / `capture_refs` / `freeze` / `install` / `uninstall` +
       `_register_manifest` / `_deregister_manifest` implemented.
-- [x] 3 unit tests green — `InstallTests`.
+- [x] 19 unit tests green — `InstallTests` (3), `InstallHardeningTests` (8),
+      `FreezeCliTests` (3), `CliDispatchTests` (3), `CaptureRefsTests` (2).
 - [x] Scored by stock `gate.py` with no special-casing.
-- [x] Shipped in a tagged release (through 0.8.0).
-- [ ] Compliance + craft review verdicts recorded under `reviews/`.
-- [ ] Reconciliation verdict + deviation log + reconciliation sweep recorded.
+- [x] Shipped in a tagged release — 0.3.0 through 0.8.0.
+- [x] Compliance + craft review verdicts recorded under `reviews/`.
+- [x] Reconciliation verdict + deviation log + reconciliation sweep recorded.
 
 ### Retro-reconciliation note (2026-08-18)
 
 Retro-recorded with [012-01](slice-01-freeze-and-aggregation-core.md); see that
-slice's note for why spec 012 has no review evidence. Test depth here (3 tests)
-is materially thinner than 012-01's (15) — install/uninstall round-trip is
-covered, but the manifest-registration and splice-idempotence paths lean on the
-shared `oracle_overlay` conventions rather than on their own assertions. That
-gap is real and is one of the things a review pass would be expected to raise.
+slice's note for the lifecycle history.
+
+**The thin-coverage gap this note originally described is now closed.** At
+retro-record time the slice had 3 tests and leaned on the shared
+`oracle_overlay` conventions rather than its own assertions. The review pass
+confirmed the gap and it was fixed in the same reconciliation: `bash -n`
+validity of the spliced `oracle.sh` (both before and after uninstall),
+SEED-block balance, manifest de-duplication on re-install, uninstall
+idempotence, config preservation across `install()`'s `init()` step, and the
+fail-closed `FileNotFoundError` paths are now directly asserted, plus
+`de.freeze()` and `main()`'s argparse dispatch.
+
+Compliance also flagged `capture_refs` as the one CLI verb with neither error
+handling nor a test: a missing `node` escaped as an uncaught traceback rather
+than the clean env-error rc that `score.capture_app` already returned for the
+same failure. Fixed (`ENV_ERROR_RC`, mirroring `score.py`'s `EXIT_ENV_ERROR`)
+and covered by `CaptureRefsTests`.
 
 **Post-hoc scope change:** the install/splice primitives were later extracted
 to `skills/_common/fidelity_eval.py` by
 [020-01](../020-content-fidelity-eval/slice-01-extract-shared-harness.md)
 ([ADR-0024](../../decisions/adr-0024-extract-frozen-eval-harness.md)).
+
+### Deviation log
+
+- **Retro-lifecycle, not a build deviation** (see 012-01's log).
+- **Thin-coverage gap closed during reconciliation:** install/uninstall
+  hardening, `de.freeze()`, and `main()` dispatch are now asserted directly
+  (`InstallHardeningTests`, `FreezeCliTests`, `CliDispatchTests`).
+- **`capture_refs` error-handling fix (behavior change):** a missing `node`
+  now returns `ENV_ERROR_RC` (2) instead of escaping as an uncaught
+  `FileNotFoundError`, mirroring `score.capture_app`. Covered by
+  `CaptureRefsTests`.
+
+### Reconciliation sweep
+
+| Artifact | Disposition |
+|---|---|
+| `skills/design-eval/design_eval.py` (init/capture_refs/freeze/install/uninstall/main) | Verified against AC1–5; `capture_refs` hardened; `init()` now vendors `capture_lib.mjs`. |
+| Splice mechanics (`fidelity_eval.py` register/splice) | Verified; `bash -n` clean both ways, manifest de-dup asserted. |
+| `test_design_eval.py` install/freeze/dispatch classes | 19 tests green. |
+| Reviews (`reviews/slice-02-{compliance,craft}.md`) | compliance re-pass after DoD/count correction; craft pass. |

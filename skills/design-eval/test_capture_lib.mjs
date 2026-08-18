@@ -58,3 +58,12 @@ test('computeClip treats missing individual sides as zero', () => {
   // only a top inset — the other three default to 0
   assert.deepEqual(computeClip(box, { top: 20 }), { x: 0, y: 20, width: 100, height: 80 });
 });
+
+test('computeClip throws a named error when the box is null', () => {
+  assert.throws(() => computeClip(null, {}), /no bounding box/);
+});
+
+test('computeClip throws when crop insets exceed the box', () => {
+  const box = { x: 0, y: 0, width: 20, height: 20 };
+  assert.throws(() => computeClip(box, { left: 15, right: 15 }), /crop insets exceed/);
+});
