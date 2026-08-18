@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [002, 003]
 last_verified: 2026-08-18
 ---
@@ -82,34 +82,43 @@ Recorded file-per-slice (see the note below for why this arrived late):
 
 - **[012-01 — freeze-and-aggregation-core](slice-01-freeze-and-aggregation-core.md)**
   — `score.py`: `definition_hash` / `artifact_hashes` / `validate_freeze` /
-  `aggregate_lower_bound`; stale + `env_error` honesty. 15 tests.
+  `aggregate_lower_bound`; stale + `env_error` honesty. 20 tests.
 - **[012-02 — authoring-cli-and-install](slice-02-authoring-cli-and-install.md)**
   — `design_eval.py` init/capture/freeze/install/uninstall; `oracle.sh` SEED
-  splice + `COMPONENTS` + manifest (mirrors `oracle_overlay`). 3 tests.
+  splice + `COMPONENTS` + manifest (mirrors `oracle_overlay`). 19 tests.
 - **[012-03 — capture-and-judge-runtime](slice-03-capture-and-judge-runtime.md)**
-  — `capture.mjs` (chrome-cropped references, seeded app shots) + the pinned
-  vision judge. 5 tests; `capture.mjs` itself is uncovered.
+  — `capture.mjs` + `capture_lib.mjs` (chrome-cropped references, seeded app
+  shots) + the pinned vision judge on both `api` and `cli` transports. 24 tests.
 - **[012-04 — guided-skill-surface](slice-04-guided-skill-surface.md)**
-  — `SKILL.md` flow + `templates/config.example.json`. No surface tests.
+  — `SKILL.md` flow + `templates/config.example.json`. 25 surface tests.
 - **[012-05 — first-consumer-wiring](slice-05-first-consumer-wiring.md)**
   — **DEFERRED**; the consuming project (food-log) is a separate repository.
 
-> **Honest status note (rewritten 2026-08-18).** The mechanism (012-01..04) is
-> implemented, green (23 tests), and has shipped in every release through
-> **0.8.0** — it is also the code that slice
+> **Status note (rewritten 2026-08-18, after the review ceremony).** The
+> mechanism (012-01..04) shipped in **0.3.0** and every release through
+> **0.8.0** — it is also the code slice
 > [020-01](../020-content-fidelity-eval/slice-01-extract-shared-harness.md)
-> extracted the shared frozen-eval harness *out of*. But spec 012 **never went
-> through jig's review-evidence ceremony**: it predates the per-slice DONE-gate
-> machinery and, until this reconciliation, carried its slice plan as an inline
-> table that `status-board` could not see — so the board indexed a shipped
-> skill as an unstarted draft.
+> extracted the shared frozen-eval harness *out of*. But spec 012 predated the
+> per-slice DONE-gate machinery and, until this reconciliation, carried its
+> slice plan as an inline table `status-board` could not see, so the board
+> indexed a shipped skill as an unstarted draft.
 >
-> The slices above are therefore recorded at `IN_PROGRESS`, not `DONE`. That is
-> the accurate lifecycle state: **the code is done; the review is not.** Three
-> concrete evidence gaps are named in the slice files rather than smoothed over
-> — `capture.mjs` has no automated coverage, `SKILL.md` has no surface tests,
-> and 012-02's install path is thinly asserted. Reaching `DONE` requires a real
-> compliance + craft + reconciliation pass, not a frontmatter edit.
+> The ceremony has now been run against the shipped code: two independent
+> compliance reviewers and one craft reviewer, all of which returned
+> **`needs-changes`** in round 1. They found ACs that described behaviour the
+> code did not have (`definition_hash` was documented as hashing the rubric;
+> `capture_app` was credited with the `setup`-seeding that lives in
+> `capture.mjs`; bounded retry was claimed for a `cli` transport that has none),
+> untested shipped paths (the whole `cli` transport, `capture_app`'s failure
+> branches, `capture_refs`), and a doc that under-listed the vendored runtime
+> badly enough to send a reader to a broken target. All were fixed, and round 2
+> passed every slice. design-eval went from **23 to 78 tests**.
+>
+> The honest residual is narrow and disclosed rather than closed by silence:
+> `capture.mjs`'s **browser body** is still hand-verified (it cannot run without
+> a browser servo does not ship), and two robustness follow-ups — the silently
+> optional per-screen `setup`, and the `1600×1600` reference-render constant —
+> are recorded in `docs/refinement-todo.md` with resolution triggers.
 
 ## Non-goals
 

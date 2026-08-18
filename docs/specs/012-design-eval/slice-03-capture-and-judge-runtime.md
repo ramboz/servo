@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [adr-0009]
 last_verified: 2026-08-18
 ---
@@ -39,7 +39,7 @@ frozen definition from 012-01/02 can actually produce a score.
 - [x] `capture.mjs` + `capture_lib.mjs` + `capture_app` / `judge` /
       `_judge_api` / `_judge_cli` / `_post_with_retry` / `_extract_json` /
       `_ledger` implemented.
-- [x] 21 unit/node tests green — `JudgeParseTests` (5, api reply-parsing),
+- [x] 24 unit/node tests green — `JudgeParseTests` (5, api reply-parsing),
       `JudgeCliTransportTests` (6, the cli transport), `CaptureAppHonestyTests`
       (3, capture failure paths), and `test_capture_lib.mjs` (10 node tests on
       the extracted pure helpers, bridged into pytest, skipped where node is

@@ -812,41 +812,55 @@ functional for both of its own documented use cases.
 
 ---
 
-## Spec 012 (design-eval) shipped without the review-evidence ceremony
+## ~~Spec 012 (design-eval) shipped without the review-evidence ceremony~~ — RESOLVED 2026-08-18
 
-**Deferred:** Spec 012's mechanism (012-01..04) has shipped in every release
-through 0.8.0 — it is the code slice 020-01 extracted the shared
-`_common/fidelity_eval.py` harness out of — but it **never went through jig's
-compliance + craft + reconciliation review ceremony**. It predates the
-per-slice DONE-gate machinery and, until 2026-08-18, carried its slice plan as
-an inline `## Slices (SPIDR)` table that `status-board` could not see, so the
-board indexed a shipped, tested skill as an unstarted DRAFT.
+**Resolved.** Spec 012's mechanism shipped (0.3.0 through 0.8.0) before the
+per-slice review ceremony existed, and carried its slice plan as an inline
+table `status-board` could not see. The 2026-08-18 reconciliation retro-recorded
+the five slices, then **ran the full ceremony** (2 compliance + 1 craft
+reviewers, round 1 `needs-changes` → fixes → round 2). The three named evidence
+gaps are closed: `test_skill_surface.py` (25 tests) now exists (gap 2);
+012-02's install path is directly hardened — `bash -n`, SEED balance, manifest
+de-dup, config preservation, fail-closed paths (gap 3); and `capture.mjs`'s pure
+geometry was extracted to `capture_lib.mjs` with 10 node tests (gap 1 narrowed —
+see the deferred item below for the residual). The `_judge_cli` transport is
+now documented in SKILL.md and tested. 012-01..04 transitioned to `DONE`;
+012-05 stays `DEFERRED` (food-log is a separate repo). `JIG_REVIEW_EVIDENCE_GATE`
+was never bypassed — the DONE transitions cleared on real evidence.
 
-The 2026-08-18 reconciliation retro-recorded the five slices file-per-slice and
-placed 012-01..04 at `IN_PROGRESS` (code done, review not) and 012-05 at
-`DEFERRED` (its consumer, food-log, is a separate repo). It deliberately did
-**not** hand-set `DONE` or bypass `JIG_REVIEW_EVIDENCE_GATE` — reaching `DONE`
-requires the real review pass, not a frontmatter edit. Three concrete evidence
-gaps were named in the slice files rather than smoothed over:
+## Deferred nits from the spec-012 review (2026-08-18)
 
-1. **`capture.mjs` has zero automated coverage** — the Playwright capture
-   script is verified only by hand. Largest gap in spec 012.
-2. **`design-eval` ships no `SKILL.md` surface tests** — unlike every sibling
-   skill (scaffold-init, quality-gate, oracle-hook, spec-oracle,
-   autonomy-readiness).
-3. **012-02's install/splice path is thinly asserted** — 3 tests cover the
-   round-trip; manifest-registration and splice-idempotence lean on the shared
-   `oracle_overlay` conventions rather than their own assertions.
+**Deferred:** The spec-012 compliance + craft review passed the slices to DONE
+but named follow-ups deliberately left out of that reconciliation's scope
+(shipped-runtime robustness changes and cross-skill refactors that would pull in
+`content-fidelity` and want their own review):
 
-An **undocumented runtime addition** was also surfaced: `score.py` grew a second
-judge transport (`_resolve_claude` / `_judge_cli`) routing through the `claude`
-CLI when present, which the original spec text (API-only) never described. Now
-recorded in slice 012-03.
+1. **`capture.mjs`'s browser body is still hand-verified only** — the residual
+   of the old "capture.mjs uncovered" gap. `goto` / `setup`-dispatch /
+   `screenshot` cannot run without a browser servo does not ship; the pure
+   helpers (`capture_lib.mjs`) are the covered part. A `setup-node` CI leg plus
+   a Playwright smoke test would close it.
+2. **`capture.mjs` makes per-screen `setup` silently optional** (`if
+   (screen.setup)`) — a screen with no `setup` captures unseeded, now-dependent
+   state with no error, and `design_eval.py freeze` does not require one. This
+   is the exact failure the reproducible-capture AC exists to prevent. Fix:
+   require a `setup` per screen at freeze time, or warn/fail in `capture.mjs`.
+3. **`judge_transport(config)` + judge-prompt scaffolding are duplicated**
+   between `design-eval/score.py` and `content-fidelity/score.py` (3+3 sites
+   each) — a rule-of-three extraction into `_common/fidelity_eval.py`.
+4. **Small hardcodes:** the `1600×1600` reference-render viewport in
+   `capture.mjs` (the one geometry constant outside config/`capture_lib.mjs`);
+   the default viewport `{392,812,2}` written in three unlinked places; and
+   `_judge_cli`'s `cwd=app_png.parent.parent` re-deriving `base_dir` implicitly.
+5. **`templates/config.example.json` leaks a consumer path**
+   (`docs/designs/design_v1.0/food-log.dc.html`) into a shipped generic
+   template.
+6. **`name: design-eval` uses the bare form** rather than the `servo:` prefix
+   9 of 12 skills use (shared only with `content-fidelity` / `eval-authoring`);
+   changing a shipped skill's registered name is its own decision.
 
-**Resolution trigger:** whenever design-eval is next materially touched, OR when
-a real design-mockup→UI consumer adopts it (which also re-opens 012-05). Fix:
-run the compliance + craft + reconciliation reviewers against the shipped code,
-land `capture.mjs` coverage + `test_skill_surface.py`, then transition
-012-01..04 to REVIEWED → RECONCILED → DONE through `workflow.py` on the evidence.
+**Resolution trigger:** whenever design-eval is next materially touched, or when
+a real design-mockup→UI consumer adopts it (which also re-opens 012-05). Item 2
+is the highest-value (honesty-relevant); items 3–6 are hygiene.
 
-**Surfaced by:** `/jig:orient` + spec-012 reconciliation (2026-08-18).
+**Surfaced by:** spec-012 compliance + craft review passes (2026-08-18).
