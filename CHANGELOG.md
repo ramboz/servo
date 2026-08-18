@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/ramboz/servo/compare/v0.7.0...v0.8.0) (2026-08-13)
+
+
+### Features
+
+* **autonomy-readiness:** implement spec 023-02 loop.py readiness preflight ([#27](https://github.com/ramboz/servo/issues/27)) ([adad6b4](https://github.com/ramboz/servo/commit/adad6b423731c5f3cb23ee3ce22fa838e9d01fc1))
+* **autonomy-readiness:** land spec 023-01 autonomy-readiness gate ([#24](https://github.com/ramboz/servo/issues/24)) ([ae5218c](https://github.com/ramboz/servo/commit/ae5218c9828c3e2d3595948500ce926383d1f56c))
+* **heartbeat:** implement spec 024-01 durable cross-run quarantine (reframe ADR-0030) ([#25](https://github.com/ramboz/servo/issues/25)) ([560ea9d](https://github.com/ramboz/servo/commit/560ea9d61a5a604f5562e09421d806080c0c6344))
+* **heartbeat:** implement spec 025-01 lifecycle-aware coordinator ([#26](https://github.com/ramboz/servo/issues/26)) ([4f528f4](https://github.com/ramboz/servo/commit/4f528f4be5e2fa963e20b7c87aea6dc4f4ec3a52))
+
+
+### Documentation
+
+* **autonomy:** record the long-horizon-autonomy bridge (servo half) — ADR-0029/0030 + specs 023/024/025 ([#20](https://github.com/ramboz/servo/issues/20)) ([f9e4067](https://github.com/ramboz/servo/commit/f9e4067ef40072e7abc48e0335f9c0d67c89a767))
+
 ## [0.7.0](https://github.com/ramboz/servo/compare/v0.6.0...v0.7.0) (2026-07-12)
 
 
