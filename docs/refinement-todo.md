@@ -897,3 +897,32 @@ by producer so the node-grammar rules apply only to node-produced stderr. Either
 unblocks all four sites; do not wire them on consistency grounds alone.
 
 **Surfaced by:** spec 026-01 frame-critique (2026-08-19).
+
+---
+
+## SKILL.md's "Provenance in the ledger" section has no drift tripwire
+
+**Deferred:** Spec 012-04 established `skills/design-eval/test_skill_surface.py`
+as the drift tripwire for `SKILL.md` — it asserts documented CLI verbs against
+`design_eval.py`'s real argparse tuple, documented policy keys against the
+shipped template, and the Files table against `init()`'s vendoring list. Spec
+026-03 added a new **"Provenance in the ledger"** section documenting the
+`engine` / `engine_version` / `capture_transport` / `provenance` fields and the
+three reason tokens, and that section has **no** corresponding assertion.
+
+So the rest of that file is protected against prose-vs-code drift and this
+section is not: the reason tokens could be renamed in `score.py::_provenance`, or
+a field dropped, with the documentation silently going stale.
+
+**Why not done in 026-03:** outside that slice's acceptance criteria, and the
+reconciliation reviewer explicitly did not require it before DONE — recorded here
+rather than allowed to disappear.
+
+**Owner:** the next design-eval slice that touches `SKILL.md` or `_provenance`.
+
+**Resolution trigger:** the next change to either surface. Fix: assert the three
+reason tokens (`attested` / `not_attested` / `not_captured`) and the four field
+names against `score.py`'s `_provenance`, in the section-scoped style
+`test_skill_surface.py` already uses.
+
+**Surfaced by:** spec 026-03 reconciliation review (2026-08-19).

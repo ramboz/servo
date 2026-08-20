@@ -183,17 +183,22 @@ capture process**, not a guess by the process that writes the ledger.
    field, and never an independently-probed guess presented as an attestation.
 6. `SKILL.md` documents the fields, names the consumer (a human), and states that
    the value is an attestation from the capture process.
-7. Tests — and each item states whether it is **CI-runnable (pytest)** or
-   **node-skipped**, because a green CI does not mean the JS suite ran and a DONE
-   gate satisfied by a skipped test is precisely the failure mode under review.
-   Attested identity with the transport axis reduced to asserting the constant
-   `"bundled"` (026-02 deferred); a **setup
-   module that prints plain text *and* a JSON object to stdout still yields an
-   attested identity** (the AC1a contamination guard — this is the test that
-   would have caught the false "stdout is free" premise); a fake-scores run
-   records `not_captured`; a malformed line records `not_attested` and still
-   scores; hash-invariance; and no collision with the judge `transport` field in
-   historical rows.
+7. Tests. Each is labelled **CI-runnable (pytest)** or **node-skipped**, because
+   a green CI does not mean the JS suite ran, and a DONE gate satisfied by a
+   skipped test is precisely the failure mode under review:
+   - *(CI-runnable)* attested identity, with the transport axis reduced to
+     asserting the constant `"bundled"` (026-02 deferred);
+   - *(CI-runnable)* the **AC1a contamination guard** — a `setup` module printing
+     plain text *and* a JSON object to stdout still yields an attested identity;
+     this is the test that would have caught the false "stdout is free" premise;
+   - *(CI-runnable)* a fake-scores run records `not_captured`;
+   - *(CI-runnable)* a malformed line records `not_attested` and still scores;
+   - *(CI-runnable)* no-line and null-engine remain **distinct** in the record;
+   - *(CI-runnable)* hash-invariance;
+   - *(CI-runnable)* no collision with the judge `transport` field in historical rows;
+   - *(node-skipped)* `safeAttest` against a **throwing thunk** — returns a
+     null-engine payload and never touches `process.exitCode`. A Python fake does
+     not satisfy this.
 
 **DoD:**
 - [x] *(CI-runnable)* `capture.mjs` stdout report implemented (marker-delimited, emitted after
@@ -206,8 +211,11 @@ capture process**, not a guess by the process that writes the ledger.
 - [x] *(CI-runnable)* Delegation guard: `capture.mjs` calls `capture_lib.mjs`'s attestation
       helpers rather than re-inlining them (mirrors the existing
       `test_capture_mjs_imports_the_extracted_lib`).
-- [x] DoD **and AC7** items are each labelled CI-runnable or node-skipped.
-- [x] **Contamination test:** a `setup` module printing plain text *and* a JSON
+- [x] Every DoD line and every AC7 enumerated test carries a CI-runnable /
+      node-skipped label. (Ticked twice before it was true — the labelling
+      box is itself the kind of self-referential claim this ceremony exists
+      to catch, so it is stated precisely rather than broadly.)
+- [x] *(CI-runnable)* **Contamination test:** a `setup` module printing plain text *and* a JSON
       object to stdout still yields an attested identity (AC1a).
 - [x] *(CI-runnable)* Test: no-line and null-engine are recorded as **distinct** states, not merged.
 - [x] *(CI-runnable)* **Two-screen test where the second attestation differs** — per-screen
@@ -253,8 +261,7 @@ trustworthy evidence about the engine.
 - **Root cause, worth recording:** every ledger test I wrote ran only the
   *fake-scores* arm, so the live path — where both bugs lived — had zero
   coverage. This is the same shape as 026-01's dead-elision defect: a test that
-  looks like a guard but never enters the branch it guards. Four live-arm tests
-  added.
+  looks like a guard but never enters the branch it guards. Six live-arm tests added.
 - **`parseAttestation` deleted from `capture_lib.mjs`** — it had **no production
   consumer** (`capture.mjs` imports only `attestationLine`/`safeAttest`), making
   it a test-only shadow of the authoritative Python parser that would silently
@@ -291,7 +298,7 @@ trustworthy evidence about the engine.
 | `skills/design-eval/capture.mjs` | **updated** — emission after launch, before the `setup` import; failure reported on stderr. |
 | `skills/design-eval/score.py` | **updated** — `parse_attestation` (marker-first, dict-guarded), `capture_app` returns the attestation, `_provenance`, per-screen ledger rows. |
 | `skills/design-eval/test_capture_lib.mjs` | **updated** — node suite covers `safeAttest` against a throwing thunk (node-skipped in CI). |
-| `skills/design-eval/test_design_eval.py` | **updated** — attestation parsing, per-screen provenance, four live-arm tests, marker parity. |
+| `skills/design-eval/test_design_eval.py` | **updated** — attestation parsing, per-screen provenance, six live-arm tests, marker parity. |
 | `skills/design-eval/SKILL.md` | **updated** — "Provenance in the ledger" incl. the evidential-weight statement. |
 | `hosts/claude`, `hosts/codex` | **updated** — regenerated; drift check clean. |
 | `docs/refinement-todo.md` | **no-op** — nothing new deferred by this slice beyond the in-slice `per_screen` note. |
