@@ -42,20 +42,45 @@ is the one place a transport switch could invalidate a freeze.
    `oracle.sh` parses), never refuse.
 2. `capture.transport` is excluded from `definition_hash`; changing it never
    raises `StaleError` **on the score path**. Test asserts hash-invariance.
-3. **One resolver owns precedence.** A single Python function resolves
-   env > config > bundled and passes the result to `capture.mjs` as an explicit
-   `--transport <t>` argv. `capture.mjs` **never re-derives** transport from
-   config or env — this prevents a Python/JS split-brain in which the preflight
-   probes one browser and capture launches another (the files are copied into
-   targets independently, so drift would be permanent).
-4. **The reference-render path (`--refs`) does not silently follow the env
-   override.** `capture_refs` resolves from **config only**; if
-   `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` is set and differs, it **warns loudly
-   and refuses** rather than re-rendering frozen references under a different
-   engine.
-5. Re-rendering references under a transport different from the one recorded at
-   last freeze is surfaced as an explicit, actionable warning (it is a re-freeze
-   decision, not an incidental side effect).
+3. **One resolver owns precedence, with an explicit mode flag.** A single Python
+   function `resolve_transport(config, *, allow_env: bool)` is the only place
+   precedence lives: the score path calls it with `allow_env=True`
+   (env > config > bundled); `capture_refs` calls it with `allow_env=False`
+   (config > bundled). Stating the mode explicitly prevents an implementer from
+   satisfying this AC literally by having `capture_refs` call the env-honouring
+   resolver and thereby defeating AC4. It resolves once and passes the result to
+   `capture.mjs` as an explicit `--transport <t>` argv; `capture.mjs` **never
+   re-derives** transport from config or env, so the preflight and the launch can
+   never disagree (the runtime files are copied into targets independently, so
+   any drift would be permanent). Placement: `score.py` — `design_eval.py`
+   already loads it as a module and is itself never copied into targets, so both
+   spawn sites reach it without a third copy.
+3a. **`capture.mjs` fails closed when `--transport` is absent.** Its header
+   documents direct invocation (`node capture.mjs --refs`), and it ships as an
+   executable file inside the adopter's `.servo/design-eval/`. Silently defaulting
+   would re-render references under bundled Chromium while config says otherwise
+   — bypassing AC4 with no warning. It therefore errors with a clear message
+   naming the Python entry point, and the header docs are updated to match.
+4. **The `--refs` guard keys on STATE, not on which door set it.** Before
+   re-rendering, `capture_refs` compares the **resolved** transport against the
+   **transport that rendered the current frozen references** and, on a mismatch,
+   **refuses before overwriting anything** — regardless of whether the change
+   came from the env override or from editing `config.json`. The config door is
+   the headline feature and the *more likely* path, so guarding only the env door
+   (as an earlier draft did) left the real hazard open: `capture.mjs --refs`
+   loops every screen and overwrites each `reference` in place with no staging,
+   invalidating every `hashes[rel]` entry and forcing a full human re-approval.
+5. A **sanctioned route exists** for the author who deliberately wants to
+   re-render under a new engine (an explicit `--allow-transport-change` opt-in),
+   so the refusal in AC4 is a speed bump with a documented way through, not a
+   dead end.
+5a. **`capture_refs` records the render transport** into an unfrozen `capture.*`
+   key when it writes references — this is the state AC4 compares against, and
+   nothing records it today (`freeze()` writes only `hashes`,
+   `approved_content_hash`, `approval_status`, `approved_at`). A test pins that
+   this new key stays out of `definition_hash` (it will by construction, but it
+   is added on the *freeze* path rather than the config path, so it earns its own
+   assertion).
 6. 026-01's preflight becomes transport-aware: it probes what the *resolved*
    transport needs and names that transport's remedy.
 7. An invalid/unknown transport fails closed with a clear `env_error` **from the
@@ -74,11 +99,17 @@ is the one place a transport switch could invalidate a freeze.
 - [ ] Compliance + craft + **arch** review verdicts recorded under `reviews/`.
 - [ ] Reconciliation verdict + deviation log + reconciliation sweep recorded.
 
-**Fallback if A1 fails** (stated so the probe has a decision attached): ship the
-`capture` block, resolver, preflight integration, and `--refs` guard anyway with
-`bundled` as the only valid value — the schema and safety work stand on their
-own — and record in the deviation log that BYO is not viable, per ADR-0031 kill
-criterion 1. Do **not** force the transport through.
+**Fallback if A1 fails** (stated so the probe has a decision attached, and
+aligned with the Accepted ADR rather than overriding it): **ship nothing from
+this slice.** ADR-0031 kill criterion 1 says the decision "collapses toward
+Option A (bundled) — leaving only the ledger identity record, which remains
+independently worthwhile." Shipping the schema anyway would leave an irreversible
+`config.json` surface whose only legal value is the existing default, a `--refs`
+refusal that can never fire, and a "transport-aware" preflight with one transport
+— and would make this slice's own verticality claim false. In that case: mark
+026-02 ABANDONED with the probe result as the reason, and let 026-03 carry the
+value (it depends on the *resolved* transport, which degrades cleanly to
+"bundled"). Do **not** force the transport through.
 
 **Why `arch_review: true`:** changes the `config.json` schema, adds a
 cross-language interface (`--transport` argv), and touches the freeze boundary.

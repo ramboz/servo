@@ -34,10 +34,13 @@ This spec builds ADR-0031's composed answer:
   the ADR.
 - **Browser identity in the ledger** so a human investigating a score shift can
   see what rendered it.
-- **An opt-in authoring assist** that detects, recommends, and records a
-  transport — and **installs nothing** (re-scoped after frame-critique: servo has
-  no package-manager awareness, and mutating an adopter's dependency manifest is
-  not something consent can bound). Kept strictly out of `install()`'s path.
+- ~~An opt-in authoring assist~~ — **ABANDONED at frame-critique** (026-04).
+  Two re-scopes could not find positive net value: v1 (consented install) made
+  servo a package-manager driver in the adopter's repo; v2 (write the transport
+  to config) was worse, because a laptop's answer lands in the config CI reads
+  and manufactures the very failure 026-01 exists to explain. Its residual value
+  — recommending a transport — is folded into 026-01's guidance message and
+  026-02's `SKILL.md` update.
 
 **What this spec does NOT do** (ADR-0031 boundaries, load-bearing):
 
@@ -123,9 +126,9 @@ slice.
   *alternative* rule (reuse system Chrome) plus the override precedence.
 - **D — Data (026-03).** Split by the data recorded per run: add resolved
   transport + browser identity to the ledger rows.
-- **I — Interface (026-04).** Split by surface: the opt-in authoring assist is a
-  new CLI surface, deliberately last because it is the ADR's *demoted*,
-  convenience-tier mechanism.
+- ~~**I — Interface (026-04)**~~ — the axis was tried and the resulting slice was
+  **abandoned pre-implementation** on frame-critique evidence. Recorded rather
+  than deleted: the axis was legitimate, the slice was not.
 
 Every slice is vertical — each changes what an adopter or operator actually
 experiences, not just an internal layer.
@@ -142,9 +145,8 @@ experiences, not just an internal layer.
 - [026-03 — ledger-browser-identity](slice-03-ledger-browser-identity.md)
   — `capture.mjs` **attests** the engine it launched over a stdout channel;
   `score.py` records transport + attested identity in `ledger.jsonl`.
-- [026-04 — authoring-assist](slice-04-authoring-assist.md)
-  — opt-in detect → recommend → record-transport → print-the-command surface,
-  outside `install()`'s path. Installs nothing.
+- ~~[026-04 — authoring-assist](slice-04-authoring-assist.md)~~ — **ABANDONED**
+  pre-implementation; see the slice for the full reasoning and where its value went.
 
 ## Non-goals
 

@@ -34,38 +34,67 @@ remedy for everything else.
 
 **Acceptance criteria:**
 1. Before the first capture, `score.py` probes: (a) `shutil.which("node")`;
-   (b) library resolvability via a single `node -e "require.resolve('playwright')"`
-   spawn. Each failure yields a distinct `EnvError` naming the exact remedy.
+   (b) library resolvability via a single `node -e "require.resolve('<specifier>')"`
+   spawn. **The probe fails OPEN:** it reports "library absent" *only* when the
+   probe's stderr carries the `MODULE_NOT_FOUND` token (probe-confirmed). On any
+   other non-zero exit or unrecognised stderr it proceeds to capture and lets
+   capture's error be authoritative — because `-e` runs as CommonJS and an
+   environment such as `NODE_OPTIONS=--input-type=module` would make `require`
+   undefined, which must not be misreported as a missing library on a machine
+   where capture would have succeeded.
 2. The preflight **performs no browser launch** and adds **at most one extra
    node spawn per run** — and none at all when (a) already failed. (Falsifiable
    restatement of "cheap".)
 3. **Browser-binary presence is explicitly NOT preflighted** — detecting it needs
    a real Playwright import or launch, which would cost every success run or turn
    a working-but-slow environment into rc 2. It is covered by AC4 instead.
-4. `capture_app`'s error surfacing changes from `stderr[:200]` (head) to the
-   **last non-empty line(s)**, so a tool's own remedy survives instead of node's
-   preamble. This is what improves the modes a preflight cannot detect.
+4. `capture_app`'s error surfacing changes from `stderr[:200]` (a blind head
+   slice) to **salient-line selection**: drop stack frames (`^\s+at `), node
+   internals (`^node:internal/`), the caret line, the trailing `Node.js vX.Y.Z`
+   banner, and the `{ code: … }` object; keep the survivors (first 2 + last 2 if
+   over budget) under a character cap. **Grounded, not assumed** — a tail slice
+   was probed and rejected: for the library-absent case the cause
+   (`Cannot find package 'playwright'`) sits at line 4 of 18, the last non-empty
+   line is `Node.js v22.16.0`, and `stderr[-200:]` yields stack frames plus the
+   version banner — strictly worse than today's head. The filter above was probed
+   against the same output and returns exactly the cause line with no noise.
 5. The preflight runs **only** in the live-capture path: with
    `SERVO_DESIGN_EVAL_FAKE_SCORES` set, scoring still succeeds with node absent.
 6. Contract unchanged: failures stay `EnvError` → rc 2, stdout empty. The
-   preflight introduces **no new failing case** — it only reclassifies failures
-   that would have failed anyway, earlier and with a better message.
+   preflight introduces **no new failing case** — guaranteed by AC1's fail-open
+   rule, not merely asserted: the only conditions that halt are node-absent and a
+   token-confirmed missing library, both of which would have failed at capture
+   anyway. Every ambiguous probe outcome proceeds to capture.
 7. Non-interactive: never prompts, never reads stdin, never installs.
 
 **DoD:**
 - [ ] Preflight implemented inside the live-capture arm of `score()`.
 - [ ] Tests: node-missing, library-missing, all-clear, and **fake-scores-with-node-absent still passes** (AC5 regression guard).
 - [ ] Test: stdout empty + rc 2 on every preflight failure.
-- [ ] Test: the new stderr surfacing shows a remedy line that `[:200]` would have cut.
+- [ ] Test: the salient-line filter, run against a **recorded real** node
+      `ERR_MODULE_NOT_FOUND` stderr fixture (not a hand-written one with the
+      remedy conveniently last), returns the cause line and drops the banner,
+      caret, `code:` object and `at` frames.
+- [ ] Test: an ambiguous probe failure (non-zero exit **without** a
+      `MODULE_NOT_FOUND` token) does **not** halt — capture still runs (AC1/AC6
+      fail-open guard).
 - [ ] Test asserts no browser launch occurs during preflight (AC2/AC3).
 - [ ] `SKILL.md` Prerequisites references the runtime guidance.
 - [ ] Compliance + craft review verdicts recorded under `reviews/`.
 - [ ] Reconciliation verdict + deviation log + reconciliation sweep recorded.
 
 **Out of scope (stated, not implied):** transport awareness (026-02 owns it — this
-slice hardcodes today's single bundled path, preserving its "no config surface"
+slice probes today's single bundled specifier, preserving its "no config surface"
 verticality claim); app-down / selector / timeout failures, which no pre-launch
 probe can detect and which AC4 improves only by surfacing.
+
+**Inherited obligation for 026-02 (so it is a handoff, not a discovery):** this
+slice hardcodes the probe specifier `'playwright'`. When 026-02 changes what
+`capture.mjs` imports/launches (e.g. `playwright-core` + `channel:'chrome'`), it
+**must** update the preflight specifier alongside it — or derive it from the
+resolved transport — otherwise the preflight demands a package the chosen
+transport does not need (a new false failure) or passes while the real import
+fails.
 
 **Vertical?** Yes — an adopter whose run fails gets an actionable remedy at the
 point of failure, with no config surface and no dependency on later slices.

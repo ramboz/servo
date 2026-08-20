@@ -122,7 +122,7 @@
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-01 — runtime-preflight-guidance | DRAFT | **The primary mechanism** ([ADR-0031](../decisions/adr-0031-design-eval-browser-acquisition.md)): `score.py` preflight probes node/library/browser BEFORE spawning capture and emits an actionable remedy instead of the opaque `node/playwright unavailable`. Runs on the machine that actually fails (CI/Routines). Probe must live in `score.py` — `capture.mjs`'s top-level Playwright import throws first. Message-only: rc 2 contract unchanged. |
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-02 — transport-selection | DRAFT | Unfrozen `capture.transport` + `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` override so an adopter can reuse installed Chrome and skip the ~150&#8211;300&nbsp;MB download. Excluded from `definition_hash` (environmental, mirroring `app_url`) &#8594; never `StaleError`. Carries load-bearing **A1** (`channel:'chrome'` viability) &#8212; probe first; if it fails, ADR-0031 kill criterion 1 fires. `arch_review` (schema + freeze boundary). |
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-03 — ledger-browser-identity | DRAFT | Records resolved transport + browser name/version per run so a human can investigate a score shift. Observability, **not** a gate &#8212; not hashed, never a staleness trigger, best-effort. Carries **A2** (trustworthy version string); if untrustworthy, omit rather than mislead. |
-| [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-04 — authoring-assist | DRAFT | The ADR's **demoted** convenience tier: opt-in detect-ask-(consented)install. MUST stay outside `install()`&#8594;`init()` (`design_eval.py:148`) or `install` blocks on stdin in CI &#8212; that guard test is the point. Carries **A4** (non-interactive stdin degradation). |
+| [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-04 — authoring-assist | ABANDONED | The ADR's **demoted** convenience tier: opt-in detect-ask-(consented)install. MUST stay outside `install()`&#8594;`init()` (`design_eval.py:148`) or `install` blocks on stdin in CI &#8212; that guard test is the point. Carries **A4** (non-interactive stdin degradation). |
 
 ## Deferred slices
 
@@ -134,6 +134,14 @@
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-02 - agent-loop adapter hints | Resume after 013-01 lands and a real caller needs |
 | [013-host-phase-aware-loops](013-host-phase-aware-loops/spec.md) | 013-03 - design-eval and heartbeat guidance | Resume when a second design-eval consumer appears, or |
 | [016-execution-planner](016-execution-planner/spec.md) | 016-05 — prompt-render |  |
+
+## Abandoned slices
+
+> Slices permanently dropped, with a stated reason. This is distinct from Deferred (parked, resumable) — re-open by transitioning to DRAFT.
+
+| Spec | Slice | Abandonment reason |
+|------|-------|---------------------|
+| [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-04 — authoring-assist | two independent re-scopes could not find a version of |
 
 ## Richer-skill selection audit (spec 096-05)
 
