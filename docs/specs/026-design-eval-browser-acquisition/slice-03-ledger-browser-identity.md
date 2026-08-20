@@ -1,9 +1,8 @@
 ---
-status: REVIEWED
+status: DONE
 dependencies: [adr-0031]
-last_verified:
+last_verified: 2026-08-19
 frame_review: true
-claimed_by: claude/jig-orient-6324de
 ---
 
 ## Slice 026-03 — ledger-browser-identity
@@ -211,7 +210,7 @@ capture process**, not a guess by the process that writes the ledger.
 - [x] *(CI-runnable)* Delegation guard: `capture.mjs` calls `capture_lib.mjs`'s attestation
       helpers rather than re-inlining them (mirrors the existing
       `test_capture_mjs_imports_the_extracted_lib`).
-- [x] Every DoD line and every AC7 enumerated test carries a CI-runnable /
+- [x] *(n/a)* Every DoD line and every AC7 enumerated test carries a CI-runnable /
       node-skipped label. (Ticked twice before it was true — the labelling
       box is itself the kind of self-referential claim this ceremony exists
       to catch, so it is stated precisely rather than broadly.)

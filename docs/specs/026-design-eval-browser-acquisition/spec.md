@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 skill: design-eval
 use_cases: []
 ---
@@ -8,6 +8,19 @@ use_cases: []
 
 > Implements [ADR-0031](../../decisions/adr-0031-design-eval-browser-acquisition.md)
 > (Accepted 2026-08-19, after a 4-round adversarial frame-critique).
+
+> **Status banner — read this before trusting the `DONE` rollup.** The
+> frontmatter `status: DONE` is *computed*: `workflow.py` excludes `DEFERRED` and
+> `ABANDONED` slices, so a spec whose live slices are all DONE rolls up to DONE
+> even when scope was parked (a known wart, logged in `docs/refinement-todo.md`).
+>
+> What actually shipped: **026-01** (the runtime preflight — ADR-0031's *primary*
+> mechanism) and **026-03** (ledger browser-identity attestation). What did not:
+> **026-02** is `DEFERRED` on missing evidence — the footprint saving that
+> motivated ADR-0031 turns on a `playwright` vs `playwright-core` question this
+> repo cannot answer, since it deliberately ships no browser — and **026-04** is
+> `ABANDONED`. So the adopter-facing footprint concern in ADR-0031 is **not
+> addressed**; the guidance and observability halves are.
 
 ## Overview
 
