@@ -754,12 +754,20 @@ class PreflightTests(unittest.TestCase):
 
             def spy(*a, **k):
                 seen.update(k)
+                seen["argv"] = a[0] if a else None
                 return _P()
 
             score.subprocess.run = spy
             try:
                 score.preflight_capture(Path(td))
                 self.assertEqual(seen.get("cwd"), str(Path(td)))
+                # AC2/AC3: pin the ARGV, not just the kwargs — a probe rewritten
+                # to launch a browser would otherwise pass this test.
+                argv = seen.get("argv")
+                self.assertEqual(argv[:2], ["node", "-e"])
+                self.assertIn("require.resolve", argv[2])
+                self.assertNotIn("chromium", " ".join(argv).lower())
+                self.assertNotIn("launch", " ".join(argv).lower())
             finally:
                 score.subprocess.run, score.shutil.which = orig, orig_which
 
@@ -873,8 +881,12 @@ class SalientStderrTests(unittest.TestCase):
         # AC4: a truncated `npx playwright inst` is the failure this prevents.
         long_cause = "C" * 380
         out = score._fe.salient_stderr(f"{long_cause}\nnpx playwright install\n")
-        self.assertNotIn("npx playwright inst\n", out)
-        self.assertFalse(out.endswith("npx playwright inst"))
+        # The cause fits (380 < 400); the remedy does not fit alongside it, so it
+        # must be SKIPPED WHOLE — never emitted truncated. Assert the exact
+        # output, so this can actually fail (the earlier form was tautological:
+        # `out` never contains a newline, and endswith() also passes for "").
+        self.assertEqual(out, long_cause)
+        self.assertNotIn("npx", out)
 
 
 class PreflightExitContractTests(unittest.TestCase):
@@ -908,7 +920,9 @@ class SalientStderrRegressionTests(unittest.TestCase):
         return "\n".join(ln for ln in raw.splitlines() if not ln.startswith("# "))
 
     def test_app_down_fixture_surfaces_the_cause_first(self):
-        # Fixture (iii): recorded real, no Playwright needed (a closed port).
+        # Fixture (iii): the node run is real, but the ERROR SHAPE is constructed
+        # (Playwright is not installable here) — see the fixture's own header.
+        # Labelled rather than passed off as a recording.
         out = score._fe.salient_stderr(self._fixture("stderr-app-down.txt"))
         self.assertTrue(out.split(" | ")[0].startswith("capture: net::ERR_CONNECTION_REFUSED"),
                         f"rank 1 should be the cause, got {out.split(' | ')[0]!r}")

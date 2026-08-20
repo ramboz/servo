@@ -109,6 +109,14 @@ def salient_stderr(stderr: str, budget: int = SALIENT_BUDGET) -> str:
                 i += 1
             continue
         i += 1
+        # Three deliberate normalizations, each for a different job:
+        #   * header match above uses line.strip()  — anchors must not be defeated
+        #     by leading indentation;
+        #   * drop predicates below test the RAW line — they are anchored patterns
+        #     (^\s+at , ^Node\.js v...) that encode leading whitespace as signal;
+        #   * emission uses the box-stripped, trimmed form (AC4).
+        # Left unmerged intentionally: unifying them would change block-walk
+        # behaviour that the recorded fixtures currently pin.
         stripped = line.translate(_SALIENT_BOX_TABLE).strip()
         if not stripped or any(p.search(line) for p in drop):
             continue
@@ -118,6 +126,9 @@ def salient_stderr(stderr: str, budget: int = SALIENT_BUDGET) -> str:
         return stderr.strip()[:SALIENT_FLOOR_BUDGET]
 
     ranked = [kept[0]] + [line for line in kept[1:] if remedy.search(line)]
+    # NOTE: value-membership, so byte-identical duplicate lines collapse. That is
+    # intended — repeated identical stderr lines are noise, and the budget is
+    # better spent on distinct information.
     ranked += [line for line in kept[1:] if line not in ranked]
 
     out, total = [], 0

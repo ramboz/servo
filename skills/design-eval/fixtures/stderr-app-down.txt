@@ -1,8 +1,14 @@
-# RECORDED REAL stderr — do not hand-edit, do not reorder.
-# provenance: node v22.16.0, macOS 26.5.2
-# command: capture.mjs's caught-error path — `capture: ${err.message}` with a
-#   Playwright-shaped page.goto ECONNREFUSED message (app_url at a closed port)
-# captured: 2026-08-19 for spec 026-01 DoD fixture (iii) app-down
+# CONSTRUCTED-INPUT capture — labelled honestly, not 'RECORDED REAL'.
+# The node run and its stderr bytes are real, but the ERROR MESSAGE SHAPE was
+# written by hand to mimic Playwright's page.goto ECONNREFUSED + 'Call log:'
+# form, because Playwright is not installable in this repo. It exercises
+# capture.mjs's caught-error path (`capture: ${err.message}`), which is the
+# shape that matters for the filter — but it is NOT a recording of a real
+# Playwright failure, and must not be cited as one.
+# provenance: node v22.16.0, macOS 26.5.2, playwright ABSENT (hence constructed)
+# captured: 2026-08-19 for spec 026-01 fixture (iii) app-down
+# TO UPGRADE: re-record on a Playwright-equipped machine with app_url at a
+#   closed port, and drop this caveat.
 capture: net::ERR_CONNECTION_REFUSED at http://localhost:4173/
 Call log:
   - navigating to "http://localhost:4173/", waiting until "networkidle"
