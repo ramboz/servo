@@ -1,6 +1,6 @@
 ---
 status: DRAFT
-dependencies: [026-02, adr-0031]
+dependencies: [adr-0031]
 last_verified:
 frame_review: true
 ---

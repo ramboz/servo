@@ -34,7 +34,7 @@ remedy for everything else.
 
 **Acceptance criteria:**
 1. Before the first capture, `score.py` probes: (a) `shutil.which("node")`;
-   (b) library resolvability via a single `node -e "require.resolve('<specifier>')"`
+   (b) library resolvability via a single `node -e "require.resolve('playwright')"`
    spawn. **The probe fails OPEN:** it reports "library absent" *only* when the
    probe's stderr carries the `MODULE_NOT_FOUND` token (probe-confirmed). On any
    other non-zero exit or unrecognised stderr it proceeds to capture and lets
@@ -70,7 +70,11 @@ remedy for everything else.
      adopter's headline would have been node internals, the very defect this AC
      removes. Additionally drop stack frames (`^\s+at `), the trailing
      `Node.js vX.Y.Z` banner, the `{ code: … }` object, and box-drawing/
-     padding-only lines. Strip box-drawing characters before measuring.
+     padding-only lines. Strip box-drawing characters before measuring — **and the emitted line is that
+     box-stripped, whitespace-trimmed form**, not the raw one (otherwise a
+     compliant implementation could emit `║     npx playwright install    ║`
+     verbatim, which the rank-1 exact-match tests would not catch since all three
+     fixtures' cause lines fall outside the box).
    - **Rank** the survivors: the cause (first survivor) first, then remedy lines
      matched by **command shape** — `^\s*(npx|npm|yarn|pnpm|pip|python -m pip|
      brew|apt|apt-get)\b` after box-stripping — then the rest. **Intra-tier
@@ -81,6 +85,16 @@ remedy for everything else.
      ahead of the runnable command and can exhaust the budget before reaching it
      — telling an adopter whose symptom is *Playwright is unusable* that it was
      recently installed.
+   - **The budget is 400 characters** — stated, because the number decides
+     whether the mechanism works. Fixture (ii)'s cause
+     (`browserType.launch: Executable doesn't exist at /Users/…/ms-playwright/…`,
+     ≈140 chars and longer under a CI `$HOME`) plus its remedy
+     (`npx playwright install`, 22) needs ≈165+, so a budget of 150 would make
+     the skip-whole-line rule below discard the remedy **silently** — no error,
+     no truncation, just absence, the exact outcome this AC exists to prevent.
+     400 leaves headroom for the box case; today's 200 does not. Fixture (ii)'s
+     test asserts the remedy survives **at 400**, not at whatever value the test
+     happens to pass under.
    - **Budget boundaries are defined, not left to the implementer:** never emit a
      partial remedy (a truncated `npx playwright inst` is exactly the failure
      this AC exists to prevent) — skip a line that does not fit and try the next,
@@ -152,8 +166,15 @@ remedy for everything else.
       cause line** (not merely that it "survives" somewhere, which cannot detect a
       rank-1 corruption) and that, where the tool emits one, the runnable remedy
       is present.
-- [ ] Test: the helper lives in `_common/fidelity_eval.py` and both `capture_app`
-      and `design-eval/score.py`'s judge path call it (no second inline copy).
+- [ ] Test: the helper lives in `_common/fidelity_eval.py`, `capture_app` calls
+      it, **and `score.py`'s judge path (`:157`) is UNCHANGED** — a guard against
+      re-wiring the node-grammar filter to the `claude -p` producer before a real
+      fixture for it exists. (An earlier DoD line required the opposite; it
+      contradicted AC4a, and the DoD is what an implementer ticks.)
+- [ ] `docs/refinement-todo.md` entry written for the deferred call sites
+      (judge path, `content-fidelity`, `eval-authoring`) with a named owner and
+      the trigger "a recorded real `claude -p` failure fixture exists, or the
+      helper is parameterised by producer".
 - [ ] **Prototype-parity test (mechanical, not an exhortation).** Three defects
       here came from code being stricter than its own AC, and a checkbox reading
       "the suite matches the prose" cannot fail — an implementer who writes
@@ -175,12 +196,15 @@ remedy for everything else.
 - [ ] Compliance + craft review verdicts recorded under `reviews/`.
 - [ ] Reconciliation verdict + deviation log + reconciliation sweep recorded.
 
-**Out of scope (stated, not implied):** transport awareness (026-02 owns it — this
+**Out of scope (stated, not implied):** transport awareness (026-02 owned it, but
+is now **DEFERRED** pending the A1 package probe, so `'playwright'` is the
+specifier for the foreseeable future — this
 slice probes today's single bundled specifier, preserving its "no config surface"
 verticality claim); app-down / selector / timeout failures, which no pre-launch
 probe can detect and which AC4 improves only by surfacing.
 
-**Inherited obligation for 026-02 (so it is a handoff, not a discovery):** this
+**Inherited obligation for 026-02 — DORMANT while 026-02 is DEFERRED** (recorded
+so it is a handoff rather than a rediscovery if that slice re-opens): this
 slice hardcodes the probe specifier `'playwright'`. When 026-02 changes what
 `capture.mjs` imports/launches (e.g. `playwright-core` + `channel:'chrome'`), it
 **must** update the preflight specifier alongside it — or derive it from the
