@@ -43,8 +43,8 @@ capture process**, not a guess by the process that writes the ledger.
 
 **Acceptance criteria:**
 1. `capture.mjs` emits **one JSON line on stdout**, on the `--screen` path only,
-   reporting **both** the engine it actually launched (name + version) **and the
-   transport it actually resolved**. `capture_app` parses it; a malformed/absent
+   reporting the engine it actually launched (name + version) and the transport
+   it was **instructed** to use (echoed — see AC2, it cannot diverge). `capture_app` parses it; a malformed/absent
    line is tolerated (AC4). Scoping to `--screen` matters because
    `design_eval.capture_refs` runs `capture.mjs --refs` **without**
    `capture_output`, so an unconditional line would print raw JSON into the
@@ -52,13 +52,35 @@ capture process**, not a guess by the process that writes the ledger.
    *Oracle collision checked and clear:* `oracle.sh` parses **`score.py`'s**
    stdout, and `capture_app` runs the child with `capture_output=True`, so the
    child's stdout is absorbed by the parent and can never reach the oracle stream.
-1a. **The line is marker-delimited and scanned by marker, never positionally.**
+1b. **The attestation can never fail a score — guarded, not merely intended.**
+   `capture.mjs` has exactly **one** `try`, whose `catch` sets
+   `process.exitCode = 2`; `capture_app` maps any non-zero rc to `EnvError`, and
+   `score()` then never reaches `_ledger`. So an engine accessor that *throws*
+   (`browser.version()` unavailable on a `playwright-core`/channel build — A5 is
+   still unprobed — or the browser dying between launch and query) would, under a
+   naive implementation, turn a **successful screenshot** into no score and no
+   row: provenance becoming load-bearing, in direct contradiction of AC4 and
+   strictly worse than the pre-slice status quo, on the BYO path this spec
+   exists to enable. Therefore the attestation block — accessor call,
+   serialization, write — is wrapped in its **own** try/catch that on any error
+   emits the marker line with `engine: null` **plus a short `error` string**, and
+   **never assigns `process.exitCode`**. That `error` string is also what
+   separates "A5 false, nothing to do" from "accessor threw, possibly transient".
+1a. **The line is marker-delimited, scanned by marker, with a pinned position.**
    It carries a namespaced single-line sentinel (e.g. `##servo-capture:{…}`);
-   the parser scans for **that marker's line** — not first-line, not last-line,
-   and explicitly **not** `_extract_json`. Any non-matching stdout (the adopter's
-   own logging) is **discarded, not treated as failure**, so a rich `setup`
-   script can never silently decay the field to `not_attested` and thereby
-   misattribute an adopter's `console.log` to a Playwright/A5 problem.
+   the parser scans for **that marker's line** and explicitly **not**
+   `_extract_json`. Any non-matching stdout (the adopter's own logging) is
+   **discarded, not treated as failure**, so a rich `setup` script can never
+   silently decay the field to `not_attested` and misattribute an adopter's
+   `console.log` to a Playwright/A5 problem.
+   **A marker cannot be made collision-proof** — `SKILL.md` documents its shape,
+   and the setup author debugging "why is my provenance unattested" is exactly
+   the person who might echo it. The defence is **determinism, not uniqueness**:
+   servo emits the line **immediately after launch and before the `setup`
+   import**, and the parser takes the **first** marker-matched line. A colliding
+   line can then only ever appear later, and can only mis-record provenance —
+   never fail a score (AC4 + AC1b) — so this is a correctness-of-evidence
+   concern, bounded, not a reliability one.
 2. **No mixed-provenance rows.** Every provenance field comes from the
    attestation line or is explicitly unattested; nothing is re-derived
    writer-side. **Honest framing of the transport field:** given 026-02's single
@@ -86,7 +108,12 @@ capture process**, not a guess by the process that writes the ledger.
    `capture_app` under `SERVO_DESIGN_EVAL_FAKE_SCORES` yet still writes a ledger
    row, and the ledger has no other synthetic-run marker, so this field is the
    only place that fact could surface) must be distinguishable from
-   `not_attested` (capture happened; identity unavailable). A third distinction
+   `not_attested` (capture happened; identity unavailable). **"Always emits" is
+   honestly scoped to "always, once a browser exists":** `chromium.launch()` is
+   top-level and outside the `try`, so a launch failure — the no-browser case
+   026-01 preflights — emits nothing, exits non-zero, and writes no row at all.
+   The observable states are therefore exactly: no row / no line / null engine /
+   attested. A third distinction
    is available **for free** and worth taking, because the remedies differ:
    `capture.mjs` **always** emits the line, with an explicit null engine when the
    accessor fails — so "line present + null engine" (A5 false: nothing to do)
@@ -104,7 +131,16 @@ capture process**, not a guess by the process that writes the ledger.
    historical rows.
 
 **DoD:**
-- [ ] `capture.mjs` stdout report implemented; `capture_app` parses it.
+- [ ] `capture.mjs` stdout report implemented (marker-delimited, emitted after
+      launch and before the `setup` import); `capture_app` parses the **first**
+      marker line, never `_extract_json`.
+- [ ] **Accessor-throw test:** a stubbed accessor that *throws* still scores and
+      still writes a row with `engine: null` + an `error` string (AC1b). This is
+      distinct from the malformed-line test, which exercises only the Python parser.
+- [ ] **Contamination test:** a `setup` module printing plain text *and* a JSON
+      object to stdout still yields an attested identity (AC1a).
+- [ ] Test: no-line (pre-channel copy) and null-engine (accessor unavailable) are
+      recorded as **distinct** states, not merged.
 - [ ] Ledger rows carry attested capture-transport + engine under a distinct key
       (or a reason token), with no writer-side re-derivation.
 - [ ] Fake-scores row asserts `not_captured` — a synthetic score is never

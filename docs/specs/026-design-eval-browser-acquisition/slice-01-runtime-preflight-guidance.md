@@ -59,10 +59,18 @@ remedy for everything else.
    slice) to **salience-RANKED line selection** — explicitly *not* positional at
    any stage, since two positional heuristics have now been falsified here
    (head, then "first 2 + last 2"):
-   - **Drop** stack frames (`^\s+at `), node internals (`^node:internal/`), the
-     `^file://` preamble and its echoed source line, caret lines, the trailing
-     `Node.js vX.Y.Z` banner, the `{ code: … }` object, and box-drawing/padding-
-     only lines. Strip box-drawing characters before measuring.
+   - **Drop, as a BLOCK rule — not per-line predicates.** Node's uncaught-
+     exception preamble is a three-line *block*: frame header / echoed source /
+     caret. A frame header — `^(file://|node:internal/|/).*:\d+$` — drops
+     **itself and every following line through the caret line or the next blank
+     line, whichever comes first**. Per-line predicates are provably insufficient
+     here: probed, the AC's earlier per-line form left
+     `throw new ERR_MODULE_NOT_FOUND(packageName, …)` as the first survivor, and
+     the rank rule then promotes the first survivor to *the cause* — so the
+     adopter's headline would have been node internals, the very defect this AC
+     removes. Additionally drop stack frames (`^\s+at `), the trailing
+     `Node.js vX.Y.Z` banner, the `{ code: … }` object, and box-drawing/
+     padding-only lines. Strip box-drawing characters before measuring.
    - **Rank** the survivors: the cause (first survivor) first, then remedy lines
      matched by **command shape** — `^\s*(npx|npm|yarn|pnpm|pip|python -m pip|
      brew|apt|apt-get)\b` after box-stripping — then the rest. **Intra-tier
@@ -77,7 +85,9 @@ remedy for everything else.
      partial remedy (a truncated `npx playwright inst` is exactly the failure
      this AC exists to prevent) — skip a line that does not fit and try the next,
      and elide the **middle** of an over-long line (long cache paths are the only
-     reason the budget binds) rather than its tail. **Zero-survivor floor:** if
+     reason the budget binds) rather than its tail — elision is **per-line**, and
+     applies only when a single line exceeds the budget, never to the assembled
+     output. **Zero-survivor floor:** if
      the drop stage removes every line, fall back to today's head slice rather
      than emitting an empty diagnostic — a strict regression otherwise.
    Ranking rather than slicing is what makes this robust: Playwright's
@@ -95,6 +105,22 @@ remedy for everything else.
    **command shape** rather than substring, and it is recorded here as a caution:
    a reconstruction can pass while the specified rule fails.
 
+4a. **The filter is a shared helper, not an inline fix.** It lives in
+   `skills/_common/fidelity_eval.py` (the ADR-0024 home `score.py` already imports
+   through) as a named function — because `stderr.strip()[:200]` is **not** local
+   to the line AC4 replaces. Verified by enumeration: **5 call sites across 3
+   skills**, including `design-eval/score.py:157` (the `cli` judge path, 46 lines
+   below the target, whose failures — auth expiry, rate limit, model unavailable —
+   are all remedy-bearing) and `content-fidelity/score.py:157,224`, a sibling that
+   drives the same capture pattern its docstring says it mirrors exactly. Writing
+   it inline would leave identical truncation in the same file and diverge two
+   skills' message quality for the same failure; and since `hosts/` regenerates
+   from `skills/`, a copy-paste multiplies into three divergent copies.
+   **Scope decision, stated rather than left silent:** this slice applies the
+   helper to `capture_app` (its own path) **and** to `design-eval/score.py:157`
+   (same file, zero extra risk). `content-fidelity` and `eval-authoring` call
+   sites are **deferred with a named owner** — a refinement-todo entry — because
+   they belong to other skills whose tests this slice does not own.
 5. The preflight runs **only** in the live-capture path: with
    `SERVO_DESIGN_EVAL_FAKE_SCORES` set, scoring still succeeds with node absent.
 6. Contract unchanged: failures stay `EnvError` → rc 2, stdout empty. The
@@ -118,8 +144,15 @@ remedy for everything else.
       Playwright version, OS, exact command).
 - [ ] Tests: the salience filter against those fixtures for all three shapes —
       (i) library absent, (ii) browsers not downloaded, (iii) app down —
-      asserting the cause **and**, where the tool emits one, the runnable remedy
-      survive in each.
+      asserting **by exact match that the emitted FIRST line equals the expected
+      cause line** (not merely that it "survives" somewhere, which cannot detect a
+      rank-1 corruption) and that, where the tool emits one, the runnable remedy
+      is present.
+- [ ] Test: the helper lives in `_common/fidelity_eval.py` and both `capture_app`
+      and `design-eval/score.py`'s judge path call it (no second inline copy).
+- [ ] **Prototype-parity check:** the test suite exercises the filter exactly as
+      the AC specifies it — no stricter predicate in code than in prose. Three
+      defects in this slice came from a prototype being stricter than its own AC.
 - [ ] Test: zero-survivor input falls back to the head slice (no empty diagnostic).
 - [ ] Test: a remedy line that would not fit is skipped whole, never truncated.
 - [ ] Test: the probe's spawn kwargs carry `cwd=base_dir` (AC1's false-positive
