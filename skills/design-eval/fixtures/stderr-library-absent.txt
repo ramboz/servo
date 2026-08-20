@@ -1,6 +1,7 @@
 # RECORDED REAL stderr — do not hand-edit, do not reorder.
 # provenance: node v22.16.0, macOS 26.5.2, playwright ABSENT
-# command: node -e "import { chromium } from 'playwright'" (ESM, lib not installed)
+# command: node fake_capture.mjs — a one-line ESM file `import { chromium } from 'playwright';`
+#          (an .mjs file, not `node -e`, which is why the payload names a .mjs path)
 # captured: 2026-08-19 for spec 026-01 DoD fixture (i) library-absent
 node:internal/modules/package_json_reader:256
   throw new ERR_MODULE_NOT_FOUND(packageName, fileURLToPath(base), null);

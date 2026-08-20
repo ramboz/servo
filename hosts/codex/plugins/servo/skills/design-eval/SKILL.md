@@ -26,6 +26,11 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
   `/servo:scaffold-init` first).
 - The project can screenshot its UI with **Playwright** (a project
   devDependency; `npx playwright install chromium` once). servo ships no browser.
+  **If it is missing, you do not have to remember this:** the scoring run
+  preflights `node` and the Playwright library on the machine that actually
+  runs the oracle — CI, a Routine, a detached loop — and fails with the exact
+  install command for that machine rather than an opaque error. Failures stay
+  `env_error` (rc 2), never a silent `0.0`.
 - Design mockups renderable in a browser (e.g. claude-design `.dc.html`).
 - A judge transport for live scoring (the freeze + install steps need neither;
   only `score` does):

@@ -72,6 +72,7 @@ _fe = _load_fidelity_eval()
 EnvError = _fe.EnvError
 StaleError = _fe.StaleError
 sha256_text = _fe.sha256_text
+salient_stderr = _fe.salient_stderr
 sha256_file = _fe.sha256_file
 
 
@@ -146,7 +147,7 @@ def capture_app(base_dir: Path, screen: dict) -> Path:
         # node-produced stderr ONLY (AC4a) — the judge path at _judge_cli keeps
         # `[:200]` deliberately, since these predicates parse node's grammar.
         raise EnvError(
-            f"capture failed for screen {screen['id']!r}: {_fe.salient_stderr(proc.stderr)}")
+            f"capture failed for screen {screen['id']!r}: {salient_stderr(proc.stderr)}")
     return out
 
 
@@ -291,18 +292,17 @@ def score(base_dir: Path) -> float:
         if transport == "cli" and not _resolve_claude():
             raise EnvError(
                 "`claude` CLI not found — set SERVO_DESIGN_EVAL_CLAUDE_BIN or add it to PATH")
+        # AC5: live-capture arm only, so the fake-scores path is unaffected.
+        # AC2: once per run, not per screen — no latch needed here.
+        preflight_capture(base_dir)
 
     per_screen = []
-    _preflighted = False   # AC2: at most one probe spawn per run, not per screen
     for screen in config["screens"]:
         if fake is not None:
             if screen["id"] not in fake:
                 raise EnvError(f"fake scores missing screen {screen['id']!r}")
             samples = [float(x) for x in fake[screen["id"]]]
         else:
-            if not _preflighted:
-                preflight_capture(base_dir)
-                _preflighted = True
             app_png = capture_app(base_dir, screen)
             ref_png = base_dir / screen["reference"]
             if not ref_png.is_file():

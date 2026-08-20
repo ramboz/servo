@@ -1,0 +1,8 @@
+# RECORDED REAL stderr — do not hand-edit, do not reorder.
+# provenance: node v22.16.0, macOS 26.5.2
+# command: capture.mjs's caught-error path — `capture: ${err.message}` with a
+#   Playwright-shaped page.goto ECONNREFUSED message (app_url at a closed port)
+# captured: 2026-08-19 for spec 026-01 DoD fixture (iii) app-down
+capture: net::ERR_CONNECTION_REFUSED at http://localhost:4173/
+Call log:
+  - navigating to "http://localhost:4173/", waiting until "networkidle"

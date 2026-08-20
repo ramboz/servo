@@ -63,7 +63,7 @@ def sha256_file(path: Path) -> str:
 # leak the echoed source line, which then ranks as the "cause".
 SALIENT_FRAME_HEADER = r"^(file://|node:internal/|/).*:\d+$"
 SALIENT_DROP_LINE = (
-    r"^\s+at\s",              # stack frames
+    r"^\s+at ",               # stack frames  (AC4 literal: trailing space)
     r"^Node\.js v\d",          # trailing version banner
     r"^\s*\}\s*$",             # closing brace of the { code: ... } object
     r"^\s*code:\s",           # the code: field
@@ -73,6 +73,7 @@ SALIENT_DROP_LINE = (
 # positioned ABOVE the real command in its box).
 SALIENT_REMEDY = r"^\s*(npx|npm|yarn|pnpm|pip|python -m pip|brew|apt|apt-get)\b"
 _SALIENT_BOX = "\u2551\u2554\u2557\u255a\u255d\u2550\u2500\u2502\u250c\u2510\u2514\u2518"
+_SALIENT_BOX_TABLE = str.maketrans("", "", _SALIENT_BOX)
 # Normal-path budget. NOTE the deliberate asymmetry with SALIENT_FLOOR_BUDGET
 # below: the zero-survivor floor is defined as EXISTING behaviour (today's head
 # slice), not as this budget. Do not unify them — that would silently change the
@@ -91,7 +92,7 @@ def salient_stderr(stderr: str, budget: int = SALIENT_BUDGET) -> str:
     """
     drop = [re.compile(p) for p in SALIENT_DROP_LINE]
     header = re.compile(SALIENT_FRAME_HEADER)
-    remedy = re.compile(SALIENT_REMEDY, re.I)
+    remedy = re.compile(SALIENT_REMEDY)   # no re.I — AC4 states none
     caret = re.compile(r"^\s*\^+\s*$")
 
     raw = stderr.splitlines()
@@ -108,7 +109,7 @@ def salient_stderr(stderr: str, budget: int = SALIENT_BUDGET) -> str:
                 i += 1
             continue
         i += 1
-        stripped = line.translate({ord(c): None for c in _SALIENT_BOX}).strip()
+        stripped = line.translate(_SALIENT_BOX_TABLE).strip()
         if not stripped or any(p.search(line) for p in drop):
             continue
         kept.append(stripped)
@@ -121,13 +122,24 @@ def salient_stderr(stderr: str, budget: int = SALIENT_BUDGET) -> str:
 
     out, total = [], 0
     for line in ranked:
-        if len(line) > budget:         # per-line middle elision, never the tail
-            half = (budget - 5) // 2
-            line = line[:half] + " ... " + line[-half:]
-        if total + len(line) + 3 > budget:
+        sep = 3 if out else 0          # " | " only between lines, not before the first
+        if len(line) + sep > budget:   # per-line middle elision, never the tail
+            # Size to the space actually available, so an elided line always
+            # FITS. Sizing to `budget` (ignoring the separator) made this branch
+            # dead: the elided line was 2*((budget-5)//2)+5 chars, which plus the
+            # separator always exceeded budget, so every over-long line was
+            # skipped whole — and a sole over-long survivor returned "", an empty
+            # diagnostic and a strict regression on the old head slice.
+            room = budget - sep
+            half = (room - 5) // 2
+            if half > 0:
+                line = line[:half] + " ... " + line[-half:]
+        if total + len(line) + sep > budget:
             continue                   # skip whole; never emit a partial remedy
         out.append(line)
-        total += len(line) + 3
+        total += len(line) + sep
+    if not out:                        # belt-and-braces: never an empty diagnostic
+        return stderr.strip()[:SALIENT_FLOOR_BUDGET]
     return " | ".join(out)
 
 

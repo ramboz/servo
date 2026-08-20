@@ -704,7 +704,8 @@ class PreflightTests(unittest.TestCase):
 
     def test_library_missing_raises_with_exact_command(self):
         with tempfile.TemporaryDirectory() as td:
-            orig = score.subprocess.run
+            orig, orig_which = score.subprocess.run, score.shutil.which
+            score.shutil.which = lambda n: "/usr/bin/node"
 
             class _P:
                 returncode = 1
@@ -719,13 +720,14 @@ class PreflightTests(unittest.TestCase):
                 self.assertIn("npm i -D playwright", msg)
                 self.assertIn("npx playwright install", msg)
             finally:
-                score.subprocess.run = orig
+                score.subprocess.run, score.shutil.which = orig, orig_which
 
     def test_fails_open_on_ambiguous_probe_failure(self):
         # AC1/AC6: non-zero WITHOUT the token must NOT halt — e.g.
         # NODE_OPTIONS=--input-type=module making `require` undefined.
         with tempfile.TemporaryDirectory() as td:
-            orig = score.subprocess.run
+            orig, orig_which = score.subprocess.run, score.shutil.which
+            score.shutil.which = lambda n: "/usr/bin/node"
 
             class _P:
                 returncode = 1
@@ -736,12 +738,14 @@ class PreflightTests(unittest.TestCase):
             try:
                 score.preflight_capture(Path(td))   # must not raise
             finally:
-                score.subprocess.run = orig
+                score.subprocess.run, score.shutil.which = orig, orig_which
 
     def test_probe_spawns_with_cwd_base_dir(self):
         # AC1: CJS module.paths must walk the same chain as capture.mjs's ESM import.
         with tempfile.TemporaryDirectory() as td:
             seen, orig = {}, score.subprocess.run
+            orig_which = score.shutil.which
+            score.shutil.which = lambda n: "/usr/bin/node"
 
             class _P:
                 returncode = 0
@@ -757,11 +761,12 @@ class PreflightTests(unittest.TestCase):
                 score.preflight_capture(Path(td))
                 self.assertEqual(seen.get("cwd"), str(Path(td)))
             finally:
-                score.subprocess.run = orig
+                score.subprocess.run, score.shutil.which = orig, orig_which
 
     def test_all_clear_is_silent(self):
         with tempfile.TemporaryDirectory() as td:
-            orig = score.subprocess.run
+            orig, orig_which = score.subprocess.run, score.shutil.which
+            score.shutil.which = lambda n: "/usr/bin/node"
 
             class _P:
                 returncode = 0
@@ -772,7 +777,7 @@ class PreflightTests(unittest.TestCase):
             try:
                 score.preflight_capture(Path(td))
             finally:
-                score.subprocess.run = orig
+                score.subprocess.run, score.shutil.which = orig, orig_which
 
     def test_fake_scores_path_still_scores_with_node_absent(self):
         # AC5 regression guard: the preflight lives in the live-capture arm only,
@@ -814,9 +819,11 @@ class SalientStderrTests(unittest.TestCase):
         # cannot detect a rank-1 corruption, which is how R5's defect hid.
         out = score._fe.salient_stderr(self._fixture("stderr-library-absent.txt"))
         first = out.split(" | ")[0]
-        self.assertTrue(
-            first.startswith("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'playwright'"),
-            f"rank 1 should be the cause, got: {first!r}")
+        # EXACT match on the emitted first line. `startswith` cannot detect a
+        # corrupted tail — which is how the elision defect hid.
+        expected = [ln for ln in self._fixture("stderr-library-absent.txt").splitlines()
+                    if ln.startswith("Error [ERR_MODULE_NOT_FOUND]")][0].strip()
+        self.assertEqual(first, expected, "rank 1 must be the cause line, verbatim")
 
     def test_library_absent_drops_node_internals(self):
         out = score._fe.salient_stderr(self._fixture("stderr-library-absent.txt"))
@@ -828,6 +835,9 @@ class SalientStderrTests(unittest.TestCase):
         # AC4: command-shape ranking. The prose line "was just installed or
         # updated" sits ABOVE the command in Playwright's box; a bare `install`
         # substring would rank it first and exhaust the budget (R4's defect).
+        # NOTE: this input is a RECONSTRUCTION, not a recorded fixture —
+        # Playwright is not installable in this repo, so fixture (ii) could not
+        # be captured here. Logged as a deviation; see the slice deviation log.
         box = (
             "browserType.launch: Executable doesn't exist at "
             "/Users/x/Library/Caches/ms-playwright/chromium-1234/chrome-mac/Chromium.app\n"
@@ -867,6 +877,89 @@ class SalientStderrTests(unittest.TestCase):
         self.assertFalse(out.endswith("npx playwright inst"))
 
 
+class PreflightExitContractTests(unittest.TestCase):
+    """DoD: stdout empty + rc 2 on a preflight failure, end to end through main()."""
+
+    def test_preflight_failure_exits_2_with_empty_stdout(self):
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ["ANTHROPIC_API_KEY"] = "x"        # get past the judge check
+            orig_which = score.shutil.which
+            score.shutil.which = lambda n: None          # node absent -> preflight halts
+            try:
+                rc, out, err = _capture_main(d)
+                self.assertEqual(rc, score.EXIT_ENV_ERROR)
+                self.assertEqual(out.strip(), "")        # never a silent 0.0
+                self.assertIn("node", err.lower())
+            finally:
+                score.shutil.which = orig_which
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+
+
+class SalientStderrRegressionTests(unittest.TestCase):
+    """Guards for defects found in review rather than in authoring."""
+
+    FIXTURES = HERE / "fixtures"
+
+    def _fixture(self, name):
+        raw = (self.FIXTURES / name).read_text()
+        return "\n".join(ln for ln in raw.splitlines() if not ln.startswith("# "))
+
+    def test_app_down_fixture_surfaces_the_cause_first(self):
+        # Fixture (iii): recorded real, no Playwright needed (a closed port).
+        out = score._fe.salient_stderr(self._fixture("stderr-app-down.txt"))
+        self.assertTrue(out.split(" | ")[0].startswith("capture: net::ERR_CONNECTION_REFUSED"),
+                        f"rank 1 should be the cause, got {out.split(' | ')[0]!r}")
+
+    def test_over_long_sole_survivor_is_elided_not_deleted(self):
+        # REGRESSION (compliance review): the elision branch was arithmetically
+        # dead — an over-long sole survivor returned "", an empty diagnostic and
+        # a strict regression on the old head slice.
+        long_cause = "Executable doesn't exist at /Users/x/" + "deep/" * 90 + "headless_shell"
+        out = score._fe.salient_stderr(long_cause + "\n")
+        self.assertTrue(out, "must never return an empty diagnostic")
+        self.assertIn("...", out, "an over-long sole survivor must be middle-elided")
+        self.assertTrue(out.startswith("Executable doesn't exist at"))
+        self.assertTrue(out.endswith("headless_shell"), "the actionable tail must survive")
+        self.assertLessEqual(len(out), score._fe.SALIENT_BUDGET)
+
+    def test_judge_path_still_uses_head_slice(self):
+        # AC4a guard: the node-grammar filter must NOT be wired to the `claude`
+        # CLI producer, which has a different grammar and no fixture.
+        src = (HERE / "score.py").read_text()
+        judge = [ln for ln in src.splitlines() if "claude judge failed" in ln][0]
+        self.assertIn("[:200]", judge, "judge path must keep the head slice (AC4a)")
+        self.assertNotIn("salient_stderr", judge)
+
+    def test_capture_app_routes_through_the_helper(self):
+        """BEHAVIOURAL wiring test (craft finding): reverting score.py to
+        `[:200]` must fail the suite. Asserting on the source text would not
+        catch a semantically-equivalent revert."""
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            stderr = self._fixture("stderr-library-absent.txt")
+            orig = score.subprocess.run
+
+            class _P:
+                returncode = 1
+                stdout = ""
+
+            _P.stderr = stderr
+            score.subprocess.run = lambda *a, **k: _P()
+            try:
+                with self.assertRaises(score.EnvError) as cm:
+                    score.capture_app(d, {"id": "home"})
+                msg = str(cm.exception)
+                self.assertIn("Cannot find package 'playwright'", msg,
+                              "the cause must reach the operator")
+                self.assertNotIn("node:internal/", msg,
+                                 "node internals must not reach the operator ([:200] would)")
+            finally:
+                score.subprocess.run = orig
+
+
 class ACParityTests(unittest.TestCase):
     """026-01 DoD: the mechanical control against code being stricter than its AC.
 
@@ -888,8 +981,28 @@ class ACParityTests(unittest.TestCase):
         self.assertTrue(self.SLICE.is_file(), f"slice not found at {self.SLICE}")
 
     def test_remedy_regex_matches_the_ac(self):
-        self.assertIn(score._fe.SALIENT_REMEDY.replace("\\s*", "\\s*"), self._slice_text(),
+        self.assertIn(score._fe.SALIENT_REMEDY, self._slice_text(),
                       "SALIENT_REMEDY drifted from AC4's stated command-shape pattern")
+
+    def test_stack_frame_pattern_matches_the_ac_literally(self):
+        """The constant that DID drift: code had `^\\s+at\\s` where AC4 says
+        `^\\s+at ` (literal space). This is the exact defect class the parity
+        control exists for, and it was the one constant not covered."""
+        self.assertIn(r"^\s+at ", self._slice_text(),
+                      "AC4 must quote the stack-frame pattern")
+        self.assertIn(r"^\s+at ", score._fe.SALIENT_DROP_LINE,
+                      "SALIENT_DROP_LINE drifted from AC4's stack-frame literal")
+
+    def test_remedy_pattern_is_not_case_insensitive_beyond_the_ac(self):
+        """AC4 states no case-insensitivity; compiling with re.I would be code
+        looser than its AC — invisible to a pattern-string comparison."""
+        src = (HERE.parent / "_common" / "fidelity_eval.py").read_text()
+        compile_line = [ln for ln in src.splitlines()
+                        if "re.compile(SALIENT_REMEDY" in ln][0]
+        code = compile_line.split("#")[0]   # ignore an explanatory comment
+        self.assertNotIn("re.I", code,
+                         "AC4 states no case-insensitivity for the remedy pattern")
+        self.assertNotIn("IGNORECASE", code)
 
     def test_frame_header_regex_matches_the_ac(self):
         self.assertIn(score._fe.SALIENT_FRAME_HEADER, self._slice_text(),
