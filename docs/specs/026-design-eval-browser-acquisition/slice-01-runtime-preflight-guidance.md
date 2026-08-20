@@ -42,6 +42,13 @@ remedy for everything else.
    environment such as `NODE_OPTIONS=--input-type=module` would make `require`
    undefined, which must not be misreported as a missing library on a machine
    where capture would have succeeded.
+   **The probe spawns with `cwd=base_dir`**, matching `capture_app`'s own spawn,
+   so its CommonJS `module.paths` walk covers the same directory chain as
+   `capture.mjs`'s ESM resolution (which walks up from `<target>/.servo/design-eval/`
+   to `<target>/node_modules`). Without this the probe could emit a *genuine*
+   `MODULE_NOT_FOUND` token on a machine where capture would succeed — a
+   token-confirmed false positive that lands in the fail-**closed** branch, the
+   one hole fail-open cannot plug.
 2. The preflight **performs no browser launch** and adds **at most one extra
    node spawn per run** — and none at all when (a) already failed. (Falsifiable
    restatement of "cheap".)
@@ -49,15 +56,45 @@ remedy for everything else.
    a real Playwright import or launch, which would cost every success run or turn
    a working-but-slow environment into rc 2. It is covered by AC4 instead.
 4. `capture_app`'s error surfacing changes from `stderr[:200]` (a blind head
-   slice) to **salient-line selection**: drop stack frames (`^\s+at `), node
-   internals (`^node:internal/`), the caret line, the trailing `Node.js vX.Y.Z`
-   banner, and the `{ code: … }` object; keep the survivors (first 2 + last 2 if
-   over budget) under a character cap. **Grounded, not assumed** — a tail slice
-   was probed and rejected: for the library-absent case the cause
-   (`Cannot find package 'playwright'`) sits at line 4 of 18, the last non-empty
-   line is `Node.js v22.16.0`, and `stderr[-200:]` yields stack frames plus the
-   version banner — strictly worse than today's head. The filter above was probed
-   against the same output and returns exactly the cause line with no noise.
+   slice) to **salience-RANKED line selection** — explicitly *not* positional at
+   any stage, since two positional heuristics have now been falsified here
+   (head, then "first 2 + last 2"):
+   - **Drop** stack frames (`^\s+at `), node internals (`^node:internal/`), the
+     `^file://` preamble and its echoed source line, caret lines, the trailing
+     `Node.js vX.Y.Z` banner, the `{ code: … }` object, and box-drawing/padding-
+     only lines. Strip box-drawing characters before measuring.
+   - **Rank** the survivors: the cause (first survivor) first, then remedy lines
+     matched by **command shape** — `^\s*(npx|npm|yarn|pnpm|pip|python -m pip|
+     brew|apt|apt-get)\b` after box-stripping — then the rest. **Intra-tier
+     order is command-shape-first, explicitly, not document order.** A bare
+     `install` substring is *not* used: it matches explanatory prose such as
+     Playwright's "…was just installed or updated", which sits *above* the real
+     command in its box, so document-order tie-breaking would rank the prose
+     ahead of the runnable command and can exhaust the budget before reaching it
+     — telling an adopter whose symptom is *Playwright is unusable* that it was
+     recently installed.
+   - **Budget boundaries are defined, not left to the implementer:** never emit a
+     partial remedy (a truncated `npx playwright inst` is exactly the failure
+     this AC exists to prevent) — skip a line that does not fit and try the next,
+     and elide the **middle** of an over-long line (long cache paths are the only
+     reason the budget binds) rather than its tail. **Zero-survivor floor:** if
+     the drop stage removes every line, fall back to today's head slice rather
+     than emitting an empty diagnostic — a strict regression otherwise.
+   Ranking rather than slicing is what makes this robust: Playwright's
+   browsers-not-downloaded message puts `npx playwright install` in a
+   **positionally central** drawn box, so any first-N/last-N reduction discards
+   exactly the remedy while keeping box corners.
+   **Grounding, stated honestly — including where it was insufficient.** The
+   filter was run against the *real* captured `ERR_MODULE_NOT_FOUND` stderr
+   (cause survives, all noise dropped) and against a *reconstruction* of
+   Playwright's box (cause and remedy ranked 1st and 2nd). But the reconstruction
+   passed only because the prototype used a word-bounded `\binstall\b` while the
+   AC text said a bare `install` — i.e. the implementation was stricter than the
+   spec, and the box's prose line would have out-ranked the command under the AC
+   as written. That divergence is why the rank rule above is now specified by
+   **command shape** rather than substring, and it is recorded here as a caution:
+   a reconstruction can pass while the specified rule fails.
+
 5. The preflight runs **only** in the live-capture path: with
    `SERVO_DESIGN_EVAL_FAKE_SCORES` set, scoring still succeeds with node absent.
 6. Contract unchanged: failures stay `EnvError` → rc 2, stdout empty. The
@@ -71,10 +108,22 @@ remedy for everything else.
 - [ ] Preflight implemented inside the live-capture arm of `score()`.
 - [ ] Tests: node-missing, library-missing, all-clear, and **fake-scores-with-node-absent still passes** (AC5 regression guard).
 - [ ] Test: stdout empty + rc 2 on every preflight failure.
-- [ ] Test: the salient-line filter, run against a **recorded real** node
-      `ERR_MODULE_NOT_FOUND` stderr fixture (not a hand-written one with the
-      remedy conveniently last), returns the cause line and drops the banner,
-      caret, `code:` object and `at` frames.
+- [ ] **Fixtures committed with provenance**, not merely "tests run against real
+      stderr" — fixtures (ii) and (iii) require a machine *with* Playwright
+      installed, which this repo is not, so the acquisition path is named rather
+      than left to an implementer who would otherwise skip the case (leaving the
+      highest-value row untested) or hand-write it (which this DoD forbids):
+      record once on a Playwright-equipped machine, commit under the test tree as
+      **verbatim captured stderr** with a provenance comment (node version,
+      Playwright version, OS, exact command).
+- [ ] Tests: the salience filter against those fixtures for all three shapes —
+      (i) library absent, (ii) browsers not downloaded, (iii) app down —
+      asserting the cause **and**, where the tool emits one, the runnable remedy
+      survive in each.
+- [ ] Test: zero-survivor input falls back to the head slice (no empty diagnostic).
+- [ ] Test: a remedy line that would not fit is skipped whole, never truncated.
+- [ ] Test: the probe's spawn kwargs carry `cwd=base_dir` (AC1's false-positive
+      guard).
 - [ ] Test: an ambiguous probe failure (non-zero exit **without** a
       `MODULE_NOT_FOUND` token) does **not** halt — capture still runs (AC1/AC6
       fail-open guard).
