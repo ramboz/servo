@@ -864,3 +864,36 @@ a real design-mockup→UI consumer adopts it (which also re-opens 012-05). Item 
 is the highest-value (honesty-relevant); items 3–6 are hygiene.
 
 **Surfaced by:** spec-012 compliance + craft review passes (2026-08-18).
+
+---
+
+## `stderr[:200]` head-truncation remains at 4 call sites (deferred from spec 026-01)
+
+**Deferred:** Spec 026-01 replaced the blind `stderr.strip()[:200]` head slice
+with `_common/fidelity_eval.py::salient_stderr` — but applied it to
+**`design-eval`'s `capture_app` only**. Four sites still truncate:
+
+- `skills/design-eval/score.py:~157` — the `claude -p` judge path
+- `skills/content-fidelity/score.py` (2 sites)
+- `skills/eval-authoring/score.py` (1 site)
+
+**Why not done in 026-01 (frame-critique finding, round 6):** every predicate in
+`salient_stderr` parses **node's uncaught-exception grammar** — the three-line
+frame-header block, `^\s+at ` frames, the `Node.js vX.Y.Z` banner, the
+`{ code: … }` object. The `claude` CLI is a **different producer with a different
+grammar**, and 026-01 has no fixture for it. The block rule is the sharpest
+hazard: `^/.*:\d+$` matches a bare path line such as
+`/Users/x/.claude/settings.json:12`, and with no caret following it would drop
+forward to the next blank — taking the explanation with it and making a path
+that works acceptably today **worse**. Consistency is not urgent enough to
+outrun evidence.
+
+**Owner:** whoever next touches the judge path or `content-fidelity`'s capture
+surfacing.
+
+**Resolution trigger:** a **recorded real `claude -p` failure fixture** exists
+(expired auth is the cheapest to produce), OR `salient_stderr` is parameterised
+by producer so the node-grammar rules apply only to node-produced stderr. Either
+unblocks all four sites; do not wire them on consistency grounds alone.
+
+**Surfaced by:** spec 026-01 frame-critique (2026-08-19).

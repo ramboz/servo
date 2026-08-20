@@ -684,6 +684,222 @@ class CaptureRefsTests(unittest.TestCase):
                 de.subprocess.run = orig
 
 
+class PreflightTests(unittest.TestCase):
+    """026-01 AC1-AC3, AC5-AC7: probe node + library before spawning capture."""
+
+    def _no_node(self, *a, **k):
+        raise AssertionError("preflight must not spawn node when which(node) is None")
+
+    def test_node_missing_raises_with_remedy(self):
+        with tempfile.TemporaryDirectory() as td:
+            orig_which, orig_run = score.shutil.which, score.subprocess.run
+            score.shutil.which = lambda n: None
+            score.subprocess.run = self._no_node   # AC2: no spawn when (a) failed
+            try:
+                with self.assertRaises(score.EnvError) as cm:
+                    score.preflight_capture(Path(td))
+                self.assertIn("node", str(cm.exception).lower())
+            finally:
+                score.shutil.which, score.subprocess.run = orig_which, orig_run
+
+    def test_library_missing_raises_with_exact_command(self):
+        with tempfile.TemporaryDirectory() as td:
+            orig = score.subprocess.run
+
+            class _P:
+                returncode = 1
+                stderr = "Error [ERR_MODULE_NOT_FOUND]: ... MODULE_NOT_FOUND ..."
+                stdout = ""
+
+            score.subprocess.run = lambda *a, **k: _P()
+            try:
+                with self.assertRaises(score.EnvError) as cm:
+                    score.preflight_capture(Path(td))
+                msg = str(cm.exception)
+                self.assertIn("npm i -D playwright", msg)
+                self.assertIn("npx playwright install", msg)
+            finally:
+                score.subprocess.run = orig
+
+    def test_fails_open_on_ambiguous_probe_failure(self):
+        # AC1/AC6: non-zero WITHOUT the token must NOT halt — e.g.
+        # NODE_OPTIONS=--input-type=module making `require` undefined.
+        with tempfile.TemporaryDirectory() as td:
+            orig = score.subprocess.run
+
+            class _P:
+                returncode = 1
+                stderr = "ReferenceError: require is not defined in ES module scope"
+                stdout = ""
+
+            score.subprocess.run = lambda *a, **k: _P()
+            try:
+                score.preflight_capture(Path(td))   # must not raise
+            finally:
+                score.subprocess.run = orig
+
+    def test_probe_spawns_with_cwd_base_dir(self):
+        # AC1: CJS module.paths must walk the same chain as capture.mjs's ESM import.
+        with tempfile.TemporaryDirectory() as td:
+            seen, orig = {}, score.subprocess.run
+
+            class _P:
+                returncode = 0
+                stderr = ""
+                stdout = ""
+
+            def spy(*a, **k):
+                seen.update(k)
+                return _P()
+
+            score.subprocess.run = spy
+            try:
+                score.preflight_capture(Path(td))
+                self.assertEqual(seen.get("cwd"), str(Path(td)))
+            finally:
+                score.subprocess.run = orig
+
+    def test_all_clear_is_silent(self):
+        with tempfile.TemporaryDirectory() as td:
+            orig = score.subprocess.run
+
+            class _P:
+                returncode = 0
+                stderr = ""
+                stdout = ""
+
+            score.subprocess.run = lambda *a, **k: _P()
+            try:
+                score.preflight_capture(Path(td))
+            finally:
+                score.subprocess.run = orig
+
+    def test_fake_scores_path_still_scores_with_node_absent(self):
+        # AC5 regression guard: the preflight lives in the live-capture arm only,
+        # so every offline/CI run using the fake-scores hook must be unaffected.
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            orig_which = score.shutil.which
+            score.shutil.which = lambda n: None   # node absent
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9, 0.9], "settings": [0.9, 0.9]})
+            try:
+                rc, out, _ = _capture_main(d)
+                self.assertEqual(rc, score.EXIT_OK)
+                self.assertGreater(float(out.strip()), 0.0)
+            finally:
+                score.shutil.which = orig_which
+                os.environ.pop(score._FAKE_SCORES_ENV, None)
+
+
+class SalientStderrTests(unittest.TestCase):
+    """026-01 AC4: salient-line surfacing replaces the blind `stderr[:200]` head.
+
+    Fixture (i) is RECORDED REAL stderr (see fixtures/ provenance header), not a
+    hand-written one with the remedy conveniently placed — three defects in this
+    slice came from grounding the easy case.
+    """
+
+    FIXTURES = HERE / "fixtures"
+
+    def _fixture(self, name):
+        raw = (self.FIXTURES / name).read_text()
+        # strip the leading provenance comment block
+        return "\n".join(ln for ln in raw.splitlines() if not ln.startswith("# "))
+
+    def test_library_absent_first_line_is_the_cause_exact(self):
+        # AC4 DoD: exact match on the EMITTED FIRST line — "survives anywhere"
+        # cannot detect a rank-1 corruption, which is how R5's defect hid.
+        out = score._fe.salient_stderr(self._fixture("stderr-library-absent.txt"))
+        first = out.split(" | ")[0]
+        self.assertTrue(
+            first.startswith("Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'playwright'"),
+            f"rank 1 should be the cause, got: {first!r}")
+
+    def test_library_absent_drops_node_internals(self):
+        out = score._fe.salient_stderr(self._fixture("stderr-library-absent.txt"))
+        for noise in ("node:internal/", "throw new ERR_MODULE_NOT_FOUND(",
+                      "Node.js v", "code: 'ERR_MODULE_NOT_FOUND'", "    at "):
+            self.assertNotIn(noise, out, f"noise leaked into the surfaced message: {noise!r}")
+
+    def test_remedy_ranks_above_prose_at_the_stated_budget(self):
+        # AC4: command-shape ranking. The prose line "was just installed or
+        # updated" sits ABOVE the command in Playwright's box; a bare `install`
+        # substring would rank it first and exhaust the budget (R4's defect).
+        box = (
+            "browserType.launch: Executable doesn't exist at "
+            "/Users/x/Library/Caches/ms-playwright/chromium-1234/chrome-mac/Chromium.app\n"
+            "╔══╗\n"
+            "║ Looks like Playwright was just installed or updated. ║\n"
+            "║ Please run the following command to download new browsers: ║\n"
+            "║     npx playwright install ║\n"
+            "╚══╝\n"
+            "    at Object.<anonymous> (/t/capture.mjs:31:33)\n"
+            "Node.js v22.16.0\n"
+        )
+        out = score._fe.salient_stderr(box, budget=score._fe.SALIENT_BUDGET)
+        self.assertIn("npx playwright install", out, "the runnable remedy must survive at 400")
+        parts = out.split(" | ")
+        self.assertTrue(parts[0].startswith("browserType.launch:"), f"rank 1: {parts[0]!r}")
+        self.assertLess(parts.index([p for p in parts if "npx playwright install" in p][0]),
+                        parts.index([p for p in parts if "was just installed" in p][0]),
+                        "command must outrank prose")
+
+    def test_emitted_form_is_box_stripped(self):
+        out = score._fe.salient_stderr("cause here\n║   npx playwright install   ║\n")
+        self.assertNotIn("║", out)
+        self.assertIn("npx playwright install", out)
+
+    def test_zero_survivor_floor_falls_back_to_head_slice(self):
+        # AC4: never emit an empty diagnostic — a strict regression on today's [:200].
+        only_noise = "    at a (x:1:1)\n    at b (y:2:2)\nNode.js v22.16.0\n"
+        out = score._fe.salient_stderr(only_noise)
+        self.assertTrue(out, "zero survivors must fall back, not return empty")
+        self.assertEqual(out, only_noise.strip()[:score._fe.SALIENT_FLOOR_BUDGET])
+
+    def test_over_budget_line_is_skipped_whole_not_truncated(self):
+        # AC4: a truncated `npx playwright inst` is the failure this prevents.
+        long_cause = "C" * 380
+        out = score._fe.salient_stderr(f"{long_cause}\nnpx playwright install\n")
+        self.assertNotIn("npx playwright inst\n", out)
+        self.assertFalse(out.endswith("npx playwright inst"))
+
+
+class ACParityTests(unittest.TestCase):
+    """026-01 DoD: the mechanical control against code being stricter than its AC.
+
+    Three defects in this slice came from exactly that gap, and a checkbox saying
+    "the suite matches the prose" cannot fail. This binds the shipped constants to
+    the slice text. Mirrors the doc-parity pattern in test_skill_surface.py.
+    """
+
+    SLICE = (HERE.parent.parent / "docs" / "specs" / "026-design-eval-browser-acquisition"
+             / "slice-01-runtime-preflight-guidance.md")
+
+    def _slice_text(self):
+        # Join AC line-wraps precisely: strip the leading indent of continuation
+        # lines. Do NOT normalize whitespace generally — loosening this comparison
+        # would gut the control it exists to be.
+        return re.sub(r"\n\s+", "", self.SLICE.read_text())
+
+    def test_slice_file_exists(self):
+        self.assertTrue(self.SLICE.is_file(), f"slice not found at {self.SLICE}")
+
+    def test_remedy_regex_matches_the_ac(self):
+        self.assertIn(score._fe.SALIENT_REMEDY.replace("\\s*", "\\s*"), self._slice_text(),
+                      "SALIENT_REMEDY drifted from AC4's stated command-shape pattern")
+
+    def test_frame_header_regex_matches_the_ac(self):
+        self.assertIn(score._fe.SALIENT_FRAME_HEADER, self._slice_text(),
+                      "SALIENT_FRAME_HEADER drifted from AC4's stated block rule")
+
+    def test_budget_matches_the_ac(self):
+        self.assertIn(f"budget is {score._fe.SALIENT_BUDGET} characters", self.SLICE.read_text(),
+                      "SALIENT_BUDGET drifted from the number stated in AC4")
+
+
 class CaptureLibNodeTests(unittest.TestCase):
     """Bridge the browser-free capture_lib.mjs node tests into the Python suite.
 

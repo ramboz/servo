@@ -49,6 +49,88 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+# --------------------------------------------------------------------------- #
+# Salient-line stderr surfacing (spec 026-01 / ADR-0031)
+# --------------------------------------------------------------------------- #
+# These constants are quoted VERBATIM from slice 026-01 AC4. A parity test reads
+# the slice file and asserts they still match — three defects in that slice came
+# from code being stricter than its own AC, so the control is mechanical, not a
+# checkbox. Do not "tidy" these patterns without editing the AC in the same commit.
+
+# A frame header drops ITSELF and everything through the caret line or the next
+# blank, whichever comes first. Node's uncaught-exception preamble is a
+# three-line BLOCK (header / echoed source / caret); per-line predicates provably
+# leak the echoed source line, which then ranks as the "cause".
+SALIENT_FRAME_HEADER = r"^(file://|node:internal/|/).*:\d+$"
+SALIENT_DROP_LINE = (
+    r"^\s+at\s",              # stack frames
+    r"^Node\.js v\d",          # trailing version banner
+    r"^\s*\}\s*$",             # closing brace of the { code: ... } object
+    r"^\s*code:\s",           # the code: field
+)
+# Remedy lines are matched by COMMAND SHAPE, never by a bare "install" substring
+# (which matches prose such as Playwright's "was just installed or updated",
+# positioned ABOVE the real command in its box).
+SALIENT_REMEDY = r"^\s*(npx|npm|yarn|pnpm|pip|python -m pip|brew|apt|apt-get)\b"
+_SALIENT_BOX = "\u2551\u2554\u2557\u255a\u255d\u2550\u2500\u2502\u250c\u2510\u2514\u2518"
+# Normal-path budget. NOTE the deliberate asymmetry with SALIENT_FLOOR_BUDGET
+# below: the zero-survivor floor is defined as EXISTING behaviour (today's head
+# slice), not as this budget. Do not unify them — that would silently change the
+# fallback. (026-01 AC4 + zero-survivor floor.)
+SALIENT_BUDGET = 400
+SALIENT_FLOOR_BUDGET = 200
+
+
+def salient_stderr(stderr: str, budget: int = SALIENT_BUDGET) -> str:
+    """Surface the cause (and any runnable remedy) from node-produced stderr.
+
+    Replaces a blind ``stderr[:200]`` head slice. Applied ONLY to node-produced
+    output (spec 026-01 AC4a): every predicate here parses node's
+    uncaught-exception grammar, so pointing it at another producer (e.g. the
+    ``claude`` CLI) can strip that producer's explanation.
+    """
+    drop = [re.compile(p) for p in SALIENT_DROP_LINE]
+    header = re.compile(SALIENT_FRAME_HEADER)
+    remedy = re.compile(SALIENT_REMEDY, re.I)
+    caret = re.compile(r"^\s*\^+\s*$")
+
+    raw = stderr.splitlines()
+    kept, i = [], 0
+    while i < len(raw):
+        line = raw[i]
+        if header.search(line.strip()):
+            # Block-drop: header, then forward through the caret or next blank.
+            i += 1
+            while i < len(raw):
+                if caret.search(raw[i]) or not raw[i].strip():
+                    i += 1
+                    break
+                i += 1
+            continue
+        i += 1
+        stripped = line.translate({ord(c): None for c in _SALIENT_BOX}).strip()
+        if not stripped or any(p.search(line) for p in drop):
+            continue
+        kept.append(stripped)
+
+    if not kept:                       # zero-survivor floor: existing behaviour
+        return stderr.strip()[:SALIENT_FLOOR_BUDGET]
+
+    ranked = [kept[0]] + [line for line in kept[1:] if remedy.search(line)]
+    ranked += [line for line in kept[1:] if line not in ranked]
+
+    out, total = [], 0
+    for line in ranked:
+        if len(line) > budget:         # per-line middle elision, never the tail
+            half = (budget - 5) // 2
+            line = line[:half] + " ... " + line[-half:]
+        if total + len(line) + 3 > budget:
+            continue                   # skip whole; never emit a partial remedy
+        out.append(line)
+        total += len(line) + 3
+    return " | ".join(out)
+
+
 def definition_hash(
     config: dict, cases_key: str, case_file_fields, extra_fields: tuple = ()) -> str:
     """Hash the *frozen definition* (ADR-0005 clause 2): judge model + decoding,

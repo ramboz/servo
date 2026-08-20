@@ -1,8 +1,9 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: [adr-0031]
 last_verified:
 frame_review: true
+claimed_by: claude/jig-orient-6324de
 ---
 
 ## Slice 026-01 — runtime-preflight-guidance

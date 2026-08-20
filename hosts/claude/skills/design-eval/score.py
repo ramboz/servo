@@ -95,6 +95,41 @@ def aggregate_lower_bound(samples, k: float) -> float:
 # Capture + judge (the live path; bypassed by the fake-scores hook)
 # --------------------------------------------------------------------------- #
 
+# 026-01 / ADR-0031: the preflight. Runs on the machine that actually fails —
+# CI, a Routine, a detached loop — where no human is present to be asked.
+_PREFLIGHT_SPECIFIER = "playwright"  # 026-02 is DEFERRED; this is the specifier.
+
+
+def preflight_capture(base_dir: Path, specifier: str = _PREFLIGHT_SPECIFIER) -> None:
+    """Probe node + the browser library before spawning capture; raise EnvError
+    with an actionable remedy naming this machine's exact fix.
+
+    FAILS OPEN (AC1/AC6): "library absent" is reported only on a token-confirmed
+    MODULE_NOT_FOUND. Any other non-zero exit proceeds to capture, so a quirk
+    such as NODE_OPTIONS=--input-type=module (which makes `require` undefined)
+    can never be misreported as a missing library on a machine where capture
+    would have succeeded. Performs NO browser launch (AC2/AC3).
+    """
+    if shutil.which("node") is None:
+        raise EnvError(
+            "node is not on PATH — design-eval captures screenshots with "
+            "Playwright, which needs Node. Install Node, or set the capture "
+            "component aside.")
+    try:
+        probe = subprocess.run(
+            ["node", "-e", f"require.resolve({specifier!r})"],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(base_dir),   # AC1: match capture_app's spawn, so CJS resolution
+        )                        # walks the same chain as capture.mjs's ESM import
+    except (OSError, subprocess.SubprocessError):
+        return                   # fail open — let capture be authoritative
+    if probe.returncode != 0 and "MODULE_NOT_FOUND" in (probe.stderr or ""):
+        raise EnvError(
+            f"{specifier!r} is not installed in this project — design-eval uses "
+            f"the target's Playwright. Run:  npm i -D {specifier} && "
+            f"npx playwright install chromium")
+
+
 def capture_app(base_dir: Path, screen: dict) -> Path:
     """Screenshot the running app at the screen's seeded state via capture.mjs."""
     out = base_dir / "shots" / f"app-{screen['id']}.png"
@@ -107,8 +142,11 @@ def capture_app(base_dir: Path, screen: dict) -> Path:
     except subprocess.TimeoutExpired:
         raise EnvError(f"capture timed out for screen {screen['id']!r}") from None
     if proc.returncode != 0 or not out.is_file():
+        # 026-01 AC4: salient-line surfacing, not a blind head slice. Applied to
+        # node-produced stderr ONLY (AC4a) — the judge path at _judge_cli keeps
+        # `[:200]` deliberately, since these predicates parse node's grammar.
         raise EnvError(
-            f"capture failed for screen {screen['id']!r}: {proc.stderr.strip()[:200]}")
+            f"capture failed for screen {screen['id']!r}: {_fe.salient_stderr(proc.stderr)}")
     return out
 
 
@@ -255,12 +293,16 @@ def score(base_dir: Path) -> float:
                 "`claude` CLI not found — set SERVO_DESIGN_EVAL_CLAUDE_BIN or add it to PATH")
 
     per_screen = []
+    _preflighted = False   # AC2: at most one probe spawn per run, not per screen
     for screen in config["screens"]:
         if fake is not None:
             if screen["id"] not in fake:
                 raise EnvError(f"fake scores missing screen {screen['id']!r}")
             samples = [float(x) for x in fake[screen["id"]]]
         else:
+            if not _preflighted:
+                preflight_capture(base_dir)
+                _preflighted = True
             app_png = capture_app(base_dir, screen)
             ref_png = base_dir / screen["reference"]
             if not ref_png.is_file():
