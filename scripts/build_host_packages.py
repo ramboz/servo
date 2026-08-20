@@ -61,6 +61,11 @@ def _is_runtime_file(path: Path, source_root: Path) -> bool:
         return False
     if path.name == "crew-postmortem.md":
         return False
+    # Test-only data directories never ship to adopters. `test_*` catches test
+    # modules, but a `fixtures/` tree beside them is just as test-only and would
+    # otherwise land in every installed plugin (spec 026-01 reconciliation).
+    if "fixtures" in rel.parts:
+        return False
     return path.is_file()
 
 

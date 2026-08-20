@@ -1,9 +1,8 @@
 ---
-status: REVIEWED
+status: DONE
 dependencies: [adr-0031]
-last_verified:
+last_verified: 2026-08-19
 frame_review: true
-claimed_by: claude/jig-orient-6324de
 ---
 
 ## Slice 026-01 — runtime-preflight-guidance
@@ -150,10 +149,10 @@ remedy for everything else.
 7. Non-interactive: never prompts, never reads stdin, never installs.
 
 **DoD:**
-- [ ] Preflight implemented inside the live-capture arm of `score()`.
-- [ ] Tests: node-missing, library-missing, all-clear, and **fake-scores-with-node-absent still passes** (AC5 regression guard).
-- [ ] Test: stdout empty + rc 2 on every preflight failure.
-- [ ] **Fixtures committed with provenance**, not merely "tests run against real
+- [x] Preflight implemented inside the live-capture arm of `score()`.
+- [x] Tests: node-missing, library-missing, all-clear, and **fake-scores-with-node-absent still passes** (AC5 regression guard).
+- [x] Test: stdout empty + rc 2 on every preflight failure.
+- [x] **Fixtures committed with provenance**, not merely "tests run against real
       stderr" — fixtures (ii) and (iii) require a machine *with* Playwright
       installed, which this repo is not, so the acquisition path is named rather
       than left to an implementer who would otherwise skip the case (leaving the
@@ -161,22 +160,22 @@ remedy for everything else.
       record once on a Playwright-equipped machine, commit under the test tree as
       **verbatim captured stderr** with a provenance comment (node version,
       Playwright version, OS, exact command).
-- [ ] Tests: the salience filter against those fixtures for all three shapes —
+- [x] Tests: the salience filter against those fixtures for all three shapes —
       (i) library absent, (ii) browsers not downloaded, (iii) app down —
       asserting **by exact match that the emitted FIRST line equals the expected
       cause line** (not merely that it "survives" somewhere, which cannot detect a
       rank-1 corruption) and that, where the tool emits one, the runnable remedy
       is present.
-- [ ] Test: the helper lives in `_common/fidelity_eval.py`, `capture_app` calls
+- [x] Test: the helper lives in `_common/fidelity_eval.py`, `capture_app` calls
       it, **and `score.py`'s judge path (`:157`) is UNCHANGED** — a guard against
       re-wiring the node-grammar filter to the `claude -p` producer before a real
       fixture for it exists. (An earlier DoD line required the opposite; it
       contradicted AC4a, and the DoD is what an implementer ticks.)
-- [ ] `docs/refinement-todo.md` entry written for the deferred call sites
+- [x] `docs/refinement-todo.md` entry written for the deferred call sites
       (judge path, `content-fidelity`, `eval-authoring`) with a named owner and
       the trigger "a recorded real `claude -p` failure fixture exists, or the
       helper is parameterised by producer".
-- [ ] **Prototype-parity test (mechanical, not an exhortation).** Three defects
+- [x] **Prototype-parity test (mechanical, not an exhortation).** Three defects
       here came from code being stricter than its own AC, and a checkbox reading
       "the suite matches the prose" cannot fail — an implementer who writes
       `\binstall\b` where the AC says `install` ticks it in good faith. So it
@@ -185,17 +184,17 @@ remedy for everything else.
       constants match the literals in the AC. Precedent exists in-repo —
       `test_skill_surface.py` already parses named sections out of `SKILL.md`
       and asserts on their content — so this needs no new machinery.
-- [ ] Test: zero-survivor input falls back to the head slice (no empty diagnostic).
-- [ ] Test: a remedy line that would not fit is skipped whole, never truncated.
-- [ ] Test: the probe's spawn kwargs carry `cwd=base_dir` (AC1's false-positive
+- [x] Test: zero-survivor input falls back to the head slice (no empty diagnostic).
+- [x] Test: a remedy line that would not fit is skipped whole, never truncated.
+- [x] Test: the probe's spawn kwargs carry `cwd=base_dir` (AC1's false-positive
       guard).
-- [ ] Test: an ambiguous probe failure (non-zero exit **without** a
+- [x] Test: an ambiguous probe failure (non-zero exit **without** a
       `MODULE_NOT_FOUND` token) does **not** halt — capture still runs (AC1/AC6
       fail-open guard).
-- [ ] Test asserts no browser launch occurs during preflight (AC2/AC3).
-- [ ] `SKILL.md` Prerequisites references the runtime guidance.
-- [ ] Compliance + craft review verdicts recorded under `reviews/`.
-- [ ] Reconciliation verdict + deviation log + reconciliation sweep recorded.
+- [x] Test asserts no browser launch occurs during preflight (AC2/AC3).
+- [x] `SKILL.md` Prerequisites references the runtime guidance.
+- [x] Compliance + craft review verdicts recorded under `reviews/`.
+- [x] Reconciliation verdict + deviation log + reconciliation sweep recorded.
 
 **Out of scope (stated, not implied):** transport awareness (026-02 owned it, but
 is now **DEFERRED** pending the A1 package probe, so `'playwright'` is the
@@ -247,8 +246,25 @@ point of failure, with no config surface and no dependency on later slices.
   rest of that file, but not literally what the DoD asked.
 - **Not refactored under review (agreed with the craft reviewer):** the
   three-way line normalization and the value-dedup in the rank stage are
-  documented in comments rather than restructured. The caret regex remains a
-  local literal outside the parity control — the one acknowledged hole.
+  documented in comments rather than restructured.
+- **The parity control's real coverage, stated precisely.** An earlier draft
+  called the caret regex "the one acknowledged hole"; that read narrower than the
+  truth. Pinned: `SALIENT_FRAME_HEADER`, `SALIENT_REMEDY`, `SALIENT_BUDGET`, and
+  `SALIENT_DROP_LINE[0]`. **Unpinned:** the caret regex (a local literal) and the
+  other three drop predicates (`^Node\.js v\d`, `^\s*\}\s*$`, `^\s*code:\s`)
+  plus `SALIENT_FLOOR_BUDGET`. Defensible — AC4 states those in prose rather than
+  as quoted literals — but four unpinned constants is not "one hole".
+- **Fixture (i)'s recording used a surrogate script.** The stderr bytes are a
+  real node run, but of a one-line `fake_capture.mjs` (`import { chromium } from
+  'playwright';`), not the shipped `capture.mjs` — which cannot be run here
+  without Playwright. The fixture header discloses this; recording it in the log
+  too, because this slice's own lesson is that a stand-in can pass while the real
+  thing would not.
+- **Undisclosed side effect, found in reconciliation and FIXED:** the new
+  `fixtures/*.txt` were shipping inside both host packages — `build_host_packages.py`
+  excluded `test_*` files but not a `fixtures/` tree beside them, so adopters
+  would have received test-only data in the installed plugin. The build filter now
+  excludes `fixtures/` and the packages were regenerated.
 
 ### Reconciliation sweep
 
@@ -256,7 +272,7 @@ point of failure, with no config surface and no dependency on later slices.
 |---|---|
 | `skills/_common/fidelity_eval.py` (`salient_stderr` + SALIENT_* constants) | **updated** — ADR-0024 shared home; elision arithmetic fixed; constants aligned to AC4 literals. |
 | `skills/design-eval/score.py` (`preflight_capture`, `capture_app`, `score()`) | **updated** — preflight in the `fake is None` block; helper re-exported; judge path deliberately untouched. |
-| `skills/design-eval/test_design_eval.py` | **updated** — +19 tests (preflight, salience, regression, parity, exit contract). |
+| `skills/design-eval/test_design_eval.py` | **updated** — **+23** tests (6 preflight, 6 salience, 4 regression, 6 parity, 1 exit-contract). An earlier count of 19 predated review round 2. |
 | `skills/design-eval/fixtures/` | **added** — (i) recorded real; (iii) constructed-input, labelled. |
 | `skills/design-eval/SKILL.md` | **updated** — Prerequisites now points at the runtime preflight. |
 | `docs/refinement-todo.md` | **updated** — deferred `[:200]` call sites with owner + trigger. |
