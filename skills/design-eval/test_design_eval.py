@@ -848,7 +848,13 @@ class AttestationParseTests(unittest.TestCase):
 
 class LedgerProvenanceTests(unittest.TestCase):
     """026-03 AC2/AC2a/AC5: per-screen provenance under a distinct key, with
-    reason tokens that keep not_captured separate from not_attested."""
+    reason tokens that keep not_captured separate from not_attested.
+
+    CI-RUNNABLE (pytest). The JS-side guard (safeAttest against a throwing
+    thunk) is NODE-SKIPPED and lives in test_capture_lib.mjs — a Python fake
+    cannot substitute for it, which is why AC1c moved that logic out of the
+    untestable capture.mjs in the first place.
+    """
 
     def _row(self, d):
         line = (d / "ledger.jsonl").read_text().strip().splitlines()[-1]

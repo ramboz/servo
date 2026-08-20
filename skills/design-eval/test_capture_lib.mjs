@@ -8,7 +8,8 @@
 //   node --test skills/design-eval/test_capture_lib.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFlag, resolveViewport, findScreen, computeClip } from './capture_lib.mjs';
+import { parseFlag, resolveViewport, findScreen, computeClip,
+         ATTEST_MARKER, attestationLine, safeAttest } from './capture_lib.mjs';
 
 test('parseFlag reads the value after a flag', () => {
   assert.equal(parseFlag(['--screen', 'home', '--out', 'a.png'], '--screen'), 'home');
@@ -69,7 +70,6 @@ test('computeClip throws when crop insets exceed the box', () => {
 });
 
 // --- 026-03 attestation channel -------------------------------------------
-import { ATTEST_MARKER, attestationLine, safeAttest } from './capture_lib.mjs';
 
 test('attestationLine emits one marker-prefixed JSON line', () => {
   const line = attestationLine({ engine: 'chromium', version: '131.0', transport: 'bundled' });

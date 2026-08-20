@@ -371,7 +371,10 @@ def _provenance(att, *, fake_run: bool) -> dict:
 
 
 def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
-            fake_run: bool = False) -> None:
+            *, fake_run: bool) -> None:
+    # `fake_run` is keyword-only and REQUIRED on purpose: a default would let a
+    # future caller silently get `not_attested` on a synthetic run — the same
+    # class of error as deriving it from `att`, which this replaced.
     record = {
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],

@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: REVIEWED
 dependencies: [adr-0031]
 last_verified:
 frame_review: true
@@ -196,31 +196,31 @@ capture process**, not a guess by the process that writes the ledger.
    historical rows.
 
 **DoD:**
-- [ ] `capture.mjs` stdout report implemented (marker-delimited, emitted after
+- [x] *(CI-runnable)* `capture.mjs` stdout report implemented (marker-delimited, emitted after
       launch and before the `setup` import); `capture_app` parses the **first**
       marker line, never `_extract_json`.
-- [ ] **Accessor-throw test — in the NODE suite (node-skipped in CI), against
+- [x] *(node-skipped)* **Accessor-throw test — in the NODE suite (node-skipped in CI), against
       `capture_lib.mjs`'s `safeAttest`:** a throwing thunk returns a null-engine
       payload with an `error` string and never touches `process.exitCode`. A
       Python-side fake does **not** satisfy this item; it would re-test the parser.
-- [ ] Delegation guard: `capture.mjs` calls `capture_lib.mjs`'s attestation
+- [x] *(CI-runnable)* Delegation guard: `capture.mjs` calls `capture_lib.mjs`'s attestation
       helpers rather than re-inlining them (mirrors the existing
       `test_capture_mjs_imports_the_extracted_lib`).
-- [ ] DoD/AC7 items are each labelled CI-runnable or node-skipped.
-- [ ] **Contamination test:** a `setup` module printing plain text *and* a JSON
+- [x] DoD/AC7 items are each labelled CI-runnable or node-skipped (done here).
+- [x] **Contamination test:** a `setup` module printing plain text *and* a JSON
       object to stdout still yields an attested identity (AC1a).
-- [ ] Test: no-line and null-engine are recorded as **distinct** states, not merged.
-- [ ] **Two-screen test where the second attestation differs** — per-screen
+- [x] Test: no-line and null-engine are recorded as **distinct** states, not merged.
+- [x] **Two-screen test where the second attestation differs** — per-screen
       provenance records both, and any row-level field reads `mixed` (AC2).
-- [ ] Ledger rows carry attested capture-transport + engine under a distinct key
+- [x] *(CI-runnable)* Ledger rows carry attested capture-transport + engine under a distinct key
       (or a reason token), with no writer-side re-derivation.
-- [ ] Fake-scores row asserts `not_captured` — a synthetic score is never
+- [x] *(CI-runnable)* Fake-scores row asserts `not_captured` — a synthetic score is never
       byte-indistinguishable from a real capture.
-- [ ] Hash-invariance test green.
-- [ ] Best-effort test: garbage on stdout still scores successfully.
-- [ ] `SKILL.md` ledger table updated.
-- [ ] Compliance + craft review verdicts recorded under `reviews/`.
-- [ ] Reconciliation verdict + deviation log + reconciliation sweep recorded.
+- [x] *(CI-runnable)* Hash-invariance test green.
+- [x] *(CI-runnable)* Best-effort test: garbage on stdout still scores successfully.
+- [x] *(CI-runnable)* `SKILL.md` ledger table updated.
+- [x] Compliance + craft review verdicts recorded under `reviews/`.
+- [x] Reconciliation verdict + deviation log + reconciliation sweep recorded.
 
 **Dropped from this slice (was AC5 — recording the reference-render engine).**
 At score time the reference is a frozen PNG and nothing on disk carries its
@@ -234,3 +234,61 @@ spec's non-goal on structural engine mixing stands alone instead.
 
 **Vertical?** Yes — an operator investigating "why did fidelity drop?" gets
 trustworthy evidence about the engine.
+
+### Deviation log
+
+- **Two shipped bugs, found by review, not by my tests.** Both reviewers found
+  both independently:
+  1. `_provenance(att, fake_run=att is None)` passed a value **derived from the
+     same predicate the function branches on**, making `not_attested`
+     unreachable on the live path — a real capture whose marker line was missing
+     or malformed was recorded as `not_captured` ("no browser ran at all"), the
+     exact merge AC5 exists to prevent.
+  2. A non-object JSON payload after the marker (`##servo-capture:123`) reached
+     `att.get(...)` and raised `AttributeError`, which is **not** in `main()`'s
+     catch tuple — a successful capture-and-judge run died on a provenance
+     detail, contradicting AC4. AC1a explicitly anticipates an adopter echoing
+     the marker, so this was reachable, not theoretical.
+  Both fixed and **mutation-verified**: reintroducing either fails its test.
+- **Root cause, worth recording:** every ledger test I wrote ran only the
+  *fake-scores* arm, so the live path — where both bugs lived — had zero
+  coverage. This is the same shape as 026-01's dead-elision defect: a test that
+  looks like a guard but never enters the branch it guards. Four live-arm tests
+  added.
+- **`parseAttestation` deleted from `capture_lib.mjs`** — it had **no production
+  consumer** (`capture.mjs` imports only `attestationLine`/`safeAttest`), making
+  it a test-only shadow of the authoritative Python parser that would silently
+  diverge. Replaced with a cross-language `ATTEST_MARKER` parity test: the marker
+  is the *entire* contract between the two languages and had nothing holding the
+  copies together.
+- **Three vacuous assertions removed**, one unfailable by construction (its
+  needle contained spaces its haystack had stripped) — it was the only guard for
+  AC1b's "the emission must not sit in a catch that sets exitCode 2", and it
+  guarded nothing.
+- **AC1b narrowed in practice:** `safeAttest` cannot throw, so `capture.mjs`'s
+  wrapper catch only ever sees a `console.log`/`JSON.stringify` failure. It now
+  reports on stderr rather than emitting a null-engine line, which is a small
+  deviation from AC1b's literal text ("on any error emits the marker line") and
+  is recorded rather than silently taken.
+- **`per_screen` stays a 4-tuple** (deferred, agreed with the craft reviewer):
+  the threading is correct and covered, so the remaining cost is readability
+  only, and restructuring the composite arithmetic under review against a landed
+  026-01 is the worse trade. **Trigger:** if a fifth element is ever added, land
+  the `NamedTuple` then.
+- **026-02 deferred**, so `transport` is the literal `"bundled"` — verified, not
+  assumed: `capture.mjs`'s `chromium.launch()` takes no channel.
+
+### Reconciliation sweep
+
+| Artifact | Disposition |
+|---|---|
+| `skills/design-eval/capture_lib.mjs` | **updated** — `ATTEST_MARKER`, `attestationLine`, `safeAttest` added as pure functions (testable, unlike `capture.mjs`); orphaned `parseAttestation` removed. |
+| `skills/design-eval/capture.mjs` | **updated** — emission after launch, before the `setup` import; failure reported on stderr. |
+| `skills/design-eval/score.py` | **updated** — `parse_attestation` (marker-first, dict-guarded), `capture_app` returns the attestation, `_provenance`, per-screen ledger rows. |
+| `skills/design-eval/test_capture_lib.mjs` | **updated** — node suite covers `safeAttest` against a throwing thunk (node-skipped in CI). |
+| `skills/design-eval/test_design_eval.py` | **updated** — attestation parsing, per-screen provenance, four live-arm tests, marker parity. |
+| `skills/design-eval/SKILL.md` | **updated** — "Provenance in the ledger" incl. the evidential-weight statement. |
+| `hosts/claude`, `hosts/codex` | **updated** — regenerated; drift check clean. |
+| `docs/refinement-todo.md` | **no-op** — nothing new deferred by this slice beyond the in-slice `per_screen` note. |
+| ADR-0031 | **no-op** — implementation matches the accepted decision; observability, not a gate. |
+| `_common/fidelity_eval.py` | **no-op** — the attestation is design-eval-specific; no shared-harness change. |
