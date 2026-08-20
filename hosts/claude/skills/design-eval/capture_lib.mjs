@@ -67,7 +67,9 @@ export const ATTEST_MARKER = '##servo-capture:';
  * attested; `error` then carries a short reason so "A5 false / no accessor" is
  * distinguishable from "the accessor threw".
  */
-export function attestationLine({ engine = null, version = null, transport = 'bundled', error = null }) {
+export function attestationLine(
+  { engine = null, version = null, transport = 'bundled', error = null } = {},
+) {
   return ATTEST_MARKER + JSON.stringify({ engine, version, transport, error });
 }
 
@@ -97,16 +99,7 @@ export function safeAttest(getVersion, transport = 'bundled') {
   }
 }
 
-/** Extract the attestation from captured stdout: FIRST marker line, never _extract_json. */
-export function parseAttestation(stdout) {
-  for (const line of String(stdout || '').split('\n')) {
-    const idx = line.indexOf(ATTEST_MARKER);
-    if (idx === -1) continue;              // adopter's own logging — discarded, not a failure
-    try {
-      return JSON.parse(line.slice(idx + ATTEST_MARKER.length));
-    } catch {
-      return null;                          // malformed -> not_attested, never fatal
-    }
-  }
-  return null;
-}
+// NOTE: there is deliberately no JS-side parser here. The authoritative
+// parser is `score.parse_attestation` (Python), which is what actually runs in
+// production — a JS shadow would be a test-only copy that silently diverges.
+// The cross-language contract is ATTEST_MARKER, pinned by a parity test.

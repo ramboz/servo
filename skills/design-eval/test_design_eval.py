@@ -887,18 +887,125 @@ class LedgerProvenanceTests(unittest.TestCase):
                 row = self._row(d)
                 self.assertIn("transport", row)                 # judge transport
                 self.assertIn("capture_transport", row["screens"][0])
-                self.assertNotEqual("capture_transport", "transport")
+                # The meaningful assertion: capture_transport must NOT appear at
+                # the row level, where `transport` already means the judge one.
+                self.assertNotIn("capture_transport", row)
             finally:
                 os.environ.pop(score._FAKE_SCORES_ENV, None)
 
+    def _live_row(self, tmp, stdout, versions=None):
+        """Drive a LIVE-capture run (not the fake-scores arm) with a stubbed
+        capture.mjs stdout, and return the ledger row.
+
+        Calls `score.score()` directly rather than `_capture_main`, because that
+        helper loads a FRESH copy of score.py from the eval dir — monkeypatches
+        on this module would not reach it.
+        """
+        d = _make_eval_dir(tmp)
+        de.freeze(tmp)
+        seen = {"n": 0}
+        orig_run, orig_which, orig_judge = (
+            score.subprocess.run, score.shutil.which, score.judge)
+
+        class _P:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        def fake_run(*a, **k):
+            argv = a[0]
+            if "--out" not in argv:
+                # the preflight probe (`node -e require.resolve(...)`), not capture
+                _P.stdout = ""
+                return _P()
+            out = Path(argv[argv.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x89PNG")
+            if versions:
+                v = versions[min(seen["n"], len(versions) - 1)]
+                _P.stdout = ('##servo-capture:{"engine":"chromium","version":"%s",'
+                             '"transport":"bundled","error":null}' % v)
+            else:
+                _P.stdout = stdout
+            seen["n"] += 1
+            return _P()
+
+        score.subprocess.run = fake_run
+        score.shutil.which = lambda n: "/usr/bin/node"
+        score.judge = lambda *a, **k: 0.9
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            composite = score.score(d)
+            rows = (d / "ledger.jsonl").read_text().strip().splitlines()
+            return composite, json.loads(rows[-1])
+        finally:
+            score.subprocess.run, score.shutil.which, score.judge = (
+                orig_run, orig_which, orig_judge)
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    def test_live_capture_records_attested_provenance(self):
+        with tempfile.TemporaryDirectory() as t:
+            line = ('##servo-capture:{"engine":"chromium","version":"131.0",'
+                    '"transport":"bundled","error":null}')
+            composite, row = self._live_row(Path(t), line)
+            self.assertGreater(composite, 0.0)
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "attested")
+                self.assertEqual(s["engine"], "chromium")
+                self.assertEqual(s["engine_version"], "131.0")
+                self.assertEqual(s["capture_transport"], "bundled")
+
+    def test_missing_line_on_a_LIVE_capture_is_not_attested_not_not_captured(self):
+        # THE regression this exists for: an earlier version derived `fake_run`
+        # from `att is None`, making `not_attested` unreachable — so a real
+        # capture with no marker line reported "no browser ran at all".
+        with tempfile.TemporaryDirectory() as t:
+            _composite, row = self._live_row(Path(t), "just adopter logging\n")
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "not_attested")
+
+    def test_garbage_and_non_object_payloads_still_score(self):
+        # AC4: provenance is never load-bearing. A non-object JSON payload after
+        # the marker previously raised AttributeError out of main()'s catch tuple.
+        for stdout in ("##servo-capture:123", '##servo-capture:"a string"',
+                       "##servo-capture:{not json", "binary junk"):
+            with tempfile.TemporaryDirectory() as t:
+                composite, row = self._live_row(Path(t), stdout)
+                self.assertGreater(composite, 0.0, f"failed to score on {stdout!r}")
+                self.assertEqual(row["screens"][0]["provenance"], "not_attested")
+
+    def test_two_screens_with_differing_attestations_are_recorded_separately(self):
+        # AC2: capture_app runs once per screen, so a row has N attestations. A
+        # single row-level field would silently report one of them.
+        with tempfile.TemporaryDirectory() as t:
+            _composite, row = self._live_row(Path(t), "", versions=["131.0", "132.0"])
+            got = [s["engine_version"] for s in row["screens"]]
+            self.assertEqual(got, ["131.0", "132.0"],
+                             "a mid-run engine change must be visible per screen")
+
     def test_provenance_is_not_in_the_definition_hash(self):
-        # AC3: environmental, never a staleness trigger.
+        """AC3: environmental, never a staleness trigger.
+
+        Varies something provenance-SHAPED — an earlier form hashed a
+        byte-identical copy and would have passed even if provenance were hashed.
+        """
         cfg = _base_config()
         h0 = score.definition_hash(cfg)
-        cfg2 = dict(cfg)
-        cfg2["screens"] = [dict(s) for s in cfg["screens"]]
-        h1 = score.definition_hash(cfg2)
-        self.assertEqual(h0, h1)
+        polluted = dict(cfg, capture={"transport": "system-chrome"})
+        polluted["screens"] = [dict(s, engine="chromium", engine_version="131.0")
+                               for s in cfg["screens"]]
+        self.assertEqual(score.definition_hash(polluted), h0,
+                         "provenance-shaped fields must not move the definition hash")
+
+    def test_marker_constant_matches_across_the_language_boundary(self):
+        """ATTEST_MARKER is the ENTIRE cross-language contract, and it was
+        duplicated with nothing holding the copies together — a drift here breaks
+        production silently (capture.mjs emits one prefix, score.py scans another)."""
+        js = (HERE / "capture_lib.mjs").read_text()
+        line = [ln for ln in js.splitlines() if "ATTEST_MARKER =" in ln][0]
+        js_marker = line.split("=", 1)[1].strip().rstrip(";").strip("'\"")
+        self.assertEqual(js_marker, score._ATTEST_MARKER,
+                         "capture_lib.mjs ATTEST_MARKER drifted from score.py _ATTEST_MARKER")
 
 
 class SalientStderrTests(unittest.TestCase):
@@ -1177,9 +1284,12 @@ class CaptureLibNodeTests(unittest.TestCase):
         cap = (HERE / "capture.mjs").read_text()
         self.assertIn("attestationLine", cap)
         self.assertIn("safeAttest", cap)
-        self.assertNotIn("process.exitCode = 2;\n    }\n  } catch", cap.replace(" ", ""))
-        # the emission must precede the setup import (first-marker determinism)
-        self.assertLess(cap.index("attestationLine"), cap.index("screen.setup"))
+        # Anchor on the EMISSION, not the import — cap.index("attestationLine")
+        # would match the import statement at the top of the file and prove
+        # nothing about ordering.
+        emission = cap.index("console.log(attestationLine")
+        self.assertLess(emission, cap.index("screen.setup"),
+                        "the attestation must be emitted before the adopter's setup import")
 
 
 class InitVendorsRuntimeTests(unittest.TestCase):

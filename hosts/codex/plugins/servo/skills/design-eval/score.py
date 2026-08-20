@@ -134,7 +134,7 @@ def preflight_capture(base_dir: Path, specifier: str = _PREFLIGHT_SPECIFIER) -> 
 _ATTEST_MARKER = "##servo-capture:"
 
 
-def parse_attestation(stdout: str):
+def parse_attestation(stdout: str) -> dict | None:
     """First marker line only — never `_extract_json` (026-03 AC1a).
 
     `capture.mjs` runs the ADOPTER's setup module in-process, so their
@@ -147,13 +147,18 @@ def parse_attestation(stdout: str):
         if idx == -1:
             continue
         try:
-            return json.loads(line[idx + len(_ATTEST_MARKER):])
+            payload = json.loads(line[idx + len(_ATTEST_MARKER):])
         except (ValueError, TypeError):
             return None
+        # An adopter can echo the marker (AC1a anticipates it). A non-object
+        # payload would make `.get` raise AttributeError, which is NOT in
+        # main()'s catch tuple — a raw traceback and a failed score, violating
+        # AC4's "provenance is never load-bearing".
+        return payload if isinstance(payload, dict) else None
     return None
 
 
-def capture_app(base_dir: Path, screen: dict):
+def capture_app(base_dir: Path, screen: dict) -> tuple[Path, dict | None]:
     """Screenshot the app at the screen's seeded state; return (png, attestation).
 
     026-03 AC2c: the attestation is RETURNED, never stashed in a module global —
@@ -342,7 +347,7 @@ def score(base_dir: Path) -> float:
     if total_w <= 0:
         raise EnvError("total screen weight is zero")
     composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a in per_screen) / total_w
-    _ledger(base_dir, config, per_screen, composite)
+    _ledger(base_dir, config, per_screen, composite, fake_run=fake is not None)
     return max(0.0, min(1.0, composite))
 
 
@@ -351,17 +356,22 @@ def _provenance(att, *, fake_run: bool) -> dict:
     browser ran — the fake-scores path still writes a row) must stay
     distinguishable from `not_attested` (capture happened, identity
     unavailable), because the remedies differ."""
+    base = {"engine": None, "engine_version": None, "capture_transport": None,
+            "provenance": None, "provenance_error": None}
     if att is None:
-        return {"engine": None, "capture_transport": None,
-                "provenance": "not_captured" if fake_run else "not_attested"}
+        # `fake_run` is passed in from score() — NOT derived from `att`, which
+        # would make this branch and the next indistinguishable and silently
+        # report a real capture's missing line as "no browser ran".
+        return {**base, "provenance": "not_captured" if fake_run else "not_attested"}
     if not att.get("engine"):
-        return {"engine": None, "capture_transport": att.get("transport"),
+        return {**base, "capture_transport": att.get("transport"),
                 "provenance": "not_attested", "provenance_error": att.get("error")}
-    return {"engine": att.get("engine"), "engine_version": att.get("version"),
+    return {**base, "engine": att.get("engine"), "engine_version": att.get("version"),
             "capture_transport": att.get("transport"), "provenance": "attested"}
 
 
-def _ledger(base_dir: Path, config: dict, per_screen, composite: float) -> None:
+def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
+            fake_run: bool = False) -> None:
     record = {
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],
@@ -377,7 +387,7 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float) -> None:
                 "id": s["id"],
                 "samples": [round(x, 4) for x in samp],
                 "lower_bound": round(lb, 4),
-                **_provenance(att, fake_run=att is None),
+                **_provenance(att, fake_run=fake_run),
             }
             for s, samp, lb, att in per_screen
         ],

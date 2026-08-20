@@ -69,7 +69,7 @@ test('computeClip throws when crop insets exceed the box', () => {
 });
 
 // --- 026-03 attestation channel -------------------------------------------
-import { ATTEST_MARKER, attestationLine, safeAttest, parseAttestation } from './capture_lib.mjs';
+import { ATTEST_MARKER, attestationLine, safeAttest } from './capture_lib.mjs';
 
 test('attestationLine emits one marker-prefixed JSON line', () => {
   const line = attestationLine({ engine: 'chromium', version: '131.0', transport: 'bundled' });
@@ -98,23 +98,4 @@ test('safeAttest distinguishes no-accessor from accessor-threw', () => {
   assert.equal(safeAttest(() => undefined).error, 'no-accessor');
   assert.equal(safeAttest(() => ({ version: '' })).error, 'no-accessor');
   assert.ok(safeAttest(() => { throw new Error('x'); }).error.startsWith('accessor-threw'));
-});
-
-test('parseAttestation takes the FIRST marker line and ignores adopter logging', () => {
-  const stdout = [
-    'seeded 3 orders',                                   // adopter console.log
-    JSON.stringify({ notOurs: true }),                   // adopter JSON — must not be parsed
-    attestationLine({ engine: 'chromium', version: '131.0' }),
-    attestationLine({ engine: 'firefox', version: '99' }), // a later collision must lose
-  ].join('\n');
-  const got = parseAttestation(stdout);
-  assert.equal(got.engine, 'chromium');
-  assert.equal(got.version, '131.0');
-});
-
-test('parseAttestation returns null for absent or malformed lines, never throws', () => {
-  assert.equal(parseAttestation('nothing here\njust logs'), null);
-  assert.equal(parseAttestation(ATTEST_MARKER + '{not json'), null);
-  assert.equal(parseAttestation(''), null);
-  assert.equal(parseAttestation(undefined), null);
 });

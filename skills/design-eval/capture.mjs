@@ -70,7 +70,10 @@ try {
         engine: browser.browserType().name(),
         version: browser.version(),
       }))));
-    } catch { /* provenance is never load-bearing */ }
+    } catch (e) {
+      // Never load-bearing — but say so, rather than hiding a real stdout failure.
+      console.error(`capture: provenance emit failed: ${(e && e.message) || e}`);
+    }
 
     const page = await browser.newPage({ deviceScaleFactor: vp.deviceScaleFactor });
     await page.setViewportSize({ width: vp.width, height: vp.height });

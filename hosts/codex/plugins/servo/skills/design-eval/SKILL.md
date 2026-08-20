@@ -117,7 +117,11 @@ changed. The consumer is a human — nothing reads it programmatically today.
   path still writes a row). A synthetic score is never byte-indistinguishable
   from a real capture.
 
-Note `capture_transport` is deliberately distinct from the row's top-level
+**What each field is worth as evidence.** `engine` + `engine_version` are the
+real attestation — reported by the process that actually launched the browser.
+`capture_transport` is the transport that process was *instructed* to use,
+echoed back as a mismatch canary; it is **not** independent evidence of what
+launched. Note it is also deliberately distinct from the row's top-level
 `transport`, which means the **judge** transport (`api`/`cli`) in every
 historical row.
 
