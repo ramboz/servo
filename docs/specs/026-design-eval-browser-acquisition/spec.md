@@ -160,5 +160,8 @@ experiences, not just an internal layer.
 - The host-connector capture path (authoring-time reference rendering only, and
   not required by ADR-0031).
 - Same-engine enforcement between the frozen reference PNG and the live app
-  screenshot. Engine mixing is structural (references are frozen bytes); 026-03
-  makes it *visible*, and closing it would need its own ADR.
+  screenshot. Engine mixing is structural (references are frozen bytes). 026-03 records the
+  **live-app** engine only — it dropped the reference-render engine as
+  unobtainable at score time, so mixing is **not** made visible, and closing that
+  would need its own ADR. ADR-0031's reference-render-engine bullet is therefore
+  unimplemented and, with 026-02 DEFERRED and 026-04 ABANDONED, stays that way.

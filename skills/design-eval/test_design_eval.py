@@ -970,6 +970,33 @@ class LedgerProvenanceTests(unittest.TestCase):
             for s in row["screens"]:
                 self.assertEqual(s["provenance"], "not_attested")
 
+    def test_null_engine_is_distinct_from_no_line(self):
+        """The DoD box I had ticked without a test. `_provenance`'s null-engine
+        branch (score.py `if not att.get("engine")`) was production-reachable and
+        completely uncovered — the same shape as the two bugs this slice shipped."""
+        with tempfile.TemporaryDirectory() as t:
+            line = ('##servo-capture:{"engine":null,"version":null,'
+                    '"transport":"bundled","error":"accessor-threw: boom"}')
+            _c, row = self._live_row(Path(t), line)
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "not_attested")
+                self.assertEqual(s["provenance_error"], "accessor-threw: boom")
+                # distinct from the no-line case, which carries NO error string
+                self.assertEqual(s["capture_transport"], "bundled")
+
+    def test_no_line_and_null_engine_differ_in_the_record(self):
+        with tempfile.TemporaryDirectory() as t1, tempfile.TemporaryDirectory() as t2:
+            _c1, no_line = self._live_row(Path(t1), "adopter logging only\n")
+            line = ('##servo-capture:{"engine":null,"version":null,'
+                    '"transport":"bundled","error":"no-accessor"}')
+            _c2, null_eng = self._live_row(Path(t2), line)
+            a, b = no_line["screens"][0], null_eng["screens"][0]
+            self.assertEqual(a["provenance"], b["provenance"])          # both not_attested
+            self.assertIsNone(a["provenance_error"])                    # but distinguishable
+            self.assertEqual(b["provenance_error"], "no-accessor")
+            self.assertIsNone(a["capture_transport"])
+            self.assertEqual(b["capture_transport"], "bundled")
+
     def test_garbage_and_non_object_payloads_still_score(self):
         # AC4: provenance is never load-bearing. A non-object JSON payload after
         # the marker previously raised AttributeError out of main()'s catch tuple.

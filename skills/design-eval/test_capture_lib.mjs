@@ -89,9 +89,13 @@ test('safeAttest returns identity when the accessor works', () => {
 test('safeAttest NEVER lets a throwing accessor escape (AC1b)', () => {
   // The load-bearing guard: capture.mjs's single catch sets exitCode 2, so an
   // escaping throw would kill a SUCCESSFUL screenshot's score and ledger row.
+  const before = process.exitCode;
   const out = safeAttest(() => { throw new Error('browser.version unavailable'); });
   assert.equal(out.engine, null);
   assert.ok(out.error.startsWith('accessor-threw:'));
+  // ASSERT the exitCode half, don't just comment it — re-adding
+  // `process.exitCode = 2` inside safeAttest's catch previously passed the suite.
+  assert.equal(process.exitCode, before, 'safeAttest must never touch process.exitCode');
 });
 
 test('safeAttest distinguishes no-accessor from accessor-threw', () => {

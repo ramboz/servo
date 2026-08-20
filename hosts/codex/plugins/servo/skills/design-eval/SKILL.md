@@ -95,7 +95,7 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 | `score.py` | runtime: freeze-validate → capture → judge → aggregate → composite |
 | `fidelity_eval.py` | shared frozen-eval harness (hash/aggregate/ledger/splice), imported by `score.py` (ADR-0024) |
 | `capture.mjs` | Playwright: render references / screenshot the seeded app |
-| `capture_lib.mjs` | pure capture helpers (clip geometry, flag/screen resolution), imported by `capture.mjs` |
+| `capture_lib.mjs` | pure helpers imported by `capture.mjs`: clip geometry, flag/screen resolution, and the engine-attestation channel |
 | `setups/<id>.mjs` | per-screen deterministic state + navigation |
 | `refs/<id>.png` | frozen reference screenshots (chrome-cropped) |
 | `ledger.jsonl` | per-run sampled + aggregated scores + hashes, plus **per-screen provenance** (audit) |

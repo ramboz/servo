@@ -206,11 +206,11 @@ capture process**, not a guess by the process that writes the ledger.
 - [x] *(CI-runnable)* Delegation guard: `capture.mjs` calls `capture_lib.mjs`'s attestation
       helpers rather than re-inlining them (mirrors the existing
       `test_capture_mjs_imports_the_extracted_lib`).
-- [x] DoD/AC7 items are each labelled CI-runnable or node-skipped (done here).
+- [x] DoD **and AC7** items are each labelled CI-runnable or node-skipped.
 - [x] **Contamination test:** a `setup` module printing plain text *and* a JSON
       object to stdout still yields an attested identity (AC1a).
-- [x] Test: no-line and null-engine are recorded as **distinct** states, not merged.
-- [x] **Two-screen test where the second attestation differs** — per-screen
+- [x] *(CI-runnable)* Test: no-line and null-engine are recorded as **distinct** states, not merged.
+- [x] *(CI-runnable)* **Two-screen test where the second attestation differs** — per-screen
       provenance records both, and any row-level field reads `mixed` (AC2).
 - [x] *(CI-runnable)* Ledger rows carry attested capture-transport + engine under a distinct key
       (or a reason token), with no writer-side re-derivation.
@@ -219,8 +219,8 @@ capture process**, not a guess by the process that writes the ledger.
 - [x] *(CI-runnable)* Hash-invariance test green.
 - [x] *(CI-runnable)* Best-effort test: garbage on stdout still scores successfully.
 - [x] *(CI-runnable)* `SKILL.md` ledger table updated.
-- [x] Compliance + craft review verdicts recorded under `reviews/`.
-- [x] Reconciliation verdict + deviation log + reconciliation sweep recorded.
+- [x] *(n/a)* Compliance + craft review verdicts recorded under `reviews/`.
+- [x] *(n/a)* Reconciliation verdict + deviation log + reconciliation sweep recorded.
 
 **Dropped from this slice (was AC5 — recording the reference-render engine).**
 At score time the reference is a frozen PNG and nothing on disk carries its
@@ -275,6 +275,11 @@ trustworthy evidence about the engine.
   only, and restructuring the composite arithmetic under review against a landed
   026-01 is the worse trade. **Trigger:** if a fifth element is ever added, land
   the `NamedTuple` then.
+- **`capture_app`'s Python signature changed** from `Path` to
+  `tuple[Path, dict | None]`. ADR-0031 says "`capture_app`'s contract is
+  unchanged" — that refers to its *failure semantics* (subprocess, fail-closed to
+  `env_error` rc 2, never a silent `0.0`), which are preserved. Noting it so the
+  two records do not read as contradictory.
 - **026-02 deferred**, so `transport` is the literal `"bundled"` — verified, not
   assumed: `capture.mjs`'s `chromium.launch()` takes no channel.
 
@@ -290,5 +295,8 @@ trustworthy evidence about the engine.
 | `skills/design-eval/SKILL.md` | **updated** — "Provenance in the ledger" incl. the evidential-weight statement. |
 | `hosts/claude`, `hosts/codex` | **updated** — regenerated; drift check clean. |
 | `docs/refinement-todo.md` | **no-op** — nothing new deferred by this slice beyond the in-slice `per_screen` note. |
-| ADR-0031 | **no-op** — implementation matches the accepted decision; observability, not a gate. |
+| ADR-0031 | **partial — disclosed, not no-op.** The accepted ADR says "the spec should record the reference-render engine in the ledger so a mismatch is at least visible". This slice **deliberately dropped that** (see "Dropped from this slice"): at score time the reference is a frozen PNG carrying no engine, and for a hand-supplied reference the information never existed. With 026-02 DEFERRED and 026-04 ABANDONED, **nothing else will pick it up** — so it is recorded here rather than left as a false "fully implemented". |
+| `docs/specs/.../spec.md` | **updated** — its non-goal claimed 026-03 "makes engine mixing visible"; false after the reference-engine drop, corrected. |
+| `reviews/slice-03-{compliance,craft,reconciliation}.md` | **added** — the ceremony's own evidence. |
+| `skills/design-eval/SKILL.md` (Files table) | **updated** — `capture_lib.mjs` now also owns the attestation channel, not just clip geometry. |
 | `_common/fidelity_eval.py` | **no-op** — the attestation is design-eval-specific; no shared-harness change. |
