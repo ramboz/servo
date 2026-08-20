@@ -44,8 +44,14 @@ capture process**, not a guess by the process that writes the ledger.
 
 **Acceptance criteria:**
 1. `capture.mjs` emits **one JSON line on stdout**, on the `--screen` path only,
-   reporting the engine it actually launched (name + version) and the transport
-   it was **instructed** to use (echoed — see AC2, it cannot diverge). `capture_app` parses it; a malformed/absent
+   reporting the engine it actually launched (name + version) and the transport.
+   **With 026-02 DEFERRED, the transport value is the literal `"bundled"`** — not
+   a guess but a verified fact: `capture.mjs`'s `chromium.launch()` takes no
+   channel, so bundled is the only engine source that exists today. It is
+   therefore *not* `null` (which AC5 reserves for unattested states) and *not*
+   re-derived from config (which AC2b forbids). If 026-02 later lands, this
+   becomes the `--transport` argv echoed back as a mismatch canary — a note about
+   the future, not the operative instruction. `capture_app` parses it; a malformed/absent
    line is tolerated (AC4). Scoping to `--screen` matters because
    `design_eval.capture_refs` runs `capture.mjs --refs` **without**
    `capture_output`, so an unconditional line would print raw JSON into the
@@ -53,6 +59,22 @@ capture process**, not a guess by the process that writes the ledger.
    *Oracle collision checked and clear:* `oracle.sh` parses **`score.py`'s**
    stdout, and `capture_app` runs the child with `capture_output=True`, so the
    child's stdout is absorbed by the parent and can never reach the oracle stream.
+1c. **The JS logic lives in `capture_lib.mjs`, because `capture.mjs` is
+   structurally untestable.** `capture.mjs` imports Playwright at module load, so
+   it "cannot be unit tested directly" — the repo already says so and already
+   solved it: pure logic is extracted to `capture_lib.mjs` and covered by node's
+   runner, with a delegation guard preventing re-inlining. Without this, the
+   DoD's accessor-throw item has no honest implementation: with no Playwright
+   resolvable here, the path of least resistance is to monkeypatch
+   `subprocess.run` and hand `score.py` crafted stdout that *already contains*
+   `engine: null` + `error` — which passes without a single line of the JS guard
+   existing, and merely re-tests the Python parser the malformed-line item
+   already covers. AC1b would then ship with **zero coverage while its checkbox
+   is ticked** — the exact failure this whole review chain has been eliminating.
+   So: `attestationLine({engine, transport, error})` and
+   `safeAttest(getVersion)` are **pure functions in `capture_lib.mjs`**; the node
+   suite covers the throwing-thunk case directly; and a delegation guard mirrors
+   the existing `test_capture_mjs_imports_the_extracted_lib`.
 1b. **The attestation can never fail a score — guarded, not merely intended.**
    `capture.mjs` has exactly **one** `try`, whose `catch` sets
    `process.exitCode = 2`; `capture_app` maps any non-zero rc to `EnvError`, and
@@ -105,6 +127,11 @@ capture process**, not a guess by the process that writes the ledger.
    judge samples per screen), so a later screen genuinely can launch a different
    binary. Engine-changed-mid-run is the single most investigable event this
    field exists to surface.
+2c. **The attestation is RETURNED alongside the PNG path, never stashed.**
+   `capture_app` returns a `Path` today and has three dedicated failure-branch
+   tests, so the low-friction move is a module-level `_LAST_ATTESTATION` that
+   `_ledger` reads — which is last-write-wins and silently re-creates the exact
+   single-field collapse AC2 exists to fix. Change the return, don't stash.
 2b. **Every provenance field comes from the attestation line or is explicitly
    unattested** — nothing re-derived writer-side; per-screen partial attestation
    (screen A attests, screen B hits AC1b's null-engine guard) is therefore
@@ -155,7 +182,11 @@ capture process**, not a guess by the process that writes the ledger.
    field, and never an independently-probed guess presented as an attestation.
 6. `SKILL.md` documents the fields, names the consumer (a human), and states that
    the value is an attestation from the capture process.
-7. Tests: attested identity **and transport** on both transports; a **setup
+7. Tests — and each item states whether it is **CI-runnable (pytest)** or
+   **node-skipped**, because a green CI does not mean the JS suite ran and a DONE
+   gate satisfied by a skipped test is precisely the failure mode under review.
+   Attested identity with the transport axis reduced to asserting the constant
+   `"bundled"` (026-02 deferred); a **setup
    module that prints plain text *and* a JSON object to stdout still yields an
    attested identity** (the AC1a contamination guard — this is the test that
    would have caught the false "stdout is free" premise); a fake-scores run
@@ -167,9 +198,14 @@ capture process**, not a guess by the process that writes the ledger.
 - [ ] `capture.mjs` stdout report implemented (marker-delimited, emitted after
       launch and before the `setup` import); `capture_app` parses the **first**
       marker line, never `_extract_json`.
-- [ ] **Accessor-throw test:** a stubbed accessor that *throws* still scores and
-      still writes a row with `engine: null` + an `error` string (AC1b). This is
-      distinct from the malformed-line test, which exercises only the Python parser.
+- [ ] **Accessor-throw test — in the NODE suite (node-skipped in CI), against
+      `capture_lib.mjs`'s `safeAttest`:** a throwing thunk returns a null-engine
+      payload with an `error` string and never touches `process.exitCode`. A
+      Python-side fake does **not** satisfy this item; it would re-test the parser.
+- [ ] Delegation guard: `capture.mjs` calls `capture_lib.mjs`'s attestation
+      helpers rather than re-inlining them (mirrors the existing
+      `test_capture_mjs_imports_the_extracted_lib`).
+- [ ] DoD/AC7 items are each labelled CI-runnable or node-skipped.
 - [ ] **Contamination test:** a `setup` module printing plain text *and* a JSON
       object to stdout still yields an attested identity (AC1a).
 - [ ] Test: no-line and null-engine are recorded as **distinct** states, not merged.
