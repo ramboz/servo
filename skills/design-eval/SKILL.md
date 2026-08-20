@@ -104,7 +104,28 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 | `capture_lib.mjs` | pure capture helpers (clip geometry, flag/screen resolution), imported by `capture.mjs` |
 | `setups/<id>.mjs` | per-screen deterministic state + navigation |
 | `refs/<id>.png` | frozen reference screenshots (chrome-cropped) |
-| `ledger.jsonl` | per-run sampled + aggregated scores + hashes (audit) |
+| `ledger.jsonl` | per-run sampled + aggregated scores + hashes, plus **per-screen provenance** (audit) |
+
+### Provenance in the ledger
+
+Each `ledger.jsonl` row records, **per screen**, which browser actually rendered
+that screenshot — `engine`, `engine_version`, `capture_transport`, and a
+`provenance` token. It is **observability, not a gate**: nothing here is hashed,
+none of it can raise `StaleError`, and a provenance failure never fails a score.
+
+Read it when a fidelity score shifts and you want to know whether the engine
+changed. The consumer is a human — nothing reads it programmatically today.
+
+- `attested` — the capture process reported the engine it launched.
+- `not_attested` — capture happened, identity unavailable (`provenance_error`
+  says why: no accessor, or the accessor threw).
+- `not_captured` — **no browser ran at all** (the `SERVO_DESIGN_EVAL_FAKE_SCORES`
+  path still writes a row). A synthetic score is never byte-indistinguishable
+  from a real capture.
+
+Note `capture_transport` is deliberately distinct from the row's top-level
+`transport`, which means the **judge** transport (`api`/`cli`) in every
+historical row.
 
 ## Authoring tips
 

@@ -807,6 +807,100 @@ class PreflightTests(unittest.TestCase):
                 os.environ.pop(score._FAKE_SCORES_ENV, None)
 
 
+class AttestationParseTests(unittest.TestCase):
+    """026-03 AC1a: marker-delimited, first-match, adopter logging discarded.
+
+    CI-runnable (pytest). The JS-side guard (safeAttest) is node-skipped and
+    lives in test_capture_lib.mjs — a Python fake cannot substitute for it.
+    """
+
+    def test_takes_first_marker_line_and_ignores_adopter_logging(self):
+        stdout = "\n".join([
+            "seeded 3 orders",                                  # adopter console.log
+            json.dumps({"notOurs": True}),                      # adopter JSON
+            '##servo-capture:{"engine":"chromium","version":"131.0","transport":"bundled"}',
+            '##servo-capture:{"engine":"firefox","version":"99"}',   # later collision loses
+        ])
+        got = score.parse_attestation(stdout)
+        self.assertEqual(got["engine"], "chromium")
+        self.assertEqual(got["version"], "131.0")
+
+    def test_contaminated_stdout_still_attests(self):
+        # The test that would have caught the false "stdout is free" premise:
+        # capture.mjs runs the ADOPTER's setup module in-process.
+        stdout = 'log line\n{"their":"json"}\n##servo-capture:{"engine":"chromium","version":"1"}'
+        self.assertIsNotNone(score.parse_attestation(stdout))
+
+    def test_absent_or_malformed_returns_none_never_raises(self):
+        self.assertIsNone(score.parse_attestation("just logs\nnothing"))
+        self.assertIsNone(score.parse_attestation("##servo-capture:{not json"))
+        self.assertIsNone(score.parse_attestation(""))
+        self.assertIsNone(score.parse_attestation(None))
+
+    def test_does_not_use_extract_json(self):
+        # _extract_json (first { to last }) would span the adopter's object and
+        # the attestation, or return the adopter's data AS the attestation.
+        src = (HERE / "score.py").read_text()
+        block = src[src.index("def parse_attestation"):src.index("def capture_app")]
+        # Assert on an INVOCATION, not the docstring explaining why we avoid it.
+        self.assertNotIn("_extract_json(", block)
+
+
+class LedgerProvenanceTests(unittest.TestCase):
+    """026-03 AC2/AC2a/AC5: per-screen provenance under a distinct key, with
+    reason tokens that keep not_captured separate from not_attested."""
+
+    def _row(self, d):
+        line = (d / "ledger.jsonl").read_text().strip().splitlines()[-1]
+        return json.loads(line)
+
+    def test_fake_scores_row_records_not_captured(self):
+        # A synthetic score must never be byte-indistinguishable from a real
+        # capture: no browser ran at all.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9, 0.9], "settings": [0.9, 0.9]})
+            try:
+                _capture_main(d)
+                row = self._row(d)
+                for s in row["screens"]:
+                    self.assertEqual(s["provenance"], "not_captured")
+                    self.assertIsNone(s["engine"])
+            finally:
+                os.environ.pop(score._FAKE_SCORES_ENV, None)
+
+    def test_capture_transport_key_is_distinct_from_judge_transport(self):
+        # AC2a: the row's top-level `transport` means the JUDGE transport in
+        # every historical row; reusing it would destroy a human's ability to
+        # spot a judge-transport change.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9, 0.9], "settings": [0.9, 0.9]})
+            try:
+                _capture_main(d)
+                row = self._row(d)
+                self.assertIn("transport", row)                 # judge transport
+                self.assertIn("capture_transport", row["screens"][0])
+                self.assertNotEqual("capture_transport", "transport")
+            finally:
+                os.environ.pop(score._FAKE_SCORES_ENV, None)
+
+    def test_provenance_is_not_in_the_definition_hash(self):
+        # AC3: environmental, never a staleness trigger.
+        cfg = _base_config()
+        h0 = score.definition_hash(cfg)
+        cfg2 = dict(cfg)
+        cfg2["screens"] = [dict(s) for s in cfg["screens"]]
+        h1 = score.definition_hash(cfg2)
+        self.assertEqual(h0, h1)
+
+
 class SalientStderrTests(unittest.TestCase):
     """026-01 AC4: salient-line surfacing replaces the blind `stderr[:200]` head.
 
@@ -1074,6 +1168,18 @@ class CaptureLibNodeTests(unittest.TestCase):
                          "clip width math should live in capture_lib.computeClip, not inline")
         self.assertNotIn("box.height -", cap,
                          "clip height math should live in capture_lib.computeClip, not inline")
+
+    def test_capture_mjs_delegates_attestation_to_the_lib(self):
+        """026-03 AC1c: the attestation guard must stay in capture_lib.mjs, where
+        the node suite can test it — capture.mjs imports Playwright at module
+        load and is structurally untestable, so a guard inlined there would ship
+        with a ticked checkbox and no coverage."""
+        cap = (HERE / "capture.mjs").read_text()
+        self.assertIn("attestationLine", cap)
+        self.assertIn("safeAttest", cap)
+        self.assertNotIn("process.exitCode = 2;\n    }\n  } catch", cap.replace(" ", ""))
+        # the emission must precede the setup import (first-marker determinism)
+        self.assertLess(cap.index("attestationLine"), cap.index("screen.setup"))
 
 
 class InitVendorsRuntimeTests(unittest.TestCase):

@@ -50,3 +50,63 @@ export function computeClip(box, crop) {
   }
   return { x: box.x + left, y: box.y + top, width, height };
 }
+
+// --------------------------------------------------------------------------- //
+// Attestation channel (spec 026-03 / ADR-0031)
+// --------------------------------------------------------------------------- //
+// These live here, not in capture.mjs, because capture.mjs imports Playwright at
+// module load and cannot be unit tested — so a guard written there would ship
+// with a ticked checkbox and no coverage. Pure functions; the node suite tests
+// them directly.
+
+/** The namespaced sentinel. Parsed by marker, never positionally. */
+export const ATTEST_MARKER = '##servo-capture:';
+
+/**
+ * Build the single attestation line. `engine` is null when identity could not be
+ * attested; `error` then carries a short reason so "A5 false / no accessor" is
+ * distinguishable from "the accessor threw".
+ */
+export function attestationLine({ engine = null, version = null, transport = 'bundled', error = null }) {
+  return ATTEST_MARKER + JSON.stringify({ engine, version, transport, error });
+}
+
+/**
+ * Call an engine-identity thunk and NEVER let its failure escape.
+ *
+ * The load-bearing guarantee (026-03 AC1b): capture.mjs has exactly one `try`
+ * whose `catch` sets `process.exitCode = 2`, which `capture_app` maps to an
+ * EnvError — so an accessor that throws would turn a SUCCESSFUL screenshot into
+ * no score and no ledger row, making provenance load-bearing. This returns a
+ * null-engine payload instead, and never touches process.exitCode.
+ */
+export function safeAttest(getVersion, transport = 'bundled') {
+  try {
+    const info = getVersion();
+    if (!info || typeof info.version !== 'string' || !info.version) {
+      return { engine: null, version: null, transport, error: 'no-accessor' };
+    }
+    return { engine: info.engine || 'chromium', version: info.version, transport, error: null };
+  } catch (err) {
+    return {
+      engine: null,
+      version: null,
+      transport,
+      error: `accessor-threw: ${(err && err.message) || err}`.slice(0, 120),
+    };
+  }
+}
+
+/** Extract the attestation from captured stdout: FIRST marker line, never _extract_json. */
+export function parseAttestation(stdout) {
+  for (const line of String(stdout || '').split('\n')) {
+    const idx = line.indexOf(ATTEST_MARKER);
+    if (idx === -1) continue;              // adopter's own logging — discarded, not a failure
+    try {
+      return JSON.parse(line.slice(idx + ATTEST_MARKER.length));
+    } catch {
+      return null;                          // malformed -> not_attested, never fatal
+    }
+  }
+  return null;
+}

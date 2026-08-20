@@ -12,7 +12,8 @@ import { chromium } from 'playwright';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { parseFlag, resolveViewport, findScreen, computeClip } from './capture_lib.mjs';
+import { parseFlag, resolveViewport, findScreen, computeClip,
+         attestationLine, safeAttest } from './capture_lib.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const targetRoot = path.resolve(here, '..', '..'); // <target>/
@@ -59,6 +60,18 @@ try {
     if (!id || !out) fail('usage: --screen <id> --out <path>');
     const screen = findScreen(config.screens, id);
     if (!screen) fail(`unknown screen: ${id}`);
+    // 026-03: attest the engine that actually launched, BEFORE the adopter's
+    // setup module runs (it shares this stdout, and the parser takes the FIRST
+    // marker line — so servo's line is deterministically the winner). Its own
+    // try/catch lives in safeAttest, which never touches process.exitCode: a
+    // provenance failure must never fail a successful screenshot.
+    try {
+      console.log(attestationLine(safeAttest(() => ({
+        engine: browser.browserType().name(),
+        version: browser.version(),
+      }))));
+    } catch { /* provenance is never load-bearing */ }
+
     const page = await browser.newPage({ deviceScaleFactor: vp.deviceScaleFactor });
     await page.setViewportSize({ width: vp.width, height: vp.height });
     await page.goto(config.app_url, { waitUntil: 'networkidle' });

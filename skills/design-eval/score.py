@@ -131,8 +131,35 @@ def preflight_capture(base_dir: Path, specifier: str = _PREFLIGHT_SPECIFIER) -> 
             f"npx playwright install chromium")
 
 
-def capture_app(base_dir: Path, screen: dict) -> Path:
-    """Screenshot the running app at the screen's seeded state via capture.mjs."""
+_ATTEST_MARKER = "##servo-capture:"
+
+
+def parse_attestation(stdout: str):
+    """First marker line only — never `_extract_json` (026-03 AC1a).
+
+    `capture.mjs` runs the ADOPTER's setup module in-process, so their
+    `console.log` shares this stdout. Non-matching lines are DISCARDED, not
+    treated as failure, so a rich setup script cannot decay provenance to
+    `not_attested` and misattribute their logging to a Playwright problem.
+    """
+    for line in (stdout or "").splitlines():
+        idx = line.find(_ATTEST_MARKER)
+        if idx == -1:
+            continue
+        try:
+            return json.loads(line[idx + len(_ATTEST_MARKER):])
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def capture_app(base_dir: Path, screen: dict):
+    """Screenshot the app at the screen's seeded state; return (png, attestation).
+
+    026-03 AC2c: the attestation is RETURNED, never stashed in a module global —
+    a global would be last-write-wins across screens and silently re-create the
+    single-field collapse per-screen provenance exists to prevent.
+    """
     out = base_dir / "shots" / f"app-{screen['id']}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["node", str(base_dir / "capture.mjs"), "--screen", screen["id"], "--out", str(out)]
@@ -148,7 +175,7 @@ def capture_app(base_dir: Path, screen: dict) -> Path:
         # `[:200]` deliberately, since these predicates parse node's grammar.
         raise EnvError(
             f"capture failed for screen {screen['id']!r}: {salient_stderr(proc.stderr)}")
-    return out
+    return out, parse_attestation(proc.stdout)
 
 
 def judge(app_png: Path, ref_png: Path, config: dict) -> float:
@@ -302,20 +329,36 @@ def score(base_dir: Path) -> float:
             if screen["id"] not in fake:
                 raise EnvError(f"fake scores missing screen {screen['id']!r}")
             samples = [float(x) for x in fake[screen["id"]]]
+            attestation = None   # no browser ran at all -> not_captured
         else:
-            app_png = capture_app(base_dir, screen)
+            app_png, attestation = capture_app(base_dir, screen)
             ref_png = base_dir / screen["reference"]
             if not ref_png.is_file():
                 raise EnvError(f"reference missing: {screen['reference']}")
             samples = [judge(app_png, ref_png, config) for _ in range(n)]
-        per_screen.append((screen, samples, aggregate_lower_bound(samples, k)))
+        per_screen.append((screen, samples, aggregate_lower_bound(samples, k), attestation))
 
-    total_w = sum(float(s.get("weight", 1.0)) for s, _, _ in per_screen)
+    total_w = sum(float(s.get("weight", 1.0)) for s, _, _, _ in per_screen)
     if total_w <= 0:
         raise EnvError("total screen weight is zero")
-    composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb in per_screen) / total_w
+    composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a in per_screen) / total_w
     _ledger(base_dir, config, per_screen, composite)
     return max(0.0, min(1.0, composite))
+
+
+def _provenance(att, *, fake_run: bool) -> dict:
+    """Reason tokens, not a bare "unknown" (026-03 AC5): `not_captured` (no
+    browser ran — the fake-scores path still writes a row) must stay
+    distinguishable from `not_attested` (capture happened, identity
+    unavailable), because the remedies differ."""
+    if att is None:
+        return {"engine": None, "capture_transport": None,
+                "provenance": "not_captured" if fake_run else "not_attested"}
+    if not att.get("engine"):
+        return {"engine": None, "capture_transport": att.get("transport"),
+                "provenance": "not_attested", "provenance_error": att.get("error")}
+    return {"engine": att.get("engine"), "engine_version": att.get("version"),
+            "capture_transport": att.get("transport"), "provenance": "attested"}
 
 
 def _ledger(base_dir: Path, config: dict, per_screen, composite: float) -> None:
@@ -325,9 +368,18 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float) -> None:
         "transport": (config.get("judge") or {}).get("transport", "api"),
         "composite": round(composite, 4),
         "definition_hash": config.get("approved_content_hash"),
+        # 026-03 AC2/AC2a: provenance is PER SCREEN (capture_app runs once per
+        # screen, so a row has N attestations), under `capture_transport` —
+        # distinct from the top-level `transport`, which means the JUDGE
+        # transport in every historical row.
         "screens": [
-            {"id": s["id"], "samples": [round(x, 4) for x in samp], "lower_bound": round(lb, 4)}
-            for s, samp, lb in per_screen
+            {
+                "id": s["id"],
+                "samples": [round(x, 4) for x in samp],
+                "lower_bound": round(lb, 4),
+                **_provenance(att, fake_run=att is None),
+            }
+            for s, samp, lb, att in per_screen
         ],
     }
     _fe.write_ledger(base_dir, record)
