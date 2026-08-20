@@ -28,10 +28,10 @@ This spec builds ADR-0031's composed answer:
   because the wall is hit at *score time* on CI / Routines / detached loops,
   which is where a human is *not*. It turns an opaque failure into a precise,
   actionable instruction for *this* machine.
-- **An unfrozen `capture.transport` config field** (+ `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT`
-  env override) so an adopter can reuse an installed Chrome instead of paying a
-  ~150–300 MB pinned-Chromium download — the footprint concern that motivated
-  the ADR.
+- ~~An unfrozen `capture.transport` config field~~ — **DEFERRED (026-02)**: the
+  footprint concern that motivated the ADR turns on a package question
+  (`playwright` vs `playwright-core`) that cannot be answered in a repo which
+  deliberately ships no browser. Deferred rather than guessed.
 - **Browser identity in the ledger** so a human investigating a score shift can
   see what rendered it.
 - ~~An opt-in authoring assist~~ — **ABANDONED at frame-critique** (026-04).
@@ -138,10 +138,12 @@ experiences, not just an internal layer.
 - [026-01 — runtime-preflight-guidance](slice-01-runtime-preflight-guidance.md)
   — `score.py` preflights node + library (the two cheaply detectable modes) and
   fixes the head-truncated stderr surfacing that hides the remedy for the rest.
-- [026-02 — transport-selection](slice-02-transport-selection.md)
-  — unfrozen `capture.transport` + `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT`
-  override; `capture.mjs` launches per transport; back-compat for existing
-  frozen configs.
+- [026-02 — transport-selection](slice-02-transport-selection.md) — **DEFERRED**
+  pending the A1 probe. Five critique rounds sharpened it to a factual gap: the
+  footprint saving requires `playwright-core`, but `capture.mjs`'s import is a
+  static top-level `playwright`, and each horn of that fork breaks a claim the
+  slice makes. Answering it needs a Playwright-equipped machine (ADR-0031 kill
+  criterion 1).
 - [026-03 — ledger-browser-identity](slice-03-ledger-browser-identity.md)
   — `capture.mjs` **attests** the engine it launched over a stdout channel;
   `score.py` records transport + attested identity in `ledger.jsonl`.

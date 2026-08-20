@@ -105,22 +105,26 @@ remedy for everything else.
    **command shape** rather than substring, and it is recorded here as a caution:
    a reconstruction can pass while the specified rule fails.
 
-4a. **The filter is a shared helper, not an inline fix.** It lives in
-   `skills/_common/fidelity_eval.py` (the ADR-0024 home `score.py` already imports
-   through) as a named function — because `stderr.strip()[:200]` is **not** local
-   to the line AC4 replaces. Verified by enumeration: **5 call sites across 3
-   skills**, including `design-eval/score.py:157` (the `cli` judge path, 46 lines
-   below the target, whose failures — auth expiry, rate limit, model unavailable —
-   are all remedy-bearing) and `content-fidelity/score.py:157,224`, a sibling that
-   drives the same capture pattern its docstring says it mirrors exactly. Writing
-   it inline would leave identical truncation in the same file and diverge two
-   skills' message quality for the same failure; and since `hosts/` regenerates
-   from `skills/`, a copy-paste multiplies into three divergent copies.
-   **Scope decision, stated rather than left silent:** this slice applies the
-   helper to `capture_app` (its own path) **and** to `design-eval/score.py:157`
-   (same file, zero extra risk). `content-fidelity` and `eval-authoring` call
-   sites are **deferred with a named owner** — a refinement-todo entry — because
-   they belong to other skills whose tests this slice does not own.
+4a. **The filter is a shared helper, applied only to node-produced stderr.** It
+   lives in `skills/_common/fidelity_eval.py` (the ADR-0024 home `score.py`
+   already imports through) as a named function, because
+   `stderr.strip()[:200]` is not local to the line AC4 replaces — enumerated:
+   **5 call sites across 3 skills**.
+   **This slice applies it to `capture_app` only.** An earlier draft also wired
+   it to `design-eval/score.py:157` (the `claude -p` judge path) on
+   same-file/consistency grounds; that was wrong. Every drop predicate in AC4 is
+   a parser for **node's uncaught-exception grammar** (frame header / echoed
+   source / caret, `^\s+at `, `Node.js vX.Y.Z`, `{ code: … }`), and the `claude`
+   CLI is a different producer with a different grammar for which this slice has
+   **no fixture**. The block rule is the sharpest hazard: `^/.*:\d+$` matches a
+   bare path line such as `/Users/x/.claude/settings.json:12`, and with no caret
+   following it would eat forward to the next blank — taking the explanation with
+   it and making the judge path **worse** than today's `[:200]`, on exactly the
+   remedy-bearing failures (auth expiry, rate limit) that motivated including it.
+   Consistency is not urgent enough to outrun evidence: the judge path,
+   `content-fidelity`, and `eval-authoring` call sites are **deferred together**
+   to a named refinement-todo owner, to be done when a recorded real `claude -p`
+   failure fixture exists (or the helper is parameterised by producer).
 5. The preflight runs **only** in the live-capture path: with
    `SERVO_DESIGN_EVAL_FAKE_SCORES` set, scoring still succeeds with node absent.
 6. Contract unchanged: failures stay `EnvError` → rc 2, stdout empty. The
@@ -150,9 +154,15 @@ remedy for everything else.
       is present.
 - [ ] Test: the helper lives in `_common/fidelity_eval.py` and both `capture_app`
       and `design-eval/score.py`'s judge path call it (no second inline copy).
-- [ ] **Prototype-parity check:** the test suite exercises the filter exactly as
-      the AC specifies it — no stricter predicate in code than in prose. Three
-      defects in this slice came from a prototype being stricter than its own AC.
+- [ ] **Prototype-parity test (mechanical, not an exhortation).** Three defects
+      here came from code being stricter than its own AC, and a checkbox reading
+      "the suite matches the prose" cannot fail — an implementer who writes
+      `\binstall\b` where the AC says `install` ticks it in good faith. So it
+      gets an artifact: the filter's regexes are named module constants quoted
+      **verbatim** from AC4, and a test reads this slice file and asserts the
+      constants match the literals in the AC. Precedent exists in-repo —
+      `test_skill_surface.py` already parses named sections out of `SKILL.md`
+      and asserts on their content — so this needs no new machinery.
 - [ ] Test: zero-survivor input falls back to the head slice (no empty diagnostic).
 - [ ] Test: a remedy line that would not fit is skipped whole, never truncated.
 - [ ] Test: the probe's spawn kwargs carry `cwd=base_dir` (AC1's false-positive
