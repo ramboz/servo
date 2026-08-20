@@ -15,9 +15,12 @@ use_cases: []
 scores, but servo ships none ([ADR-0020](../../decisions/adr-0020-python-39-floor.md)
 dependency-light stance). Today there is **no acquisition mechanism at all**:
 `capture.mjs` hard-imports Playwright (`capture.mjs:11`), and an adopter who
-hasn't installed it gets the opaque `env_error` "node/playwright unavailable for
-capture" at score time. The only guidance is a sentence in `SKILL.md`'s
-Prerequisites. servo detects nothing, asks nothing, installs nothing.
+hasn't installed it gets — as the frame-critique established by probe — not a
+tidy servo message but **node's own internals**, head-truncated:
+`ERR_MODULE_NOT_FOUND … package_json_reader:256`. (The tidier
+"node/playwright unavailable" string fires only when the `node` *binary* is
+missing.) The only guidance is a sentence in `SKILL.md`'s Prerequisites. servo
+detects nothing, asks nothing, installs nothing.
 
 This spec builds ADR-0031's composed answer:
 
@@ -31,8 +34,10 @@ This spec builds ADR-0031's composed answer:
   the ADR.
 - **Browser identity in the ledger** so a human investigating a score shift can
   see what rendered it.
-- **An opt-in authoring assist** that may detect-ask-and-install *with consent*,
-  kept strictly out of `install()`'s code path.
+- **An opt-in authoring assist** that detects, recommends, and records a
+  transport — and **installs nothing** (re-scoped after frame-critique: servo has
+  no package-manager awareness, and mutating an adopter's dependency manifest is
+  not something consent can bound). Kept strictly out of `install()`'s path.
 
 **What this spec does NOT do** (ADR-0031 boundaries, load-bearing):
 
@@ -41,9 +46,12 @@ This spec builds ADR-0031's composed answer:
   probes the environment) and `definition_hash` deliberately excludes
   environmental fields. Pinning them would be inert at best and a fail-closed
   halt on every browser patch bump at worst (ADR-0031 Option E, rejected).
-- It introduces **no new fail-closed mode**. Nothing added here is hashed, so an
-  environment move can never raise `StaleError`. The worst case stays the
-  pre-existing `env_error` (rc 2).
+- It introduces **no new fail-closed mode on the score path**. Nothing added
+  there is hashed, so an environment move can never raise `StaleError`; the worst
+  case stays the pre-existing `env_error` (rc 2). **Narrowed after
+  frame-critique:** `capture.mjs` is *also* the reference renderer, and reference
+  PNGs *are* content-hashed — so 026-02 explicitly guards the `--refs` path
+  against silently re-rendering frozen references under a different engine.
 - It does **not** make `init` or `install` interactive. `install()` calls
   `init()` unconditionally (`design_eval.py:148`), so any interactive ask lives
   behind an explicit opt-in outside that path.
@@ -52,33 +60,51 @@ This spec builds ADR-0031's composed answer:
 
 ## Assumptions
 
-These are the unverified, load-bearing claims this spec rests on. Each is
-probe-gated inside the slice that depends on it — the ADR's kill criteria turn
-on the first two.
+Four rounds of frame-critique (one per slice) resolved most of the original set
+by probe. What remains genuinely unverified is listed first.
 
-- **A1 — `channel: 'chrome'` (or `playwright-core` + `executablePath`) reliably
-  drives an installed system Chrome** across the OS/versions servo's adopters
-  run. If false, the bring-your-own transport is not viable and 026-02 collapses
-  to bundled-only (ADR-0031 kill criterion 1). Probed inside 026-02.
-- **A2 — a trustworthy browser name + version string is cheaply obtainable** on
-  both transports. If false, the ledger record would be misleading and should be
-  omitted rather than shipped wrong (ADR-0031 kill criterion 2). Probed inside
-  026-03.
-- **A3 — `node -e "require.resolve('playwright')"` is a reliable library-presence
-  probe** from `score.py`. Plausible but unverified; 026-01 must confirm it
-  distinguishes "node missing" from "library missing" rather than collapsing
-  both to a generic non-zero exit.
-- **A4 — the authoring assist can detect a non-interactive stdin and degrade to
-  print-the-command** rather than blocking. Load-bearing for 026-04's safety
-  claim; unverified.
+**Still unverified (probe-gated inside the slice that depends on it):**
 
-Grounded (probe-verified, not assumptions): `capture.mjs` hard-imports Playwright
-at module top level (`capture.mjs:11`), so it cannot preflight its own missing
-dependency — the probe must live in the Python parent; `install()` calls `init()`
-unconditionally (`design_eval.py:148`); `app_url` is present in
-`templates/config.example.json:4` and named in `definition_hash`'s docstring as
-the excluded-environmental example; `validate_freeze` compares only config-to-its-
-own-hash plus on-disk artifact hashes.
+- **A1 — `channel: 'chrome'` / `playwright-core` + `executablePath` reliably
+  drives an installed system Chrome** across adopter OS/versions. Probed inside
+  026-02, and **the probe must run under `playwright-core` (or with browsers not
+  downloaded)** — probing under the full `playwright` package would not test the
+  footprint claim, since the download happens at install time regardless of
+  channel. If false, ADR-0031 kill criterion 1 fires; 026-02 states its fallback
+  deliverable explicitly.
+- **A5 — Playwright exposes a usable per-launch engine name + version inside
+  `capture.mjs`** (`browser.version()` or equivalent). 026-03's attestation
+  channel depends on it. If unavailable, 026-03 records `"unknown"` rather than
+  substituting an out-of-band guess.
+
+**Resolved by probe during frame-critique (no longer assumptions):**
+
+- ~~A2 (version string obtainable)~~ — confirmed: system Chrome reports
+  `Google Chrome 151.0.7922.138` via `--version`. The *real* question the
+  critique surfaced was not availability but **provenance**, which 026-03 now
+  answers with an attestation channel rather than a probe.
+- ~~A3 (`require.resolve` probe)~~ — confirmed: with the library absent, `node -e
+  "require.resolve('playwright')"` exits **1** with a `MODULE_NOT_FOUND` token;
+  and `shutil.which("node")` distinguishes node-missing **before** node is
+  invoked. Both branches are cleanly separable.
+- ~~A4 (stdin detection is the safety claim)~~ — **retired as mis-ranked.**
+  026-04's safety rests on the opt-in surface living outside `install()`→`init()`,
+  which a scripted install cannot reach whatever stdin looks like. `isatty` is
+  demoted to a secondary guard.
+- **Freeze-neutrality** — confirmed by running `definition_hash` directly: adding
+  or changing a top-level `capture` block leaves the hash byte-identical, while
+  `threshold` still moves it. New top-level keys are excluded **by construction**.
+- **Failure taxonomy** — confirmed, and it **falsified 026-01's original
+  premise**: the `node/playwright unavailable` message fires **only** when the
+  `node` binary is absent. A missing *library* starts node fine and returns rc 1,
+  surfacing head-truncated node internals
+  (`ERR_MODULE_NOT_FOUND … package_json_reader:256`). 026-01 was rewritten around
+  the real taxonomy and now also fixes the truncation.
+- **Back-compat** — confirmed: `capture.mjs`'s `chromium.launch()` takes no
+  channel, so no existing adopter can be on system Chrome; "absent block ⇒
+  bundled" preserves behavior exactly rather than guessing.
+- **No package-manager awareness** — confirmed by enumeration over
+  `skills/`/`scripts/`: servo has none, which is why 026-04 no longer installs.
 
 ## Decomposition
 
@@ -107,16 +133,18 @@ experiences, not just an internal layer.
 ## Slices
 
 - [026-01 — runtime-preflight-guidance](slice-01-runtime-preflight-guidance.md)
-  — `score.py` probes node/library/browser before spawning capture and emits an
-  actionable instruction instead of the opaque `node/playwright unavailable`.
+  — `score.py` preflights node + library (the two cheaply detectable modes) and
+  fixes the head-truncated stderr surfacing that hides the remedy for the rest.
 - [026-02 — transport-selection](slice-02-transport-selection.md)
   — unfrozen `capture.transport` + `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT`
   override; `capture.mjs` launches per transport; back-compat for existing
   frozen configs.
 - [026-03 — ledger-browser-identity](slice-03-ledger-browser-identity.md)
-  — record resolved transport + browser name/version in `ledger.jsonl`.
+  — `capture.mjs` **attests** the engine it launched over a stdout channel;
+  `score.py` records transport + attested identity in `ledger.jsonl`.
 - [026-04 — authoring-assist](slice-04-authoring-assist.md)
-  — opt-in detect-ask-(consented)install surface, outside `install()`'s path.
+  — opt-in detect → recommend → record-transport → print-the-command surface,
+  outside `install()`'s path. Installs nothing.
 
 ## Non-goals
 
