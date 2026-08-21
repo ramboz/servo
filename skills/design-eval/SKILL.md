@@ -91,6 +91,23 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
        The resolved argv is recorded in the ledger as `capture_command`. If your
        command emits no `##servo-capture:` attestation line its per-screen
        provenance is honestly `not_attested` (never a fabricated engine).
+     - `"android"` — a **blessed built-in** for native Android. Servo runs
+       `adb -s <serial> exec-out screencap` per screen, optionally fires a
+       per-screen deep link first, and crops the device chrome to the reference
+       frame. Config under `capture.android`:
+       - `serial` — device/emulator serial; precedence is `serial` →
+         `SERVO_DESIGN_EVAL_ANDROID_SERIAL` → the single connected device. No
+         device, or an ambiguous set with no serial, fails closed to `env_error`.
+       - `crop` — `{top,bottom,left,right}` pixel insets stripping the status /
+         navigation bars to the reference's logical frame (via a dependency-free
+         stdlib PNG crop; an out-of-bounds crop fails closed).
+       - a screen may set `deeplink: "<uri>"` to seed its state
+         (`am start -a VIEW -d <uri>`); complex tap-flows use the `command`
+         provider instead. State equivalence to the web seed is project-authored,
+         not certified (ADR-0032 §4).
+       `adb` is found on `PATH` or via `SERVO_DESIGN_EVAL_ADB_BIN`; the resolved
+       screencap argv is the ledger `capture_command`, and provenance is
+       `not_attested` (adb has no attestation channel).
 
 3. **`capture-refs`** — `python3 design_eval.py capture-refs <target>` renders
    each `referenceSource` to its `reference` PNG (cropped). Eyeball them.
@@ -124,6 +141,7 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 | `fidelity_eval.py` | shared frozen-eval harness (hash/aggregate/ledger/splice), imported by `score.py` (ADR-0024) |
 | `capture.mjs` | Playwright: render references / screenshot the seeded app |
 | `capture_lib.mjs` | pure helpers imported by `capture.mjs`: clip geometry, flag/screen resolution, and the engine-attestation channel |
+| `pngcrop.py` | dependency-free stdlib PNG cropper, imported by `score.py` for the native providers' chrome-frame normalization (027-04) |
 | `setups/<id>.mjs` | per-screen deterministic state + navigation |
 | `refs/<id>.png` | frozen reference screenshots (chrome-cropped) |
 | `ledger.jsonl` | per-run sampled + aggregated scores + hashes, plus **per-screen provenance** (audit) |

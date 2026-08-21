@@ -1445,6 +1445,8 @@ def _capture_main(eval_dir: Path):
     if not (eval_dir / "fidelity_eval.py").is_file():
         shutil.copyfile(HERE.parent / "_common" / "fidelity_eval.py",
                         eval_dir / "fidelity_eval.py")
+    if not (eval_dir / "pngcrop.py").is_file():  # 027-04 sibling stdlib cropper
+        shutil.copyfile(HERE / "pngcrop.py", eval_dir / "pngcrop.py")
     mod = _load("design_eval_score_run", str(eval_dir / "score.py"))
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -1903,6 +1905,259 @@ class CaptureCommandProviderTests(unittest.TestCase):
             self.assertEqual(row["capture_provider"], "web")
             self.assertIsNone(row["capture_command"])
             self.assertTrue(any(any("capture.mjs" in a for a in argv) for argv in calls))
+
+
+pngcrop = _load("design_eval_pngcrop", "pngcrop.py")
+# A small RGBA PNG encoded by an INDEPENDENT encoder (macOS `sips`), so it uses
+# real adaptive per-scanline filters (Sub/Paeth here) — exercising the cropper's
+# un-filter code paths, not just this module's own filter-0 output. Synthetic
+# gradient content (no third-party imagery). The live real-emulator screencap→
+# crop path is validated separately and recorded in the slice's deviation log.
+_ANDROID_FIXTURE = HERE / "testdata" / "rgba_filter_sample.png"
+
+
+class PngCropTests(unittest.TestCase):
+    """Slice 027-04: the stdlib PNG cropper, validated against a real-encoder PNG
+    fixture (independent encoder → real per-scanline filter types, not just this
+    module's own filter-0 output)."""
+
+    def _raw(self):
+        return _ANDROID_FIXTURE.read_bytes()
+
+    def test_roundtrip_preserves_dimensions_and_pixels(self):
+        raw = self._raw()
+        w, h = pngcrop.png_dimensions(raw)
+        rt = pngcrop.crop_png(raw)  # zero insets
+        self.assertEqual(pngcrop.png_dimensions(rt), (w, h))
+
+    def test_real_crop_reduces_dimensions(self):
+        raw = self._raw()
+        w, h = pngcrop.png_dimensions(raw)
+        c = pngcrop.crop_png(raw, top=10, bottom=8, left=4, right=6)
+        self.assertEqual(pngcrop.png_dimensions(c), (w - 10, h - 18))
+        # the result must be a real, re-decodable PNG (not garbage bytes)
+        pngcrop.crop_png(c)  # re-decode via a second crop; raises if invalid
+
+    def test_out_of_bounds_crop_raises(self):
+        raw = self._raw()
+        w, h = pngcrop.png_dimensions(raw)
+        with self.assertRaises(pngcrop.PngCropError):
+            pngcrop.crop_png(raw, top=h, bottom=1)
+
+    def test_negative_inset_raises(self):
+        with self.assertRaises(pngcrop.PngCropError):
+            pngcrop.crop_png(self._raw(), left=-1)
+
+    def test_unsupported_png_raises(self):
+        # A hand-built IHDR claiming interlaced → must refuse, not mis-decode.
+        import struct as _s
+        import zlib as _z
+        sig = b"\x89PNG\r\n\x1a\n"
+        ihdr = _s.pack(">IIBBBBB", 4, 4, 8, 6, 0, 0, 1)  # interlace=1
+
+        def chunk(t, b):
+            return _s.pack(">I", len(b)) + t + b + _s.pack(">I", _z.crc32(t + b) & 0xFFFFFFFF)
+
+        blob = sig + chunk(b"IHDR", ihdr) + chunk(b"IEND", b"")
+        with self.assertRaises(pngcrop.PngCropError):
+            pngcrop.crop_png(blob)
+
+
+class CaptureAndroidProviderTests(unittest.TestCase):
+    """Slice 027-04: the blessed Android provider — adb screencap + optional
+    deep-link seed + stdlib chrome crop, fail-closed, ledger identity."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in ("ANTHROPIC_API_KEY", score._FAKE_SCORES_ENV,
+                  "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT",
+                  "SERVO_DESIGN_EVAL_ANDROID_SERIAL", "SERVO_DESIGN_EVAL_ADB_BIN"):
+            os.environ.pop(k, None)
+
+    def _cfg(self, screens=None, **android):
+        cfg = _base_config()
+        cfg["capture"] = {"transport": "android", "android": android}
+        if screens is not None:
+            cfg["screens"] = screens
+        return cfg
+
+    def _live_run(self, d, *, screencap_bytes=None, devices=("emulator-5554",),
+                  screencap_rc=0, am_rc=0, adb=True):
+        if screencap_bytes is None:
+            screencap_bytes = _ANDROID_FIXTURE.read_bytes()
+        calls = []
+
+        def fake_run(*a, **k):
+            argv = list(a[0])
+            calls.append(argv)
+
+            class _P:
+                pass
+            p = _P()
+            if "devices" in argv:
+                p.returncode = 0
+                p.stdout = "List of devices attached\n" + "".join(
+                    f"{s}\tdevice\n" for s in devices)
+                p.stderr = ""
+            elif "screencap" in argv:
+                p.returncode = screencap_rc
+                p.stdout = screencap_bytes if screencap_rc == 0 else b""
+                p.stderr = b"" if screencap_rc == 0 else b"screencap boom"
+            else:  # am start
+                p.returncode = am_rc
+                p.stdout = ""
+                p.stderr = "" if am_rc == 0 else "am boom"
+            return p
+
+        orig = (score.subprocess.run, score.shutil.which, score.judge, score.time.sleep)
+        score.subprocess.run = fake_run
+        score.shutil.which = (lambda n: "/usr/bin/adb") if adb else (lambda n: None)
+        score.judge = lambda *a, **k: 0.9
+        score.time.sleep = lambda *a, **k: None  # don't actually wait the settle delay
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            return row, calls
+        finally:
+            (score.subprocess.run, score.shutil.which, score.judge,
+             score.time.sleep) = orig
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC1: screencap argv + serial resolution ---------------------------------
+    def test_configured_serial_screencap_argv_and_ledger(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="emulator-5554"))
+            de.freeze(tmp)
+            row, calls = self._live_run(d)
+            self.assertEqual(row["capture_provider"], "android")
+            # capture_command = [<adb>, "-s", <serial>, "exec-out", "screencap", "-p"]
+            self.assertEqual(row["capture_command"][-3:], ["exec-out", "screencap", "-p"])
+            self.assertEqual(row["capture_command"][-5:-3], ["-s", "emulator-5554"])
+            screencaps = [c for c in calls if "screencap" in c]
+            self.assertTrue(screencaps)
+
+    def test_serial_from_env_overrides_autoresolve(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg())  # no serial in config
+            de.freeze(tmp)
+            os.environ["SERVO_DESIGN_EVAL_ANDROID_SERIAL"] = "emulator-9"
+            row, calls = self._live_run(d, devices=("a", "b"))  # ambiguous, but env wins
+            self.assertIn("emulator-9", row["capture_command"])
+
+    def test_single_device_autoresolved(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg())
+            de.freeze(tmp)
+            row, _ = self._live_run(d, devices=("the-only-one",))
+            self.assertIn("the-only-one", row["capture_command"])
+
+    def test_no_device_and_ambiguous_fail_closed(self):
+        for devices in ((), ("a", "b")):
+            with self.subTest(devices=devices), tempfile.TemporaryDirectory() as t:
+                tmp = Path(t)
+                d = _make_eval_dir(tmp, self._cfg())
+                de.freeze(tmp)
+                os.environ["ANTHROPIC_API_KEY"] = "x"
+                orig = (score.subprocess.run, score.shutil.which)
+
+                def fake_run(*a, **k):
+                    class _P:
+                        returncode = 0
+                        stdout = "List of devices attached\n" + "".join(
+                            f"{s}\tdevice\n" for s in devices)
+                        stderr = ""
+                    return _P()
+
+                score.subprocess.run = fake_run
+                score.shutil.which = lambda n: "/usr/bin/adb"
+                try:
+                    with self.assertRaises(score.EnvError):
+                        score.score(d)
+                finally:
+                    score.subprocess.run, score.shutil.which = orig
+                    os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC2: chrome crop applied to the shot; out-of-bounds fails closed --------
+    def test_crop_applied_to_shot(self):
+        raw = _ANDROID_FIXTURE.read_bytes()
+        w, h = pngcrop.png_dimensions(raw)
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="emulator-5554",
+                                              crop={"top": 10, "bottom": 8, "left": 4, "right": 6}))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            for s in row["screens"]:
+                shot = d / s["shot"]
+                self.assertTrue(shot.is_file())
+                self.assertEqual(pngcrop.png_dimensions(shot.read_bytes()),
+                                 (w - 10, h - 18))
+
+    def test_out_of_bounds_crop_fails_closed(self):
+        raw = _ANDROID_FIXTURE.read_bytes()
+        _, h = pngcrop.png_dimensions(raw)
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s", crop={"top": h, "bottom": 5}))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d)
+            self.assertIn("crop", str(cm.exception))
+
+    # -- AC3: optional deep-link seed fires am start -----------------------------
+    def test_deeplink_fires_am_start(self):
+        screens = [{"id": "home", "reference": "refs/home.png", "weight": 1.0,
+                    "deeplink": "myapp://home"}]
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(screens=screens, serial="s"))
+            de.freeze(tmp)
+            _, calls = self._live_run(d)
+            am = [c for c in calls if "am" in c and "start" in c]
+            self.assertTrue(am, "a screen with a deeplink must fire `am start`")
+            self.assertIn("myapp://home", am[0])
+
+    # -- AC4: provenance + fail-closed on adb-absent / non-zero screencap --------
+    def test_unattested_provenance(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s"))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "not_attested")
+
+    def test_adb_absent_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, adb=False)
+            self.assertIn("adb", str(cm.exception).lower())
+
+    def test_screencap_nonzero_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, screencap_rc=1)
+            self.assertIn("screencap", str(cm.exception))
+
+    # -- AC5: capture.android is environmental, not frozen -----------------------
+    def test_capture_android_not_in_definition_hash(self):
+        base = _base_config()
+        withandroid = {**_base_config(),
+                       "capture": {"transport": "android",
+                                   "android": {"serial": "s", "crop": {"top": 5}}}}
+        self.assertEqual(score.definition_hash(base), score.definition_hash(withandroid))
 
 
 if __name__ == "__main__":
