@@ -1,8 +1,8 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: []
-last_verified:
-claimed_by: feat/design-eval-shot-retention
+last_verified: 2026-08-21
+claimed_by: claude/027-01-342c59
 ---
 
 ## Slice 027-01 — shot retention + ledger visibility
@@ -45,19 +45,27 @@ trust. Applies to every capture mode, web included.
    new per-screen ledger field).
 
 **DoD:**
-- [ ] All ACs pass; full test suite green (no regressions).
-- [ ] Implementer test coverage exercises each AC with at least one fixture
+- [x] All ACs pass; full test suite green (no regressions). — `ShotRetentionTests`
+      4/4 green; 94/95 in `test_design_eval` (the one red,
+      `CaptureLibNodeTests.test_capture_lib_node_suite_passes`, is a pre-existing
+      Node output-format mismatch, red on a clean tree, unrelated to this slice).
+- [x] Implementer test coverage exercises each AC with at least one fixture
       (no-clobber across two runs; ledger `shot` resolves to a file; fake-scores
       run records `shot: null`).
-- [ ] Each new test shown to fail when the feature is removed (restore the fixed
-      filename / drop the ledger field → tests go red).
-- [ ] Reviewed by `reviewer` subagent (compliance + craft passes).
-- [ ] Implementation review passed.
-- [ ] Deviation log produced under this slice heading.
-- [ ] Reconciliation sweep produced under this slice heading.
-- [ ] Reconciliation review passed.
-- [ ] `docs/refinement-todo.md` updated if any decisions were deferred
-      (e.g. a disk-growth retention cap — see below).
+- [x] Each new test shown to fail when the feature is removed (restore the fixed
+      filename / drop the ledger field → tests go red). — demonstrated red before
+      implementation (3 failures + 1 error) → green after.
+- [x] Reviewed by `reviewer` subagent (compliance + craft passes). — `jig:reviewer`,
+      independent (no build-conversation access), 2026-08-21.
+- [x] Implementation review passed. — VERDICT: pass, no blocking issues.
+- [x] Deviation log produced under this slice heading.
+- [x] Reconciliation sweep produced under this slice heading.
+- [x] Reconciliation review passed. — `jig:reviewer` reconciliation pass, VERDICT:
+      pass, 2026-08-21; all deviation-log claims verified against `score.py`, sweep
+      dispositions confirmed, DoD ticks honest.
+- [x] `docs/refinement-todo.md` updated if any decisions were deferred
+      (e.g. a disk-growth retention cap — see below). — entry
+      "design-eval retains every run's app shots with no disk-growth cap" added.
 
 **Anti-horizontal-phasing check:** After this slice lands, a user running
 design-eval can open the exact screenshot behind any per-screen score, for any
@@ -80,19 +88,47 @@ GitHub #29's shared-plumbing.
 
 The original spec is preserved above. Implementation notes:
 
-_TBD during reconciliation._
+- **Stamped filename, not a per-run subdirectory.** The retained shot is
+  `shots/app-<id>-<run_id>.png` (a new `_run_stamp()` helper: local wall-clock
+  `%Y%m%dT%H%M%S` + a 6-digit microsecond suffix). This keeps the file directly
+  under `shots/` — path depth unchanged — so the DoR coupling constraint holds:
+  `_judge_cli` still cwd's to `app_png.parent.parent == base_dir`. A per-run
+  subdirectory would have satisfied "no clobber" but broken that contract.
+- **One stamp per run, shared across screens.** `score()` computes `run_id` once
+  and passes it into every `capture_app` call, so a run's shots group under a
+  common suffix (human-inspectable). `capture_app` gained a **defaulted**
+  `run_id: str | None = None` param — the 2-arg callers (the three
+  `CaptureAppHonestyTests` and the `CaptureLibNodeTests` routing test) keep
+  working and each falls back to its own fresh stamp, so they too are
+  non-clobbering.
+- **Ledger `shot` field is a per-screen path or null.** Threaded through by
+  growing the internal `per_screen` tuple from 4 to 5 elements
+  (`+ shot`); every consumer (`total_w`, `composite`, `_ledger`) updated in
+  lockstep. Live capture records `app_png.relative_to(base_dir).as_posix()`;
+  the fake-scores arm records `None`, mirroring the existing `not_captured`
+  provenance token. No microsecond-collision guard was added: two full `score()`
+  calls are separated by real work (freeze validation, capture, judge, ledger
+  write), so distinct stamps are effectively guaranteed — the reviewer agreed
+  this is not a real defect.
+- **No behaviour change beyond the two additive outputs.** Composite math,
+  `validate_freeze`, the `EnvError` branches, and the 0/1/2 oracle contract are
+  untouched (AC4). Confirmed by the other ~90 tests staying green.
+- **Beyond the letter of the ACs:** documented the new `shot` field in
+  `SKILL.md`'s "Provenance in the ledger" section, so the ledger's per-screen
+  shape stays honestly described (the section already documents the other
+  per-screen fields).
 
 ### Reconciliation sweep
 
 | Artifact | Disposition | Rationale |
 |----------|-------------|-----------|
-| `README.md` | `no-op` | _TBD._ |
-| `docs/specs/README.md` | `updated` | _TBD: regenerated by `workflow.py status-board`._ |
-| `docs/product-vision.md` | `no-op` | _TBD._ |
-| `docs/architecture.md` | `no-op` | _TBD: additive ledger field, no module-boundary change._ |
-| Primer surfaces: `CLAUDE.md` / `AGENTS.md` / scaffold templates | `no-op` | _TBD._ |
-| `docs/inbox.md` | `no-op` | _TBD._ |
-| `docs/refinement-todo.md` | `no-op` | _TBD: note the disk-growth cap if deferred._ |
-| `docs/memory/**` | `no-op` | _TBD._ |
-| `docs/decisions/README.md` / ADR index | `no-op` | _TBD: no ADR touched._ |
-| `skills/design-eval/SKILL.md` | `no-op` | _TBD: note if the ledger `shot` field is documented there._ |
+| `README.md` | `no-op` | Root README is project-level orientation; no surface it describes changed. |
+| `docs/specs/README.md` | `deferred` | Status-board regen is the post-DONE close-out step; deliberately not run yet (this slice does not close the spec, and `workflow.py status-board` mis-rolls umbrella-spec frontmatter to DONE — a known `refinement-todo` bug). Done at close-out with a frontmatter re-check. |
+| `docs/product-vision.md` | `no-op` | No vision-level claim affected; this is shared plumbing under an existing skill. |
+| `docs/architecture.md` | `no-op` | Additive per-run output + one ledger field; no module boundary, contract, or artifact-path change. |
+| Primer surfaces: `CLAUDE.md` / `AGENTS.md` / scaffold templates | `no-op` | No primer or scaffold template references the shot filename or ledger shape. |
+| `docs/inbox.md` | `no-op` | Nothing to hand off; the deferred cap went to `refinement-todo.md`, its correct home. |
+| `docs/refinement-todo.md` | `updated` | Added "design-eval retains every run's app shots with no disk-growth cap" (deferred retention cap, per the slice's Deferred note). |
+| `docs/memory/**` | `no-op` | No durable cross-session fact; the change is fully described by spec + code. |
+| `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — shots are unfrozen outputs (DoR: no ADR needed). |
+| `skills/design-eval/SKILL.md` | `updated` | Documented the new per-screen `shot` field (path-or-null, retained, unhashed) in the "Provenance in the ledger" section. |

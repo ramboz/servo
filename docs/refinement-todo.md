@@ -926,3 +926,28 @@ names against `score.py`'s `_provenance`, in the section-scoped style
 `test_skill_surface.py` already uses.
 
 **Surfaced by:** spec 026-03 reconciliation review (2026-08-19).
+
+---
+
+## design-eval retains every run's app shots with no disk-growth cap
+
+**Deferred:** Slice 027-01 changed app-screenshot capture from clobber-on-each-run
+(`shots/app-<id>.png`) to retain-each-run (`shots/app-<id>-<run_id>.png`) so a
+past score's exact image stays inspectable via the new ledger `shot` field. That
+retention is deliberately unbounded: nothing prunes `<base_dir>/shots/`, so a
+target scored repeatedly — especially inside an agent loop that re-scores every
+iteration — accumulates one PNG per screen per run without limit. This is the
+inverse trade-off of the old clobber behaviour (which never grew but destroyed
+history); v1 keeps everything on purpose, because the whole point of the slice is
+that history survives.
+
+**Resolution trigger:** first target where `shots/` growth becomes a disk or
+clutter problem, OR the next design-eval slice that touches capture/retention
+(027-02..05 add capture providers — a natural place to add the knob). Options to
+weigh: keep-last-N per screen, keep-milestones (only runs whose composite crossed
+a threshold), or an age bound; plus a `--prune`/`gc` affordance. Git handling
+(track the ledger scores, keep raw shots local) is tracked separately under
+GitHub #29's shared-plumbing.
+
+**Surfaced by:** slice 027-01 (spec `Deferred (candidate for refinement-todo)`
+note; DoD-required follow-up).

@@ -131,6 +131,15 @@ launched. Note it is also deliberately distinct from the row's top-level
 `transport`, which means the **judge** transport (`api`/`cli`) in every
 historical row.
 
+**The shot that was judged.** Each per-screen entry also carries `shot`: a path,
+relative to the eval directory, to the exact PNG that screen was scored on — or
+`null` on the `not_captured` (fake-scores) path, where no browser ran. Shots are
+retained per run (`shots/app-<id>-<run_id>.png`), never clobbered, so a past
+row's `shot` still resolves: open it to see what the judge saw behind any score.
+Like the rest of this row it is observability, not a gate — nothing here is
+hashed. (`shots/` grows without bound today; a retention cap is a tracked
+follow-up in `docs/refinement-todo.md`.)
+
 ## Authoring tips
 
 - Keep `n` × `|screens|` bounded — it counts against the loop's cost ceiling.
