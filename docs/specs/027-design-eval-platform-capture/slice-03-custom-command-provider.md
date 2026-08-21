@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [adr-0032, 027-02]
 last_verified: 2026-08-21
 claimed_by: claude/027-01-342c59
@@ -71,22 +71,39 @@ seeding — those are the command's responsibility (ADR-0032 §5).
    are untouched. The change is a new registered provider + one new ledger field.
 
 **DoD:**
-- [ ] All ACs pass; full test suite green (no regressions).
-- [ ] Implementer test coverage exercises each AC with at least one fixture
+- [x] All ACs pass; full test suite green (no regressions). — `CaptureCommandProviderTests`
+      9/9 green; 111/111 in `test_design_eval` bar the one pre-existing red
+      (`CaptureLibNodeTests.test_capture_lib_node_suite_passes`, a Node
+      output-format mismatch, red on a clean tree, unrelated); `test_skill_surface`
+      25/25 green after the SKILL.md edits.
+- [x] Implementer test coverage exercises each AC with at least one fixture
       (command spawn shape `--screen/--out`; missing/empty command → rc2 env_error
       before capture; non-zero/no-output command → rc2 env_error; ledger
       `capture_provider: "command"` + `capture_command` argv; unattested command →
       `not_attested`; web path unchanged).
-- [ ] Each new test shown to fail when the feature is removed (drop the `command`
-      provider / the ledger `capture_command` field → tests go red).
-- [ ] Reviewed by `reviewer` subagent (compliance + craft passes).
-- [ ] Implementation review passed.
-- [ ] Deviation log produced under this slice heading.
-- [ ] Reconciliation sweep produced under this slice heading.
-- [ ] Reconciliation review passed.
-- [ ] `docs/refinement-todo.md` updated if any decisions were deferred (e.g. a
-      per-provider capture timeout knob, if the shared 180s proves wrong for slow
-      device captures).
+- [x] Each new test shown to fail when the feature is removed (drop the `command`
+      provider / the ledger `capture_command` field → tests go red). — demonstrated
+      red before implementation (6 of 8 red; 9 after the post-review split). Honest
+      caveat: `test_capture_command_not_in_definition_hash` is the one pure
+      regression-guard (a `capture` key was already excluded from the hash, so it
+      is green without the feature). Every other test is feature-bearing —
+      including `test_web_run_records_null_capture_command`, which asserts
+      `capture_command is None` and so goes red (KeyError) if the ledger field is
+      removed.
+- [x] Reviewed by `reviewer` subagent (compliance + craft passes). — `jig:reviewer`,
+      independent, 2026-08-21; VERDICT: pass. Two test-tightness nits (spawn-shape
+      order; an inert monkeypatch guard) were **fixed** post-review, not deferred
+      (see deviation log).
+- [x] Implementation review passed. — no blocking issues.
+- [x] Deviation log produced under this slice heading.
+- [x] Reconciliation sweep produced under this slice heading.
+- [x] Reconciliation review passed. — `jig:reviewer` reconciliation pass,
+      VERDICT: pass, 2026-08-21; deviation-log claims verified against `score.py`
+      line-for-line, the 9-test class and both post-review tightenings confirmed,
+      SKILL.md + refinement-todo confirmed. One caveat-accuracy nit (a mis-labelled
+      regression-guard) corrected above.
+- [x] `docs/refinement-todo.md` updated if any decisions were deferred. — added
+      "design-eval capture timeout is a fixed 180s shared across all providers".
 
 **Anti-horizontal-phasing check:** After this slice lands, a project on **any**
 stack servo can drive — native, desktop, a game harness — can be scored by
@@ -108,19 +125,53 @@ native target hits the ceiling — noted, not built, so it isn't a silent gap.
 
 The original spec is preserved above. Implementation notes:
 
-_TBD during reconciliation._
+- **Shared subprocess capture.** Both the web and command providers run through
+  one `_run_capture_subprocess(base_dir, screen, run_id, command_prefix, *, label)`
+  — the old `_capture_web` body was extracted verbatim, so retention (027-01),
+  the `_judge_cli` cwd contract, salient stderr (026-01), and attestation parse
+  (026-03) are identical across providers. Only the leading argv differs
+  (`node capture.mjs` vs the project command) plus the `label` in the
+  "unavailable for capture" message (`node/playwright` vs `capture command`).
+- **Provider signature widened to `(base_dir, screen, run_id, config)`.** The
+  command provider needs `capture.command` from config; web ignores it. `capture_app`
+  gained a 5th param `config=None` and passes it through. The 2-arg external
+  callers (`CaptureAppHonestyTests`, the `CaptureLibNodeTests` routing test,
+  027-01/02 tests) keep working via the defaults.
+- **`capture.command` validated twice, fail-closed.** `score()` calls
+  `_capture_command_argv(config)` up front for the command provider (missing/empty
+  → `env_error` before any capture, and it captures the argv for the ledger), and
+  `_capture_command` validates again at spawn time (defence in depth for any direct
+  caller). A non-list / empty / absent command is refused.
+- **New ledger field `capture_command`** (top-level, required keyword-only in
+  `_ledger`, mirroring `provider`/`fake_run`): the resolved argv on a command run,
+  `null` otherwise. Kept out of `_EXTRA_HASH_FIELDS`, so `definition_hash` is
+  unchanged (AC4).
+- **Post-review test tightening (not deferred).** The independent review flagged
+  two tests that did not enforce their claim: `test_command_spawn_shape` asserted
+  flag *membership* not *order*, and `test_missing_command_fails_closed_before_capture`
+  used a monkeypatch that never reached the module `_capture_main` loads. Both were
+  fixed in this slice: the spawn test now pins the exact ordered tail
+  (`… --screen <id> --out <path>.png`), and the missing-command test now drives
+  `score.score()` directly so the "no capture before validation" guard is live,
+  with a separate `test_missing_command_env_errors_through_main` retaining the
+  rc-2/`main()` honesty check. (Test count 8 → 9.)
+- **Beyond the letter of the ACs:** documented the `command` provider, the
+  `capture.command` config, the `--screen/--out` invocation contract, the
+  fail-closed behaviour, and the `capture_command` ledger field in `SKILL.md`.
+- **Deferred:** the shared 180s capture timeout — noted in `docs/refinement-todo.md`
+  as a candidate `capture.timeout`/env knob for slow native captures.
 
 ### Reconciliation sweep
 
 | Artifact | Disposition | Rationale |
 |----------|-------------|-----------|
-| `README.md` | `no-op` | _TBD._ |
-| `docs/specs/README.md` | `deferred` | _TBD: status-board regen at close-out; spec not closed._ |
-| `docs/product-vision.md` | `no-op` | _TBD._ |
-| `docs/architecture.md` | `no-op` | _TBD: additive provider + ledger field, no module-boundary change._ |
-| Primer surfaces: `CLAUDE.md` / `AGENTS.md` / scaffold templates | `no-op` | _TBD._ |
-| `docs/inbox.md` | `no-op` | _TBD._ |
-| `docs/refinement-todo.md` | `no-op` | _TBD: note the capture-timeout knob if deferred._ |
-| `docs/memory/**` | `no-op` | _TBD._ |
-| `docs/decisions/README.md` / ADR index | `no-op` | _TBD: no ADR touched (ADR-0032 already Accepted)._ |
-| `skills/design-eval/SKILL.md` | `updated` | _TBD: document the `command` provider + `capture.command` + `capture_command` ledger field._ |
+| `README.md` | `no-op` | Root orientation; no surface it describes changed. |
+| `docs/specs/README.md` | `deferred` | Status-board regen is post-DONE close-out; not run (spec not closed — 04–05 remain; and the known `workflow.py status-board` umbrella-frontmatter rollup bug). |
+| `docs/product-vision.md` | `no-op` | No vision-level claim affected. |
+| `docs/architecture.md` | `no-op` | Additive provider + one ledger field; no module boundary, contract, or artifact-path change. |
+| Primer surfaces: `CLAUDE.md` / `AGENTS.md` / scaffold templates | `no-op` | None reference capture providers or the ledger shape. |
+| `docs/inbox.md` | `no-op` | Nothing to hand off. |
+| `docs/refinement-todo.md` | `updated` | Added "design-eval capture timeout is a fixed 180s shared across all providers" (deferred `capture.timeout` knob). |
+| `docs/memory/**` | `no-op` | No durable cross-session fact beyond spec + code. |
+| `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — ADR-0032 already Accepted and governs this seam. |
+| `skills/design-eval/SKILL.md` | `updated` | Documented the `command` provider, `capture.command`, the `--screen/--out` contract, fail-closed behaviour, and the `capture_command` ledger field. |

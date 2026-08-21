@@ -70,14 +70,27 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
        transport runs at the model's CLI default and ignores them. (Both are
        still hashed into the freeze, so editing either re-freezes regardless.)
    - optionally, `capture` — which **capture provider** takes the app
-     screenshots: `capture.transport`, `"web"` (Playwright) by default, and today
-     the only built-in. The `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` env var overrides
-     the config value (precedence: env → `capture.transport` → `"web"`). Unlike
-     `judge`, the capture transport is **environmental, not frozen** — it is
-     **not** hashed into the freeze (ADR-0031/ADR-0032 §6), so switching it never
-     re-freezes; the provider that actually ran is recorded in `ledger.jsonl`
-     instead (see below). An unknown provider fails closed to `env_error`, never a
-     silent score.
+     screenshots: `capture.transport`, `"web"` (Playwright) by default. The
+     `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` env var overrides the config value
+     (precedence: env → `capture.transport` → `"web"`). Unlike `judge`, the
+     capture transport is **environmental, not frozen** — it is **not** hashed
+     into the freeze (ADR-0031/ADR-0032 §6), so switching it never re-freezes; the
+     provider that actually ran is recorded in `ledger.jsonl` instead (see below).
+     An unknown provider fails closed to `env_error`, never a silent score. The
+     providers:
+     - `"web"` (default) — the built-in Playwright path (`node capture.mjs`).
+     - `"command"` — the **escape hatch** for any non-web stack. Set
+       `capture.command` to an argv list; servo invokes it **per screen** as
+       `<your argv…> --screen <id> --out <path>` (cwd = the eval dir, 180s
+       timeout). Your command must **drive the app into that screen's state,
+       screenshot it, and write a frame-normalized PNG to `--out`** — state
+       seeding and chrome-cropping are the command's job, not servo's (ADR-0032
+       §4/§5); servo does not run your `setup` module or post-process the image.
+       A non-zero exit, timeout, missing binary, or no-output PNG fails closed to
+       `env_error`; a missing/empty `capture.command` fails before any capture.
+       The resolved argv is recorded in the ledger as `capture_command`. If your
+       command emits no `##servo-capture:` attestation line its per-screen
+       provenance is honestly `not_attested` (never a fabricated engine).
 
 3. **`capture-refs`** — `python3 design_eval.py capture-refs <target>` renders
    each `referenceSource` to its `reference` PNG (cropped). Eyeball them.

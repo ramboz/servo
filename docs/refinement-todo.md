@@ -951,3 +951,25 @@ GitHub #29's shared-plumbing.
 
 **Surfaced by:** slice 027-01 (spec `Deferred (candidate for refinement-todo)`
 note; DoD-required follow-up).
+
+---
+
+## design-eval capture timeout is a fixed 180s shared across all providers
+
+**Deferred:** The subprocess-backed capture providers (web + custom-command,
+`skills/design-eval/score.py::_run_capture_subprocess`) share a hardcoded 180s
+`subprocess.run` timeout, inherited unchanged from the original web path. A
+custom-command provider (027-03) that drives a slow native emulator/device
+(`adb`/`simctl` boot + screencap) or a heavy build harness can legitimately
+exceed 180s, and today the only outcome is a fail-closed `env_error` timeout —
+there is no way to raise the ceiling per provider or per project.
+
+**Resolution trigger:** first real native/command target that hits the 180s
+ceiling on a legitimate slow capture. Fix options: a `capture.timeout` config
+field (environmental, not frozen — same class as `capture.transport`/`capture.command`),
+and/or a `SERVO_DESIGN_EVAL_CAPTURE_TIMEOUT` env override, threaded into
+`_run_capture_subprocess`. Keep the default at 180s so web is unchanged; add a
+test that a custom timeout is honored.
+
+**Surfaced by:** slice 027-03 (spec `Deferred (candidate for refinement-todo)`
+note; independent review flagged the inherited timeout as a disclosed follow-up).
