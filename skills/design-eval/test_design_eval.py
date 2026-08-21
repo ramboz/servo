@@ -1701,5 +1701,187 @@ class CaptureProviderSeamTests(unittest.TestCase):
             score.validate_freeze(config, d)  # must not raise StaleError
 
 
+class CaptureCommandProviderTests(unittest.TestCase):
+    """Slice 027-03: the custom-command capture provider (escape hatch). A project
+    command is invoked per screen as `<argv…> --screen <id> --out <path>`, owns
+    state + framing, fails closed to env_error, and has its identity recorded in
+    the ledger (unfrozen). Web path stays unchanged."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+        os.environ.pop("SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT", None)
+
+    def _cfg(self, command):
+        cfg = _base_config()
+        cfg["capture"] = {"transport": "command", "command": command}
+        return cfg
+
+    def _live_run(self, d, *, emit_attestation=False):
+        """Drive one LIVE-capture `score.score()` with a stubbed capture command.
+        Records EVERY spawned argv. Returns (last ledger row, [argv, …])."""
+        calls = []
+
+        class _P:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        def fake_run(*a, **k):
+            argv = list(a[0])
+            calls.append(argv)
+            if "--out" not in argv:            # a preflight probe (web only)
+                _P.stdout = ""
+                return _P()
+            out = Path(argv[argv.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x89PNG")
+            _P.stdout = ('##servo-capture:{"engine":"chromium","version":"1","'
+                         'transport":"bundled","error":null}') if emit_attestation else ""
+            return _P()
+
+        orig = (score.subprocess.run, score.shutil.which, score.judge)
+        score.subprocess.run = fake_run
+        score.shutil.which = lambda n: "/usr/bin/node"
+        score.judge = lambda *a, **k: 0.9
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            return row, calls
+        finally:
+            score.subprocess.run, score.shutil.which, score.judge = orig
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC1: invoked per screen as `<argv> --screen <id> --out <path>` ----------
+    def test_command_spawn_shape(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["mytool", "--flag"]))
+            de.freeze(tmp)
+            row, calls = self._live_run(d)
+            capture_calls = [c for c in calls if "--out" in c]
+            self.assertTrue(capture_calls, "the command provider must spawn per screen")
+            for argv in capture_calls:
+                self.assertEqual(argv[:2], ["mytool", "--flag"],
+                                 f"project command must lead the argv, got {argv!r}")
+                self.assertIn("--screen", argv)
+                self.assertIn("--out", argv)
+            # shot retained + ledger-linked exactly like web (027-01 plumbing)
+            for s in row["screens"]:
+                self.assertTrue((d / s["shot"]).is_file())
+
+    # -- AC2: command owns state/framing; servo runs no playwright / no crop -----
+    def test_command_provider_never_spawns_web_capture(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["mytool"]))
+            de.freeze(tmp)
+            _, calls = self._live_run(d)
+            self.assertFalse(
+                any(any("capture.mjs" in a for a in argv) for argv in calls),
+                "the command provider must not run the web capture.mjs / preflight")
+
+    # -- AC3: fail closed — missing/empty command, before any capture ------------
+    def test_missing_command_fails_closed_before_capture(self):
+        for command in (None, []):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as t:
+                tmp = Path(t)
+                cfg = _base_config()
+                cfg["capture"] = {"transport": "command"}
+                if command is not None:
+                    cfg["capture"]["command"] = command
+                d = _make_eval_dir(tmp, cfg)
+                de.freeze(tmp)
+
+                def boom(*a, **k):
+                    raise AssertionError("must not capture when command is missing/empty")
+
+                orig = score.subprocess.run
+                score.subprocess.run = boom
+                os.environ["ANTHROPIC_API_KEY"] = "x"
+                try:
+                    rc, out, err = _capture_main(d)
+                finally:
+                    score.subprocess.run = orig
+                    os.environ.pop("ANTHROPIC_API_KEY", None)
+                self.assertEqual(rc, score.EXIT_ENV_ERROR)
+                self.assertEqual(out.strip(), "")
+                self.assertIn("env_error", err)
+                self.assertIn("command", err)
+
+    # -- AC3: fail closed — a command that exits non-zero / writes no PNG --------
+    def test_command_nonzero_exit_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["broken-tool"]))
+            de.freeze(tmp)
+
+            class _P:
+                returncode = 3
+                stderr = "device offline"
+                stdout = ""
+
+            orig = (score.subprocess.run, score.judge)
+            score.subprocess.run = lambda *a, **k: _P()
+            score.judge = lambda *a, **k: 0.9
+            os.environ["ANTHROPIC_API_KEY"] = "x"
+            try:
+                with self.assertRaises(score.EnvError) as cm:
+                    score.score(d)
+                self.assertIn("capture failed", str(cm.exception))
+            finally:
+                score.subprocess.run, score.judge = orig
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC4: command identity in the ledger, unfrozen ---------------------------
+    def test_ledger_records_command_identity(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["mytool", "--flag"]))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            self.assertEqual(row["capture_provider"], "command")
+            self.assertEqual(row["capture_command"], ["mytool", "--flag"])
+
+    def test_capture_command_not_in_definition_hash(self):
+        base = _base_config()
+        withcmd = {**_base_config(),
+                   "capture": {"transport": "command", "command": ["x", "-y"]}}
+        self.assertEqual(score.definition_hash(base), score.definition_hash(withcmd))
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            config = json.loads((d / "config.json").read_text())
+            config["capture"] = {"transport": "command", "command": ["x"]}
+            score.validate_freeze(config, d)  # must not raise
+
+    # -- AC5: an unattested command records not_attested, never a fake engine ----
+    def test_unattested_command_records_not_attested(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["mytool"]))
+            de.freeze(tmp)
+            row, _ = self._live_run(d, emit_attestation=False)
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "not_attested")
+                self.assertIsNone(s["engine"])
+
+    # -- AC6: web path unchanged — capture_command null on a web run -------------
+    def test_web_run_records_null_capture_command(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)  # no capture block → web default
+            de.freeze(tmp)
+            row, calls = self._live_run(d, emit_attestation=True)
+            self.assertEqual(row["capture_provider"], "web")
+            self.assertIsNone(row["capture_command"])
+            self.assertTrue(any(any("capture.mjs" in a for a in argv) for argv in calls))
+
+
 if __name__ == "__main__":
     unittest.main()

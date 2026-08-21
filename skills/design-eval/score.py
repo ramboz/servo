@@ -176,46 +176,80 @@ def _run_stamp() -> str:
     return time.strftime("%Y%m%dT%H%M%S", time.localtime(t)) + f"-{int((t % 1) * 1e6):06d}"
 
 
-def _capture_web(base_dir: Path, screen: dict, run_id: str | None = None) -> tuple[Path, dict | None]:
-    """The **web** capture provider (027-02): the original Playwright path, spawning
-    ``node capture.mjs`` — unchanged in behaviour, now one provider behind the seam.
+def _run_capture_subprocess(base_dir: Path, screen: dict, run_id: str | None,
+                            command_prefix: list, *, label: str) -> tuple[Path, dict | None]:
+    """Shared capture spawn for the subprocess-backed providers (web + command).
 
-    026-03 AC2c: the attestation is RETURNED, never stashed in a module global —
-    a global would be last-write-wins across screens and silently re-create the
-    single-field collapse per-screen provenance exists to prevent.
-
-    027-01 AC1: the shot filename is stamped (`app-<id>-<run_id>.png`) so a later
-    run does not overwrite it, and stays DIRECTLY under `shots/` (path depth
-    unchanged) to preserve the `_judge_cli` cwd contract (`app_png.parent.parent`
-    == base_dir). `run_id` defaults to a fresh per-call stamp so the standalone
-    callers (and tests) that pass only `(base_dir, screen)` still get retention;
-    `score()` passes one shared stamp so all screens in a run group together.
+    Runs ``[*command_prefix, "--screen", <id>, "--out", <shot_path>]`` from the
+    eval dir, consumes the PNG the command writes to ``--out``, and returns
+    ``(png, attestation)``. One contract, two providers — the only difference is
+    the leading argv (``node capture.mjs`` for web; the project command for the
+    escape hatch), so retention (027-01), the `_judge_cli` cwd contract, salient
+    stderr surfacing (026-01), and attestation parsing (026-03) are shared and
+    identical across providers.
     """
     stamp = run_id or _run_stamp()
     out = base_dir / "shots" / f"app-{screen['id']}-{stamp}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["node", str(base_dir / "capture.mjs"), "--screen", screen["id"], "--out", str(out)]
+    cmd = [*command_prefix, "--screen", screen["id"], "--out", str(out)]
     try:
         proc = subprocess.run(cmd, cwd=str(base_dir), capture_output=True, text=True, timeout=180)
     except FileNotFoundError as e:
-        raise EnvError(f"node/playwright unavailable for capture: {e}") from e
+        raise EnvError(f"{label} unavailable for capture: {e}") from e
     except subprocess.TimeoutExpired:
         raise EnvError(f"capture timed out for screen {screen['id']!r}") from None
     if proc.returncode != 0 or not out.is_file():
         # 026-01 AC4: salient-line surfacing, not a blind head slice. Applied to
-        # node-produced stderr ONLY (AC4a) — the judge path at _judge_cli keeps
+        # subprocess stderr ONLY (AC4a) — the judge path at _judge_cli keeps
         # `[:200]` deliberately, since these predicates parse node's grammar.
         raise EnvError(
             f"capture failed for screen {screen['id']!r}: {salient_stderr(proc.stderr)}")
     return out, parse_attestation(proc.stdout)
 
 
-# 027-02: the capture-provider seam. Each provider is invoked per screen and
-# returns (png, attestation) with the same contract as the old `capture_app`.
-# Later slices (027-03..05) register `command` / `android` / `ios` here without
-# touching the scoring path. Web is the default and the only provider today.
+def _capture_web(base_dir: Path, screen: dict, run_id: str | None = None,
+                 config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **web** capture provider (027-02): the original Playwright path, spawning
+    ``node capture.mjs``. `config` is accepted for the uniform provider signature
+    and ignored — web needs nothing from it.
+    """
+    return _run_capture_subprocess(
+        base_dir, screen, run_id,
+        ["node", str(base_dir / "capture.mjs")], label="node/playwright")
+
+
+def _capture_command(base_dir: Path, screen: dict, run_id: str | None = None,
+                     config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **custom-command** capture provider (027-03): the escape hatch for any
+    non-web stack. Runs the project's ``capture.command`` argv, appending
+    ``--screen <id> --out <path>``. The command owns state + framing (ADR-0032
+    §4/§5); servo passes only id + out and consumes the PNG. Failure fails closed
+    to `EnvError`. A command that emits no ``##servo-capture:`` line is honestly
+    recorded as `not_attested` (via the shared attestation parse).
+    """
+    command = _capture_command_argv(config or {})
+    return _run_capture_subprocess(
+        base_dir, screen, run_id, list(command), label="capture command")
+
+
+def _capture_command_argv(config: dict) -> list:
+    """The project's ``capture.command`` argv, validated. Missing / empty / non-list
+    fails **closed** to `EnvError` (→ rc 2) — never a silent fall-through."""
+    command = (config.get("capture") or {}).get("command")
+    if not command or not isinstance(command, list):
+        raise EnvError(
+            "capture.transport is 'command' but capture.command is missing or empty "
+            "(expected a non-empty argv list)")
+    return command
+
+
+# 027-02: the capture-provider seam. Each provider is invoked per screen as
+# ``fn(base_dir, screen, run_id, config)`` and returns (png, attestation).
+# 027-03 adds `command`; 027-04/05 add `android`/`ios` here without touching the
+# scoring path. Web is the default.
 _CAPTURE_PROVIDERS = {
     "web": _capture_web,
+    "command": _capture_command,
 }
 
 
@@ -233,20 +267,22 @@ def _resolve_capture_transport(config: dict) -> str:
 
 
 def capture_app(base_dir: Path, screen: dict, run_id: str | None = None,
-                provider: str = _DEFAULT_CAPTURE_TRANSPORT) -> tuple[Path, dict | None]:
+                provider: str = _DEFAULT_CAPTURE_TRANSPORT,
+                config: dict | None = None) -> tuple[Path, dict | None]:
     """Screenshot the app at the screen's seeded state; return (png, attestation).
 
     027-02: dispatches to the selected capture provider. `provider` defaults to
     ``"web"`` so the standalone callers (and tests) that pass only
     ``(base_dir, screen[, run_id])`` keep the original behaviour. An unknown
     provider fails **closed** to `EnvError` (→ rc 2 env_error) — never a silent
-    fall-through to web.
+    fall-through to web. 027-03: `config` is threaded to providers that need it
+    (the command provider reads ``capture.command``); web ignores it.
     """
     fn = _CAPTURE_PROVIDERS.get(provider)
     if fn is None:
         known = ", ".join(sorted(_CAPTURE_PROVIDERS))
         raise EnvError(f"unknown capture provider {provider!r} (known: {known})")
-    return fn(base_dir, screen, run_id)
+    return fn(base_dir, screen, run_id, config)
 
 
 def judge(app_png: Path, ref_png: Path, config: dict) -> float:
@@ -386,6 +422,7 @@ def score(base_dir: Path) -> float:
     # 027-02: capture provider selected once per run (env > config > "web").
     # None on the fake arm — no capture ran, so no provider is exercised.
     provider = None
+    capture_command = None
     if fake is None:
         transport = (config.get("judge") or {}).get("transport", "api")
         if transport == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
@@ -400,6 +437,11 @@ def score(base_dir: Path) -> float:
         if provider not in _CAPTURE_PROVIDERS:
             known = ", ".join(sorted(_CAPTURE_PROVIDERS))
             raise EnvError(f"unknown capture provider {provider!r} (known: {known})")
+        # 027-03 AC3: for the command provider, validate `capture.command` up front
+        # (missing/empty → env_error before any capture), and capture its identity
+        # for the ledger (AC4).
+        if provider == "command":
+            capture_command = _capture_command_argv(config)
         # 027-02: the node/Playwright preflight is the WEB provider's precheck;
         # a non-web provider brings its own environment, so gate it to web.
         # AC5 (027-01): live-capture arm only, so the fake-scores path is
@@ -419,7 +461,7 @@ def score(base_dir: Path) -> float:
             attestation = None   # no browser ran at all -> not_captured
             shot = None          # 027-01 AC3: no browser ran -> no shot, honestly
         else:
-            app_png, attestation = capture_app(base_dir, screen, run_id, provider)
+            app_png, attestation = capture_app(base_dir, screen, run_id, provider, config)
             # 027-01 AC2: record the exact PNG this screen was judged on, as a
             # path relative to base_dir (the ledger's own root).
             shot = app_png.relative_to(base_dir).as_posix()
@@ -435,7 +477,7 @@ def score(base_dir: Path) -> float:
         raise EnvError("total screen weight is zero")
     composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a, _sh in per_screen) / total_w
     _ledger(base_dir, config, per_screen, composite,
-            fake_run=fake is not None, provider=provider)
+            fake_run=fake is not None, provider=provider, capture_command=capture_command)
     return max(0.0, min(1.0, composite))
 
 
@@ -459,11 +501,11 @@ def _provenance(att, *, fake_run: bool) -> dict:
 
 
 def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
-            *, fake_run: bool, provider: str | None) -> None:
+            *, fake_run: bool, provider: str | None, capture_command: list | None) -> None:
     # `fake_run` is keyword-only and REQUIRED on purpose: a default would let a
     # future caller silently get `not_attested` on a synthetic run — the same
     # class of error as deriving it from `att`, which this replaced. `provider`
-    # is likewise required keyword-only for the same reason (027-02).
+    # and `capture_command` are likewise required keyword-only (027-02/03).
     record = {
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],
@@ -471,6 +513,9 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
         # 027-02 AC5: which capture provider produced this run's shots — advisory,
         # never hashed (ADR-0032 §6). `null` on the fake arm (no capture ran).
         "capture_provider": provider,
+        # 027-03 AC4: the resolved custom-command argv (identity), for the command
+        # provider only; `null` otherwise. Advisory, never hashed.
+        "capture_command": capture_command,
         "composite": round(composite, 4),
         "definition_hash": config.get("approved_content_hash"),
         # 026-03 AC2/AC2a: provenance is PER SCREEN (capture_app runs once per
