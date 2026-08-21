@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 dependencies: []
 last_verified: 2026-08-21
 frame_review: true
@@ -9,8 +9,12 @@ frame_review: true
 
 ## Status
 
-Proposed (2026-08-21) — awaiting owner acceptance and a passing frame-critique.
-Revised three times on 2026-08-21 after three frame-critique needs-changes rounds:
+Accepted (2026-08-21)
+
+Approved by owner (PR #30); frame-critique passed after four revisions —
+`docs/decisions/reviews/adr-0032-frame-critique.md`.
+
+Revised four times on 2026-08-21 after four frame-critique needs-changes rounds:
 (1) state-seeding and frame-normalization promoted to co-load-bearing parts of
 the provider contract; (2) the "portable neutral state directive + mechanical
 migration + guaranteed matched cross-stack comparison" claim **retracted** as
