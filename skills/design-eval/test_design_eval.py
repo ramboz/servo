@@ -1766,10 +1766,13 @@ class CaptureCommandProviderTests(unittest.TestCase):
             capture_calls = [c for c in calls if "--out" in c]
             self.assertTrue(capture_calls, "the command provider must spawn per screen")
             for argv in capture_calls:
+                # exact ordered contract: <project argv…> --screen <id> --out <path>
                 self.assertEqual(argv[:2], ["mytool", "--flag"],
                                  f"project command must lead the argv, got {argv!r}")
-                self.assertIn("--screen", argv)
-                self.assertIn("--out", argv)
+                self.assertEqual(argv[-4], "--screen", f"flag order wrong: {argv!r}")
+                self.assertIn(argv[-3], {"home", "settings"})
+                self.assertEqual(argv[-2], "--out", f"flag order wrong: {argv!r}")
+                self.assertTrue(argv[-1].endswith(".png"))
             # shot retained + ledger-linked exactly like web (027-01 plumbing)
             for s in row["screens"]:
                 self.assertTrue((d / s["shot"]).is_file())
@@ -1787,6 +1790,9 @@ class CaptureCommandProviderTests(unittest.TestCase):
 
     # -- AC3: fail closed — missing/empty command, before any capture ------------
     def test_missing_command_fails_closed_before_capture(self):
+        # Drive score.score() directly (not _capture_main, which loads a fresh
+        # score.py copy the monkeypatch would never reach) so the "no capture"
+        # guard is LIVE: boom fires if any subprocess is spawned.
         for command in (None, []):
             with self.subTest(command=command), tempfile.TemporaryDirectory() as t:
                 tmp = Path(t)
@@ -1804,14 +1810,30 @@ class CaptureCommandProviderTests(unittest.TestCase):
                 score.subprocess.run = boom
                 os.environ["ANTHROPIC_API_KEY"] = "x"
                 try:
-                    rc, out, err = _capture_main(d)
+                    with self.assertRaises(score.EnvError) as cm:
+                        score.score(d)          # boom would fire before this raised
+                    self.assertIn("command", str(cm.exception))
                 finally:
                     score.subprocess.run = orig
                     os.environ.pop("ANTHROPIC_API_KEY", None)
-                self.assertEqual(rc, score.EXIT_ENV_ERROR)
-                self.assertEqual(out.strip(), "")
-                self.assertIn("env_error", err)
-                self.assertIn("command", err)
+
+    # -- AC3: the same failure surfaces as rc 2 env_error through main() ---------
+    def test_missing_command_env_errors_through_main(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            cfg = _base_config()
+            cfg["capture"] = {"transport": "command"}  # no command
+            d = _make_eval_dir(tmp, cfg)
+            de.freeze(tmp)
+            os.environ["ANTHROPIC_API_KEY"] = "x"
+            try:
+                rc, out, err = _capture_main(d)
+            finally:
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.assertEqual(rc, score.EXIT_ENV_ERROR)
+            self.assertEqual(out.strip(), "")       # never a 0.0
+            self.assertIn("env_error", err)
+            self.assertIn("command", err)
 
     # -- AC3: fail closed — a command that exits non-zero / writes no PNG --------
     def test_command_nonzero_exit_fails_closed(self):
