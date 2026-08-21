@@ -34,6 +34,10 @@ from pathlib import Path
 EXIT_OK = 0
 EXIT_ENV_ERROR = 2  # → oracle.sh treats rc=2 as a missing component → gate env_error
 _FAKE_SCORES_ENV = "SERVO_DESIGN_EVAL_FAKE_SCORES"  # test/offline hook (no API/browser)
+# 027-02: capture-provider selector (env overrides config, mirroring
+# SERVO_DESIGN_EVAL_CLAUDE_BIN). Environmental, never frozen (ADR-0031/0032 §6).
+_CAPTURE_TRANSPORT_ENV = "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT"
+_DEFAULT_CAPTURE_TRANSPORT = "web"
 
 # design-eval's case shape, passed to the shared module's generalized
 # definition_hash/artifact_hashes/validate_freeze (ADR-0024).
@@ -172,8 +176,9 @@ def _run_stamp() -> str:
     return time.strftime("%Y%m%dT%H%M%S", time.localtime(t)) + f"-{int((t % 1) * 1e6):06d}"
 
 
-def capture_app(base_dir: Path, screen: dict, run_id: str | None = None) -> tuple[Path, dict | None]:
-    """Screenshot the app at the screen's seeded state; return (png, attestation).
+def _capture_web(base_dir: Path, screen: dict, run_id: str | None = None) -> tuple[Path, dict | None]:
+    """The **web** capture provider (027-02): the original Playwright path, spawning
+    ``node capture.mjs`` — unchanged in behaviour, now one provider behind the seam.
 
     026-03 AC2c: the attestation is RETURNED, never stashed in a module global —
     a global would be last-write-wins across screens and silently re-create the
@@ -203,6 +208,45 @@ def capture_app(base_dir: Path, screen: dict, run_id: str | None = None) -> tupl
         raise EnvError(
             f"capture failed for screen {screen['id']!r}: {salient_stderr(proc.stderr)}")
     return out, parse_attestation(proc.stdout)
+
+
+# 027-02: the capture-provider seam. Each provider is invoked per screen and
+# returns (png, attestation) with the same contract as the old `capture_app`.
+# Later slices (027-03..05) register `command` / `android` / `ios` here without
+# touching the scoring path. Web is the default and the only provider today.
+_CAPTURE_PROVIDERS = {
+    "web": _capture_web,
+}
+
+
+def _resolve_capture_transport(config: dict) -> str:
+    """Which capture provider to use, by precedence: the
+    ``SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT`` env var, then ``config.capture.transport``,
+    then the ``"web"`` default. Name resolution only — validity is checked at
+    dispatch (`capture_app`) / run start (`score`), so an unknown name fails
+    closed rather than silently defaulting to web."""
+    return (
+        os.environ.get(_CAPTURE_TRANSPORT_ENV)
+        or (config.get("capture") or {}).get("transport")
+        or _DEFAULT_CAPTURE_TRANSPORT
+    )
+
+
+def capture_app(base_dir: Path, screen: dict, run_id: str | None = None,
+                provider: str = _DEFAULT_CAPTURE_TRANSPORT) -> tuple[Path, dict | None]:
+    """Screenshot the app at the screen's seeded state; return (png, attestation).
+
+    027-02: dispatches to the selected capture provider. `provider` defaults to
+    ``"web"`` so the standalone callers (and tests) that pass only
+    ``(base_dir, screen[, run_id])`` keep the original behaviour. An unknown
+    provider fails **closed** to `EnvError` (→ rc 2 env_error) — never a silent
+    fall-through to web.
+    """
+    fn = _CAPTURE_PROVIDERS.get(provider)
+    if fn is None:
+        known = ", ".join(sorted(_CAPTURE_PROVIDERS))
+        raise EnvError(f"unknown capture provider {provider!r} (known: {known})")
+    return fn(base_dir, screen, run_id)
 
 
 def judge(app_png: Path, ref_png: Path, config: dict) -> float:
@@ -339,6 +383,9 @@ def score(base_dir: Path) -> float:
     n = int(config["samples"]["n"])
     k = float(config["samples"].get("k", 1.0))
     fake = _fake_scores()
+    # 027-02: capture provider selected once per run (env > config > "web").
+    # None on the fake arm — no capture ran, so no provider is exercised.
+    provider = None
     if fake is None:
         transport = (config.get("judge") or {}).get("transport", "api")
         if transport == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
@@ -346,9 +393,19 @@ def score(base_dir: Path) -> float:
         if transport == "cli" and not _resolve_claude():
             raise EnvError(
                 "`claude` CLI not found — set SERVO_DESIGN_EVAL_CLAUDE_BIN or add it to PATH")
-        # AC5: live-capture arm only, so the fake-scores path is unaffected.
-        # AC2: once per run, not per screen — no latch needed here.
-        preflight_capture(base_dir)
+        # 027-02 AC4: resolve + validate the provider up front, so an unknown one
+        # fails closed (env_error) BEFORE any preflight or capture — never a
+        # silent 0.0, never a fall-through to web.
+        provider = _resolve_capture_transport(config)
+        if provider not in _CAPTURE_PROVIDERS:
+            known = ", ".join(sorted(_CAPTURE_PROVIDERS))
+            raise EnvError(f"unknown capture provider {provider!r} (known: {known})")
+        # 027-02: the node/Playwright preflight is the WEB provider's precheck;
+        # a non-web provider brings its own environment, so gate it to web.
+        # AC5 (027-01): live-capture arm only, so the fake-scores path is
+        # unaffected. AC2 (026-01): once per run, not per screen — no latch here.
+        if provider == "web":
+            preflight_capture(base_dir)
 
     # 027-01 AC1: one stamp per run, shared across screens, so a run's shots
     # group together and never clobber a prior run's.
@@ -362,7 +419,7 @@ def score(base_dir: Path) -> float:
             attestation = None   # no browser ran at all -> not_captured
             shot = None          # 027-01 AC3: no browser ran -> no shot, honestly
         else:
-            app_png, attestation = capture_app(base_dir, screen, run_id)
+            app_png, attestation = capture_app(base_dir, screen, run_id, provider)
             # 027-01 AC2: record the exact PNG this screen was judged on, as a
             # path relative to base_dir (the ledger's own root).
             shot = app_png.relative_to(base_dir).as_posix()
@@ -377,7 +434,8 @@ def score(base_dir: Path) -> float:
     if total_w <= 0:
         raise EnvError("total screen weight is zero")
     composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a, _sh in per_screen) / total_w
-    _ledger(base_dir, config, per_screen, composite, fake_run=fake is not None)
+    _ledger(base_dir, config, per_screen, composite,
+            fake_run=fake is not None, provider=provider)
     return max(0.0, min(1.0, composite))
 
 
@@ -401,14 +459,18 @@ def _provenance(att, *, fake_run: bool) -> dict:
 
 
 def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
-            *, fake_run: bool) -> None:
+            *, fake_run: bool, provider: str | None) -> None:
     # `fake_run` is keyword-only and REQUIRED on purpose: a default would let a
     # future caller silently get `not_attested` on a synthetic run — the same
-    # class of error as deriving it from `att`, which this replaced.
+    # class of error as deriving it from `att`, which this replaced. `provider`
+    # is likewise required keyword-only for the same reason (027-02).
     record = {
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
+        # 027-02 AC5: which capture provider produced this run's shots — advisory,
+        # never hashed (ADR-0032 §6). `null` on the fake arm (no capture ran).
+        "capture_provider": provider,
         "composite": round(composite, 4),
         "definition_hash": config.get("approved_content_hash"),
         # 026-03 AC2/AC2a: provenance is PER SCREEN (capture_app runs once per

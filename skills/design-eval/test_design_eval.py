@@ -1552,5 +1552,154 @@ class ShotRetentionTests(unittest.TestCase):
                 self.assertIsNone(s["shot"])
 
 
+class CaptureProviderSeamTests(unittest.TestCase):
+    """Slice 027-02: capture is selected by `capture.transport` (env > config >
+    'web' default) and dispatched through a provider seam. The existing Playwright
+    path is the default **web** provider (behavior-preserving); the chosen provider
+    is recorded in the ledger (advisory, unfrozen); an unknown provider fails closed
+    to env_error (rc 2), never a silent 0.0 and never a fall-through to web."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+        os.environ.pop("SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT", None)
+
+    def _live_run(self, d):
+        """Drive one LIVE-capture `score.score()` with a stubbed capture.mjs.
+        Returns (last ledger row, the capture.mjs argv that was spawned)."""
+        seen = {"argv": None}
+
+        class _P:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        def fake_run(*a, **k):
+            argv = a[0]
+            if "--out" not in argv:            # preflight probe, not capture
+                _P.stdout = ""
+                return _P()
+            seen["argv"] = list(argv)
+            out = Path(argv[argv.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x89PNG")
+            _P.stdout = ('##servo-capture:{"engine":"chromium","version":"131.0",'
+                         '"transport":"bundled","error":null}')
+            return _P()
+
+        orig = (score.subprocess.run, score.shutil.which, score.judge)
+        score.subprocess.run = fake_run
+        score.shutil.which = lambda n: "/usr/bin/node"
+        score.judge = lambda *a, **k: 0.9
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            return row, seen["argv"]
+        finally:
+            score.subprocess.run, score.shutil.which, score.judge = orig
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC1: absent config → the exact web Playwright spawn, unchanged ----------
+    def test_absent_capture_config_uses_web_spawn(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            row, argv = self._live_run(d)
+            self.assertIsNotNone(argv, "the web provider must spawn node capture.mjs")
+            self.assertEqual(argv[0], "node")
+            self.assertTrue(any("capture.mjs" in a for a in argv),
+                            f"expected the capture.mjs spawn, got {argv!r}")
+            self.assertEqual(row["capture_provider"], "web")
+
+    # -- AC2: explicit web behaves identically -----------------------------------
+    def test_explicit_web_transport_matches_absent(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            cfg = _base_config()
+            cfg["capture"] = {"transport": "web"}
+            d = _make_eval_dir(tmp, cfg)
+            de.freeze(tmp)
+            row, argv = self._live_run(d)
+            self.assertEqual(argv[0], "node")
+            self.assertEqual(row["capture_provider"], "web")
+
+    # -- AC3: env > config > 'web' resolution precedence -------------------------
+    def test_transport_resolution_precedence(self):
+        self.assertEqual(score._resolve_capture_transport({}), "web")
+        self.assertEqual(
+            score._resolve_capture_transport({"capture": {"transport": "web"}}), "web")
+        os.environ["SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT"] = "custom-provider"
+        self.assertEqual(
+            score._resolve_capture_transport({"capture": {"transport": "web"}}),
+            "custom-provider", "env var must override config.capture.transport")
+
+    # -- AC4: unknown provider fails closed to env_error, before any capture -----
+    def test_unknown_provider_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            cfg = _base_config()
+            cfg["capture"] = {"transport": "banana"}
+            d = _make_eval_dir(tmp, cfg)
+            de.freeze(tmp)
+            called = {"capture": False}
+
+            def boom(*a, **k):
+                if "--out" in (a[0] if a else []):
+                    called["capture"] = True
+                raise AssertionError("capture must not run for an unknown provider")
+
+            orig = score.subprocess.run
+            score.subprocess.run = boom
+            os.environ["ANTHROPIC_API_KEY"] = "x"
+            try:
+                rc, out, err = _capture_main(d)
+            finally:
+                score.subprocess.run = orig
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.assertEqual(rc, score.EXIT_ENV_ERROR)
+            self.assertEqual(out.strip(), "")          # never a 0.0
+            self.assertIn("env_error", err)
+            self.assertIn("banana", err)               # names the unknown provider
+            self.assertFalse(called["capture"])        # failed before capturing
+
+    # -- AC5: fake-scores arm records a null provider (no capture ran) -----------
+    def test_fake_scores_run_records_null_provider(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9, 0.9, 0.9, 0.9], "settings": [0.9, 0.9, 0.9, 0.9]})
+            try:
+                score.score(d)
+                row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            finally:
+                os.environ.pop(score._FAKE_SCORES_ENV, None)
+            self.assertIn("capture_provider", row)
+            self.assertIsNone(row["capture_provider"])
+
+    # -- AC6: a `capture` block is environmental, never in the definition hash ---
+    def test_capture_block_not_in_definition_hash(self):
+        base = _base_config()
+        withcap = {**_base_config(), "capture": {"transport": "web"}}
+        self.assertEqual(
+            score.definition_hash(base), score.definition_hash(withcap),
+            "capture.transport must not enter definition_hash (ADR-0032 §6)")
+
+    def test_adding_capture_block_does_not_stale_a_frozen_eval(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            config = json.loads((d / "config.json").read_text())
+            config["capture"] = {"transport": "web"}
+            score.validate_freeze(config, d)  # must not raise StaleError
+
+
 if __name__ == "__main__":
     unittest.main()
