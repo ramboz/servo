@@ -158,14 +158,36 @@ def parse_attestation(stdout: str) -> dict | None:
     return None
 
 
-def capture_app(base_dir: Path, screen: dict) -> tuple[Path, dict | None]:
+def _run_stamp() -> str:
+    """A per-run, filesystem-safe, human-sortable token for shot filenames.
+
+    027-01 AC1: shots must be RETAINED, not clobbered — so each run's screenshot
+    needs a unique name. Microsecond resolution makes two back-to-back `score()`
+    calls collide-free without a new import; shots are unfrozen outputs (027-01
+    DoR: no ADR, not part of the frozen definition), so a wall-clock stamp is
+    fine. Kept human-readable on purpose — the point of retention is that an
+    operator can open the exact image behind a low score.
+    """
+    t = time.time()
+    return time.strftime("%Y%m%dT%H%M%S", time.localtime(t)) + f"-{int((t % 1) * 1e6):06d}"
+
+
+def capture_app(base_dir: Path, screen: dict, run_id: str | None = None) -> tuple[Path, dict | None]:
     """Screenshot the app at the screen's seeded state; return (png, attestation).
 
     026-03 AC2c: the attestation is RETURNED, never stashed in a module global —
     a global would be last-write-wins across screens and silently re-create the
     single-field collapse per-screen provenance exists to prevent.
+
+    027-01 AC1: the shot filename is stamped (`app-<id>-<run_id>.png`) so a later
+    run does not overwrite it, and stays DIRECTLY under `shots/` (path depth
+    unchanged) to preserve the `_judge_cli` cwd contract (`app_png.parent.parent`
+    == base_dir). `run_id` defaults to a fresh per-call stamp so the standalone
+    callers (and tests) that pass only `(base_dir, screen)` still get retention;
+    `score()` passes one shared stamp so all screens in a run group together.
     """
-    out = base_dir / "shots" / f"app-{screen['id']}.png"
+    stamp = run_id or _run_stamp()
+    out = base_dir / "shots" / f"app-{screen['id']}-{stamp}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     cmd = ["node", str(base_dir / "capture.mjs"), "--screen", screen["id"], "--out", str(out)]
     try:
@@ -328,6 +350,9 @@ def score(base_dir: Path) -> float:
         # AC2: once per run, not per screen — no latch needed here.
         preflight_capture(base_dir)
 
+    # 027-01 AC1: one stamp per run, shared across screens, so a run's shots
+    # group together and never clobber a prior run's.
+    run_id = _run_stamp()
     per_screen = []
     for screen in config["screens"]:
         if fake is not None:
@@ -335,18 +360,23 @@ def score(base_dir: Path) -> float:
                 raise EnvError(f"fake scores missing screen {screen['id']!r}")
             samples = [float(x) for x in fake[screen["id"]]]
             attestation = None   # no browser ran at all -> not_captured
+            shot = None          # 027-01 AC3: no browser ran -> no shot, honestly
         else:
-            app_png, attestation = capture_app(base_dir, screen)
+            app_png, attestation = capture_app(base_dir, screen, run_id)
+            # 027-01 AC2: record the exact PNG this screen was judged on, as a
+            # path relative to base_dir (the ledger's own root).
+            shot = app_png.relative_to(base_dir).as_posix()
             ref_png = base_dir / screen["reference"]
             if not ref_png.is_file():
                 raise EnvError(f"reference missing: {screen['reference']}")
             samples = [judge(app_png, ref_png, config) for _ in range(n)]
-        per_screen.append((screen, samples, aggregate_lower_bound(samples, k), attestation))
+        per_screen.append(
+            (screen, samples, aggregate_lower_bound(samples, k), attestation, shot))
 
-    total_w = sum(float(s.get("weight", 1.0)) for s, _, _, _ in per_screen)
+    total_w = sum(float(s.get("weight", 1.0)) for s, _, _, _, _ in per_screen)
     if total_w <= 0:
         raise EnvError("total screen weight is zero")
-    composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a in per_screen) / total_w
+    composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a, _sh in per_screen) / total_w
     _ledger(base_dir, config, per_screen, composite, fake_run=fake is not None)
     return max(0.0, min(1.0, composite))
 
@@ -390,9 +420,12 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
                 "id": s["id"],
                 "samples": [round(x, 4) for x in samp],
                 "lower_bound": round(lb, 4),
+                # 027-01 AC2/AC3: the exact shot this screen was judged on
+                # (relative to base_dir), or null when no browser ran.
+                "shot": shot,
                 **_provenance(att, fake_run=fake_run),
             }
-            for s, samp, lb, att in per_screen
+            for s, samp, lb, att, shot in per_screen
         ],
     }
     _fe.write_ledger(base_dir, record)
