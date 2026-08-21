@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.9.0](https://github.com/ramboz/servo/compare/v0.8.0...v0.9.0) (2026-08-21)
+
+
+### Features
+
+* **design-eval:** implement 026-01 runtime preflight + salient stderr surfacing ([d116e5e](https://github.com/ramboz/servo/commit/d116e5e5e2e9dfb8dafa7cfd892ac432290cc288))
+* **design-eval:** implement 026-03 ledger browser-identity attestation ([73110b7](https://github.com/ramboz/servo/commit/73110b7de51ab81035d105df4d1ce19665a018c1))
+
+
+### Bug Fixes
+
+* **design-eval:** 026-03 reconciliation findings — untrue DoD ticks corrected ([08b6909](https://github.com/ramboz/servo/commit/08b690901d9226489799a463f5c4623fa2d56c94))
+* **design-eval:** address 026-01 compliance + craft review findings ([fb25ac2](https://github.com/ramboz/servo/commit/fb25ac23a0c262421ac67389df8bb16a5f718849))
+* **design-eval:** address 026-03 compliance + craft review findings ([f009d55](https://github.com/ramboz/servo/commit/f009d55fe83df20dcdbfc050b9535d68bf48ebf8))
+* **design-eval:** address spec 012 compliance + craft review findings ([1cfbf8f](https://github.com/ramboz/servo/commit/1cfbf8fa36e6c14001658d9e38755aa026547509))
+* **design-eval:** close 026-01 review nits; add reconciliation artifacts ([3b2eba1](https://github.com/ramboz/servo/commit/3b2eba1a6f1fb4373bc63132c8246138466340ad))
+
+
+### Documentation
+
+* **decisions:** accept ADR-0031 (design-eval browser acquisition) ([dadf272](https://github.com/ramboz/servo/commit/dadf272bc0e3859ce952994a09f90827dafa2d36))
+* **decisions:** add ADR-0032 — pluggable capture providers for design-eval (Proposed) ([#30](https://github.com/ramboz/servo/issues/30)) ([8da8506](https://github.com/ramboz/servo/commit/8da8506aaa12b4b5195cd77611f005b8a4205a77))
+* **decisions:** file ADR-0031 (design-eval browser acquisition) — Proposed ([2128502](https://github.com/ramboz/servo/commit/21285025696c878cf30c6a3c7dfc10d63bea3678))
+* **decisions:** reserve adr-0031-design-eval-browser-acquisition ([e0d21b3](https://github.com/ramboz/servo/commit/e0d21b323421aee2027bf2bbdceae3a2cc1a22a8))
+* **decisions:** revise ADR-0031 through 4-round frame-critique (still Proposed) ([66e1625](https://github.com/ramboz/servo/commit/66e1625d834d8d2a8055fb554491d30f5a3ec812))
+* **specs:** 026 — frame-critique round 4/5; 026-02 simplified, not patched ([e6332cc](https://github.com/ramboz/servo/commit/e6332cc550b1bd27792657bccf719647e51a2cec))
+* **specs:** 026 slices — frame-critique round 3/4 findings applied ([9bdfc41](https://github.com/ramboz/servo/commit/9bdfc41fc88bc3640865c0a851878c2bb04bae6e))
+* **specs:** 026-01 round-7 fixes; drop 026-03 dep on deferred 026-02 ([2d208c8](https://github.com/ramboz/servo/commit/2d208c809f4bbfe1f68c46932dd564efce288f33))
+* **specs:** 026-03 — make the labelling claim true; record the SKILL.md residual ([3f1ad82](https://github.com/ramboz/servo/commit/3f1ad820ff457f6382ca77844ae4cfd90d0b43d9))
+* **specs:** 026-03 round-6 — testable JS logic, bundled constant, no-stash ([df7eaad](https://github.com/ramboz/servo/commit/df7eaad1fcf0a12975fcbb9b8c72c7e101240c9b))
+* **specs:** abandon 026-04, revise 026-01/02/03 after frame-critique round 2 ([a9ce3b5](https://github.com/ramboz/servo/commit/a9ce3b5139f76468827bc5b700f62ffbc2ab2e4e))
+* **specs:** defer 026-02 pending A1 probe; apply round-5/6 findings to 026-01/03 ([81910df](https://github.com/ramboz/servo/commit/81910df433431e27dc55e11f25e92b44c3769f17))
+* **specs:** draft spec 026 (design-eval browser acquisition) — implements ADR-0031 ([89b7ccb](https://github.com/ramboz/servo/commit/89b7ccbd29517f7a3b849086942bd12414bbc8db))
+* **specs:** reserve 026-design-eval-browser-acquisition ([e8ecaa5](https://github.com/ramboz/servo/commit/e8ecaa5c78e1bec065a7624eda44ca1a1eb7be7b))
+* **specs:** respec 026 slices after frame-critique (all four needs-changes) ([906a4f2](https://github.com/ramboz/servo/commit/906a4f2064cd069e347f8775a1db0a9e631174b8))
+
 ## [0.8.0](https://github.com/ramboz/servo/compare/v0.7.0...v0.8.0) (2026-08-13)
 
 
