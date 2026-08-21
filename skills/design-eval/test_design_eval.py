@@ -1452,5 +1452,105 @@ def _capture_main(eval_dir: Path):
     return rc, out.getvalue(), err.getvalue()
 
 
+class ShotRetentionTests(unittest.TestCase):
+    """Slice 027-01: each run's app screenshots must be KEPT (never clobbered by
+    the next run) and pointed at from the ledger row, so a low score is
+    inspectable instead of a number to trust. Applies to every capture mode."""
+
+    def _run_once(self, d):
+        """Drive one LIVE-capture `score.score()` with a stubbed capture.mjs that
+        writes a PNG to whatever `--out` path capture_app chose. Returns the last
+        ledger row."""
+        class _P:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        def fake_run(*a, **k):
+            argv = a[0]
+            if "--out" not in argv:            # the preflight probe, not capture
+                _P.stdout = ""
+                return _P()
+            out = Path(argv[argv.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x89PNG")
+            _P.stdout = ('##servo-capture:{"engine":"chromium","version":"131.0",'
+                         '"transport":"bundled","error":null}')
+            return _P()
+
+        orig_run, orig_which, orig_judge = (
+            score.subprocess.run, score.shutil.which, score.judge)
+        score.subprocess.run = fake_run
+        score.shutil.which = lambda n: "/usr/bin/node"
+        score.judge = lambda *a, **k: 0.9
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            rows = (d / "ledger.jsonl").read_text().strip().splitlines()
+            return json.loads(rows[-1])
+        finally:
+            score.subprocess.run, score.shutil.which, score.judge = (
+                orig_run, orig_which, orig_judge)
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    def test_shots_are_not_clobbered_across_runs(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            self._run_once(d)
+            self._run_once(d)
+            homes = sorted((d / "shots").glob("app-home*.png"))
+            self.assertGreaterEqual(
+                len(homes), 2,
+                f"two runs must retain two distinct home shots, not overwrite one; "
+                f"found {[p.name for p in homes]}")
+
+    def test_shots_stay_one_dir_under_base_for_the_cli_judge_cwd(self):
+        # _judge_cli cwd's to app_png.parent.parent (score.py:222); retention must
+        # not deepen the path or the CLI judge's Read sandbox breaks.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            row = self._run_once(d)
+            for s in row["screens"]:
+                self.assertEqual(
+                    (d / s["shot"]).parent, d / "shots",
+                    f"shot must live directly in shots/, got {s['shot']!r}")
+
+    def test_ledger_row_points_at_an_existing_shot_per_screen(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            row = self._run_once(d)
+            for s in row["screens"]:
+                self.assertIn("shot", s,
+                              "each scored screen must record the shot it was judged on")
+                self.assertTrue(s["shot"], "a live-captured screen's shot path must be non-empty")
+                self.assertTrue(
+                    (d / s["shot"]).is_file(),
+                    f"the ledger shot path must resolve to a real file: {s['shot']!r}")
+
+    def test_fake_scores_run_records_no_shot(self):
+        """No browser ran → no shot to point at. The field is present but null,
+        mirroring the `not_captured` provenance token (honest, not misleading)."""
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9, 0.9, 0.9, 0.9], "settings": [0.9, 0.9, 0.9, 0.9]})
+            try:
+                score.score(d)
+                row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            finally:
+                os.environ.pop(score._FAKE_SCORES_ENV, None)
+            for s in row["screens"]:
+                self.assertIn("shot", s)
+                self.assertIsNone(s["shot"])
+
+
 if __name__ == "__main__":
     unittest.main()
