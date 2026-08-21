@@ -1962,6 +1962,134 @@ class PngCropTests(unittest.TestCase):
         with self.assertRaises(pngcrop.PngCropError):
             pngcrop.crop_png(blob)
 
+    def test_corrupt_idat_raises_pngcroperror(self):
+        # A truncated/garbage IDAT (a plausible screencap transport hiccup) must
+        # stay inside the PngCropError contract, not escape as a raw zlib.error —
+        # so the native providers fail closed to env_error (review 027-04).
+        import struct as _s
+        import zlib as _z
+        sig = b"\x89PNG\r\n\x1a\n"
+        ihdr = _s.pack(">IIBBBBB", 4, 4, 8, 6, 0, 0, 0)
+
+        def chunk(t, b):
+            return _s.pack(">I", len(b)) + t + b + _s.pack(">I", _z.crc32(t + b) & 0xFFFFFFFF)
+
+        blob = sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", b"not zlib") + chunk(b"IEND", b"")
+        with self.assertRaises(pngcrop.PngCropError):
+            pngcrop.crop_png(blob)
+
+    # -- Per-filter pixel-exact decode: prove EVERY un-filter branch (0-4) ------
+    @staticmethod
+    def _encode_with_filter(pixels, w, h, bpp, ftype):
+        """Forward-filter a known RGBA image with ONE chosen PNG filter type, so
+        decoding must exercise exactly that un-filter branch. Deterministic, no
+        external tool — the strongest per-branch codec proof."""
+        import struct as _s
+        import zlib as _z
+        stride = w * bpp
+        raw = bytearray()
+        prev = bytearray(stride)
+        for y in range(h):
+            line = bytearray(pixels[y * stride:(y + 1) * stride])
+            out = bytearray(stride)
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                if ftype == 0:
+                    out[i] = line[i]
+                elif ftype == 1:
+                    out[i] = (line[i] - a) & 0xFF
+                elif ftype == 2:
+                    out[i] = (line[i] - b) & 0xFF
+                elif ftype == 3:
+                    out[i] = (line[i] - ((a + b) >> 1)) & 0xFF
+                elif ftype == 4:
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                    out[i] = (line[i] - pr) & 0xFF
+            raw.append(ftype)
+            raw.extend(out)
+            prev = line
+        idat = _z.compress(bytes(raw))
+        ihdr = _s.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
+
+        def chunk(t, b):
+            return _s.pack(">I", len(b)) + t + b + _s.pack(">I", _z.crc32(t + b) & 0xFFFFFFFF)
+
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+
+    def _pixels_of(self, png):
+        import struct as _s
+        import zlib as _z
+        ihdr = None
+        idat = bytearray()
+        for ct, b in pngcrop._iter_chunks(png):
+            if ct == b"IHDR":
+                ihdr = b
+            elif ct == b"IDAT":
+                idat.extend(b)
+            elif ct == b"IEND":
+                break
+        w, h, bd, cty, _, _, _ = _s.unpack(">IIBBBBB", ihdr)
+        return pngcrop._unfilter(_z.decompress(bytes(idat)), w, h, pngcrop._CHANNELS[cty])
+
+    def test_each_filter_type_decodes_pixel_exact(self):
+        w, h, bpp = 5, 4, 4
+        # a non-trivial known RGBA image (varied so filters actually differ)
+        pixels = bytes(((x * 37 + y * 11 + ch * 5) & 0xFF)
+                       for y in range(h) for x in range(w) for ch in range(bpp))
+        for ftype in range(5):
+            with self.subTest(filter=ftype):
+                png = self._encode_with_filter(pixels, w, h, bpp, ftype)
+                # crop 0 → must reproduce the exact original pixels
+                got = self._pixels_of(pngcrop.crop_png(png))
+                self.assertEqual(bytes(got), pixels,
+                                 f"un-filter branch {ftype} is not pixel-exact")
+
+    def test_crop_lands_exact_pixels(self):
+        # A real crop must return exactly the right sub-rectangle of pixels, not
+        # merely the right dimensions (a shifted/corrupt crop passes a dims check).
+        w, h, bpp = 6, 5, 4
+        pixels = bytes(((x * 40 + y * 9 + ch) & 0xFF)
+                       for y in range(h) for x in range(w) for ch in range(bpp))
+        png = self._encode_with_filter(pixels, w, h, bpp, 4)  # Paeth-filtered source
+        cropped = pngcrop.crop_png(png, top=1, bottom=1, left=2, right=1)
+        self.assertEqual(pngcrop.png_dimensions(cropped), (w - 3, h - 2))
+        got = self._pixels_of(cropped)
+        nw = w - 3
+        # rebuild the expected sub-rectangle from the source pixels
+        expected = bytearray()
+        for y in range(1, h - 1):
+            for x in range(2, w - 1):
+                idx = (y * w + x) * bpp
+                expected.extend(pixels[idx:idx + bpp])
+        self.assertEqual(bytes(got), bytes(expected))
+        self.assertEqual(len(got), nw * (h - 2) * bpp)
+
+    def test_fixture_uses_nonzero_filters(self):
+        # The committed fixture must keep exercising the Sub/Paeth branches; a
+        # future all-filter-0 swap would silently un-cover branches 1-4.
+        import struct as _s
+        import zlib as _z
+        raw = self._raw()
+        ihdr = None
+        idat = bytearray()
+        for ct, b in pngcrop._iter_chunks(raw):
+            if ct == b"IHDR":
+                ihdr = b
+            elif ct == b"IDAT":
+                idat.extend(b)
+            elif ct == b"IEND":
+                break
+        w, h, bd, cty, _, _, _ = _s.unpack(">IIBBBBB", ihdr)
+        stride = w * pngcrop._CHANNELS[cty]
+        data = _z.decompress(bytes(idat))
+        filters = {data[i * (stride + 1)] for i in range(h)}
+        self.assertTrue(filters - {0},
+                        f"fixture must use non-zero filters, got {sorted(filters)}")
+
 
 class CaptureAndroidProviderTests(unittest.TestCase):
     """Slice 027-04: the blessed Android provider — adb screencap + optional
@@ -2150,6 +2278,25 @@ class CaptureAndroidProviderTests(unittest.TestCase):
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d, screencap_rc=1)
             self.assertIn("screencap", str(cm.exception))
+
+    def test_corrupt_screencap_png_fails_closed(self):
+        # A rc-0 screencap that returns garbage (not a PNG) must fail closed to
+        # EnvError via the crop's PngCropError contract — not a raw traceback.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError):
+                self._live_run(d, screencap_bytes=b"not a png at all")
+
+    def test_non_integer_crop_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s", crop={"top": "lots"}))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d)
+            self.assertIn("crop", str(cm.exception))
 
     # -- AC5: capture.android is environmental, not frozen -----------------------
     def test_capture_android_not_in_definition_hash(self):

@@ -326,7 +326,15 @@ def _android_screencap_argv(config: dict) -> list:
 
 def _crop_insets(config: dict) -> dict:
     crop = _android_cfg(config).get("crop") or {}
-    return {k: int(crop.get(k, 0)) for k in ("top", "bottom", "left", "right")}
+    insets = {}
+    for k in ("top", "bottom", "left", "right"):
+        v = crop.get(k, 0)
+        try:
+            insets[k] = int(v)
+        except (TypeError, ValueError) as e:
+            raise EnvError(
+                f"capture.android.crop.{k} must be an integer, got {v!r}") from e
+    return insets
 
 
 def _capture_android(base_dir: Path, screen: dict, run_id: str | None = None,

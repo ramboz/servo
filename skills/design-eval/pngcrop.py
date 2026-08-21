@@ -141,7 +141,14 @@ def crop_png(data: bytes, *, top: int = 0, bottom: int = 0,
             f"crop leaves no pixels: {width}x{height} with insets "
             f"top={top} bottom={bottom} left={left} right={right}")
 
-    pixels = _unfilter(zlib.decompress(bytes(idat)), width, height, bpp)
+    try:
+        inflated = zlib.decompress(bytes(idat))
+    except zlib.error as e:
+        # A corrupt / truncated IDAT (a plausible screencap transport hiccup) must
+        # stay inside this module's PngCropError contract so the native providers
+        # fail closed to env_error (rc 2), not a bare zlib traceback.
+        raise PngCropError(f"corrupt PNG image data: {e}") from e
+    pixels = _unfilter(inflated, width, height, bpp)
     stride = width * bpp
     out = bytearray(new_w * bpp * new_h)
     row_bytes = new_w * bpp
