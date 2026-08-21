@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [adr-0032]
 last_verified: 2026-08-21
 claimed_by: claude/027-01-342c59
@@ -65,19 +65,33 @@ today's web path already satisfies both for free, and native seeding/cropping is
    new ledger field.
 
 **DoD:**
-- [ ] All ACs pass; full test suite green (no regressions).
-- [ ] Implementer test coverage exercises each AC with at least one fixture
+- [x] All ACs pass; full test suite green (no regressions). — `CaptureProviderSeamTests`
+      7/7 green; 102/102 in `test_design_eval` bar the one pre-existing red
+      (`CaptureLibNodeTests.test_capture_lib_node_suite_passes`, a Node
+      output-format mismatch, red on a clean tree, unrelated to this slice);
+      `test_skill_surface` 25/25 green after the SKILL.md edits.
+- [x] Implementer test coverage exercises each AC with at least one fixture
       (absent→web spawn; explicit web; env-beats-config precedence; unknown→rc2
       env_error; ledger `capture_provider` name on live + null on fake; a `capture`
       block leaves `definition_hash` unchanged).
-- [ ] Each new test shown to fail when the feature is removed (drop the selector /
-      the registry guard / the ledger field → tests go red).
-- [ ] Reviewed by `reviewer` subagent (compliance + craft passes).
-- [ ] Implementation review passed.
-- [ ] Deviation log produced under this slice heading.
-- [ ] Reconciliation sweep produced under this slice heading.
-- [ ] Reconciliation review passed.
-- [ ] `docs/refinement-todo.md` updated if any decisions were deferred.
+- [x] Each new test shown to fail when the feature is removed (drop the selector /
+      the registry guard / the ledger field → tests go red). — demonstrated red
+      before implementation (5 of 7 red). Honest caveat: the two AC6 tests are
+      regression-guards on the freeze (a `capture` key is *already* excluded from
+      the hash), so they stay green even without the selector; the five
+      feature-bearing tests go red without it (see deviation log).
+- [x] Reviewed by `reviewer` subagent (compliance + craft passes). — `jig:reviewer`,
+      independent, 2026-08-21.
+- [x] Implementation review passed. — VERDICT: pass, no blocking issues.
+- [x] Deviation log produced under this slice heading.
+- [x] Reconciliation sweep produced under this slice heading.
+- [x] Reconciliation review passed. — `jig:reviewer` reconciliation pass,
+      VERDICT: pass, 2026-08-21; deviation-log claims verified line-for-line
+      against `score.py`, SKILL.md additions confirmed accurate, sweep dispositions
+      confirmed, git working tree confirmed clean (only this slice + SKILL.md).
+- [x] `docs/refinement-todo.md` updated if any decisions were deferred. — none
+      deferred by this slice (the widened state/frame contract is 027-03/04/05
+      scope, not a deferral); no entry needed.
 
 **Anti-horizontal-phasing check:** After this slice lands, a design-eval user can
 *select* their capture provider through `capture.transport` (env or config), see
@@ -99,19 +113,54 @@ deferral of this slice.
 
 The original spec is preserved above. Implementation notes:
 
-_TBD during reconciliation._
+- **Registry-based dispatch.** The seam is a module-level `_CAPTURE_PROVIDERS`
+  dict (`{"web": _capture_web}`) plus `_resolve_capture_transport(config)` for
+  precedence and a lookup in `capture_app`. The old `capture_app` body moved
+  verbatim into `_capture_web` (behavior-preserving); `capture_app` became a thin
+  dispatcher taking a defaulted `provider="web"` param, so the existing 2-/3-arg
+  callers (`CaptureAppHonestyTests`, the `CaptureLibNodeTests` routing test, and
+  027-01's `ShotRetentionTests`) keep working unchanged.
+- **Fail-closed validated twice, on purpose.** `score()` resolves and validates
+  the provider *before* the preflight/capture (so an unknown provider is an
+  `env_error` at run start, not mid-loop), and `capture_app` independently guards
+  its own lookup (so any direct caller also fails closed). The reviewer noted the
+  AC4 test is therefore double-guarded — it proves fail-closed but does not
+  *isolate* the "before preflight" ordering; kept as-is (feature-bearing, and the
+  ordering is asserted by reading `score()`), classified honestly rather than
+  padded with a brittle ordering-only probe.
+- **Preflight gated to web.** The node/Playwright `preflight_capture` is the web
+  provider's precheck, so it runs only when `provider == "web"`. A future non-web
+  provider brings its own environment and is unaffected.
+- **Fake-scores arm leaves `provider = None`** and skips transport validation —
+  consistent with AC4 (no capture runs) and AC5 (records `capture_provider: null`).
+  An unknown transport combined with `SERVO_DESIGN_EVAL_FAKE_SCORES` is not
+  flagged, by design: fake-scores is the offline/test hook, not a capture path.
+- **`_ledger` gained a required keyword-only `provider`** (mirroring the existing
+  required `fake_run`), so no caller can silently omit it and mis-record the
+  provider. New top-level ledger field `capture_provider`; `capture.transport`
+  deliberately kept out of `_EXTRA_HASH_FIELDS`, so `definition_hash` is unchanged
+  (AC6).
+- **AC6 tests are regression-guards, not feature-driven.** A `capture` key was
+  *already* excluded from the hash (the hash covers a fixed field set), so those
+  two tests stay green even without the selector. They pin the environmental-not-
+  frozen property against a future regression; the DoD "red when removed" note
+  scopes the claim to the five feature-bearing tests.
+- **Beyond the letter of the ACs:** documented the `capture.transport` selector,
+  the `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` override, and the `capture_provider`
+  ledger field in `SKILL.md` (config-authoring step + "Provenance in the ledger"),
+  disambiguating the three transport-ish names.
 
 ### Reconciliation sweep
 
 | Artifact | Disposition | Rationale |
 |----------|-------------|-----------|
-| `README.md` | `no-op` | _TBD._ |
-| `docs/specs/README.md` | `deferred` | _TBD: status-board regen at close-out; spec not closed._ |
-| `docs/product-vision.md` | `no-op` | _TBD._ |
-| `docs/architecture.md` | `no-op` | _TBD: additive selector + ledger field, no module-boundary change._ |
-| Primer surfaces: `CLAUDE.md` / `AGENTS.md` / scaffold templates | `no-op` | _TBD._ |
-| `docs/inbox.md` | `no-op` | _TBD._ |
-| `docs/refinement-todo.md` | `no-op` | _TBD._ |
-| `docs/memory/**` | `no-op` | _TBD._ |
-| `docs/decisions/README.md` / ADR index | `no-op` | _TBD: no ADR touched (ADR-0032 already Accepted)._ |
-| `skills/design-eval/SKILL.md` | `updated` | _TBD: document the `capture.transport` selector + `capture_provider` ledger field._ |
+| `README.md` | `no-op` | Root orientation; no surface it describes changed. |
+| `docs/specs/README.md` | `deferred` | Status-board regen is post-DONE close-out; not run (spec not closed — 03–05 remain; and `workflow.py status-board` mis-rolls umbrella-spec frontmatter, a known `refinement-todo` bug). |
+| `docs/product-vision.md` | `no-op` | No vision-level claim affected. |
+| `docs/architecture.md` | `no-op` | Additive selector + one ledger field; no module boundary, contract, or artifact-path change. |
+| Primer surfaces: `CLAUDE.md` / `AGENTS.md` / scaffold templates | `no-op` | None reference capture transport or the ledger shape. |
+| `docs/inbox.md` | `no-op` | Nothing to hand off. |
+| `docs/refinement-todo.md` | `no-op` | No decision deferred by this slice. |
+| `docs/memory/**` | `no-op` | No durable cross-session fact beyond spec + code. |
+| `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — ADR-0032 already Accepted and governs this seam. |
+| `skills/design-eval/SKILL.md` | `updated` | Documented the `capture.transport` selector, the `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` override, and the `capture_provider` ledger field. |

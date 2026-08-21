@@ -69,6 +69,15 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
        transport only**; `claude -p` exposes no decoding flags, so the `"cli"`
        transport runs at the model's CLI default and ignores them. (Both are
        still hashed into the freeze, so editing either re-freezes regardless.)
+   - optionally, `capture` — which **capture provider** takes the app
+     screenshots: `capture.transport`, `"web"` (Playwright) by default, and today
+     the only built-in. The `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` env var overrides
+     the config value (precedence: env → `capture.transport` → `"web"`). Unlike
+     `judge`, the capture transport is **environmental, not frozen** — it is
+     **not** hashed into the freeze (ADR-0031/ADR-0032 §6), so switching it never
+     re-freezes; the provider that actually ran is recorded in `ledger.jsonl`
+     instead (see below). An unknown provider fails closed to `env_error`, never a
+     silent score.
 
 3. **`capture-refs`** — `python3 design_eval.py capture-refs <target>` renders
    each `referenceSource` to its `reference` PNG (cropped). Eyeball them.
@@ -130,6 +139,15 @@ echoed back as a mismatch canary; it is **not** independent evidence of what
 launched. Note it is also deliberately distinct from the row's top-level
 `transport`, which means the **judge** transport (`api`/`cli`) in every
 historical row.
+
+**Which capture provider ran.** The row also carries a top-level
+`capture_provider` — the provider selected for that run (`"web"` today; see the
+`capture.transport` selector above), or `null` on the fake-scores path where no
+capture ran. Keep the three transport-ish names straight: top-level `transport`
+is the **judge** transport (`api`/`cli`); top-level `capture_provider` is the
+**capture provider** (027-02); per-screen `capture_transport` is the browser
+transport that provider's process was instructed to use (026-03). All are
+advisory — none is hashed.
 
 **The shot that was judged.** Each per-screen entry also carries `shot`: a path,
 relative to the eval directory, to the exact PNG that screen was scored on — or
