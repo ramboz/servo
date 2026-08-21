@@ -38,6 +38,7 @@
 - [ADR-0029: Autonomy-readiness pre-flight gate](adr-0029-autonomy-readiness-gate.md) — Servo's Compile phase already asks *"can this spec be evaluated?"* — the `edd-suitability` gate ([ADR-0015](adr-0015-edd-suitability-gate.md), [ADR-0018](adr-0018-suitability-gates-compile-not-heartbeat.md)) emits a three-state verdict and gates Compile. (2026-08-06, Accepted)
 - [ADR-0030: Durable cross-run quarantine and a lifecycle-aware coordinator](adr-0030-durable-quarantine-and-lifecycle-coordinator.md) — Two gaps block servo's heartbeat from being a safe, bounded, long-horizon coordinator. (2026-08-06, Accepted)
 - [ADR-0031: design-eval browser acquisition — runtime preflight, unfrozen capture transport, browser identity in the ledger](adr-0031-design-eval-browser-acquisition.md) — `/servo:design-eval` ([ADR-0009](adr-0009-design-fidelity-eval-recipe.md), spec 012) scores UI fidelity by screenshotting the running app and comparing it to a frozen mockup reference. (2026-08-19, Accepted)
+- [ADR-0032: Pluggable capture providers for design-eval (platform-agnostic app capture)](adr-0032-design-eval-capture-providers.md) — `/servo:design-eval` ([ADR-0009](adr-0009-design-fidelity-eval-recipe.md), spec 012) can only score a **web** UI. (Proposed)
 
 ## Pending
 
