@@ -63,6 +63,59 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
        transport only**; `claude -p` exposes no decoding flags, so the `"cli"`
        transport runs at the model's CLI default and ignores them. (Both are
        still hashed into the freeze, so editing either re-freezes regardless.)
+   - optionally, `capture` — which **capture provider** takes the app
+     screenshots: `capture.transport`, `"web"` (Playwright) by default. The
+     `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` env var overrides the config value
+     (precedence: env → `capture.transport` → `"web"`). Unlike `judge`, the
+     capture transport is **environmental, not frozen** — it is **not** hashed
+     into the freeze (ADR-0031/ADR-0032 §6), so switching it never re-freezes; the
+     provider that actually ran is recorded in `ledger.jsonl` instead (see below).
+     An unknown provider fails closed to `env_error`, never a silent score. The
+     providers:
+     - `"web"` (default) — the built-in Playwright path (`node capture.mjs`).
+     - `"command"` — the **escape hatch** for any non-web stack. Set
+       `capture.command` to an argv list; servo invokes it **per screen** as
+       `<your argv…> --screen <id> --out <path>` (cwd = the eval dir, 180s
+       timeout). Your command must **drive the app into that screen's state,
+       screenshot it, and write a frame-normalized PNG to `--out`** — state
+       seeding and chrome-cropping are the command's job, not servo's (ADR-0032
+       §4/§5); servo does not run your `setup` module or post-process the image.
+       A non-zero exit, timeout, missing binary, or no-output PNG fails closed to
+       `env_error`; a missing/empty `capture.command` fails before any capture.
+       The resolved argv is recorded in the ledger as `capture_command`. If your
+       command emits no `##servo-capture:` attestation line its per-screen
+       provenance is honestly `not_attested` (never a fabricated engine).
+     - `"android"` — a **blessed built-in** for native Android. Servo runs
+       `adb -s <serial> exec-out screencap` per screen, optionally fires a
+       per-screen deep link first, and crops the device chrome to the reference
+       frame. Config under `capture.android`:
+       - `serial` — device/emulator serial; precedence is `serial` →
+         `SERVO_DESIGN_EVAL_ANDROID_SERIAL` → the single connected device. No
+         device, or an ambiguous set with no serial, fails closed to `env_error`.
+       - `crop` — `{top,bottom,left,right}` pixel insets stripping the status /
+         navigation bars to the reference's logical frame (via a dependency-free
+         stdlib PNG crop; an out-of-bounds crop fails closed).
+       - a screen may set `deeplink: "<uri>"` to seed its state
+         (`am start -a VIEW -d <uri>`); complex tap-flows use the `command`
+         provider instead. State equivalence to the web seed is project-authored,
+         not certified (ADR-0032 §4).
+       `adb` is found on `PATH` or via `SERVO_DESIGN_EVAL_ADB_BIN`; the resolved
+       screencap argv is the ledger `capture_command`, and provenance is
+       `not_attested` (adb has no attestation channel).
+     - `"ios"` — a **blessed built-in** for native iOS, parallel to `android`.
+       Servo runs `xcrun simctl io <target> screenshot` per screen (writing a PNG
+       to the shot file), optionally fires `simctl openurl` first, and crops the
+       chrome via the same stdlib cropper. Config under `capture.ios`:
+       - `udid` — simulator udid; precedence is `udid` →
+         `SERVO_DESIGN_EVAL_IOS_UDID` → the literal `booted` (simctl's
+         single-booted-simulator selector; simctl fails closed if none/ambiguous).
+       - `crop` — `{top,bottom,left,right}` pixel insets (out-of-bounds /
+         non-integer fails closed).
+       - a screen may set `deeplink: "<uri>"` (→ `simctl openurl`); complex flows
+         use the `command` provider. State equivalence is project-authored (§4).
+       `xcrun` is found on `PATH` or via `SERVO_DESIGN_EVAL_XCRUN_BIN`; the resolved
+       screenshot argv is the ledger `capture_command`; provenance is
+       `not_attested` (simctl has no attestation channel).
 
 3. **`capture-refs`** — `python3 design_eval.py capture-refs <target>` renders
    each `referenceSource` to its `reference` PNG (cropped). Eyeball them.
@@ -96,6 +149,7 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 | `fidelity_eval.py` | shared frozen-eval harness (hash/aggregate/ledger/splice), imported by `score.py` (ADR-0024) |
 | `capture.mjs` | Playwright: render references / screenshot the seeded app |
 | `capture_lib.mjs` | pure helpers imported by `capture.mjs`: clip geometry, flag/screen resolution, and the engine-attestation channel |
+| `pngcrop.py` | dependency-free stdlib PNG cropper, imported by `score.py` for the native providers' chrome-frame normalization (027-04) |
 | `setups/<id>.mjs` | per-screen deterministic state + navigation |
 | `refs/<id>.png` | frozen reference screenshots (chrome-cropped) |
 | `ledger.jsonl` | per-run sampled + aggregated scores + hashes, plus **per-screen provenance** (audit) |
@@ -124,6 +178,24 @@ echoed back as a mismatch canary; it is **not** independent evidence of what
 launched. Note it is also deliberately distinct from the row's top-level
 `transport`, which means the **judge** transport (`api`/`cli`) in every
 historical row.
+
+**Which capture provider ran.** The row also carries a top-level
+`capture_provider` — the provider selected for that run (`"web"` today; see the
+`capture.transport` selector above), or `null` on the fake-scores path where no
+capture ran. Keep the three transport-ish names straight: top-level `transport`
+is the **judge** transport (`api`/`cli`); top-level `capture_provider` is the
+**capture provider** (027-02); per-screen `capture_transport` is the browser
+transport that provider's process was instructed to use (026-03). All are
+advisory — none is hashed.
+
+**The shot that was judged.** Each per-screen entry also carries `shot`: a path,
+relative to the eval directory, to the exact PNG that screen was scored on — or
+`null` on the `not_captured` (fake-scores) path, where no browser ran. Shots are
+retained per run (`shots/app-<id>-<run_id>.png`), never clobbered, so a past
+row's `shot` still resolves: open it to see what the judge saw behind any score.
+Like the rest of this row it is observability, not a gate — nothing here is
+hashed. (`shots/` grows without bound today; a retention cap is a tracked
+follow-up in `docs/refinement-todo.md`.)
 
 ## Authoring tips
 

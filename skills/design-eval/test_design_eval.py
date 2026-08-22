@@ -2024,7 +2024,8 @@ class PngCropTests(unittest.TestCase):
         def chunk(t, b):
             return _s.pack(">I", len(b)) + t + b + _s.pack(">I", _z.crc32(t + b) & 0xFFFFFFFF)
 
-        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+                + chunk(b"IDAT", idat) + chunk(b"IEND", b""))
 
     def _pixels_of(self, png):
         import struct as _s
@@ -2200,11 +2201,11 @@ class CaptureAndroidProviderTests(unittest.TestCase):
                 os.environ["ANTHROPIC_API_KEY"] = "x"
                 orig = (score.subprocess.run, score.shutil.which)
 
-                def fake_run(*a, **k):
+                def fake_run(*a, _devices=devices, **k):  # bind loop var (ruff B023)
                     class _P:
                         returncode = 0
                         stdout = "List of devices attached\n" + "".join(
-                            f"{s}\tdevice\n" for s in devices)
+                            f"{s}\tdevice\n" for s in _devices)
                         stderr = ""
                     return _P()
 

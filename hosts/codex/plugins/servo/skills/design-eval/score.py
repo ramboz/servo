@@ -34,6 +34,10 @@ from pathlib import Path
 EXIT_OK = 0
 EXIT_ENV_ERROR = 2  # → oracle.sh treats rc=2 as a missing component → gate env_error
 _FAKE_SCORES_ENV = "SERVO_DESIGN_EVAL_FAKE_SCORES"  # test/offline hook (no API/browser)
+# 027-02: capture-provider selector (env overrides config, mirroring
+# SERVO_DESIGN_EVAL_CLAUDE_BIN). Environmental, never frozen (ADR-0031/0032 §6).
+_CAPTURE_TRANSPORT_ENV = "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT"
+_DEFAULT_CAPTURE_TRANSPORT = "web"
 
 # design-eval's case shape, passed to the shared module's generalized
 # definition_hash/artifact_hashes/validate_freeze (ADR-0024).
@@ -67,6 +71,35 @@ def _load_fidelity_eval():
         "fidelity_eval.py not found next to score.py nor at ../_common/fidelity_eval.py")
 
 
+_pc = None  # 027-04 PNG cropper — loaded LAZILY on first native-provider use (below)
+
+
+def _pngcrop():
+    """Lazily load + cache the sibling stdlib PNG cropper (027-04).
+
+    Loaded on demand — NOT at module import — because only the native (android/ios)
+    providers crop, so `score.py` must import and run the web/command/fake-scores
+    paths WITHOUT `pngcrop.py` present. (Regression fixed under 027-04 reopen: the
+    original module-load `_pc = _load_pngcrop()` crashed every import lacking the
+    sibling, breaking `_common/test_fidelity_eval.py::ImportResolutionTests`, which
+    copy score.py + fidelity_eval.py alone.) `design_eval.py::init()` vends
+    `pngcrop.py`, so it is a sibling in a real native install; a native run without
+    it fails closed to `EnvError`, not a bare ModuleNotFoundError traceback."""
+    global _pc
+    if _pc is None:
+        here = Path(__file__).resolve().parent
+        candidate = here / "pngcrop.py"
+        if not candidate.is_file():
+            raise EnvError(
+                "pngcrop.py not found next to score.py — the native capture providers "
+                "need it for chrome-frame cropping (vended by design_eval.py init()).")
+        spec = importlib.util.spec_from_file_location("pngcrop", candidate)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _pc = module
+    return _pc
+
+
 _fe = _load_fidelity_eval()
 
 EnvError = _fe.EnvError
@@ -74,6 +107,13 @@ StaleError = _fe.StaleError
 sha256_text = _fe.sha256_text
 salient_stderr = _fe.salient_stderr
 sha256_file = _fe.sha256_file
+
+# 027-04: blessed Android provider env overrides (mirror SERVO_DESIGN_EVAL_CLAUDE_BIN).
+_ADB_BIN_ENV = "SERVO_DESIGN_EVAL_ADB_BIN"
+_ANDROID_SERIAL_ENV = "SERVO_DESIGN_EVAL_ANDROID_SERIAL"
+# 027-05: blessed iOS provider env overrides.
+_XCRUN_BIN_ENV = "SERVO_DESIGN_EVAL_XCRUN_BIN"
+_IOS_UDID_ENV = "SERVO_DESIGN_EVAL_IOS_UDID"
 
 
 def definition_hash(config: dict) -> str:
@@ -158,29 +198,340 @@ def parse_attestation(stdout: str) -> dict | None:
     return None
 
 
-def capture_app(base_dir: Path, screen: dict) -> tuple[Path, dict | None]:
-    """Screenshot the app at the screen's seeded state; return (png, attestation).
+def _run_stamp() -> str:
+    """A per-run, filesystem-safe, human-sortable token for shot filenames.
 
-    026-03 AC2c: the attestation is RETURNED, never stashed in a module global —
-    a global would be last-write-wins across screens and silently re-create the
-    single-field collapse per-screen provenance exists to prevent.
+    027-01 AC1: shots must be RETAINED, not clobbered — so each run's screenshot
+    needs a unique name. Microsecond resolution makes two back-to-back `score()`
+    calls collide-free without a new import; shots are unfrozen outputs (027-01
+    DoR: no ADR, not part of the frozen definition), so a wall-clock stamp is
+    fine. Kept human-readable on purpose — the point of retention is that an
+    operator can open the exact image behind a low score.
     """
-    out = base_dir / "shots" / f"app-{screen['id']}.png"
+    t = time.time()
+    return time.strftime("%Y%m%dT%H%M%S", time.localtime(t)) + f"-{int((t % 1) * 1e6):06d}"
+
+
+def _shot_out_path(base_dir: Path, screen: dict, run_id: str | None) -> Path:
+    """The retained, stamped shot path for a screen (027-01): stays DIRECTLY under
+    ``shots/`` (path depth unchanged → preserves the `_judge_cli` cwd contract)."""
+    stamp = run_id or _run_stamp()
+    out = base_dir / "shots" / f"app-{screen['id']}-{stamp}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    cmd = ["node", str(base_dir / "capture.mjs"), "--screen", screen["id"], "--out", str(out)]
+    return out
+
+
+def _run_capture_subprocess(base_dir: Path, screen: dict, run_id: str | None,
+                            command_prefix: list, *, label: str) -> tuple[Path, dict | None]:
+    """Shared capture spawn for the subprocess-backed providers (web + command).
+
+    Runs ``[*command_prefix, "--screen", <id>, "--out", <shot_path>]`` from the
+    eval dir, consumes the PNG the command writes to ``--out``, and returns
+    ``(png, attestation)``. One contract, two providers — the only difference is
+    the leading argv (``node capture.mjs`` for web; the project command for the
+    escape hatch), so retention (027-01), the `_judge_cli` cwd contract, salient
+    stderr surfacing (026-01), and attestation parsing (026-03) are shared and
+    identical across providers.
+    """
+    out = _shot_out_path(base_dir, screen, run_id)
+    cmd = [*command_prefix, "--screen", screen["id"], "--out", str(out)]
     try:
         proc = subprocess.run(cmd, cwd=str(base_dir), capture_output=True, text=True, timeout=180)
     except FileNotFoundError as e:
-        raise EnvError(f"node/playwright unavailable for capture: {e}") from e
+        raise EnvError(f"{label} unavailable for capture: {e}") from e
     except subprocess.TimeoutExpired:
         raise EnvError(f"capture timed out for screen {screen['id']!r}") from None
     if proc.returncode != 0 or not out.is_file():
         # 026-01 AC4: salient-line surfacing, not a blind head slice. Applied to
-        # node-produced stderr ONLY (AC4a) — the judge path at _judge_cli keeps
+        # subprocess stderr ONLY (AC4a) — the judge path at _judge_cli keeps
         # `[:200]` deliberately, since these predicates parse node's grammar.
         raise EnvError(
             f"capture failed for screen {screen['id']!r}: {salient_stderr(proc.stderr)}")
     return out, parse_attestation(proc.stdout)
+
+
+def _capture_web(base_dir: Path, screen: dict, run_id: str | None = None,
+                 config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **web** capture provider (027-02): the original Playwright path, spawning
+    ``node capture.mjs``. `config` is accepted for the uniform provider signature
+    and ignored — web needs nothing from it.
+    """
+    return _run_capture_subprocess(
+        base_dir, screen, run_id,
+        ["node", str(base_dir / "capture.mjs")], label="node/playwright")
+
+
+def _capture_command(base_dir: Path, screen: dict, run_id: str | None = None,
+                     config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **custom-command** capture provider (027-03): the escape hatch for any
+    non-web stack. Runs the project's ``capture.command`` argv, appending
+    ``--screen <id> --out <path>``. The command owns state + framing (ADR-0032
+    §4/§5); servo passes only id + out and consumes the PNG. Failure fails closed
+    to `EnvError`. A command that emits no ``##servo-capture:`` line is honestly
+    recorded as `not_attested` (via the shared attestation parse).
+    """
+    command = _capture_command_argv(config or {})
+    return _run_capture_subprocess(
+        base_dir, screen, run_id, list(command), label="capture command")
+
+
+def _capture_command_argv(config: dict) -> list:
+    """The project's ``capture.command`` argv, validated. Missing / empty / non-list
+    fails **closed** to `EnvError` (→ rc 2) — never a silent fall-through."""
+    command = (config.get("capture") or {}).get("command")
+    if not command or not isinstance(command, list):
+        raise EnvError(
+            "capture.transport is 'command' but capture.command is missing or empty "
+            "(expected a non-empty argv list)")
+    return command
+
+
+# --------------------------------------------------------------------------- #
+# 027-04: blessed Android provider (adb screencap + deep-link seed + stdlib crop)
+# --------------------------------------------------------------------------- #
+
+def _resolve_adb() -> str:
+    """The ``adb`` path: explicit ``SERVO_DESIGN_EVAL_ADB_BIN`` override, else PATH.
+    Absent → fail closed (`EnvError`)."""
+    adb = os.environ.get(_ADB_BIN_ENV) or shutil.which("adb")
+    if not adb:
+        raise EnvError(
+            "`adb` not found — the Android capture provider needs the Android "
+            "platform-tools. Install them, or set SERVO_DESIGN_EVAL_ADB_BIN.")
+    return adb
+
+
+def _android_cfg(config: dict) -> dict:
+    return ((config or {}).get("capture") or {}).get("android") or {}
+
+
+def _resolve_android_serial(config: dict) -> str:
+    """Resolve a CONCRETE device serial, precedence: ``capture.android.serial`` →
+    ``SERVO_DESIGN_EVAL_ANDROID_SERIAL`` → the single connected device. No device,
+    or an ambiguous multi-device set with no serial, fails closed to `EnvError`."""
+    serial = _android_cfg(config).get("serial") or os.environ.get(_ANDROID_SERIAL_ENV)
+    if serial:
+        return serial
+    adb = _resolve_adb()
+    try:
+        proc = subprocess.run([adb, "devices"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise EnvError(f"`adb devices` failed: {e}") from e
+    # Lines after the header: "<serial>\t<state>"; count only ready devices.
+    devices = []
+    for line in (proc.stdout or "").splitlines()[1:]:
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            devices.append(parts[0])
+    if not devices:
+        raise EnvError(
+            "no Android device/emulator connected (`adb devices` shows none ready) "
+            "— boot one, or set capture.android.serial / SERVO_DESIGN_EVAL_ANDROID_SERIAL")
+    if len(devices) > 1:
+        raise EnvError(
+            f"multiple Android devices connected ({', '.join(devices)}); set "
+            "capture.android.serial or SERVO_DESIGN_EVAL_ANDROID_SERIAL to pick one")
+    return devices[0]
+
+
+def _android_screencap_argv(config: dict) -> list:
+    """The resolved screencap argv (device identity for the ledger). Also the
+    up-front fail-closed check: `adb` present + a concrete device resolvable."""
+    return [_resolve_adb(), "-s", _resolve_android_serial(config),
+            "exec-out", "screencap", "-p"]
+
+
+def _crop_insets(crop: dict | None, *, where: str = "crop") -> dict:
+    """Validate + coerce a ``{top,bottom,left,right}`` crop block to ints (shared by
+    the native providers). A non-integer inset fails closed to `EnvError`; ``where``
+    names the config path for a clear message (e.g. ``capture.android.crop``)."""
+    crop = crop or {}
+    insets = {}
+    for k in ("top", "bottom", "left", "right"):
+        v = crop.get(k, 0)
+        try:
+            insets[k] = int(v)
+        except (TypeError, ValueError) as e:
+            raise EnvError(f"{where}.{k} must be an integer, got {v!r}") from e
+    return insets
+
+
+def _capture_android(base_dir: Path, screen: dict, run_id: str | None = None,
+                     config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **Android** capture provider (027-04): `adb exec-out screencap` for
+    pixels, an optional per-screen deep-link seed, and a stdlib crop of the device
+    chrome to the reference frame. Any failure fails closed to `EnvError`. adb
+    emits no ``##servo-capture:`` line, so provenance is honestly `not_attested`.
+    """
+    config = config or {}
+    adb = _resolve_adb()
+    serial = _resolve_android_serial(config)
+    # Optional deep-link state seed (the common declarative case; complex flows
+    # use the `command` provider).
+    deeplink = screen.get("deeplink")
+    if deeplink:
+        try:
+            proc = subprocess.run(
+                [adb, "-s", serial, "shell", "am", "start", "-a",
+                 "android.intent.action.VIEW", "-d", deeplink],
+                capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise EnvError(f"adb deep-link failed for screen {screen['id']!r}: {e}") from e
+        if proc.returncode != 0:
+            raise EnvError(
+                f"adb deep-link failed for screen {screen['id']!r}: "
+                f"{salient_stderr(proc.stderr)}")
+        time.sleep(2)  # bounded settle before the shot
+    # Screencap (binary PNG on stdout → capture bytes, not text).
+    try:
+        proc = subprocess.run(
+            [adb, "-s", serial, "exec-out", "screencap", "-p"],
+            capture_output=True, timeout=180)
+    except FileNotFoundError as e:
+        raise EnvError(f"adb unavailable for capture: {e}") from e
+    except subprocess.TimeoutExpired:
+        raise EnvError(f"android screencap timed out for screen {screen['id']!r}") from None
+    if proc.returncode != 0 or not proc.stdout:
+        err = salient_stderr(proc.stderr.decode("utf-8", "replace") if proc.stderr else "")
+        raise EnvError(f"android screencap failed for screen {screen['id']!r}: {err}")
+    # Chrome-frame normalization (stdlib crop). An out-of-bounds crop fails closed.
+    pc = _pngcrop()
+    try:
+        cropped = pc.crop_png(
+            proc.stdout, **_crop_insets(_android_cfg(config).get("crop"),
+                                        where="capture.android.crop"))
+    except pc.PngCropError as e:
+        raise EnvError(f"android frame crop failed for screen {screen['id']!r}: {e}") from e
+    out = _shot_out_path(base_dir, screen, run_id)
+    out.write_bytes(cropped)
+    return out, None  # no attestation channel from adb → not_attested
+
+
+# --------------------------------------------------------------------------- #
+# 027-05: blessed iOS provider (xcrun simctl screenshot + openurl seed + crop)
+# --------------------------------------------------------------------------- #
+
+def _resolve_xcrun() -> str:
+    """The ``xcrun`` path: ``SERVO_DESIGN_EVAL_XCRUN_BIN`` override, else PATH.
+    Absent → fail closed (`EnvError`)."""
+    xcrun = os.environ.get(_XCRUN_BIN_ENV) or shutil.which("xcrun")
+    if not xcrun:
+        raise EnvError(
+            "`xcrun` not found — the iOS capture provider needs Xcode's command-line "
+            "tools (simctl). Install Xcode, or set SERVO_DESIGN_EVAL_XCRUN_BIN.")
+    return xcrun
+
+
+def _ios_cfg(config: dict) -> dict:
+    return ((config or {}).get("capture") or {}).get("ios") or {}
+
+
+def _resolve_ios_target(config: dict) -> str:
+    """The simulator target, precedence: ``capture.ios.udid`` →
+    ``SERVO_DESIGN_EVAL_IOS_UDID`` → the literal ``"booted"`` (simctl's
+    single-booted-device selector; simctl itself fails closed if none/ambiguous)."""
+    return _ios_cfg(config).get("udid") or os.environ.get(_IOS_UDID_ENV) or "booted"
+
+
+def _ios_screenshot_argv(config: dict) -> list:
+    """The resolved screenshot argv WITHOUT the per-screen out path (device
+    identity for the ledger). Also the up-front fail-closed check: `xcrun` present.
+    The per-screen call appends the shot path."""
+    return [_resolve_xcrun(), "simctl", "io", _resolve_ios_target(config), "screenshot"]
+
+
+def _capture_ios(base_dir: Path, screen: dict, run_id: str | None = None,
+                 config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **iOS** capture provider (027-05): `xcrun simctl io <target> screenshot`
+    writes a PNG to a FILE (unlike adb's stdout), an optional per-screen
+    `simctl openurl` seed, then the shared stdlib crop applied in place. Any
+    failure fails closed to `EnvError`. simctl emits no ``##servo-capture:`` line,
+    so provenance is honestly `not_attested`.
+    """
+    config = config or {}
+    xcrun = _resolve_xcrun()
+    target = _resolve_ios_target(config)
+    deeplink = screen.get("deeplink")
+    if deeplink:
+        try:
+            proc = subprocess.run([xcrun, "simctl", "openurl", target, deeplink],
+                                  capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise EnvError(f"simctl openurl failed for screen {screen['id']!r}: {e}") from e
+        if proc.returncode != 0:
+            raise EnvError(
+                f"simctl openurl failed for screen {screen['id']!r}: "
+                f"{salient_stderr(proc.stderr)}")
+        time.sleep(2)  # bounded settle before the shot
+    out = _shot_out_path(base_dir, screen, run_id)
+    try:
+        proc = subprocess.run([xcrun, "simctl", "io", target, "screenshot", str(out)],
+                              capture_output=True, text=True, timeout=180)
+    except FileNotFoundError as e:
+        raise EnvError(f"xcrun unavailable for capture: {e}") from e
+    except subprocess.TimeoutExpired:
+        raise EnvError(f"ios screenshot timed out for screen {screen['id']!r}") from None
+    if proc.returncode != 0:
+        raise EnvError(
+            f"ios screenshot failed for screen {screen['id']!r}: {salient_stderr(proc.stderr)}")
+    if not out.is_file():
+        # rc 0 but simctl wrote nothing — a distinct, cause-naming message (its
+        # stderr is empty here, so the generic "failed: <stderr>" would be blank).
+        raise EnvError(f"ios screenshot produced no output file for screen {screen['id']!r}")
+    # Chrome-frame normalization (stdlib crop, in place). Out-of-bounds fails closed.
+    pc = _pngcrop()
+    try:
+        cropped = pc.crop_png(out.read_bytes(),
+                              **_crop_insets(_ios_cfg(config).get("crop"),
+                                             where="capture.ios.crop"))
+    except pc.PngCropError as e:
+        raise EnvError(f"ios frame crop failed for screen {screen['id']!r}: {e}") from e
+    out.write_bytes(cropped)
+    return out, None  # no attestation channel from simctl → not_attested
+
+
+# 027-02: the capture-provider seam. Each provider is invoked per screen as
+# ``fn(base_dir, screen, run_id, config)`` and returns (png, attestation).
+# 027-03 adds `command`; 027-04 adds `android`; 027-05 adds `ios`, all without
+# touching the scoring path. Web is the default.
+_CAPTURE_PROVIDERS = {
+    "web": _capture_web,
+    "command": _capture_command,
+    "android": _capture_android,
+    "ios": _capture_ios,
+}
+
+
+def _resolve_capture_transport(config: dict) -> str:
+    """Which capture provider to use, by precedence: the
+    ``SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT`` env var, then ``config.capture.transport``,
+    then the ``"web"`` default. Name resolution only — validity is checked at
+    dispatch (`capture_app`) / run start (`score`), so an unknown name fails
+    closed rather than silently defaulting to web."""
+    return (
+        os.environ.get(_CAPTURE_TRANSPORT_ENV)
+        or (config.get("capture") or {}).get("transport")
+        or _DEFAULT_CAPTURE_TRANSPORT
+    )
+
+
+def capture_app(base_dir: Path, screen: dict, run_id: str | None = None,
+                provider: str = _DEFAULT_CAPTURE_TRANSPORT,
+                config: dict | None = None) -> tuple[Path, dict | None]:
+    """Screenshot the app at the screen's seeded state; return (png, attestation).
+
+    027-02: dispatches to the selected capture provider. `provider` defaults to
+    ``"web"`` so the standalone callers (and tests) that pass only
+    ``(base_dir, screen[, run_id])`` keep the original behaviour. An unknown
+    provider fails **closed** to `EnvError` (→ rc 2 env_error) — never a silent
+    fall-through to web. 027-03: `config` is threaded to providers that need it
+    (the command provider reads ``capture.command``); web ignores it.
+    """
+    fn = _CAPTURE_PROVIDERS.get(provider)
+    if fn is None:
+        known = ", ".join(sorted(_CAPTURE_PROVIDERS))
+        raise EnvError(f"unknown capture provider {provider!r} (known: {known})")
+    return fn(base_dir, screen, run_id, config)
 
 
 def judge(app_png: Path, ref_png: Path, config: dict) -> float:
@@ -317,6 +668,10 @@ def score(base_dir: Path) -> float:
     n = int(config["samples"]["n"])
     k = float(config["samples"].get("k", 1.0))
     fake = _fake_scores()
+    # 027-02: capture provider selected once per run (env > config > "web").
+    # None on the fake arm — no capture ran, so no provider is exercised.
+    provider = None
+    capture_command = None
     if fake is None:
         transport = (config.get("judge") or {}).get("transport", "api")
         if transport == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
@@ -324,10 +679,41 @@ def score(base_dir: Path) -> float:
         if transport == "cli" and not _resolve_claude():
             raise EnvError(
                 "`claude` CLI not found — set SERVO_DESIGN_EVAL_CLAUDE_BIN or add it to PATH")
-        # AC5: live-capture arm only, so the fake-scores path is unaffected.
-        # AC2: once per run, not per screen — no latch needed here.
-        preflight_capture(base_dir)
+        # 027-02 AC4: resolve + validate the provider up front, so an unknown one
+        # fails closed (env_error) BEFORE any preflight or capture — never a
+        # silent 0.0, never a fall-through to web.
+        provider = _resolve_capture_transport(config)
+        if provider not in _CAPTURE_PROVIDERS:
+            known = ", ".join(sorted(_CAPTURE_PROVIDERS))
+            raise EnvError(f"unknown capture provider {provider!r} (known: {known})")
+        # 027-03 AC3: for the command provider, validate `capture.command` up front
+        # (missing/empty → env_error before any capture), and capture its identity
+        # for the ledger (AC4).
+        if provider == "command":
+            capture_command = _capture_command_argv(config)
+        # 027-04 AC1/AC4: for android, resolve adb + a concrete device ONCE up front
+        # (absent/ambiguous → env_error before any capture). Pin the resolved serial
+        # into the in-memory config so the per-screen provider reuses it (no N+1
+        # `adb devices` queries) and record the screencap argv as the ledger identity.
+        elif provider == "android":
+            serial = _resolve_android_serial(config)
+            config.setdefault("capture", {}).setdefault("android", {})["serial"] = serial
+            capture_command = _android_screencap_argv(config)
+        # 027-05 AC1/AC4: for ios, validate xcrun up front and record the resolved
+        # screenshot argv as the ledger identity. (Device readiness is checked by
+        # simctl at capture time — the "booted" selector fails closed there.)
+        elif provider == "ios":
+            capture_command = _ios_screenshot_argv(config)
+        # 027-02: the node/Playwright preflight is the WEB provider's precheck;
+        # a non-web provider brings its own environment, so gate it to web.
+        # AC5 (027-01): live-capture arm only, so the fake-scores path is
+        # unaffected. AC2 (026-01): once per run, not per screen — no latch here.
+        if provider == "web":
+            preflight_capture(base_dir)
 
+    # 027-01 AC1: one stamp per run, shared across screens, so a run's shots
+    # group together and never clobber a prior run's.
+    run_id = _run_stamp()
     per_screen = []
     for screen in config["screens"]:
         if fake is not None:
@@ -335,19 +721,25 @@ def score(base_dir: Path) -> float:
                 raise EnvError(f"fake scores missing screen {screen['id']!r}")
             samples = [float(x) for x in fake[screen["id"]]]
             attestation = None   # no browser ran at all -> not_captured
+            shot = None          # 027-01 AC3: no browser ran -> no shot, honestly
         else:
-            app_png, attestation = capture_app(base_dir, screen)
+            app_png, attestation = capture_app(base_dir, screen, run_id, provider, config)
+            # 027-01 AC2: record the exact PNG this screen was judged on, as a
+            # path relative to base_dir (the ledger's own root).
+            shot = app_png.relative_to(base_dir).as_posix()
             ref_png = base_dir / screen["reference"]
             if not ref_png.is_file():
                 raise EnvError(f"reference missing: {screen['reference']}")
             samples = [judge(app_png, ref_png, config) for _ in range(n)]
-        per_screen.append((screen, samples, aggregate_lower_bound(samples, k), attestation))
+        per_screen.append(
+            (screen, samples, aggregate_lower_bound(samples, k), attestation, shot))
 
-    total_w = sum(float(s.get("weight", 1.0)) for s, _, _, _ in per_screen)
+    total_w = sum(float(s.get("weight", 1.0)) for s, _, _, _, _ in per_screen)
     if total_w <= 0:
         raise EnvError("total screen weight is zero")
-    composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a in per_screen) / total_w
-    _ledger(base_dir, config, per_screen, composite, fake_run=fake is not None)
+    composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a, _sh in per_screen) / total_w
+    _ledger(base_dir, config, per_screen, composite,
+            fake_run=fake is not None, provider=provider, capture_command=capture_command)
     return max(0.0, min(1.0, composite))
 
 
@@ -371,14 +763,21 @@ def _provenance(att, *, fake_run: bool) -> dict:
 
 
 def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
-            *, fake_run: bool) -> None:
+            *, fake_run: bool, provider: str | None, capture_command: list | None) -> None:
     # `fake_run` is keyword-only and REQUIRED on purpose: a default would let a
     # future caller silently get `not_attested` on a synthetic run — the same
-    # class of error as deriving it from `att`, which this replaced.
+    # class of error as deriving it from `att`, which this replaced. `provider`
+    # and `capture_command` are likewise required keyword-only (027-02/03).
     record = {
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
+        # 027-02 AC5: which capture provider produced this run's shots — advisory,
+        # never hashed (ADR-0032 §6). `null` on the fake arm (no capture ran).
+        "capture_provider": provider,
+        # 027-03 AC4: the resolved custom-command argv (identity), for the command
+        # provider only; `null` otherwise. Advisory, never hashed.
+        "capture_command": capture_command,
         "composite": round(composite, 4),
         "definition_hash": config.get("approved_content_hash"),
         # 026-03 AC2/AC2a: provenance is PER SCREEN (capture_app runs once per
@@ -390,9 +789,12 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
                 "id": s["id"],
                 "samples": [round(x, 4) for x in samp],
                 "lower_bound": round(lb, 4),
+                # 027-01 AC2/AC3: the exact shot this screen was judged on
+                # (relative to base_dir), or null when no browser ran.
+                "shot": shot,
                 **_provenance(att, fake_run=fake_run),
             }
-            for s, samp, lb, att in per_screen
+            for s, samp, lb, att, shot in per_screen
         ],
     }
     _fe.write_ledger(base_dir, record)
