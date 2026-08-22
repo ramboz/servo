@@ -1001,3 +1001,31 @@ so neither re-freezes.
 
 **Surfaced by:** slice 027-04 (spec `Deferred (candidate for refinement-todo)`
 note; independent review confirmed both as disclosed follow-ups).
+
+---
+
+## design-eval iOS provider has no live-simulator end-to-end smoke
+
+**Deferred:** The blessed iOS provider (027-05,
+`skills/design-eval/score.py::_capture_ios`) is validated only at the
+committed-CI bar — stubbed `xcrun simctl` + the synthetic real-encoder PNG
+fixture, with the crop itself pixel-exact-tested by 027-04's `PngCropTests`. It
+was **not** smoke-validated end-to-end against a real booted simulator, because
+the authoring machine had **Command Line Tools only — no full Xcode, no
+`simctl`** (probed 2026-08-21: `xcrun --find simctl` → not found). The Android
+sibling (027-04) *was* live-validated against a real emulator, so this is the one
+provider whose real-device path is unproven. This was a disclosed, human-approved
+trade-off at pickup, not a hidden gap.
+
+**Resolution trigger:** first time 027-05 runs on a machine with full Xcode + an
+iOS runtime (a maintainer's Mac, or CI with Xcode). Boot a simulator, point a
+`capture.transport: "ios"` eval at it, and confirm end-to-end: `simctl io …
+screenshot` → crop by insets → a valid framed PNG, ledger `capture_provider:
+"ios"` + resolved `capture_command`, `not_attested` provenance, retained cropped
+shot — mirroring 027-04's recorded emulator smoke. If the real `simctl` output
+differs from the stub assumptions (e.g. a different screenshot dimension or a
+target-selector quirk), amend the provider + a deviation note.
+
+**Surfaced by:** slice 027-05 (spec DoR environment limitation + DoD-required
+follow-up; independent review PASS confirmed the deferral is disclosed and the
+stub-level tests are sound).
