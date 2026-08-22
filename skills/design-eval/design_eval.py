@@ -83,6 +83,7 @@ def init(target: Path) -> Path:
     for runtime, src_dir in (
         ("score.py", SKILL_DIR), ("capture.mjs", SKILL_DIR),
         ("capture_lib.mjs", SKILL_DIR), ("fidelity_eval.py", COMMON_DIR),
+        ("pngcrop.py", SKILL_DIR),  # 027-04: sibling stdlib PNG cropper for native providers
     ):
         src = src_dir / runtime
         if src.is_file():

@@ -926,3 +926,106 @@ names against `score.py`'s `_provenance`, in the section-scoped style
 `test_skill_surface.py` already uses.
 
 **Surfaced by:** spec 026-03 reconciliation review (2026-08-19).
+
+---
+
+## design-eval retains every run's app shots with no disk-growth cap
+
+**Deferred:** Slice 027-01 changed app-screenshot capture from clobber-on-each-run
+(`shots/app-<id>.png`) to retain-each-run (`shots/app-<id>-<run_id>.png`) so a
+past score's exact image stays inspectable via the new ledger `shot` field. That
+retention is deliberately unbounded: nothing prunes `<base_dir>/shots/`, so a
+target scored repeatedly — especially inside an agent loop that re-scores every
+iteration — accumulates one PNG per screen per run without limit. This is the
+inverse trade-off of the old clobber behaviour (which never grew but destroyed
+history); v1 keeps everything on purpose, because the whole point of the slice is
+that history survives.
+
+**Resolution trigger:** first target where `shots/` growth becomes a disk or
+clutter problem, OR the next design-eval slice that touches capture/retention
+(027-02..05 add capture providers — a natural place to add the knob). Options to
+weigh: keep-last-N per screen, keep-milestones (only runs whose composite crossed
+a threshold), or an age bound; plus a `--prune`/`gc` affordance. Git handling
+(track the ledger scores, keep raw shots local) is tracked separately under
+GitHub #29's shared-plumbing.
+
+**Surfaced by:** slice 027-01 (spec `Deferred (candidate for refinement-todo)`
+note; DoD-required follow-up).
+
+---
+
+## design-eval capture timeout is a fixed 180s shared across all providers
+
+**Deferred:** The subprocess-backed capture providers (web + custom-command,
+`skills/design-eval/score.py::_run_capture_subprocess`) share a hardcoded 180s
+`subprocess.run` timeout, inherited unchanged from the original web path. A
+custom-command provider (027-03) that drives a slow native emulator/device
+(`adb`/`simctl` boot + screencap) or a heavy build harness can legitimately
+exceed 180s, and today the only outcome is a fail-closed `env_error` timeout —
+there is no way to raise the ceiling per provider or per project.
+
+**Resolution trigger:** first real native/command target that hits the 180s
+ceiling on a legitimate slow capture. Fix options: a `capture.timeout` config
+field (environmental, not frozen — same class as `capture.transport`/`capture.command`),
+and/or a `SERVO_DESIGN_EVAL_CAPTURE_TIMEOUT` env override, threaded into
+`_run_capture_subprocess`. Keep the default at 180s so web is unchanged; add a
+test that a custom timeout is honored.
+
+**Surfaced by:** slice 027-03 (spec `Deferred (candidate for refinement-todo)`
+note; independent review flagged the inherited timeout as a disclosed follow-up).
+
+---
+
+## design-eval Android provider uses configured crop insets + a fixed settle delay
+
+**Deferred:** The blessed Android provider (027-04,
+`skills/design-eval/score.py::_capture_android`) strips device chrome by
+**configured** pixel insets (`capture.android.crop.{top,bottom,left,right}`) and
+waits a **hardcoded 2s** after a deep link before screencap. Two follow-ups:
+
+1. **Auto-detect insets.** The status/navigation-bar heights are queryable at
+   runtime (`adb shell dumpsys window` / window insets), so the provider could
+   auto-crop instead of requiring hand-measured pixels — removing a per-device
+   calibration step. Deferred because the query surface varies by Android version
+   and configured insets are deterministic and testable; auto-detect is an
+   ergonomic upgrade, not a correctness fix.
+2. **Configurable settle delay.** The 2s post-deep-link wait
+   (`score.py`, `_capture_android`) is a guess; a slow app may need more, a fast
+   one less. A `capture.android.settle_ms` knob would let a project tune it.
+
+**Resolution trigger:** (1) first Android target where hand-measured insets are a
+real friction, or a device whose bars differ enough that a fixed inset mis-frames;
+(2) first target where 2s is wrong (a flaky capture that a longer wait fixes, or a
+suite slowed by an over-long wait). Both are environmental (`capture.android`),
+so neither re-freezes.
+
+**Surfaced by:** slice 027-04 (spec `Deferred (candidate for refinement-todo)`
+note; independent review confirmed both as disclosed follow-ups).
+
+---
+
+## design-eval iOS provider has no live-simulator end-to-end smoke
+
+**Deferred:** The blessed iOS provider (027-05,
+`skills/design-eval/score.py::_capture_ios`) is validated only at the
+committed-CI bar — stubbed `xcrun simctl` + the synthetic real-encoder PNG
+fixture, with the crop itself pixel-exact-tested by 027-04's `PngCropTests`. It
+was **not** smoke-validated end-to-end against a real booted simulator, because
+the authoring machine had **Command Line Tools only — no full Xcode, no
+`simctl`** (probed 2026-08-21: `xcrun --find simctl` → not found). The Android
+sibling (027-04) *was* live-validated against a real emulator, so this is the one
+provider whose real-device path is unproven. This was a disclosed, human-approved
+trade-off at pickup, not a hidden gap.
+
+**Resolution trigger:** first time 027-05 runs on a machine with full Xcode + an
+iOS runtime (a maintainer's Mac, or CI with Xcode). Boot a simulator, point a
+`capture.transport: "ios"` eval at it, and confirm end-to-end: `simctl io …
+screenshot` → crop by insets → a valid framed PNG, ledger `capture_provider:
+"ios"` + resolved `capture_command`, `not_attested` provenance, retained cropped
+shot — mirroring 027-04's recorded emulator smoke. If the real `simctl` output
+differs from the stub assumptions (e.g. a different screenshot dimension or a
+target-selector quirk), amend the provider + a deviation note.
+
+**Surfaced by:** slice 027-05 (spec DoR environment limitation + DoD-required
+follow-up; independent review PASS confirmed the deferral is disclosed and the
+stub-level tests are sound).

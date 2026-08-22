@@ -1280,8 +1280,14 @@ class CaptureLibNodeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "node not on PATH (CI is pytest-only)")
     def test_capture_lib_node_suite_passes(self):
+        # Pin the TAP reporter explicitly: Node's DEFAULT `--test` reporter changed
+        # across versions (TAP `# fail 0` on older Node; the "spec" reporter
+        # `ℹ fail 0` on Node ≥ ~20 when stdout is non-TTY), so asserting on the
+        # default output is version-brittle. `--test-reporter=tap` makes the summary
+        # lines deterministic (`# pass N` / `# fail 0`) on every Node that ships the
+        # built-in runner.
         res = subprocess.run(
-            ["node", "--test", str(self.NODE_TEST)],
+            ["node", "--test", "--test-reporter=tap", str(self.NODE_TEST)],
             capture_output=True, text=True)
         self.assertEqual(
             res.returncode, 0,
@@ -1445,11 +1451,1074 @@ def _capture_main(eval_dir: Path):
     if not (eval_dir / "fidelity_eval.py").is_file():
         shutil.copyfile(HERE.parent / "_common" / "fidelity_eval.py",
                         eval_dir / "fidelity_eval.py")
+    if not (eval_dir / "pngcrop.py").is_file():  # 027-04 sibling stdlib cropper
+        shutil.copyfile(HERE / "pngcrop.py", eval_dir / "pngcrop.py")
     mod = _load("design_eval_score_run", str(eval_dir / "score.py"))
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = mod.main([])
     return rc, out.getvalue(), err.getvalue()
+
+
+class ShotRetentionTests(unittest.TestCase):
+    """Slice 027-01: each run's app screenshots must be KEPT (never clobbered by
+    the next run) and pointed at from the ledger row, so a low score is
+    inspectable instead of a number to trust. Applies to every capture mode."""
+
+    def _run_once(self, d):
+        """Drive one LIVE-capture `score.score()` with a stubbed capture.mjs that
+        writes a PNG to whatever `--out` path capture_app chose. Returns the last
+        ledger row."""
+        class _P:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        def fake_run(*a, **k):
+            argv = a[0]
+            if "--out" not in argv:            # the preflight probe, not capture
+                _P.stdout = ""
+                return _P()
+            out = Path(argv[argv.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x89PNG")
+            _P.stdout = ('##servo-capture:{"engine":"chromium","version":"131.0",'
+                         '"transport":"bundled","error":null}')
+            return _P()
+
+        orig_run, orig_which, orig_judge = (
+            score.subprocess.run, score.shutil.which, score.judge)
+        score.subprocess.run = fake_run
+        score.shutil.which = lambda n: "/usr/bin/node"
+        score.judge = lambda *a, **k: 0.9
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            rows = (d / "ledger.jsonl").read_text().strip().splitlines()
+            return json.loads(rows[-1])
+        finally:
+            score.subprocess.run, score.shutil.which, score.judge = (
+                orig_run, orig_which, orig_judge)
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    def test_shots_are_not_clobbered_across_runs(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            self._run_once(d)
+            self._run_once(d)
+            homes = sorted((d / "shots").glob("app-home*.png"))
+            self.assertGreaterEqual(
+                len(homes), 2,
+                f"two runs must retain two distinct home shots, not overwrite one; "
+                f"found {[p.name for p in homes]}")
+
+    def test_shots_stay_one_dir_under_base_for_the_cli_judge_cwd(self):
+        # _judge_cli cwd's to app_png.parent.parent (score.py:222); retention must
+        # not deepen the path or the CLI judge's Read sandbox breaks.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            row = self._run_once(d)
+            for s in row["screens"]:
+                self.assertEqual(
+                    (d / s["shot"]).parent, d / "shots",
+                    f"shot must live directly in shots/, got {s['shot']!r}")
+
+    def test_ledger_row_points_at_an_existing_shot_per_screen(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            row = self._run_once(d)
+            for s in row["screens"]:
+                self.assertIn("shot", s,
+                              "each scored screen must record the shot it was judged on")
+                self.assertTrue(s["shot"], "a live-captured screen's shot path must be non-empty")
+                self.assertTrue(
+                    (d / s["shot"]).is_file(),
+                    f"the ledger shot path must resolve to a real file: {s['shot']!r}")
+
+    def test_fake_scores_run_records_no_shot(self):
+        """No browser ran → no shot to point at. The field is present but null,
+        mirroring the `not_captured` provenance token (honest, not misleading)."""
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9, 0.9, 0.9, 0.9], "settings": [0.9, 0.9, 0.9, 0.9]})
+            try:
+                score.score(d)
+                row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            finally:
+                os.environ.pop(score._FAKE_SCORES_ENV, None)
+            for s in row["screens"]:
+                self.assertIn("shot", s)
+                self.assertIsNone(s["shot"])
+
+
+class CaptureProviderSeamTests(unittest.TestCase):
+    """Slice 027-02: capture is selected by `capture.transport` (env > config >
+    'web' default) and dispatched through a provider seam. The existing Playwright
+    path is the default **web** provider (behavior-preserving); the chosen provider
+    is recorded in the ledger (advisory, unfrozen); an unknown provider fails closed
+    to env_error (rc 2), never a silent 0.0 and never a fall-through to web."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+        os.environ.pop("SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT", None)
+
+    def _live_run(self, d):
+        """Drive one LIVE-capture `score.score()` with a stubbed capture.mjs.
+        Returns (last ledger row, the capture.mjs argv that was spawned)."""
+        seen = {"argv": None}
+
+        class _P:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        def fake_run(*a, **k):
+            argv = a[0]
+            if "--out" not in argv:            # preflight probe, not capture
+                _P.stdout = ""
+                return _P()
+            seen["argv"] = list(argv)
+            out = Path(argv[argv.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x89PNG")
+            _P.stdout = ('##servo-capture:{"engine":"chromium","version":"131.0",'
+                         '"transport":"bundled","error":null}')
+            return _P()
+
+        orig = (score.subprocess.run, score.shutil.which, score.judge)
+        score.subprocess.run = fake_run
+        score.shutil.which = lambda n: "/usr/bin/node"
+        score.judge = lambda *a, **k: 0.9
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            return row, seen["argv"]
+        finally:
+            score.subprocess.run, score.shutil.which, score.judge = orig
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC1: absent config → the exact web Playwright spawn, unchanged ----------
+    def test_absent_capture_config_uses_web_spawn(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            row, argv = self._live_run(d)
+            self.assertIsNotNone(argv, "the web provider must spawn node capture.mjs")
+            self.assertEqual(argv[0], "node")
+            self.assertTrue(any("capture.mjs" in a for a in argv),
+                            f"expected the capture.mjs spawn, got {argv!r}")
+            self.assertEqual(row["capture_provider"], "web")
+
+    # -- AC2: explicit web behaves identically -----------------------------------
+    def test_explicit_web_transport_matches_absent(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            cfg = _base_config()
+            cfg["capture"] = {"transport": "web"}
+            d = _make_eval_dir(tmp, cfg)
+            de.freeze(tmp)
+            row, argv = self._live_run(d)
+            self.assertEqual(argv[0], "node")
+            self.assertEqual(row["capture_provider"], "web")
+
+    # -- AC3: env > config > 'web' resolution precedence -------------------------
+    def test_transport_resolution_precedence(self):
+        self.assertEqual(score._resolve_capture_transport({}), "web")
+        self.assertEqual(
+            score._resolve_capture_transport({"capture": {"transport": "web"}}), "web")
+        os.environ["SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT"] = "custom-provider"
+        self.assertEqual(
+            score._resolve_capture_transport({"capture": {"transport": "web"}}),
+            "custom-provider", "env var must override config.capture.transport")
+
+    # -- AC4: unknown provider fails closed to env_error, before any capture -----
+    def test_unknown_provider_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            cfg = _base_config()
+            cfg["capture"] = {"transport": "banana"}
+            d = _make_eval_dir(tmp, cfg)
+            de.freeze(tmp)
+            called = {"capture": False}
+
+            def boom(*a, **k):
+                if "--out" in (a[0] if a else []):
+                    called["capture"] = True
+                raise AssertionError("capture must not run for an unknown provider")
+
+            orig = score.subprocess.run
+            score.subprocess.run = boom
+            os.environ["ANTHROPIC_API_KEY"] = "x"
+            try:
+                rc, out, err = _capture_main(d)
+            finally:
+                score.subprocess.run = orig
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.assertEqual(rc, score.EXIT_ENV_ERROR)
+            self.assertEqual(out.strip(), "")          # never a 0.0
+            self.assertIn("env_error", err)
+            self.assertIn("banana", err)               # names the unknown provider
+            self.assertFalse(called["capture"])        # failed before capturing
+
+    # -- AC5: fake-scores arm records a null provider (no capture ran) -----------
+    def test_fake_scores_run_records_null_provider(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9, 0.9, 0.9, 0.9], "settings": [0.9, 0.9, 0.9, 0.9]})
+            try:
+                score.score(d)
+                row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            finally:
+                os.environ.pop(score._FAKE_SCORES_ENV, None)
+            self.assertIn("capture_provider", row)
+            self.assertIsNone(row["capture_provider"])
+
+    # -- AC6: a `capture` block is environmental, never in the definition hash ---
+    def test_capture_block_not_in_definition_hash(self):
+        base = _base_config()
+        withcap = {**_base_config(), "capture": {"transport": "web"}}
+        self.assertEqual(
+            score.definition_hash(base), score.definition_hash(withcap),
+            "capture.transport must not enter definition_hash (ADR-0032 §6)")
+
+    def test_adding_capture_block_does_not_stale_a_frozen_eval(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            config = json.loads((d / "config.json").read_text())
+            config["capture"] = {"transport": "web"}
+            score.validate_freeze(config, d)  # must not raise StaleError
+
+
+class CaptureCommandProviderTests(unittest.TestCase):
+    """Slice 027-03: the custom-command capture provider (escape hatch). A project
+    command is invoked per screen as `<argv…> --screen <id> --out <path>`, owns
+    state + framing, fails closed to env_error, and has its identity recorded in
+    the ledger (unfrozen). Web path stays unchanged."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+        os.environ.pop("SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT", None)
+
+    def _cfg(self, command):
+        cfg = _base_config()
+        cfg["capture"] = {"transport": "command", "command": command}
+        return cfg
+
+    def _live_run(self, d, *, emit_attestation=False):
+        """Drive one LIVE-capture `score.score()` with a stubbed capture command.
+        Records EVERY spawned argv. Returns (last ledger row, [argv, …])."""
+        calls = []
+
+        class _P:
+            returncode = 0
+            stderr = ""
+            stdout = ""
+
+        def fake_run(*a, **k):
+            argv = list(a[0])
+            calls.append(argv)
+            if "--out" not in argv:            # a preflight probe (web only)
+                _P.stdout = ""
+                return _P()
+            out = Path(argv[argv.index("--out") + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x89PNG")
+            _P.stdout = ('##servo-capture:{"engine":"chromium","version":"1","'
+                         'transport":"bundled","error":null}') if emit_attestation else ""
+            return _P()
+
+        orig = (score.subprocess.run, score.shutil.which, score.judge)
+        score.subprocess.run = fake_run
+        score.shutil.which = lambda n: "/usr/bin/node"
+        score.judge = lambda *a, **k: 0.9
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            return row, calls
+        finally:
+            score.subprocess.run, score.shutil.which, score.judge = orig
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC1: invoked per screen as `<argv> --screen <id> --out <path>` ----------
+    def test_command_spawn_shape(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["mytool", "--flag"]))
+            de.freeze(tmp)
+            row, calls = self._live_run(d)
+            capture_calls = [c for c in calls if "--out" in c]
+            self.assertTrue(capture_calls, "the command provider must spawn per screen")
+            for argv in capture_calls:
+                # exact ordered contract: <project argv…> --screen <id> --out <path>
+                self.assertEqual(argv[:2], ["mytool", "--flag"],
+                                 f"project command must lead the argv, got {argv!r}")
+                self.assertEqual(argv[-4], "--screen", f"flag order wrong: {argv!r}")
+                self.assertIn(argv[-3], {"home", "settings"})
+                self.assertEqual(argv[-2], "--out", f"flag order wrong: {argv!r}")
+                self.assertTrue(argv[-1].endswith(".png"))
+            # shot retained + ledger-linked exactly like web (027-01 plumbing)
+            for s in row["screens"]:
+                self.assertTrue((d / s["shot"]).is_file())
+
+    # -- AC2: command owns state/framing; servo runs no playwright / no crop -----
+    def test_command_provider_never_spawns_web_capture(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["mytool"]))
+            de.freeze(tmp)
+            _, calls = self._live_run(d)
+            self.assertFalse(
+                any(any("capture.mjs" in a for a in argv) for argv in calls),
+                "the command provider must not run the web capture.mjs / preflight")
+
+    # -- AC3: fail closed — missing/empty command, before any capture ------------
+    def test_missing_command_fails_closed_before_capture(self):
+        # Drive score.score() directly (not _capture_main, which loads a fresh
+        # score.py copy the monkeypatch would never reach) so the "no capture"
+        # guard is LIVE: boom fires if any subprocess is spawned.
+        for command in (None, []):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as t:
+                tmp = Path(t)
+                cfg = _base_config()
+                cfg["capture"] = {"transport": "command"}
+                if command is not None:
+                    cfg["capture"]["command"] = command
+                d = _make_eval_dir(tmp, cfg)
+                de.freeze(tmp)
+
+                def boom(*a, **k):
+                    raise AssertionError("must not capture when command is missing/empty")
+
+                orig = score.subprocess.run
+                score.subprocess.run = boom
+                os.environ["ANTHROPIC_API_KEY"] = "x"
+                try:
+                    with self.assertRaises(score.EnvError) as cm:
+                        score.score(d)          # boom would fire before this raised
+                    self.assertIn("command", str(cm.exception))
+                finally:
+                    score.subprocess.run = orig
+                    os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC3: the same failure surfaces as rc 2 env_error through main() ---------
+    def test_missing_command_env_errors_through_main(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            cfg = _base_config()
+            cfg["capture"] = {"transport": "command"}  # no command
+            d = _make_eval_dir(tmp, cfg)
+            de.freeze(tmp)
+            os.environ["ANTHROPIC_API_KEY"] = "x"
+            try:
+                rc, out, err = _capture_main(d)
+            finally:
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+            self.assertEqual(rc, score.EXIT_ENV_ERROR)
+            self.assertEqual(out.strip(), "")       # never a 0.0
+            self.assertIn("env_error", err)
+            self.assertIn("command", err)
+
+    # -- AC3: fail closed — a command that exits non-zero / writes no PNG --------
+    def test_command_nonzero_exit_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["broken-tool"]))
+            de.freeze(tmp)
+
+            class _P:
+                returncode = 3
+                stderr = "device offline"
+                stdout = ""
+
+            orig = (score.subprocess.run, score.judge)
+            score.subprocess.run = lambda *a, **k: _P()
+            score.judge = lambda *a, **k: 0.9
+            os.environ["ANTHROPIC_API_KEY"] = "x"
+            try:
+                with self.assertRaises(score.EnvError) as cm:
+                    score.score(d)
+                self.assertIn("capture failed", str(cm.exception))
+            finally:
+                score.subprocess.run, score.judge = orig
+                os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC4: command identity in the ledger, unfrozen ---------------------------
+    def test_ledger_records_command_identity(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["mytool", "--flag"]))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            self.assertEqual(row["capture_provider"], "command")
+            self.assertEqual(row["capture_command"], ["mytool", "--flag"])
+
+    def test_capture_command_not_in_definition_hash(self):
+        base = _base_config()
+        withcmd = {**_base_config(),
+                   "capture": {"transport": "command", "command": ["x", "-y"]}}
+        self.assertEqual(score.definition_hash(base), score.definition_hash(withcmd))
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            config = json.loads((d / "config.json").read_text())
+            config["capture"] = {"transport": "command", "command": ["x"]}
+            score.validate_freeze(config, d)  # must not raise
+
+    # -- AC5: an unattested command records not_attested, never a fake engine ----
+    def test_unattested_command_records_not_attested(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(["mytool"]))
+            de.freeze(tmp)
+            row, _ = self._live_run(d, emit_attestation=False)
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "not_attested")
+                self.assertIsNone(s["engine"])
+
+    # -- AC6: web path unchanged — capture_command null on a web run -------------
+    def test_web_run_records_null_capture_command(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)  # no capture block → web default
+            de.freeze(tmp)
+            row, calls = self._live_run(d, emit_attestation=True)
+            self.assertEqual(row["capture_provider"], "web")
+            self.assertIsNone(row["capture_command"])
+            self.assertTrue(any(any("capture.mjs" in a for a in argv) for argv in calls))
+
+
+pngcrop = _load("design_eval_pngcrop", "pngcrop.py")
+# A small RGBA PNG encoded by an INDEPENDENT encoder (macOS `sips`), so it uses
+# real adaptive per-scanline filters (Sub/Paeth here) — exercising the cropper's
+# un-filter code paths, not just this module's own filter-0 output. Synthetic
+# gradient content (no third-party imagery). The live real-emulator screencap→
+# crop path is validated separately and recorded in the slice's deviation log.
+_ANDROID_FIXTURE = HERE / "testdata" / "rgba_filter_sample.png"
+
+
+class PngCropTests(unittest.TestCase):
+    """Slice 027-04: the stdlib PNG cropper, validated against a real-encoder PNG
+    fixture (independent encoder → real per-scanline filter types, not just this
+    module's own filter-0 output)."""
+
+    def _raw(self):
+        return _ANDROID_FIXTURE.read_bytes()
+
+    def test_roundtrip_preserves_dimensions_and_pixels(self):
+        raw = self._raw()
+        w, h = pngcrop.png_dimensions(raw)
+        rt = pngcrop.crop_png(raw)  # zero insets
+        self.assertEqual(pngcrop.png_dimensions(rt), (w, h))
+
+    def test_real_crop_reduces_dimensions(self):
+        raw = self._raw()
+        w, h = pngcrop.png_dimensions(raw)
+        c = pngcrop.crop_png(raw, top=10, bottom=8, left=4, right=6)
+        self.assertEqual(pngcrop.png_dimensions(c), (w - 10, h - 18))
+        # the result must be a real, re-decodable PNG (not garbage bytes)
+        pngcrop.crop_png(c)  # re-decode via a second crop; raises if invalid
+
+    def test_out_of_bounds_crop_raises(self):
+        raw = self._raw()
+        w, h = pngcrop.png_dimensions(raw)
+        with self.assertRaises(pngcrop.PngCropError):
+            pngcrop.crop_png(raw, top=h, bottom=1)
+
+    def test_negative_inset_raises(self):
+        with self.assertRaises(pngcrop.PngCropError):
+            pngcrop.crop_png(self._raw(), left=-1)
+
+    def test_unsupported_png_raises(self):
+        # A hand-built IHDR claiming interlaced → must refuse, not mis-decode.
+        import struct as _s
+        import zlib as _z
+        sig = b"\x89PNG\r\n\x1a\n"
+        ihdr = _s.pack(">IIBBBBB", 4, 4, 8, 6, 0, 0, 1)  # interlace=1
+
+        def chunk(t, b):
+            return _s.pack(">I", len(b)) + t + b + _s.pack(">I", _z.crc32(t + b) & 0xFFFFFFFF)
+
+        blob = sig + chunk(b"IHDR", ihdr) + chunk(b"IEND", b"")
+        with self.assertRaises(pngcrop.PngCropError):
+            pngcrop.crop_png(blob)
+
+    def test_corrupt_idat_raises_pngcroperror(self):
+        # A truncated/garbage IDAT (a plausible screencap transport hiccup) must
+        # stay inside the PngCropError contract, not escape as a raw zlib.error —
+        # so the native providers fail closed to env_error (review 027-04).
+        import struct as _s
+        import zlib as _z
+        sig = b"\x89PNG\r\n\x1a\n"
+        ihdr = _s.pack(">IIBBBBB", 4, 4, 8, 6, 0, 0, 0)
+
+        def chunk(t, b):
+            return _s.pack(">I", len(b)) + t + b + _s.pack(">I", _z.crc32(t + b) & 0xFFFFFFFF)
+
+        blob = sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", b"not zlib") + chunk(b"IEND", b"")
+        with self.assertRaises(pngcrop.PngCropError):
+            pngcrop.crop_png(blob)
+
+    # -- Per-filter pixel-exact decode: prove EVERY un-filter branch (0-4) ------
+    @staticmethod
+    def _encode_with_filter(pixels, w, h, bpp, ftype):
+        """Forward-filter a known RGBA image with ONE chosen PNG filter type, so
+        decoding must exercise exactly that un-filter branch. Deterministic, no
+        external tool — the strongest per-branch codec proof."""
+        import struct as _s
+        import zlib as _z
+        stride = w * bpp
+        raw = bytearray()
+        prev = bytearray(stride)
+        for y in range(h):
+            line = bytearray(pixels[y * stride:(y + 1) * stride])
+            out = bytearray(stride)
+            for i in range(stride):
+                a = line[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                if ftype == 0:
+                    out[i] = line[i]
+                elif ftype == 1:
+                    out[i] = (line[i] - a) & 0xFF
+                elif ftype == 2:
+                    out[i] = (line[i] - b) & 0xFF
+                elif ftype == 3:
+                    out[i] = (line[i] - ((a + b) >> 1)) & 0xFF
+                elif ftype == 4:
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                    out[i] = (line[i] - pr) & 0xFF
+            raw.append(ftype)
+            raw.extend(out)
+            prev = line
+        idat = _z.compress(bytes(raw))
+        ihdr = _s.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
+
+        def chunk(t, b):
+            return _s.pack(">I", len(b)) + t + b + _s.pack(">I", _z.crc32(t + b) & 0xFFFFFFFF)
+
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+
+    def _pixels_of(self, png):
+        import struct as _s
+        import zlib as _z
+        ihdr = None
+        idat = bytearray()
+        for ct, b in pngcrop._iter_chunks(png):
+            if ct == b"IHDR":
+                ihdr = b
+            elif ct == b"IDAT":
+                idat.extend(b)
+            elif ct == b"IEND":
+                break
+        w, h, bd, cty, _, _, _ = _s.unpack(">IIBBBBB", ihdr)
+        return pngcrop._unfilter(_z.decompress(bytes(idat)), w, h, pngcrop._CHANNELS[cty])
+
+    def test_each_filter_type_decodes_pixel_exact(self):
+        w, h, bpp = 5, 4, 4
+        # a non-trivial known RGBA image (varied so filters actually differ)
+        pixels = bytes(((x * 37 + y * 11 + ch * 5) & 0xFF)
+                       for y in range(h) for x in range(w) for ch in range(bpp))
+        for ftype in range(5):
+            with self.subTest(filter=ftype):
+                png = self._encode_with_filter(pixels, w, h, bpp, ftype)
+                # crop 0 → must reproduce the exact original pixels
+                got = self._pixels_of(pngcrop.crop_png(png))
+                self.assertEqual(bytes(got), pixels,
+                                 f"un-filter branch {ftype} is not pixel-exact")
+
+    def test_crop_lands_exact_pixels(self):
+        # A real crop must return exactly the right sub-rectangle of pixels, not
+        # merely the right dimensions (a shifted/corrupt crop passes a dims check).
+        w, h, bpp = 6, 5, 4
+        pixels = bytes(((x * 40 + y * 9 + ch) & 0xFF)
+                       for y in range(h) for x in range(w) for ch in range(bpp))
+        png = self._encode_with_filter(pixels, w, h, bpp, 4)  # Paeth-filtered source
+        cropped = pngcrop.crop_png(png, top=1, bottom=1, left=2, right=1)
+        self.assertEqual(pngcrop.png_dimensions(cropped), (w - 3, h - 2))
+        got = self._pixels_of(cropped)
+        nw = w - 3
+        # rebuild the expected sub-rectangle from the source pixels
+        expected = bytearray()
+        for y in range(1, h - 1):
+            for x in range(2, w - 1):
+                idx = (y * w + x) * bpp
+                expected.extend(pixels[idx:idx + bpp])
+        self.assertEqual(bytes(got), bytes(expected))
+        self.assertEqual(len(got), nw * (h - 2) * bpp)
+
+    def test_fixture_uses_nonzero_filters(self):
+        # The committed fixture must keep exercising the Sub/Paeth branches; a
+        # future all-filter-0 swap would silently un-cover branches 1-4.
+        import struct as _s
+        import zlib as _z
+        raw = self._raw()
+        ihdr = None
+        idat = bytearray()
+        for ct, b in pngcrop._iter_chunks(raw):
+            if ct == b"IHDR":
+                ihdr = b
+            elif ct == b"IDAT":
+                idat.extend(b)
+            elif ct == b"IEND":
+                break
+        w, h, bd, cty, _, _, _ = _s.unpack(">IIBBBBB", ihdr)
+        stride = w * pngcrop._CHANNELS[cty]
+        data = _z.decompress(bytes(idat))
+        filters = {data[i * (stride + 1)] for i in range(h)}
+        self.assertTrue(filters - {0},
+                        f"fixture must use non-zero filters, got {sorted(filters)}")
+
+
+class CaptureAndroidProviderTests(unittest.TestCase):
+    """Slice 027-04: the blessed Android provider — adb screencap + optional
+    deep-link seed + stdlib chrome crop, fail-closed, ledger identity."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in ("ANTHROPIC_API_KEY", score._FAKE_SCORES_ENV,
+                  "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT",
+                  "SERVO_DESIGN_EVAL_ANDROID_SERIAL", "SERVO_DESIGN_EVAL_ADB_BIN"):
+            os.environ.pop(k, None)
+
+    def _cfg(self, screens=None, **android):
+        cfg = _base_config()
+        cfg["capture"] = {"transport": "android", "android": android}
+        if screens is not None:
+            cfg["screens"] = screens
+        return cfg
+
+    def _live_run(self, d, *, screencap_bytes=None, devices=("emulator-5554",),
+                  screencap_rc=0, am_rc=0, adb=True):
+        if screencap_bytes is None:
+            screencap_bytes = _ANDROID_FIXTURE.read_bytes()
+        calls = []
+
+        def fake_run(*a, **k):
+            argv = list(a[0])
+            calls.append(argv)
+
+            class _P:
+                pass
+            p = _P()
+            if "devices" in argv:
+                p.returncode = 0
+                p.stdout = "List of devices attached\n" + "".join(
+                    f"{s}\tdevice\n" for s in devices)
+                p.stderr = ""
+            elif "screencap" in argv:
+                p.returncode = screencap_rc
+                p.stdout = screencap_bytes if screencap_rc == 0 else b""
+                p.stderr = b"" if screencap_rc == 0 else b"screencap boom"
+            else:  # am start
+                p.returncode = am_rc
+                p.stdout = ""
+                p.stderr = "" if am_rc == 0 else "am boom"
+            return p
+
+        orig = (score.subprocess.run, score.shutil.which, score.judge, score.time.sleep)
+        score.subprocess.run = fake_run
+        score.shutil.which = (lambda n: "/usr/bin/adb") if adb else (lambda n: None)
+        score.judge = lambda *a, **k: 0.9
+        score.time.sleep = lambda *a, **k: None  # don't actually wait the settle delay
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            return row, calls
+        finally:
+            (score.subprocess.run, score.shutil.which, score.judge,
+             score.time.sleep) = orig
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC1: screencap argv + serial resolution ---------------------------------
+    def test_configured_serial_screencap_argv_and_ledger(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="emulator-5554"))
+            de.freeze(tmp)
+            row, calls = self._live_run(d)
+            self.assertEqual(row["capture_provider"], "android")
+            # capture_command = [<adb>, "-s", <serial>, "exec-out", "screencap", "-p"]
+            self.assertEqual(row["capture_command"][-3:], ["exec-out", "screencap", "-p"])
+            self.assertEqual(row["capture_command"][-5:-3], ["-s", "emulator-5554"])
+            screencaps = [c for c in calls if "screencap" in c]
+            self.assertTrue(screencaps)
+
+    def test_serial_from_env_overrides_autoresolve(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg())  # no serial in config
+            de.freeze(tmp)
+            os.environ["SERVO_DESIGN_EVAL_ANDROID_SERIAL"] = "emulator-9"
+            row, calls = self._live_run(d, devices=("a", "b"))  # ambiguous, but env wins
+            self.assertIn("emulator-9", row["capture_command"])
+
+    def test_single_device_autoresolved(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg())
+            de.freeze(tmp)
+            row, _ = self._live_run(d, devices=("the-only-one",))
+            self.assertIn("the-only-one", row["capture_command"])
+
+    def test_no_device_and_ambiguous_fail_closed(self):
+        for devices in ((), ("a", "b")):
+            with self.subTest(devices=devices), tempfile.TemporaryDirectory() as t:
+                tmp = Path(t)
+                d = _make_eval_dir(tmp, self._cfg())
+                de.freeze(tmp)
+                os.environ["ANTHROPIC_API_KEY"] = "x"
+                orig = (score.subprocess.run, score.shutil.which)
+
+                def fake_run(*a, **k):
+                    class _P:
+                        returncode = 0
+                        stdout = "List of devices attached\n" + "".join(
+                            f"{s}\tdevice\n" for s in devices)
+                        stderr = ""
+                    return _P()
+
+                score.subprocess.run = fake_run
+                score.shutil.which = lambda n: "/usr/bin/adb"
+                try:
+                    with self.assertRaises(score.EnvError):
+                        score.score(d)
+                finally:
+                    score.subprocess.run, score.shutil.which = orig
+                    os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC2: chrome crop applied to the shot; out-of-bounds fails closed --------
+    def test_crop_applied_to_shot(self):
+        raw = _ANDROID_FIXTURE.read_bytes()
+        w, h = pngcrop.png_dimensions(raw)
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="emulator-5554",
+                                              crop={"top": 10, "bottom": 8, "left": 4, "right": 6}))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            for s in row["screens"]:
+                shot = d / s["shot"]
+                self.assertTrue(shot.is_file())
+                self.assertEqual(pngcrop.png_dimensions(shot.read_bytes()),
+                                 (w - 10, h - 18))
+
+    def test_out_of_bounds_crop_fails_closed(self):
+        raw = _ANDROID_FIXTURE.read_bytes()
+        _, h = pngcrop.png_dimensions(raw)
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s", crop={"top": h, "bottom": 5}))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d)
+            self.assertIn("crop", str(cm.exception))
+
+    # -- AC3: optional deep-link seed fires am start -----------------------------
+    def test_deeplink_fires_am_start(self):
+        screens = [{"id": "home", "reference": "refs/home.png", "weight": 1.0,
+                    "deeplink": "myapp://home"}]
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(screens=screens, serial="s"))
+            de.freeze(tmp)
+            _, calls = self._live_run(d)
+            am = [c for c in calls if "am" in c and "start" in c]
+            self.assertTrue(am, "a screen with a deeplink must fire `am start`")
+            self.assertIn("myapp://home", am[0])
+
+    # -- AC4: provenance + fail-closed on adb-absent / non-zero screencap --------
+    def test_unattested_provenance(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s"))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "not_attested")
+
+    def test_adb_absent_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, adb=False)
+            self.assertIn("adb", str(cm.exception).lower())
+
+    def test_screencap_nonzero_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, screencap_rc=1)
+            self.assertIn("screencap", str(cm.exception))
+
+    def test_corrupt_screencap_png_fails_closed(self):
+        # A rc-0 screencap that returns garbage (not a PNG) must fail closed to
+        # EnvError via the crop's PngCropError contract — not a raw traceback.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError):
+                self._live_run(d, screencap_bytes=b"not a png at all")
+
+    def test_non_integer_crop_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(serial="s", crop={"top": "lots"}))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d)
+            self.assertIn("crop", str(cm.exception))
+
+    # -- Reopen fix (PR #31): native run without pngcrop.py fails closed ---------
+    def test_missing_pngcrop_fails_closed(self):
+        # score.py lazy-loads pngcrop; the native providers need it, so if the
+        # sibling is genuinely absent a native run must fail closed to EnvError,
+        # not a bare ModuleNotFoundError. (Regression fix: pngcrop was hard-loaded
+        # at import time, crashing the non-native paths — see slice-04 reopen.)
+        import pathlib
+        orig = score._pc
+        score._pc = None
+        try:
+            with mock.patch.object(pathlib.Path, "is_file", return_value=False):
+                with self.assertRaises(score.EnvError) as cm:
+                    score._pngcrop()
+            self.assertIn("pngcrop", str(cm.exception))
+        finally:
+            score._pc = orig
+
+    # -- AC5: capture.android is environmental, not frozen -----------------------
+    def test_capture_android_not_in_definition_hash(self):
+        base = _base_config()
+        withandroid = {**_base_config(),
+                       "capture": {"transport": "android",
+                                   "android": {"serial": "s", "crop": {"top": 5}}}}
+        self.assertEqual(score.definition_hash(base), score.definition_hash(withandroid))
+
+
+class CaptureIOSProviderTests(unittest.TestCase):
+    """Slice 027-05: the blessed iOS provider — `xcrun simctl io <target>
+    screenshot <file>` + optional `simctl openurl` seed + the shared stdlib crop
+    (in place, since simctl writes to a FILE not stdout), fail-closed, ledger
+    identity. Parallel in shape to the Android provider (027-04)."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in ("ANTHROPIC_API_KEY", score._FAKE_SCORES_ENV,
+                  "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT",
+                  "SERVO_DESIGN_EVAL_IOS_UDID", "SERVO_DESIGN_EVAL_XCRUN_BIN"):
+            os.environ.pop(k, None)
+
+    def _cfg(self, screens=None, **ios):
+        cfg = _base_config()
+        cfg["capture"] = {"transport": "ios", "ios": ios}
+        if screens is not None:
+            cfg["screens"] = screens
+        return cfg
+
+    def _live_run(self, d, *, screenshot_bytes=None, screenshot_rc=0,
+                  openurl_rc=0, xcrun=True, write_file=True):
+        if screenshot_bytes is None:
+            screenshot_bytes = _ANDROID_FIXTURE.read_bytes()
+        calls = []
+
+        def fake_run(*a, **k):
+            argv = list(a[0])
+            calls.append(argv)
+
+            class _P:
+                stdout = ""
+                stderr = ""
+            p = _P()
+            if "screenshot" in argv:
+                p.returncode = screenshot_rc
+                if screenshot_rc == 0 and write_file:
+                    Path(argv[-1]).write_bytes(screenshot_bytes)  # simctl writes a file
+                if screenshot_rc != 0:
+                    p.stderr = "simctl screenshot boom"
+            elif "openurl" in argv:
+                p.returncode = openurl_rc
+                if openurl_rc != 0:
+                    p.stderr = "openurl boom"
+            else:
+                p.returncode = 0
+            return p
+
+        orig = (score.subprocess.run, score.shutil.which, score.judge, score.time.sleep)
+        score.subprocess.run = fake_run
+        score.shutil.which = (lambda n: "/usr/bin/xcrun") if xcrun else (lambda n: None)
+        score.judge = lambda *a, **k: 0.9
+        score.time.sleep = lambda *a, **k: None
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            return row, calls
+        finally:
+            (score.subprocess.run, score.shutil.which, score.judge,
+             score.time.sleep) = orig
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC1: screenshot argv + target resolution --------------------------------
+    def test_configured_udid_screenshot_argv_and_ledger(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="ABC-123"))
+            de.freeze(tmp)
+            row, calls = self._live_run(d)
+            self.assertEqual(row["capture_provider"], "ios")
+            # capture_command = [<xcrun>, "simctl", "io", <target>, "screenshot"]
+            self.assertEqual(row["capture_command"][-3:], ["io", "ABC-123", "screenshot"])
+            shots = [c for c in calls if "screenshot" in c]
+            self.assertTrue(shots)
+            self.assertEqual(shots[0][1:4], ["simctl", "io", "ABC-123"])
+
+    def test_booted_default_target(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg())  # no udid → "booted"
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            self.assertIn("booted", row["capture_command"])
+
+    def test_udid_from_env(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg())
+            de.freeze(tmp)
+            os.environ["SERVO_DESIGN_EVAL_IOS_UDID"] = "ENV-UDID"
+            row, _ = self._live_run(d)
+            self.assertIn("ENV-UDID", row["capture_command"])
+
+    # -- AC2: crop applied in place; out-of-bounds / non-int fail closed ---------
+    def test_crop_applied_to_shot(self):
+        raw = _ANDROID_FIXTURE.read_bytes()
+        w, h = pngcrop.png_dimensions(raw)
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x",
+                                              crop={"top": 10, "bottom": 8, "left": 4, "right": 6}))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            for s in row["screens"]:
+                shot = d / s["shot"]
+                self.assertTrue(shot.is_file())
+                self.assertEqual(pngcrop.png_dimensions(shot.read_bytes()),
+                                 (w - 10, h - 18))
+
+    def test_out_of_bounds_crop_fails_closed(self):
+        _, h = pngcrop.png_dimensions(_ANDROID_FIXTURE.read_bytes())
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x", crop={"top": h, "bottom": 5}))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d)
+            self.assertIn("crop", str(cm.exception))
+
+    def test_non_integer_crop_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x", crop={"left": "lots"}))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d)
+            self.assertIn("crop", str(cm.exception))
+
+    # -- AC3: optional deep-link seed fires simctl openurl -----------------------
+    def test_deeplink_fires_openurl(self):
+        screens = [{"id": "home", "reference": "refs/home.png", "weight": 1.0,
+                    "deeplink": "myapp://home"}]
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(screens=screens, udid="x"))
+            de.freeze(tmp)
+            _, calls = self._live_run(d)
+            openurls = [c for c in calls if "openurl" in c]
+            self.assertTrue(openurls, "a screen with a deeplink must fire `simctl openurl`")
+            self.assertIn("myapp://home", openurls[0])
+
+    # -- AC4: provenance + fail-closed paths -------------------------------------
+    def test_unattested_provenance(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x"))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "not_attested")
+
+    def test_xcrun_absent_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, xcrun=False)
+            self.assertIn("xcrun", str(cm.exception).lower())
+
+    def test_screenshot_nonzero_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, screenshot_rc=1)
+            self.assertIn("screenshot", str(cm.exception))
+
+    def test_missing_output_file_fails_closed(self):
+        # rc 0 but simctl wrote nothing → must fail closed, not judge a missing file
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, write_file=False)
+            self.assertIn("screenshot", str(cm.exception))
+
+    # -- AC5: capture.ios is environmental, not frozen ---------------------------
+    def test_capture_ios_not_in_definition_hash(self):
+        base = _base_config()
+        withios = {**_base_config(),
+                   "capture": {"transport": "ios",
+                               "ios": {"udid": "x", "crop": {"top": 5}}}}
+        self.assertEqual(score.definition_hash(base), score.definition_hash(withios))
 
 
 if __name__ == "__main__":
