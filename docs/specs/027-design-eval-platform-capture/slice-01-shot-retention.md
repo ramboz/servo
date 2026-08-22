@@ -60,6 +60,7 @@ trust. Applies to every capture mode, web included.
 - [x] Implementation review passed. — VERDICT: pass, no blocking issues.
 - [x] Deviation log produced under this slice heading.
 - [x] Reconciliation sweep produced under this slice heading.
+- [x] Compliance + craft + reconciliation review verdicts recorded under `reviews/` (`slice-01-implementation.md`, `slice-01-reconciliation.md`). *(Backfilled 2026-08-21 after PR #31 review flagged missing review traces; the reviews themselves ran per-slice during implementation.)*
 - [x] Reconciliation review passed. — `jig:reviewer` reconciliation pass, VERDICT:
       pass, 2026-08-21; all deviation-log claims verified against `score.py`, sweep
       dispositions confirmed, DoD ticks honest.
@@ -131,4 +132,5 @@ The original spec is preserved above. Implementation notes:
 | `docs/refinement-todo.md` | `updated` | Added "design-eval retains every run's app shots with no disk-growth cap" (deferred retention cap, per the slice's Deferred note). |
 | `docs/memory/**` | `no-op` | No durable cross-session fact; the change is fully described by spec + code. |
 | `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — shots are unfrozen outputs (DoR: no ADR needed). |
+| `reviews/slice-01-{implementation,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
 | `skills/design-eval/SKILL.md` | `updated` | Documented the new per-screen `shot` field (path-or-null, retained, unhashed) in the "Provenance in the ledger" section. |
