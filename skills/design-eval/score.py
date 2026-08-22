@@ -71,22 +71,36 @@ def _load_fidelity_eval():
         "fidelity_eval.py not found next to score.py nor at ../_common/fidelity_eval.py")
 
 
-def _load_pngcrop():
-    """Load the sibling stdlib PNG cropper (027-04). Unlike ``fidelity_eval`` it is
-    design-eval-specific, so it lives next to ``score.py`` in BOTH layouts (source
-    ``skills/design-eval/`` and the copied-flat target) — a single-candidate load."""
-    here = Path(__file__).resolve().parent
-    candidate = here / "pngcrop.py"
-    if not candidate.is_file():
-        raise ModuleNotFoundError("pngcrop.py not found next to score.py")
-    spec = importlib.util.spec_from_file_location("pngcrop", candidate)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+_pc = None  # 027-04 PNG cropper — loaded LAZILY on first native-provider use (below)
+
+
+def _pngcrop():
+    """Lazily load + cache the sibling stdlib PNG cropper (027-04).
+
+    Loaded on demand — NOT at module import — because only the native (android/ios)
+    providers crop, so `score.py` must import and run the web/command/fake-scores
+    paths WITHOUT `pngcrop.py` present. (Regression fixed under 027-04 reopen: the
+    original module-load `_pc = _load_pngcrop()` crashed every import lacking the
+    sibling, breaking `_common/test_fidelity_eval.py::ImportResolutionTests`, which
+    copy score.py + fidelity_eval.py alone.) `design_eval.py::init()` vends
+    `pngcrop.py`, so it is a sibling in a real native install; a native run without
+    it fails closed to `EnvError`, not a bare ModuleNotFoundError traceback."""
+    global _pc
+    if _pc is None:
+        here = Path(__file__).resolve().parent
+        candidate = here / "pngcrop.py"
+        if not candidate.is_file():
+            raise EnvError(
+                "pngcrop.py not found next to score.py — the native capture providers "
+                "need it for chrome-frame cropping (vended by design_eval.py init()).")
+        spec = importlib.util.spec_from_file_location("pngcrop", candidate)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _pc = module
+    return _pc
 
 
 _fe = _load_fidelity_eval()
-_pc = _load_pngcrop()
 
 EnvError = _fe.EnvError
 StaleError = _fe.StaleError
@@ -381,11 +395,12 @@ def _capture_android(base_dir: Path, screen: dict, run_id: str | None = None,
         err = salient_stderr(proc.stderr.decode("utf-8", "replace") if proc.stderr else "")
         raise EnvError(f"android screencap failed for screen {screen['id']!r}: {err}")
     # Chrome-frame normalization (stdlib crop). An out-of-bounds crop fails closed.
+    pc = _pngcrop()
     try:
-        cropped = _pc.crop_png(
+        cropped = pc.crop_png(
             proc.stdout, **_crop_insets(_android_cfg(config).get("crop"),
                                         where="capture.android.crop"))
-    except _pc.PngCropError as e:
+    except pc.PngCropError as e:
         raise EnvError(f"android frame crop failed for screen {screen['id']!r}: {e}") from e
     out = _shot_out_path(base_dir, screen, run_id)
     out.write_bytes(cropped)
@@ -464,11 +479,12 @@ def _capture_ios(base_dir: Path, screen: dict, run_id: str | None = None,
         # stderr is empty here, so the generic "failed: <stderr>" would be blank).
         raise EnvError(f"ios screenshot produced no output file for screen {screen['id']!r}")
     # Chrome-frame normalization (stdlib crop, in place). Out-of-bounds fails closed.
+    pc = _pngcrop()
     try:
-        cropped = _pc.crop_png(out.read_bytes(),
-                               **_crop_insets(_ios_cfg(config).get("crop"),
-                                              where="capture.ios.crop"))
-    except _pc.PngCropError as e:
+        cropped = pc.crop_png(out.read_bytes(),
+                              **_crop_insets(_ios_cfg(config).get("crop"),
+                                             where="capture.ios.crop"))
+    except pc.PngCropError as e:
         raise EnvError(f"ios frame crop failed for screen {screen['id']!r}: {e}") from e
     out.write_bytes(cropped)
     return out, None  # no attestation channel from simctl → not_attested

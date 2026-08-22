@@ -1,7 +1,7 @@
 ---
 slice: 027-03 — custom-command capture provider
 pass: craft
-verdict: pass (two test-tightness nits, fixed post-review in 6a28d94)
+verdict: pass
 reviewer: jig:reviewer (in-session independent subagent)
 reviewed_at: 2026-08-21
 prompt_source: independent implementation review of commit 0c3723f (craft pass)

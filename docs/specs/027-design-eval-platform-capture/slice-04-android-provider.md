@@ -1,8 +1,7 @@
 ---
 status: DONE
 dependencies: [adr-0032, 027-02]
-last_verified: 2026-08-21
-claimed_by: claude/027-01-342c59
+last_verified: 2026-08-22
 ---
 
 ## Slice 027-04 — blessed Android provider
@@ -79,11 +78,17 @@ seed is the common declarative case (a deep link).
    contract are untouched. The web and command paths are unchanged.
 
 **DoD:**
-- [x] All ACs pass; full test suite green (no regressions). — `PngCropTests` +
-      `CaptureAndroidProviderTests` 22/22 green; 133/133 in `test_design_eval` bar
-      the one pre-existing red (`CaptureLibNodeTests.test_capture_lib_node_suite_passes`,
-      Node output-format, red on a clean tree, unrelated); `test_skill_surface`
-      green (its Files-table drift check now includes `pngcrop.py`).
+- [x] All ACs pass; **full CI suite** green (no regressions). — `python3
+      scripts/run_tests.py` (the CI command) = **1775 passed, 2 skipped**;
+      `PngCropTests` + `CaptureAndroidProviderTests` 22/22; `test_skill_surface`
+      green. **CORRECTION (2026-08-21, slice reopened):** the original tick claimed
+      "full test suite green" but was measured against the `test_design_eval`
+      SUBSET only — it MISSED a regression this slice introduced (`score.py` loaded
+      `pngcrop.py` at import time and crashed the fake-scores/web path when the
+      sibling was absent, red on `_common/test_fidelity_eval.py::ImportResolutionTests`).
+      CI caught it; the maintainer flagged it on PR #31. Fixed by lazy-loading
+      pngcrop (see the reopen deviation-log entry), and the tick now cites the full
+      CI runner, not the subset.
 - [x] Implementer test coverage exercises each AC with at least one fixture
       (screencap argv shape + device resolution/ambiguity; crop against a
       real-encoder PNG fixture → expected dims + valid PNG; out-of-bounds crop →
@@ -176,6 +181,36 @@ The original spec is preserved above. Implementation notes:
   Verified visually that the status bar and gesture pill are removed. CI stays
   stub-based (no device) for portability.
 
+**Reopen — regression fix (2026-08-21, after PR #31 CI failure).** This slice was
+transitioned DONE → IN_PROGRESS to fix a regression it had shipped:
+
+- **Symptom / who caught it.** `skills/_common/test_fidelity_eval.py::ImportResolutionTests`
+  (`test_resolves_source_layout_sibling`, `test_resolves_copied_flat_layout`) went
+  red on CI (both Python 3.9 and 3.12): `ModuleNotFoundError: pngcrop.py not found
+  next to score.py`. The maintainer flagged "tests still fail" on PR #31.
+- **Root cause (process, not just output).** score.py loaded the PNG cropper at
+  **module-import time** (`_pc = _load_pngcrop()`, hard-raising if the sibling was
+  absent). But `pngcrop.py` is needed ONLY by the native (android/ios) providers —
+  the web / command / fake-scores paths never crop — so a hard import-time
+  requirement is wrong. The `ImportResolutionTests` copy score.py + fidelity_eval.py
+  ALONE and run a fake-scores score, so they crashed at import. Deeper process
+  cause: the slice's original DoD tick claimed "full test suite green" but was
+  measured against the `test_design_eval` SUBSET, never `python3 scripts/run_tests.py`
+  (the CI command), so the regression escaped local validation entirely.
+- **Fix (structural, not a patch).** Lazy-load pngcrop: `_pc = None` + a cached
+  `_pngcrop()` accessor called only inside the two crop sites (`_capture_android`,
+  `_capture_ios`), raising `EnvError` (not a bare `ModuleNotFoundError`) if the
+  module is genuinely missing during a native run. score.py now imports and runs
+  the non-native paths without pngcrop.py present.
+- **Red→green witnessed.** `ImportResolutionTests` confirmed **red** on the
+  committed branch state (2 failures, the exact `ModuleNotFoundError`), **green**
+  after the fix. Full CI runner `python3 scripts/run_tests.py` = **1774 passed, 2
+  skipped**. The pre-existing `ImportResolutionTests` are the regression coverage —
+  the repo already had the test that catches this; the miss was not running it.
+- **Prevention.** DoD "full suite green" now cites the CI runner, not a subset;
+  saved as a standing rule (validate with `scripts/run_tests.py` before claiming
+  green). Review record: `reviews/slice-04-reopen.md`.
+
 ### Reconciliation sweep
 
 | Artifact | Disposition | Rationale |
@@ -190,6 +225,9 @@ The original spec is preserved above. Implementation notes:
 | `docs/memory/**` | `no-op` | No durable cross-session fact beyond spec + code. |
 | `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — ADR-0032 already Accepted; the stdlib-crop choice is under ADR-0020's existing constraint, not a new decision. |
 | `reviews/slice-04-{compliance,craft,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
+| `reviews/slice-04-reopen.md` | `added` | Review of the reopen regression fix (lazy-load); PASS. |
+| `skills/design-eval/score.py` | `updated` (reopen) | Lazy-load `pngcrop` (`_pngcrop()`), fixing the import-time crash that broke `_common/test_fidelity_eval.py::ImportResolutionTests` on CI. |
+| `skills/design-eval/test_design_eval.py` | `updated` (reopen) | +`test_missing_pngcrop_fails_closed` (native run without pngcrop → env_error). |
 | `skills/design-eval/SKILL.md` | `updated` | Documented the `android` provider + `capture.android` (serial/crop/deeplink), the stdlib crop, and the new `pngcrop.py` Files-table row. |
 | `skills/design-eval/design_eval.py` vendoring (`init()`) | `updated` | Vends the new `pngcrop.py` into the target. |
 | `skills/design-eval/testdata/rgba_filter_sample.png` | `added` | Synthetic real-encoder PNG fixture for the codec tests (third-party-free). |

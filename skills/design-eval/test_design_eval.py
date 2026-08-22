@@ -2304,6 +2304,23 @@ class CaptureAndroidProviderTests(unittest.TestCase):
                 self._live_run(d)
             self.assertIn("crop", str(cm.exception))
 
+    # -- Reopen fix (PR #31): native run without pngcrop.py fails closed ---------
+    def test_missing_pngcrop_fails_closed(self):
+        # score.py lazy-loads pngcrop; the native providers need it, so if the
+        # sibling is genuinely absent a native run must fail closed to EnvError,
+        # not a bare ModuleNotFoundError. (Regression fix: pngcrop was hard-loaded
+        # at import time, crashing the non-native paths — see slice-04 reopen.)
+        import pathlib
+        orig = score._pc
+        score._pc = None
+        try:
+            with mock.patch.object(pathlib.Path, "is_file", return_value=False):
+                with self.assertRaises(score.EnvError) as cm:
+                    score._pngcrop()
+            self.assertIn("pngcrop", str(cm.exception))
+        finally:
+            score._pc = orig
+
     # -- AC5: capture.android is environmental, not frozen -----------------------
     def test_capture_android_not_in_definition_hash(self):
         base = _base_config()
