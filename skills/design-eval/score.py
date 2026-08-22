@@ -456,9 +456,13 @@ def _capture_ios(base_dir: Path, screen: dict, run_id: str | None = None,
         raise EnvError(f"xcrun unavailable for capture: {e}") from e
     except subprocess.TimeoutExpired:
         raise EnvError(f"ios screenshot timed out for screen {screen['id']!r}") from None
-    if proc.returncode != 0 or not out.is_file():
+    if proc.returncode != 0:
         raise EnvError(
             f"ios screenshot failed for screen {screen['id']!r}: {salient_stderr(proc.stderr)}")
+    if not out.is_file():
+        # rc 0 but simctl wrote nothing — a distinct, cause-naming message (its
+        # stderr is empty here, so the generic "failed: <stderr>" would be blank).
+        raise EnvError(f"ios screenshot produced no output file for screen {screen['id']!r}")
     # Chrome-frame normalization (stdlib crop, in place). Out-of-bounds fails closed.
     try:
         cropped = _pc.crop_png(out.read_bytes(),
