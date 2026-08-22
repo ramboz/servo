@@ -108,6 +108,20 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
        `adb` is found on `PATH` or via `SERVO_DESIGN_EVAL_ADB_BIN`; the resolved
        screencap argv is the ledger `capture_command`, and provenance is
        `not_attested` (adb has no attestation channel).
+     - `"ios"` — a **blessed built-in** for native iOS, parallel to `android`.
+       Servo runs `xcrun simctl io <target> screenshot` per screen (writing a PNG
+       to the shot file), optionally fires `simctl openurl` first, and crops the
+       chrome via the same stdlib cropper. Config under `capture.ios`:
+       - `udid` — simulator udid; precedence is `udid` →
+         `SERVO_DESIGN_EVAL_IOS_UDID` → the literal `booted` (simctl's
+         single-booted-simulator selector; simctl fails closed if none/ambiguous).
+       - `crop` — `{top,bottom,left,right}` pixel insets (out-of-bounds /
+         non-integer fails closed).
+       - a screen may set `deeplink: "<uri>"` (→ `simctl openurl`); complex flows
+         use the `command` provider. State equivalence is project-authored (§4).
+       `xcrun` is found on `PATH` or via `SERVO_DESIGN_EVAL_XCRUN_BIN`; the resolved
+       screenshot argv is the ledger `capture_command`; provenance is
+       `not_attested` (simctl has no attestation channel).
 
 3. **`capture-refs`** — `python3 design_eval.py capture-refs <target>` renders
    each `referenceSource` to its `reference` PNG (cropped). Eyeball them.

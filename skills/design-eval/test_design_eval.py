@@ -2307,5 +2307,196 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         self.assertEqual(score.definition_hash(base), score.definition_hash(withandroid))
 
 
+class CaptureIOSProviderTests(unittest.TestCase):
+    """Slice 027-05: the blessed iOS provider — `xcrun simctl io <target>
+    screenshot <file>` + optional `simctl openurl` seed + the shared stdlib crop
+    (in place, since simctl writes to a FILE not stdout), fail-closed, ledger
+    identity. Parallel in shape to the Android provider (027-04)."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in ("ANTHROPIC_API_KEY", score._FAKE_SCORES_ENV,
+                  "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT",
+                  "SERVO_DESIGN_EVAL_IOS_UDID", "SERVO_DESIGN_EVAL_XCRUN_BIN"):
+            os.environ.pop(k, None)
+
+    def _cfg(self, screens=None, **ios):
+        cfg = _base_config()
+        cfg["capture"] = {"transport": "ios", "ios": ios}
+        if screens is not None:
+            cfg["screens"] = screens
+        return cfg
+
+    def _live_run(self, d, *, screenshot_bytes=None, screenshot_rc=0,
+                  openurl_rc=0, xcrun=True, write_file=True):
+        if screenshot_bytes is None:
+            screenshot_bytes = _ANDROID_FIXTURE.read_bytes()
+        calls = []
+
+        def fake_run(*a, **k):
+            argv = list(a[0])
+            calls.append(argv)
+
+            class _P:
+                stdout = ""
+                stderr = ""
+            p = _P()
+            if "screenshot" in argv:
+                p.returncode = screenshot_rc
+                if screenshot_rc == 0 and write_file:
+                    Path(argv[-1]).write_bytes(screenshot_bytes)  # simctl writes a file
+                if screenshot_rc != 0:
+                    p.stderr = "simctl screenshot boom"
+            elif "openurl" in argv:
+                p.returncode = openurl_rc
+                if openurl_rc != 0:
+                    p.stderr = "openurl boom"
+            else:
+                p.returncode = 0
+            return p
+
+        orig = (score.subprocess.run, score.shutil.which, score.judge, score.time.sleep)
+        score.subprocess.run = fake_run
+        score.shutil.which = (lambda n: "/usr/bin/xcrun") if xcrun else (lambda n: None)
+        score.judge = lambda *a, **k: 0.9
+        score.time.sleep = lambda *a, **k: None
+        os.environ["ANTHROPIC_API_KEY"] = "x"
+        try:
+            score.score(d)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            return row, calls
+        finally:
+            (score.subprocess.run, score.shutil.which, score.judge,
+             score.time.sleep) = orig
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+
+    # -- AC1: screenshot argv + target resolution --------------------------------
+    def test_configured_udid_screenshot_argv_and_ledger(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="ABC-123"))
+            de.freeze(tmp)
+            row, calls = self._live_run(d)
+            self.assertEqual(row["capture_provider"], "ios")
+            # capture_command = [<xcrun>, "simctl", "io", <target>, "screenshot"]
+            self.assertEqual(row["capture_command"][-3:], ["io", "ABC-123", "screenshot"])
+            shots = [c for c in calls if "screenshot" in c]
+            self.assertTrue(shots)
+            self.assertEqual(shots[0][1:4], ["simctl", "io", "ABC-123"])
+
+    def test_booted_default_target(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg())  # no udid → "booted"
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            self.assertIn("booted", row["capture_command"])
+
+    def test_udid_from_env(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg())
+            de.freeze(tmp)
+            os.environ["SERVO_DESIGN_EVAL_IOS_UDID"] = "ENV-UDID"
+            row, _ = self._live_run(d)
+            self.assertIn("ENV-UDID", row["capture_command"])
+
+    # -- AC2: crop applied in place; out-of-bounds / non-int fail closed ---------
+    def test_crop_applied_to_shot(self):
+        raw = _ANDROID_FIXTURE.read_bytes()
+        w, h = pngcrop.png_dimensions(raw)
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x",
+                                              crop={"top": 10, "bottom": 8, "left": 4, "right": 6}))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            for s in row["screens"]:
+                shot = d / s["shot"]
+                self.assertTrue(shot.is_file())
+                self.assertEqual(pngcrop.png_dimensions(shot.read_bytes()),
+                                 (w - 10, h - 18))
+
+    def test_out_of_bounds_crop_fails_closed(self):
+        _, h = pngcrop.png_dimensions(_ANDROID_FIXTURE.read_bytes())
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x", crop={"top": h, "bottom": 5}))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d)
+            self.assertIn("crop", str(cm.exception))
+
+    def test_non_integer_crop_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x", crop={"left": "lots"}))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d)
+            self.assertIn("crop", str(cm.exception))
+
+    # -- AC3: optional deep-link seed fires simctl openurl -----------------------
+    def test_deeplink_fires_openurl(self):
+        screens = [{"id": "home", "reference": "refs/home.png", "weight": 1.0,
+                    "deeplink": "myapp://home"}]
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(screens=screens, udid="x"))
+            de.freeze(tmp)
+            _, calls = self._live_run(d)
+            openurls = [c for c in calls if "openurl" in c]
+            self.assertTrue(openurls, "a screen with a deeplink must fire `simctl openurl`")
+            self.assertIn("myapp://home", openurls[0])
+
+    # -- AC4: provenance + fail-closed paths -------------------------------------
+    def test_unattested_provenance(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x"))
+            de.freeze(tmp)
+            row, _ = self._live_run(d)
+            for s in row["screens"]:
+                self.assertEqual(s["provenance"], "not_attested")
+
+    def test_xcrun_absent_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, xcrun=False)
+            self.assertIn("xcrun", str(cm.exception).lower())
+
+    def test_screenshot_nonzero_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, screenshot_rc=1)
+            self.assertIn("screenshot", str(cm.exception))
+
+    def test_missing_output_file_fails_closed(self):
+        # rc 0 but simctl wrote nothing → must fail closed, not judge a missing file
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._cfg(udid="x"))
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                self._live_run(d, write_file=False)
+            self.assertIn("screenshot", str(cm.exception))
+
+    # -- AC5: capture.ios is environmental, not frozen ---------------------------
+    def test_capture_ios_not_in_definition_hash(self):
+        base = _base_config()
+        withios = {**_base_config(),
+                   "capture": {"transport": "ios",
+                               "ios": {"udid": "x", "crop": {"top": 5}}}}
+        self.assertEqual(score.definition_hash(base), score.definition_hash(withios))
+
+
 if __name__ == "__main__":
     unittest.main()

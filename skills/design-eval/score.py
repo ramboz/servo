@@ -97,6 +97,9 @@ sha256_file = _fe.sha256_file
 # 027-04: blessed Android provider env overrides (mirror SERVO_DESIGN_EVAL_CLAUDE_BIN).
 _ADB_BIN_ENV = "SERVO_DESIGN_EVAL_ADB_BIN"
 _ANDROID_SERIAL_ENV = "SERVO_DESIGN_EVAL_ANDROID_SERIAL"
+# 027-05: blessed iOS provider env overrides.
+_XCRUN_BIN_ENV = "SERVO_DESIGN_EVAL_XCRUN_BIN"
+_IOS_UDID_ENV = "SERVO_DESIGN_EVAL_IOS_UDID"
 
 
 def definition_hash(config: dict) -> str:
@@ -324,16 +327,18 @@ def _android_screencap_argv(config: dict) -> list:
             "exec-out", "screencap", "-p"]
 
 
-def _crop_insets(config: dict) -> dict:
-    crop = _android_cfg(config).get("crop") or {}
+def _crop_insets(crop: dict | None, *, where: str = "crop") -> dict:
+    """Validate + coerce a ``{top,bottom,left,right}`` crop block to ints (shared by
+    the native providers). A non-integer inset fails closed to `EnvError`; ``where``
+    names the config path for a clear message (e.g. ``capture.android.crop``)."""
+    crop = crop or {}
     insets = {}
     for k in ("top", "bottom", "left", "right"):
         v = crop.get(k, 0)
         try:
             insets[k] = int(v)
         except (TypeError, ValueError) as e:
-            raise EnvError(
-                f"capture.android.crop.{k} must be an integer, got {v!r}") from e
+            raise EnvError(f"{where}.{k} must be an integer, got {v!r}") from e
     return insets
 
 
@@ -377,7 +382,9 @@ def _capture_android(base_dir: Path, screen: dict, run_id: str | None = None,
         raise EnvError(f"android screencap failed for screen {screen['id']!r}: {err}")
     # Chrome-frame normalization (stdlib crop). An out-of-bounds crop fails closed.
     try:
-        cropped = _pc.crop_png(proc.stdout, **_crop_insets(config))
+        cropped = _pc.crop_png(
+            proc.stdout, **_crop_insets(_android_cfg(config).get("crop"),
+                                        where="capture.android.crop"))
     except _pc.PngCropError as e:
         raise EnvError(f"android frame crop failed for screen {screen['id']!r}: {e}") from e
     out = _shot_out_path(base_dir, screen, run_id)
@@ -385,14 +392,93 @@ def _capture_android(base_dir: Path, screen: dict, run_id: str | None = None,
     return out, None  # no attestation channel from adb → not_attested
 
 
+# --------------------------------------------------------------------------- #
+# 027-05: blessed iOS provider (xcrun simctl screenshot + openurl seed + crop)
+# --------------------------------------------------------------------------- #
+
+def _resolve_xcrun() -> str:
+    """The ``xcrun`` path: ``SERVO_DESIGN_EVAL_XCRUN_BIN`` override, else PATH.
+    Absent → fail closed (`EnvError`)."""
+    xcrun = os.environ.get(_XCRUN_BIN_ENV) or shutil.which("xcrun")
+    if not xcrun:
+        raise EnvError(
+            "`xcrun` not found — the iOS capture provider needs Xcode's command-line "
+            "tools (simctl). Install Xcode, or set SERVO_DESIGN_EVAL_XCRUN_BIN.")
+    return xcrun
+
+
+def _ios_cfg(config: dict) -> dict:
+    return ((config or {}).get("capture") or {}).get("ios") or {}
+
+
+def _resolve_ios_target(config: dict) -> str:
+    """The simulator target, precedence: ``capture.ios.udid`` →
+    ``SERVO_DESIGN_EVAL_IOS_UDID`` → the literal ``"booted"`` (simctl's
+    single-booted-device selector; simctl itself fails closed if none/ambiguous)."""
+    return _ios_cfg(config).get("udid") or os.environ.get(_IOS_UDID_ENV) or "booted"
+
+
+def _ios_screenshot_argv(config: dict) -> list:
+    """The resolved screenshot argv WITHOUT the per-screen out path (device
+    identity for the ledger). Also the up-front fail-closed check: `xcrun` present.
+    The per-screen call appends the shot path."""
+    return [_resolve_xcrun(), "simctl", "io", _resolve_ios_target(config), "screenshot"]
+
+
+def _capture_ios(base_dir: Path, screen: dict, run_id: str | None = None,
+                 config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **iOS** capture provider (027-05): `xcrun simctl io <target> screenshot`
+    writes a PNG to a FILE (unlike adb's stdout), an optional per-screen
+    `simctl openurl` seed, then the shared stdlib crop applied in place. Any
+    failure fails closed to `EnvError`. simctl emits no ``##servo-capture:`` line,
+    so provenance is honestly `not_attested`.
+    """
+    config = config or {}
+    xcrun = _resolve_xcrun()
+    target = _resolve_ios_target(config)
+    deeplink = screen.get("deeplink")
+    if deeplink:
+        try:
+            proc = subprocess.run([xcrun, "simctl", "openurl", target, deeplink],
+                                  capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise EnvError(f"simctl openurl failed for screen {screen['id']!r}: {e}") from e
+        if proc.returncode != 0:
+            raise EnvError(
+                f"simctl openurl failed for screen {screen['id']!r}: "
+                f"{salient_stderr(proc.stderr)}")
+        time.sleep(2)  # bounded settle before the shot
+    out = _shot_out_path(base_dir, screen, run_id)
+    try:
+        proc = subprocess.run([xcrun, "simctl", "io", target, "screenshot", str(out)],
+                              capture_output=True, text=True, timeout=180)
+    except FileNotFoundError as e:
+        raise EnvError(f"xcrun unavailable for capture: {e}") from e
+    except subprocess.TimeoutExpired:
+        raise EnvError(f"ios screenshot timed out for screen {screen['id']!r}") from None
+    if proc.returncode != 0 or not out.is_file():
+        raise EnvError(
+            f"ios screenshot failed for screen {screen['id']!r}: {salient_stderr(proc.stderr)}")
+    # Chrome-frame normalization (stdlib crop, in place). Out-of-bounds fails closed.
+    try:
+        cropped = _pc.crop_png(out.read_bytes(),
+                               **_crop_insets(_ios_cfg(config).get("crop"),
+                                              where="capture.ios.crop"))
+    except _pc.PngCropError as e:
+        raise EnvError(f"ios frame crop failed for screen {screen['id']!r}: {e}") from e
+    out.write_bytes(cropped)
+    return out, None  # no attestation channel from simctl → not_attested
+
+
 # 027-02: the capture-provider seam. Each provider is invoked per screen as
 # ``fn(base_dir, screen, run_id, config)`` and returns (png, attestation).
-# 027-03 adds `command`; 027-04 adds `android`; 027-05 adds `ios` here without
+# 027-03 adds `command`; 027-04 adds `android`; 027-05 adds `ios`, all without
 # touching the scoring path. Web is the default.
 _CAPTURE_PROVIDERS = {
     "web": _capture_web,
     "command": _capture_command,
     "android": _capture_android,
+    "ios": _capture_ios,
 }
 
 
@@ -593,6 +679,11 @@ def score(base_dir: Path) -> float:
             serial = _resolve_android_serial(config)
             config.setdefault("capture", {}).setdefault("android", {})["serial"] = serial
             capture_command = _android_screencap_argv(config)
+        # 027-05 AC1/AC4: for ios, validate xcrun up front and record the resolved
+        # screenshot argv as the ledger identity. (Device readiness is checked by
+        # simctl at capture time — the "booted" selector fails closed there.)
+        elif provider == "ios":
+            capture_command = _ios_screenshot_argv(config)
         # 027-02: the node/Playwright preflight is the WEB provider's precheck;
         # a non-web provider brings its own environment, so gate it to web.
         # AC5 (027-01): live-capture arm only, so the fake-scores path is
