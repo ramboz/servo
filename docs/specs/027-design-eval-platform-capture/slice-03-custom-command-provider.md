@@ -97,7 +97,7 @@ seeding — those are the command's responsibility (ADR-0032 §5).
 - [x] Implementation review passed. — no blocking issues.
 - [x] Deviation log produced under this slice heading.
 - [x] Reconciliation sweep produced under this slice heading.
-- [x] Compliance + craft + reconciliation review verdicts recorded under `reviews/` (`slice-03-implementation.md`, `slice-03-reconciliation.md`). *(Backfilled 2026-08-21 after PR #31 review flagged missing review traces; the reviews themselves ran per-slice during implementation.)*
+- [x] Compliance + craft review verdicts recorded under `reviews/` (`slice-03-compliance.md`, `slice-03-craft.md`). *(Backfilled 2026-08-21 after PR #31 flagged missing review traces; the compliance + craft passes ran per-slice during implementation.)*
 - [x] Reconciliation review passed. — `jig:reviewer` reconciliation pass,
       VERDICT: pass, 2026-08-21; deviation-log claims verified against `score.py`
       line-for-line, the 9-test class and both post-review tightenings confirmed,
@@ -175,5 +175,5 @@ The original spec is preserved above. Implementation notes:
 | `docs/refinement-todo.md` | `updated` | Added "design-eval capture timeout is a fixed 180s shared across all providers" (deferred `capture.timeout` knob). |
 | `docs/memory/**` | `no-op` | No durable cross-session fact beyond spec + code. |
 | `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — ADR-0032 already Accepted and governs this seam. |
-| `reviews/slice-03-{implementation,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
+| `reviews/slice-03-{compliance,craft,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
 | `skills/design-eval/SKILL.md` | `updated` | Documented the `command` provider, `capture.command`, the `--screen/--out` contract, fail-closed behaviour, and the `capture_command` ledger field. |

@@ -102,7 +102,7 @@ seed is the common declarative case (a deep link).
 - [x] Implementation review passed. — after the fixes above.
 - [x] Deviation log produced under this slice heading.
 - [x] Reconciliation sweep produced under this slice heading.
-- [x] Compliance + craft + reconciliation review verdicts recorded under `reviews/` (`slice-04-implementation.md`, `slice-04-reconciliation.md`). *(Backfilled 2026-08-21 after PR #31 review flagged missing review traces; the reviews themselves ran per-slice during implementation.)*
+- [x] Compliance + craft review verdicts recorded under `reviews/` (`slice-04-compliance.md`, `slice-04-craft.md`). *(Backfilled 2026-08-21 after PR #31 flagged missing review traces; the compliance + craft passes ran per-slice during implementation.)*
 - [x] Reconciliation review passed. — `jig:reviewer` reconciliation pass,
       VERDICT: pass, 2026-08-21; every deviation-log/sweep claim verified against
       `score.py`/`pngcrop.py`/`SKILL.md`/`design_eval.py`/`refinement-todo.md`, the
@@ -189,7 +189,7 @@ The original spec is preserved above. Implementation notes:
 | `docs/refinement-todo.md` | `updated` | Added the Android inset-autodetect + settle-delay knobs deferral. |
 | `docs/memory/**` | `no-op` | No durable cross-session fact beyond spec + code. |
 | `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — ADR-0032 already Accepted; the stdlib-crop choice is under ADR-0020's existing constraint, not a new decision. |
-| `reviews/slice-04-{implementation,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
+| `reviews/slice-04-{compliance,craft,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
 | `skills/design-eval/SKILL.md` | `updated` | Documented the `android` provider + `capture.android` (serial/crop/deeplink), the stdlib crop, and the new `pngcrop.py` Files-table row. |
 | `skills/design-eval/design_eval.py` vendoring (`init()`) | `updated` | Vends the new `pngcrop.py` into the target. |
 | `skills/design-eval/testdata/rgba_filter_sample.png` | `added` | Synthetic real-encoder PNG fixture for the codec tests (third-party-free). |

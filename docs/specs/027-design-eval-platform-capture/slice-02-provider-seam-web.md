@@ -85,7 +85,7 @@ today's web path already satisfies both for free, and native seeding/cropping is
 - [x] Implementation review passed. — VERDICT: pass, no blocking issues.
 - [x] Deviation log produced under this slice heading.
 - [x] Reconciliation sweep produced under this slice heading.
-- [x] Compliance + craft + reconciliation review verdicts recorded under `reviews/` (`slice-02-implementation.md`, `slice-02-reconciliation.md`). *(Backfilled 2026-08-21 after PR #31 review flagged missing review traces; the reviews themselves ran per-slice during implementation.)*
+- [x] Compliance + craft review verdicts recorded under `reviews/` (`slice-02-compliance.md`, `slice-02-craft.md`). *(Backfilled 2026-08-21 after PR #31 flagged missing review traces; the compliance + craft passes ran per-slice during implementation.)*
 - [x] Reconciliation review passed. — `jig:reviewer` reconciliation pass,
       VERDICT: pass, 2026-08-21; deviation-log claims verified line-for-line
       against `score.py`, SKILL.md additions confirmed accurate, sweep dispositions
@@ -164,5 +164,5 @@ The original spec is preserved above. Implementation notes:
 | `docs/refinement-todo.md` | `no-op` | No decision deferred by this slice. |
 | `docs/memory/**` | `no-op` | No durable cross-session fact beyond spec + code. |
 | `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — ADR-0032 already Accepted and governs this seam. |
-| `reviews/slice-02-{implementation,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
+| `reviews/slice-02-{compliance,craft,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
 | `skills/design-eval/SKILL.md` | `updated` | Documented the `capture.transport` selector, the `SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT` override, and the `capture_provider` ledger field. |

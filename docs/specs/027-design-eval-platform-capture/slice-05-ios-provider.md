@@ -95,7 +95,7 @@ the 027-02 seam. Complex flows stay the job of the 027-03 `command` provider.
 - [x] Implementation review passed. — no blocking issues.
 - [x] Deviation log produced under this slice heading.
 - [x] Reconciliation sweep produced under this slice heading.
-- [x] Compliance + craft + reconciliation review verdicts recorded under `reviews/` (`slice-05-implementation.md`, `slice-05-reconciliation.md`). *(Backfilled 2026-08-21 after PR #31 review flagged missing review traces; the reviews themselves ran per-slice during implementation.)*
+- [x] Compliance + craft review verdicts recorded under `reviews/` (`slice-05-compliance.md`, `slice-05-craft.md`). *(Backfilled 2026-08-21 after PR #31 flagged missing review traces; the compliance + craft passes ran per-slice during implementation.)*
 - [x] Reconciliation review passed. — `jig:reviewer` reconciliation pass,
       VERDICT: pass, 2026-08-21; deviation-log/sweep claims verified against
       `score.py`/`SKILL.md`/`refinement-todo.md`, review-fix `e5d821b` confirmed,
@@ -187,6 +187,6 @@ The original spec is preserved above. Implementation notes:
 | `docs/refinement-todo.md` | `updated` | Added the deferred iOS live-simulator smoke entry. |
 | `docs/memory/**` | `no-op` | No durable cross-session fact beyond spec + code. |
 | `docs/decisions/README.md` / ADR index | `no-op` | No ADR touched — ADR-0032 already Accepted; iOS reuses the ADR-0020-constrained stdlib crop. |
-| `reviews/slice-05-{implementation,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
+| `reviews/slice-05-{compliance,craft,reconciliation}.md` | `added` | Committed review traces — verdicts + findings (backfilled per PR #31). |
 | `skills/design-eval/SKILL.md` | `updated` | Documented the `ios` provider + `capture.ios` (udid/crop/deeplink) under the capture-transport list. |
 | `skills/design-eval/pngcrop.py` / `design_eval.py` | `no-op` | Reused as-is from 027-04 (cropper + vendoring already in place); no change needed for iOS. |
