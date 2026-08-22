@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 skill:
 use_cases: []
 ---
@@ -71,11 +71,11 @@ phasing.
 
 ## Slices
 
-- [027-01 — shot retention + ledger visibility](slice-01-shot-retention.md) — shared plumbing (all modes, web included)
-- [027-02 — capture-provider seam + web default](slice-02-provider-seam-web.md) — DRAFT
-- [027-03 — custom-command provider](slice-03-custom-command-provider.md) — DRAFT
-- [027-04 — blessed Android provider](slice-04-android-provider.md) — DRAFT
-- [027-05 — blessed iOS provider](slice-05-ios-provider.md) — DRAFT
+- [027-01 — shot retention + ledger visibility](slice-01-shot-retention.md) — **DONE** — shared plumbing (all modes, web included)
+- [027-02 — capture-provider seam + web default](slice-02-provider-seam-web.md) — **DONE** — the selector + dispatch seam; web default, behavior-preserving
+- [027-03 — custom-command provider](slice-03-custom-command-provider.md) — **DONE** — the escape hatch for any non-web stack
+- [027-04 — blessed Android provider](slice-04-android-provider.md) — **DONE** — `adb screencap` + deep-link + stdlib crop; live-validated on a real emulator
+- [027-05 — blessed iOS provider](slice-05-ios-provider.md) — **DONE** — `xcrun simctl` sibling; stub-validated (live-simulator smoke deferred, no Xcode on the authoring machine)
 
 Slices 02–05 depend on [ADR-0032](../../decisions/adr-0032-design-eval-capture-providers.md);
 027-01 is independent shared plumbing. 027-02..05 will be fleshed to full ACs
