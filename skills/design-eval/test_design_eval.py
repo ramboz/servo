@@ -1280,8 +1280,14 @@ class CaptureLibNodeTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("node"), "node not on PATH (CI is pytest-only)")
     def test_capture_lib_node_suite_passes(self):
+        # Pin the TAP reporter explicitly: Node's DEFAULT `--test` reporter changed
+        # across versions (TAP `# fail 0` on older Node; the "spec" reporter
+        # `ℹ fail 0` on Node ≥ ~20 when stdout is non-TTY), so asserting on the
+        # default output is version-brittle. `--test-reporter=tap` makes the summary
+        # lines deterministic (`# pass N` / `# fail 0`) on every Node that ships the
+        # built-in runner.
         res = subprocess.run(
-            ["node", "--test", str(self.NODE_TEST)],
+            ["node", "--test", "--test-reporter=tap", str(self.NODE_TEST)],
             capture_output=True, text=True)
         self.assertEqual(
             res.returncode, 0,
