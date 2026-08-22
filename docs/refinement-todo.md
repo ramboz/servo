@@ -973,3 +973,31 @@ test that a custom timeout is honored.
 
 **Surfaced by:** slice 027-03 (spec `Deferred (candidate for refinement-todo)`
 note; independent review flagged the inherited timeout as a disclosed follow-up).
+
+---
+
+## design-eval Android provider uses configured crop insets + a fixed settle delay
+
+**Deferred:** The blessed Android provider (027-04,
+`skills/design-eval/score.py::_capture_android`) strips device chrome by
+**configured** pixel insets (`capture.android.crop.{top,bottom,left,right}`) and
+waits a **hardcoded 2s** after a deep link before screencap. Two follow-ups:
+
+1. **Auto-detect insets.** The status/navigation-bar heights are queryable at
+   runtime (`adb shell dumpsys window` / window insets), so the provider could
+   auto-crop instead of requiring hand-measured pixels — removing a per-device
+   calibration step. Deferred because the query surface varies by Android version
+   and configured insets are deterministic and testable; auto-detect is an
+   ergonomic upgrade, not a correctness fix.
+2. **Configurable settle delay.** The 2s post-deep-link wait
+   (`score.py`, `_capture_android`) is a guess; a slow app may need more, a fast
+   one less. A `capture.android.settle_ms` knob would let a project tune it.
+
+**Resolution trigger:** (1) first Android target where hand-measured insets are a
+real friction, or a device whose bars differ enough that a fixed inset mis-frames;
+(2) first target where 2s is wrong (a flaky capture that a longer wait fixes, or a
+suite slowed by an over-long wait). Both are environmental (`capture.android`),
+so neither re-freezes.
+
+**Surfaced by:** slice 027-04 (spec `Deferred (candidate for refinement-todo)`
+note; independent review confirmed both as disclosed follow-ups).
