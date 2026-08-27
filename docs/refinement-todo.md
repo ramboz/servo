@@ -1029,3 +1029,31 @@ target-selector quirk), amend the provider + a deviation note.
 **Surfaced by:** slice 027-05 (spec DoR environment limitation + DoD-required
 follow-up; independent review PASS confirmed the deferral is disclosed and the
 stub-level tests are sound).
+
+---
+
+## edd-suitability has no feasibility-vs-direction risk axis
+
+**Deferred:** `edd-suitability` (spec 015 / ADR-0015) is a closed three-state gate
+— `suitable` / `needs_evidence` / `unsuitable` — that judges whether success is
+*machine-evaluable*. It does not distinguish the **kind of risk** the work still
+carries. EngTip #28 ("Think Depth-First, Build Breadth-First") draws a sharp line
+worth borrowing: a **walking skeleton** (thin end-to-end slice) retires *direction
+and integration* risk but explicitly **does not** retire *feasibility* risk — "is
+this even possible?" — which is what a **POC** answers. A spec can be perfectly
+EDD-suitable (clean machine-checkable oracle) while its real open risk is
+feasibility, not evaluability. Running an unattended loop against it optimizes
+toward a green oracle without ever answering the question that actually matters.
+
+**Why noted:** captured from an eng-tips review (jig-side, 2026-08-27) so the
+distinction isn't lost. Not obviously a gate change — could be as light as the
+suitability verdict naming the *residual risk class* (feasibility vs
+direction/integration) alongside its suitable/needs_evidence/unsuitable call, so a
+"suitable but feasibility-unproven" spec routes to a spike/POC before the loop
+rather than into it.
+
+**Resolution trigger:** first time an EDD-suitable spec burns loop budget
+converging a green oracle on work whose real risk was "is this even buildable" —
+or the next substantive edit to the suitability verdict schema.
+
+**Surfaced by:** cross-repo eng-tips idea review (EngTip #28), 2026-08-27.
