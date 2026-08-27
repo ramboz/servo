@@ -1057,3 +1057,70 @@ converging a green oracle on work whose real risk was "is this even buildable" �
 or the next substantive edit to the suitability verdict schema.
 
 **Surfaced by:** cross-repo eng-tips idea review (EngTip #28), 2026-08-27.
+
+---
+
+## Mystique `agentic-loop` pickups — git-push-as-lock, HARVEST-&-COMPACT, and the coordination×evaluation composition
+
+**Why noted:** captured from a colleague's Mystique PR (an `agentic-loop` skill;
+`git.corp.adobe.com/experience-platform/mystique/pull/4644`, reviewed 2026-08-27)
+so three cross-pollination candidates aren't lost. That skill is a *coordination*
+substrate — its axis is orthogonal to servo's *evaluation* one — so the relevance
+is complementary, not competitive. Its load-bearing idea: coordination is 100%
+git (a `.loop/<workstream>.md` worklog + git-push-as-lock), letting N clones —
+humans OR cloud agents, each "a different person" — pull code, claim a task, and
+push with no shared machine, process, or memory.
+
+Three things worth borrowing, in descending confidence:
+
+1. **HARVEST & COMPACT worklog discipline (likely a real gap).** On goal-reached,
+   the skill appends a ≤1-page entry (What we did · learned · Decisions ·
+   Follow-ups) to a harvest log, then *clears the finished tasks from the live
+   worklog* — "git history keeps the full how." Servo has no equivalent
+   working-set-compaction discipline for long-running unattended runs; the
+   `heartbeat`/dispatch spine and `.servo/runs/` grow append-only. This is the
+   cheapest, lowest-risk pickup and directly relevant to the unbounded-growth
+   entries already filed above (dispatch worktree GC; `.servo/dispatch/` retention).
+
+2. **git-push-as-lock as a machine-free multi-agent claim primitive.** The claim
+   *is* a push: append a `CLAIM` line, push; a non-fast-forward rejection means
+   someone else won → rebase, take the next ready task. This is a lighter,
+   infrastructure-free alternative/complement to servo's 024/025 coordinator route
+   (oh-my-cli, quarantine, sticky-tried). It is optimistic-concurrency-plus-timeout
+   (a dead clone leaves a stale claim GC'd by a ~90-min reclaim window), NOT mutual
+   exclusion — worth naming if servo ever wants fleet parallelism without standing
+   infra. Caveat servo already got right: the skill puts *all* clones on one shared
+   branch ("keep the tip buildable at every push"), which trades constant rebase
+   churn + a tip mixing many half-done tasks for zero infra; servo's
+   execution-planner clamp is deliberately *scoped to the loop-driver branch*
+   (016) — servo chose isolation. Adopt the claim primitive, not the shared-branch
+   model, if this is ever picked up.
+
+3. **The composition is the real insight (no code, a framing).** The skill's
+   weakest link is servo's strongest asset and vice versa. Its VERIFY step is
+   *prose exhortation* — "Merged ≠ verified… Done only when verified on real
+   ground-truth… never game the check" — which is servo's entire thesis (ADR-0015
+   suitability, the *executable* `oracle.sh`, "don't optimize toward a meaningless
+   green oracle") arrived at independently at the prompt layer. Servo *mechanizes*
+   that rule; the skill asks the agent nicely (and by servo's own repeated lesson,
+   a prose guard "can't fail" — it's un-mutation-tested). The clean synthesis: an
+   `agentic-loop` task's *Acceptance* should be a servo oracle invocation, and
+   servo's `runner`/`judge` could claim tasks via push-as-lock to scale
+   horizontally — coordination×evaluation. Also note the skill has NO
+   suitability-gate analogue (it assumes every worklog task is loop-shaped); that
+   asymmetry is a point in servo's favour, not a pickup.
+
+**Resolution trigger:** (1) HARVEST-&-COMPACT — bundle with the next dispatch/run
+retention-GC work (the two unbounded-growth entries above are the natural home);
+design a `<target>/.servo/*-log.md` harvest artifact + a compaction pass that
+trims the live spine while git history retains the full trace. (2) push-as-lock —
+first time servo wants N-clone parallelism and the 024/025 coordinator feels too
+heavy for the deployment (e.g. a cloud/CI fleet with no shared host); prototype a
+`claim.sh`-shaped helper against `.servo/` state and weigh it against the
+coordinator. (3) composition — if servo ever grows a multi-collaborator front-end,
+make the oracle the Acceptance contract rather than re-deriving a verify step.
+
+**Surfaced by:** ad-hoc review of a colleague's cross-team PR, 2026-08-27 — a
+"relevant for servo?" read, captured here rather than lost to chat. Not a slice
+defect and not servo-authored; an inbound idea parked for a future spec to
+consume or decline.
