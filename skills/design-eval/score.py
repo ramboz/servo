@@ -682,6 +682,23 @@ def _scoring_prompt(config: dict) -> str:
     return "\n".join(lines)
 
 
+def _exclusion_summary(config: dict) -> str:
+    """The human-facing surfacing at freeze (028-02 / ADR-0033 §4): what the eval
+    SCORES vs what it EXCLUDES, so an approver sees the ignore-list explicitly and
+    can veto it — exactly the record the field-report author buried in prose."""
+    dims = [d.get("id", "?") for d in config.get("dimensions") or []]
+    ign = [(i.get("id", "?"), i.get("reason", "")) for i in config.get("ignore") or []]
+    lines = [f"design-eval freeze: SCORES {len(dims)} dimension(s): "
+             + (", ".join(dims) or "(none)")]
+    if ign:
+        lines.append(f"design-eval freeze: EXCLUDES {len(ign)} dimension(s) — confirm "
+                     "each is genuinely out of scope for these screens:")
+        lines += [f"  - {iid}: {reason}" for iid, reason in ign]
+    else:
+        lines.append("design-eval freeze: EXCLUDES 0 dimensions.")
+    return "\n".join(lines)
+
+
 def judge(app_png: Path, ref_png: Path, config: dict) -> float:
     """One vision-judge sample → [0,1]. Dispatches on the frozen ``judge.transport``:
     ``"api"`` (Messages API + ANTHROPIC_API_KEY) or ``"cli"`` (headless ``claude -p``,
@@ -1082,6 +1099,15 @@ def _emit_honesty_advisories(config: dict, composite: float, *, fake_run: bool,
                 f"human-supplied (sha256 {sha[:12]}…), not captured by servo; the "
                 "score reflects whatever image was staged.",
                 file=sys.stderr)
+    # 028-02 AC3: a SELF-APPROVED freeze (no distinct reviewer) carries auditability
+    # only, not prevention — say so on the loud channel every run, so a consumer
+    # never reads a self-acked exclusion list as an independently-vetoed one.
+    if config.get("approval_provenance") == "self_approved":
+        print(
+            "design-eval: SELF-APPROVED freeze (no distinct reviewer acknowledged the "
+            "exclusion list) — the ignore-list carries AUDITABILITY only, not "
+            "prevention; a backwards-authored policy would not have been vetoed here "
+            "(ADR-0033).", file=sys.stderr)
     threshold = config.get("threshold")
     delta = (config.get("samples") or {}).get("delta")
     if threshold is not None and delta:
@@ -1140,6 +1166,10 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
         # 029-02 AC3: what the subagent SAID it judged with — never verified; a bare
         # `null` on non-subagent runs keeps every row the same shape.
         "self_reported_model": self_reported_model,
+        # 028-02 AC3: whether the freeze's exclusion list was independently reviewed
+        # (`reviewed`) or self-approved by the author (`self_approved` →
+        # auditability-only, not prevention). Advisory, never hashed.
+        "approval_provenance": config.get("approval_provenance"),
         # 027-02 AC5: which capture provider produced this run's shots — advisory,
         # never hashed (ADR-0032 §6). `null` on the fake arm (no capture ran).
         "capture_provider": provider,

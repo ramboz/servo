@@ -89,7 +89,7 @@ class FreezeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             config = json.loads((d / "config.json").read_text())
             self.assertEqual(config["approval_status"], "approved")
             score.validate_freeze(config, d)  # no raise
@@ -105,7 +105,7 @@ class FreezeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             (d / "refs" / "home.png").write_bytes(b"\x89PNG-TAMPERED")
             with self.assertRaises(score.StaleError):
                 score.validate_freeze(json.loads((d / "config.json").read_text()), d)
@@ -123,7 +123,7 @@ class FreezeTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as t:
                 tmp = Path(t)
                 d = _make_eval_dir(tmp)
-                de.freeze(tmp)
+                de.freeze(tmp, acknowledge=True)
                 config = json.loads((d / "config.json").read_text())
                 mutate(config)
                 with self.assertRaises(score.StaleError):
@@ -134,7 +134,7 @@ class FreezeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             config = json.loads((d / "config.json").read_text())
             config["judge"]["model"] = "claude-haiku-4-5-20251001"
             with self.assertRaises(score.StaleError):
@@ -146,7 +146,7 @@ class FreezeTests(unittest.TestCase):
             d = _make_eval_dir(tmp)
             (d / "refs" / "home.png").unlink()
             with self.assertRaises(FileNotFoundError):
-                de.freeze(tmp)
+                de.freeze(tmp, acknowledge=True)
 
     def test_changed_viewport_is_stale(self):
         # design-eval pins "viewport" into the definition hash via its
@@ -155,7 +155,7 @@ class FreezeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             config = json.loads((d / "config.json").read_text())
             config["viewport"]["width"] = 1024
             with self.assertRaises(score.StaleError):
@@ -190,7 +190,7 @@ class ScoreHonestyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             rc, out, err = _capture_main(d)
             self.assertEqual(rc, score.EXIT_ENV_ERROR)
             self.assertEqual(out.strip(), "")  # never a 0.0 on the env-error path
@@ -210,7 +210,7 @@ class ScoreHonestyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.80, 0.82, 0.78, 0.80], "settings": [0.90, 0.90, 0.90, 0.90]})
             rc, out, _ = _capture_main(d)
@@ -238,7 +238,7 @@ class HonestyAdvisoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.90], "settings": [0.90]})
             rc, out, err = _capture_main(d)
@@ -254,7 +254,7 @@ class HonestyAdvisoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.79], "settings": [0.79]})
             rc, out, err = _capture_main(d)
@@ -266,7 +266,7 @@ class HonestyAdvisoryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.50], "settings": [0.50]})
             rc, out, err = _capture_main(d)
@@ -336,7 +336,7 @@ class StructuredPolicyTests(unittest.TestCase):
             # de.freeze raises de's own loaded score module's EnvError (a distinct
             # class object from the test module's `score.EnvError`).
             with self.assertRaises(de._score.EnvError) as cm:
-                de.freeze(tmp)
+                de.freeze(tmp, acknowledge=True)
             self.assertIn("schema_version 2", str(cm.exception))
 
     def test_empty_dimensions_fails_closed(self):
@@ -355,12 +355,122 @@ class StructuredPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.85], "settings": [0.85]})
             rc, out, _ = _capture_main(d)
             self.assertEqual(rc, score.EXIT_OK)
             self.assertAlmostEqual(float(out.strip()), 0.85, places=4)
+
+
+class FreezeSurfacingTests(unittest.TestCase):
+    """028-02 / ADR-0033 §4: freeze surfaces the exclusion list and refuses unless a
+    distinct reviewer (→ reviewed) or a human-owner ack (→ self_approved) signs off;
+    a self-approved freeze is marked auditability-only, legible in the ledger + a
+    loud run advisory; the env bypass never upgrades self_approved to reviewed."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in ("ANTHROPIC_API_KEY", score._FAKE_SCORES_ENV,
+                  "SERVO_DESIGN_EVAL_ACK_EXCLUSIONS"):
+            os.environ.pop(k, None)
+
+    def test_freeze_refuses_without_acknowledgement_and_surfaces_exclusions(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                with self.assertRaises(de._score.EnvError) as cm:
+                    de.freeze(tmp)  # no acknowledge, no reviewer
+            self.assertIn("not acknowledged", str(cm.exception))
+            # the exclusion list was surfaced (names the ignored id)
+            self.assertIn("EXCLUDES", err.getvalue())
+            self.assertIn("device-chrome", err.getvalue())
+
+    def test_acknowledge_yields_self_approved(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                cfg = de.freeze(tmp, acknowledge=True)
+            self.assertEqual(cfg["approval_status"], "approved")
+            self.assertEqual(cfg["approval_provenance"], "self_approved")
+            self.assertEqual(cfg["approved_by"], "self")
+
+    def test_distinct_reviewer_yields_reviewed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                cfg = de.freeze(tmp, reviewer="human-owner-42")
+            self.assertEqual(cfg["approval_provenance"], "reviewed")
+            self.assertEqual(cfg["approved_by"], "human-owner-42")
+
+    def test_env_bypass_is_self_approved_never_reviewed(self):
+        # AC4: the deliberateness bypass is a human-owner ack, NOT a silent upgrade
+        # of an author self-ack to `reviewed`.
+        os.environ["SERVO_DESIGN_EVAL_ACK_EXCLUSIONS"] = "1"
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                cfg = de.freeze(tmp)  # no explicit acknowledge/reviewer — env only
+            self.assertEqual(cfg["approval_provenance"], "self_approved")
+            self.assertNotEqual(cfg["approval_provenance"], "reviewed")
+
+    def test_self_approved_run_records_provenance_and_emits_advisory(self):
+        # AC3: a self_approved eval's runs carry the marker in the ledger AND a loud
+        # "SELF-APPROVED … auditability only" advisory on stderr.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                de.freeze(tmp, acknowledge=True)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9], "settings": [0.9]})
+            rc, out, err = _capture_main(d)
+            self.assertEqual(rc, score.EXIT_OK)
+            self.assertIn("SELF-APPROVED", err)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            self.assertEqual(row["approval_provenance"], "self_approved")
+
+    def test_exclusion_summary_scores_line_and_zero_exclusions(self):
+        cfg = _base_config(
+            dimensions=[{"id": "layout", "description": "x"},
+                        {"id": "palette", "description": "y"}],
+            ignore=[])
+        summary = score._exclusion_summary(cfg)
+        self.assertIn("SCORES 2 dimension(s): layout, palette", summary)
+        self.assertIn("EXCLUDES 0 dimensions", summary)
+
+    def test_cli_freeze_refusal_is_clean_line_not_traceback(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp)
+            # `de.main(["freeze", ...])` with no ack flag → clean rc 2, not a crash.
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                rc = de.main(["freeze", str(tmp)])
+            self.assertEqual(rc, de.ENV_ERROR_RC)
+            self.assertIn("freeze refused", err.getvalue())
+            self.assertNotIn("Traceback", err.getvalue())
+
+    def test_reviewed_run_has_no_self_approved_advisory(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            with contextlib.redirect_stderr(io.StringIO()):
+                de.freeze(tmp, reviewer="human-owner-42")
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9], "settings": [0.9]})
+            rc, out, err = _capture_main(d)
+            self.assertEqual(rc, score.EXIT_OK)
+            self.assertNotIn("SELF-APPROVED", err)
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            self.assertEqual(row["approval_provenance"], "reviewed")
 
 
 class ManualCaptureTests(unittest.TestCase):
@@ -439,7 +549,7 @@ class ManualCaptureTests(unittest.TestCase):
             d = _make_eval_dir(tmp, self._manual_config())
             self._stage(d, "home", b"\x89PNG-home")
             self._stage(d, "settings", b"\x89PNG-settings")
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ["ANTHROPIC_API_KEY"] = "test-key"  # passes the up-front guard
             err = io.StringIO()
             with mock.patch.object(score, "judge", return_value=0.9), \
@@ -484,7 +594,7 @@ class ManualCaptureTests(unittest.TestCase):
             d = _make_eval_dir(tmp, self._manual_config())
             self._stage(d, "home", b"\x89PNG-home")
             self._stage(d, "settings", b"\x89PNG-settings")
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             err = io.StringIO()
             with mock.patch.object(score, "judge", return_value=0.9), \
                     contextlib.redirect_stderr(err):
@@ -496,7 +606,7 @@ class ManualCaptureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t2:
             tmp2 = Path(t2)
             d2 = _make_eval_dir(tmp2)
-            de.freeze(tmp2)
+            de.freeze(tmp2, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.9], "settings": [0.9]})
             err2 = io.StringIO()
@@ -556,7 +666,7 @@ class SubagentAdvisoryTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as t:
                 tmp = Path(t)
                 d = _make_eval_dir(tmp, self._subagent_config())
-                de.freeze(tmp)
+                de.freeze(tmp, acknowledge=True)
                 if attended:  # a live "session" response sitting there must NOT matter
                     (d / "subagent").mkdir(parents=True, exist_ok=True)
                     (d / "subagent" / "response.json").write_text(
@@ -573,7 +683,7 @@ class SubagentAdvisoryTests(unittest.TestCase):
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._subagent_config())
             self._stage_manual(d)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._SUBAGENT_TIMEOUT_ENV] = "10"
             self._responder(d / "subagent", {
                 "model": "claude-sonnet-selfreported",
@@ -598,7 +708,7 @@ class SubagentAdvisoryTests(unittest.TestCase):
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._subagent_config())
             self._stage_manual(d)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._SUBAGENT_TIMEOUT_ENV] = "0"  # check once, fail closed
             start = time.time()
             with self.assertRaises(score.EnvError) as cm:
@@ -611,7 +721,7 @@ class SubagentAdvisoryTests(unittest.TestCase):
             tmp = Path(t)
             cfg = _base_config()  # transport defaults to api
             d = _make_eval_dir(tmp, cfg)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 score.advisory_read(d)
             self.assertIn("subagent", str(cm.exception))
@@ -623,7 +733,7 @@ class SubagentAdvisoryTests(unittest.TestCase):
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._subagent_config())
             self._stage_manual(d)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._SUBAGENT_TIMEOUT_ENV] = "10"
             self._responder(d / "subagent",
                             {"model": "m", "screens": {"home": ["oops"], "settings": [0.9]}})
@@ -639,7 +749,7 @@ class SubagentAdvisoryTests(unittest.TestCase):
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._subagent_config())
             self._stage_manual(d)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._SUBAGENT_TIMEOUT_ENV] = "10"
             self._responder(d / "subagent",
                             {"model": "m", "screens": {"home": [0.9], "settings": [0.9]}})
@@ -656,7 +766,7 @@ class SubagentAdvisoryTests(unittest.TestCase):
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._subagent_config())
             self._stage_manual(d)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._SUBAGENT_TIMEOUT_ENV] = "10"
             self._responder(d / "subagent",
                             {"model": "m-self", "screens": {"home": [0.9], "settings": [0.9]}})
@@ -860,7 +970,7 @@ class FreezeCliTests(unittest.TestCase):
                 (d / "setups" / f"{s['id']}.mjs").write_text("export default async () => {};\n")
             (d / "config.json").write_text(json.dumps(cfg, indent=2))
 
-            frozen = de.freeze(tmp)
+            frozen = de.freeze(tmp, acknowledge=True)
             self.assertEqual(frozen["approval_status"], "approved")
             self.assertIn("approved_content_hash", frozen)
             self.assertIn("hashes", frozen)
@@ -880,14 +990,14 @@ class FreezeCliTests(unittest.TestCase):
             # reference files deliberately absent
             (d / "config.json").write_text(json.dumps(cfg, indent=2))
             with self.assertRaises(FileNotFoundError):
-                de.freeze(tmp)
+                de.freeze(tmp, acknowledge=True)
 
     def test_freeze_without_config_raises(self):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             (tmp / ".servo" / "design-eval").mkdir(parents=True, exist_ok=True)
             with self.assertRaises(FileNotFoundError):
-                de.freeze(tmp)
+                de.freeze(tmp, acknowledge=True)
 
 
 class CliDispatchTests(unittest.TestCase):
@@ -1259,7 +1369,7 @@ class PreflightTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             orig_which = score.shutil.which
             score.shutil.which = lambda n: None   # node absent
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
@@ -1332,7 +1442,7 @@ class LedgerProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.9, 0.9], "settings": [0.9, 0.9]})
             try:
@@ -1351,7 +1461,7 @@ class LedgerProvenanceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.9, 0.9], "settings": [0.9, 0.9]})
             try:
@@ -1374,7 +1484,7 @@ class LedgerProvenanceTests(unittest.TestCase):
         on this module would not reach it.
         """
         d = _make_eval_dir(tmp)
-        de.freeze(tmp)
+        de.freeze(tmp, acknowledge=True)
         seen = {"n": 0}
         orig_run, orig_which, orig_judge = (
             score.subprocess.run, score.shutil.which, score.judge)
@@ -1596,7 +1706,7 @@ class PreflightExitContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             tmp = Path(td)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ["ANTHROPIC_API_KEY"] = "x"        # get past the judge check
             orig_which = score.shutil.which
             score.shutil.which = lambda n: None          # node absent -> preflight halts
@@ -1971,7 +2081,7 @@ class ShotRetentionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             self._run_once(d)
             self._run_once(d)
             homes = sorted((d / "shots").glob("app-home*.png"))
@@ -1986,7 +2096,7 @@ class ShotRetentionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row = self._run_once(d)
             for s in row["screens"]:
                 self.assertEqual(
@@ -1997,7 +2107,7 @@ class ShotRetentionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row = self._run_once(d)
             for s in row["screens"]:
                 self.assertIn("shot", s,
@@ -2013,7 +2123,7 @@ class ShotRetentionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.9, 0.9, 0.9, 0.9], "settings": [0.9, 0.9, 0.9, 0.9]})
             try:
@@ -2082,7 +2192,7 @@ class CaptureProviderSeamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, argv = self._live_run(d)
             self.assertIsNotNone(argv, "the web provider must spawn node capture.mjs")
             self.assertEqual(argv[0], "node")
@@ -2097,7 +2207,7 @@ class CaptureProviderSeamTests(unittest.TestCase):
             cfg = _base_config()
             cfg["capture"] = {"transport": "web"}
             d = _make_eval_dir(tmp, cfg)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, argv = self._live_run(d)
             self.assertEqual(argv[0], "node")
             self.assertEqual(row["capture_provider"], "web")
@@ -2119,7 +2229,7 @@ class CaptureProviderSeamTests(unittest.TestCase):
             cfg = _base_config()
             cfg["capture"] = {"transport": "banana"}
             d = _make_eval_dir(tmp, cfg)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             called = {"capture": False}
 
             def boom(*a, **k):
@@ -2146,7 +2256,7 @@ class CaptureProviderSeamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.9, 0.9, 0.9, 0.9], "settings": [0.9, 0.9, 0.9, 0.9]})
             try:
@@ -2169,7 +2279,7 @@ class CaptureProviderSeamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             config = json.loads((d / "config.json").read_text())
             config["capture"] = {"transport": "web"}
             score.validate_freeze(config, d)  # must not raise StaleError
@@ -2235,7 +2345,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(["mytool", "--flag"]))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, calls = self._live_run(d)
             capture_calls = [c for c in calls if "--out" in c]
             self.assertTrue(capture_calls, "the command provider must spawn per screen")
@@ -2256,7 +2366,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(["mytool"]))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             _, calls = self._live_run(d)
             self.assertFalse(
                 any(any("capture.mjs" in a for a in argv) for argv in calls),
@@ -2275,7 +2385,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
                 if command is not None:
                     cfg["capture"]["command"] = command
                 d = _make_eval_dir(tmp, cfg)
-                de.freeze(tmp)
+                de.freeze(tmp, acknowledge=True)
 
                 def boom(*a, **k):
                     raise AssertionError("must not capture when command is missing/empty")
@@ -2298,7 +2408,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
             cfg = _base_config()
             cfg["capture"] = {"transport": "command"}  # no command
             d = _make_eval_dir(tmp, cfg)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ["ANTHROPIC_API_KEY"] = "x"
             try:
                 rc, out, err = _capture_main(d)
@@ -2314,7 +2424,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(["broken-tool"]))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
 
             class _P:
                 returncode = 3
@@ -2338,7 +2448,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(["mytool", "--flag"]))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, _ = self._live_run(d)
             self.assertEqual(row["capture_provider"], "command")
             self.assertEqual(row["capture_command"], ["mytool", "--flag"])
@@ -2351,7 +2461,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             config = json.loads((d / "config.json").read_text())
             config["capture"] = {"transport": "command", "command": ["x"]}
             score.validate_freeze(config, d)  # must not raise
@@ -2361,7 +2471,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(["mytool"]))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, _ = self._live_run(d, emit_attestation=False)
             for s in row["screens"]:
                 self.assertEqual(s["provenance"], "not_attested")
@@ -2372,7 +2482,7 @@ class CaptureCommandProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp)  # no capture block → web default
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, calls = self._live_run(d, emit_attestation=True)
             self.assertEqual(row["capture_provider"], "web")
             self.assertIsNone(row["capture_command"])
@@ -2632,7 +2742,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(serial="emulator-5554"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, calls = self._live_run(d)
             self.assertEqual(row["capture_provider"], "android")
             # capture_command = [<adb>, "-s", <serial>, "exec-out", "screencap", "-p"]
@@ -2645,7 +2755,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg())  # no serial in config
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ["SERVO_DESIGN_EVAL_ANDROID_SERIAL"] = "emulator-9"
             row, calls = self._live_run(d, devices=("a", "b"))  # ambiguous, but env wins
             self.assertIn("emulator-9", row["capture_command"])
@@ -2654,7 +2764,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg())
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, _ = self._live_run(d, devices=("the-only-one",))
             self.assertIn("the-only-one", row["capture_command"])
 
@@ -2663,7 +2773,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
             with self.subTest(devices=devices), tempfile.TemporaryDirectory() as t:
                 tmp = Path(t)
                 d = _make_eval_dir(tmp, self._cfg())
-                de.freeze(tmp)
+                de.freeze(tmp, acknowledge=True)
                 os.environ["ANTHROPIC_API_KEY"] = "x"
                 orig = (score.subprocess.run, score.shutil.which)
 
@@ -2692,7 +2802,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(serial="emulator-5554",
                                               crop={"top": 10, "bottom": 8, "left": 4, "right": 6}))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, _ = self._live_run(d)
             for s in row["screens"]:
                 shot = d / s["shot"]
@@ -2706,7 +2816,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(serial="s", crop={"top": h, "bottom": 5}))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d)
             self.assertIn("crop", str(cm.exception))
@@ -2718,7 +2828,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(screens=screens, serial="s"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             _, calls = self._live_run(d)
             am = [c for c in calls if "am" in c and "start" in c]
             self.assertTrue(am, "a screen with a deeplink must fire `am start`")
@@ -2729,7 +2839,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(serial="s"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, _ = self._live_run(d)
             for s in row["screens"]:
                 self.assertEqual(s["provenance"], "not_attested")
@@ -2738,7 +2848,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(serial="s"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d, adb=False)
             self.assertIn("adb", str(cm.exception).lower())
@@ -2747,7 +2857,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(serial="s"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d, screencap_rc=1)
             self.assertIn("screencap", str(cm.exception))
@@ -2758,7 +2868,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(serial="s"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError):
                 self._live_run(d, screencap_bytes=b"not a png at all")
 
@@ -2766,7 +2876,7 @@ class CaptureAndroidProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(serial="s", crop={"top": "lots"}))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d)
             self.assertIn("crop", str(cm.exception))
@@ -2867,7 +2977,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(udid="ABC-123"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, calls = self._live_run(d)
             self.assertEqual(row["capture_provider"], "ios")
             # capture_command = [<xcrun>, "simctl", "io", <target>, "screenshot"]
@@ -2880,7 +2990,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg())  # no udid → "booted"
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, _ = self._live_run(d)
             self.assertIn("booted", row["capture_command"])
 
@@ -2888,7 +2998,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg())
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             os.environ["SERVO_DESIGN_EVAL_IOS_UDID"] = "ENV-UDID"
             row, _ = self._live_run(d)
             self.assertIn("ENV-UDID", row["capture_command"])
@@ -2901,7 +3011,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(udid="x",
                                               crop={"top": 10, "bottom": 8, "left": 4, "right": 6}))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, _ = self._live_run(d)
             for s in row["screens"]:
                 shot = d / s["shot"]
@@ -2914,7 +3024,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(udid="x", crop={"top": h, "bottom": 5}))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d)
             self.assertIn("crop", str(cm.exception))
@@ -2923,7 +3033,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(udid="x", crop={"left": "lots"}))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d)
             self.assertIn("crop", str(cm.exception))
@@ -2935,7 +3045,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(screens=screens, udid="x"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             _, calls = self._live_run(d)
             openurls = [c for c in calls if "openurl" in c]
             self.assertTrue(openurls, "a screen with a deeplink must fire `simctl openurl`")
@@ -2946,7 +3056,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(udid="x"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             row, _ = self._live_run(d)
             for s in row["screens"]:
                 self.assertEqual(s["provenance"], "not_attested")
@@ -2955,7 +3065,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(udid="x"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d, xcrun=False)
             self.assertIn("xcrun", str(cm.exception).lower())
@@ -2964,7 +3074,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(udid="x"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d, screenshot_rc=1)
             self.assertIn("screenshot", str(cm.exception))
@@ -2974,7 +3084,7 @@ class CaptureIOSProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
             d = _make_eval_dir(tmp, self._cfg(udid="x"))
-            de.freeze(tmp)
+            de.freeze(tmp, acknowledge=True)
             with self.assertRaises(score.EnvError) as cm:
                 self._live_run(d, write_file=False)
             self.assertIn("screenshot", str(cm.exception))

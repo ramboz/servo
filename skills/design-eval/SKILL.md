@@ -183,7 +183,23 @@ silent `0.0`; a changed policy/dataset/model refuses as stale.
 4. **`freeze`** — `python3 design_eval.py freeze <target>` pins + sha256-hashes
    the definition (model/n/δ/threshold/screens), the structured policy (dimensions + ignore), and every reference
    + setup file, and sets `approval_status: approved`. Any later edit to those
-   refuses at score time as **stale** until re-frozen.
+   refuses at score time as **stale** until re-frozen. **Freeze surfaces the
+   exclusion list and refuses without an acknowledgement** (028-02 / ADR-0033 §4):
+   it prints `SCORES N … / EXCLUDES M …` and will not stamp `approved` unless you
+   pass **`--reviewer <id>`** (a party *distinct from the author* who vetted the
+   exclusions → `approval_provenance: reviewed`, the prevention path) or
+   **`--acknowledge-exclusions`** / `SERVO_DESIGN_EVAL_ACK_EXCLUSIONS=1` (a human
+   owner accepting them → `self_approved`, **auditability-only**). A `self_approved`
+   freeze is legible in the ledger and prints a loud `SELF-APPROVED …` advisory on
+   every run — because a self-acked ignore-list carries auditability, **not**
+   prevention (a backwards-authored policy would not have been vetoed). The env
+   bypass is a human-owner ack; it is **never** silently upgraded to `reviewed`.
+   **Caveat (until 028-03 lands):** `reviewed` is an **asserted, unenforced**
+   marker — `--reviewer <id>` is honor-system (the config carries no author
+   identity to compare against), so it records *who was asserted to have reviewed*,
+   not a verified independent review. Do not read a `reviewed` freeze as
+   independently vetoed yet; the **enforced** independent *re-enumerating* reviewer
+   that truly earns `reviewed` (and defends the omission path) is 028-03.
 
 5. **`install`** — `python3 design_eval.py install <target> [--weight W]`
    splices `score_design_fidelity` into `oracle.sh`, registers it in COMPONENTS

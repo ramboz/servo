@@ -23,10 +23,16 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# 028-02: a human-owner's deliberateness bypass for the freeze-exclusion ack
+# (a JIG_*-style signal, ADR-0011). Acknowledging via env is recorded as
+# self_approved — never silently upgraded to `reviewed`.
+_ACK_EXCLUSIONS_ENV = "SERVO_DESIGN_EVAL_ACK_EXCLUSIONS"
 
 SKILL_DIR = Path(__file__).resolve().parent
 COMMON_DIR = SKILL_DIR.parent / "_common"
@@ -114,11 +120,16 @@ def capture_refs(target: Path) -> int:
     return proc.returncode
 
 
-def freeze(target: Path) -> dict:
+def freeze(target: Path, *, acknowledge: bool = False, reviewer: str = None) -> dict:
     """Pin + hash the definition (model/n/δ/threshold/screens) plus the structured
     policy (dimensions + ignore) + reference + setup files; set
     ``approval_status: approved`` (ADR-0005 clause 2). Refuses a legacy v1
-    free-text-`rubric` config with a re-author message (028-01 / ADR-0033)."""
+    free-text-`rubric` config with a re-author message (028-01 / ADR-0033).
+
+    028-02: surfaces the exclusion list and refuses unless the exclusions are
+    acknowledged — by a distinct ``reviewer`` (→ ``approval_provenance: reviewed``,
+    the prevention path) or a human owner via ``acknowledge`` /
+    ``SERVO_DESIGN_EVAL_ACK_EXCLUSIONS`` (→ ``self_approved``, auditability-only)."""
     d = _eval_dir(target)
     cfg_path = d / "config.json"
     if not cfg_path.is_file():
@@ -126,6 +137,23 @@ def freeze(target: Path) -> dict:
     config = json.loads(cfg_path.read_text())
     _score._require_schema_v2(config)   # 028-01: no v1 rubric freezes
     _score._validate_policy(config)     # 028-01: dimensions/ignore well-formed
+    # 028-02 (ADR-0033 §4): SURFACE the exclusion list to an approver, and refuse to
+    # stamp `approved` unless a distinct reviewer signed off (→ prevention) or a human
+    # owner acknowledged it (→ self_approved / auditability-only). A self-ack is never
+    # silently upgraded to `reviewed`.
+    print(_score._exclusion_summary(config), file=sys.stderr)
+    env_ack = os.environ.get(_ACK_EXCLUSIONS_ENV, "").lower() in ("1", "true", "yes", "on")
+    if reviewer:
+        provenance, approved_by = "reviewed", reviewer
+    elif acknowledge or env_ack:
+        provenance, approved_by = "self_approved", "self"
+    else:
+        raise _score.EnvError(
+            "freeze refused: the exclusion list above was not acknowledged. Re-run "
+            "with --reviewer <id> (a party distinct from the author who has reviewed "
+            "the exclusions — the prevention path, ADR-0033) OR "
+            "--acknowledge-exclusions / SERVO_DESIGN_EVAL_ACK_EXCLUSIONS=1 (a human "
+            "owner accepting them; recorded as self_approved / auditability-only).")
     for s in config.get("screens", []):
         for rel in (s.get("reference"), s.get("setup")):
             if rel and not (d / rel).is_file():
@@ -135,6 +163,8 @@ def freeze(target: Path) -> dict:
     config["hashes"] = _score.artifact_hashes(config, d)
     config["approved_content_hash"] = _score.definition_hash(config)
     config["approval_status"] = "approved"
+    config["approval_provenance"] = provenance
+    config["approved_by"] = approved_by
     config["approved_at"] = _fe.iso_now()
     cfg_path.write_text(json.dumps(config, indent=2) + "\n")
     return config
@@ -184,6 +214,13 @@ def main(argv=None) -> int:
         sp.add_argument("target", type=Path)
         if name == "install":
             sp.add_argument("--weight", type=float, default=DEFAULT_WEIGHT)
+        if name == "freeze":
+            # 028-02: acknowledge / review the surfaced exclusion list.
+            sp.add_argument("--acknowledge-exclusions", action="store_true",
+                            help="human owner accepts the exclusions (→ self_approved)")
+            sp.add_argument("--reviewer", default=None,
+                            help="id of a distinct reviewer who vetted the exclusions "
+                                 "(→ reviewed / the prevention path)")
     args = parser.parse_args(argv)
     target = args.target.resolve()
 
@@ -193,8 +230,17 @@ def main(argv=None) -> int:
     elif args.cmd == "capture-refs":
         return capture_refs(target)
     elif args.cmd == "freeze":
-        freeze(target)
-        print("frozen (approval_status=approved)")
+        # 028-02: a refusal (unacknowledged exclusions) or a missing reference is an
+        # expected, guided outcome — surface it as a clean line + rc 2, not a
+        # traceback (mirrors the `advisory` branch below).
+        try:
+            cfg = freeze(target, acknowledge=args.acknowledge_exclusions,
+                         reviewer=args.reviewer)
+        except (_score.StaleError, _score.EnvError, FileNotFoundError) as e:
+            print(f"design-eval: freeze refused — {e}", file=sys.stderr)
+            return ENV_ERROR_RC
+        print(f"frozen (approval_status=approved, "
+              f"approval_provenance={cfg.get('approval_provenance')})")
     elif args.cmd == "install":
         install(target, args.weight)
         print(f"installed {COMPONENT} (weight {args.weight})")
