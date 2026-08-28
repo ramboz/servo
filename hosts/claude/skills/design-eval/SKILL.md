@@ -122,6 +122,22 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
        `xcrun` is found on `PATH` or via `SERVO_DESIGN_EVAL_XCRUN_BIN`; the resolved
        screenshot argv is the ledger `capture_command`; provenance is
        `not_attested` (simctl has no attestation channel).
+     - `"manual"` — a **human-supplied PNG** for **non-automatable** targets
+       (an in-game overlay, a Windows-only plugin on a Mac host — anything servo
+       cannot drive), 029-01 / [ADR-0035](../../docs/decisions/adr-0035-design-eval-manual-capture-provider.md).
+       You stage the screenshot at `manual/<screen-id>.png` under the eval dir;
+       servo consumes it, optionally chrome-crops it (`capture.manual.crop`
+       `{top,bottom,left,right}`), retains it as the run's shot, and records
+       per-screen `provenance: manual_capture` with the input's sha256 + mtime.
+       An absent / non-PNG staged shot fails closed to `env_error`. **Every manual
+       run prints a loud `MANUAL CAPTURE …` stderr advisory** naming the sha256 —
+       the tell is masquerade-prevention (a manual composite can never pass as a
+       servo-captured measurement), **not** doctoring-detection: a human controls
+       the bytes, so a fabricated image is possible and inherent (ADR-0035 §6);
+       the honesty gain over `SERVO_DESIGN_EVAL_FAKE_SCORES` is a real, retained,
+       hashed image scored by the real judge, loudly marked. State-seeding and
+       framing are the human's job; servo runs no `setup`. Distinct from the
+       fake-scores test hook — it must be explicitly selected and is never silent.
 
 3. **`capture-refs`** — `python3 design_eval.py capture-refs <target>` renders
    each `referenceSource` to its `reference` PNG (cropped). Eyeball them.

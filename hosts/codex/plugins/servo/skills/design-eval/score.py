@@ -20,6 +20,7 @@ Python 3.9+ standard library only (servo constraint, ADR-0020).
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -490,15 +491,84 @@ def _capture_ios(base_dir: Path, screen: dict, run_id: str | None = None,
     return out, None  # no attestation channel from simctl → not_attested
 
 
+# --------------------------------------------------------------------------- #
+# 029-01: manual human-supplied capture provider (ADR-0035). For non-automatable
+# targets (an in-game overlay, a Windows-only plugin on a Mac host) there is no
+# command that drives + shoots the app — the only real capture is a human staging
+# a screenshot. This provider consumes that staged PNG. It does NOT drive or shoot;
+# state-seeding and framing are the human's job (like the `command` provider). The
+# doctored-image residual is inherent and NOT closed (ADR-0035 §6) — the honesty
+# gain over the fake-scores hook is a real, retained, hashed image plus a loud
+# stderr advisory on every run (masquerade-prevention, not doctoring-detection).
+# --------------------------------------------------------------------------- #
+
+_MANUAL_PROVENANCE = "manual_capture"  # 029-01: distinct ledger provenance token
+_PNG_MAGIC = b"\x89PNG"
+
+
+def _manual_staged_path(base_dir: Path, screen: dict) -> Path:
+    """The staged-shot path a human places the screenshot at (029-01 DoR: fixed
+    convention ``manual/<screen-id>.png`` under the eval dir — discoverable next to
+    ``refs/`` and ``shots/``; no template knob in v1)."""
+    return base_dir / "manual" / f"{screen['id']}.png"
+
+
+def _capture_manual(base_dir: Path, screen: dict, run_id: str | None = None,
+                    config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **manual** capture provider (029-01 / ADR-0035): consume the PNG a human
+    staged at ``manual/<screen-id>.png``, optionally chrome-crop it, retain it as
+    this run's shot, and return it with a ``manual_capture`` attestation carrying
+    the input's sha256 + mtime (the audit trail). Absent / unreadable / non-PNG
+    input fails **closed** to `EnvError` — never a silent 0.0, never a fall-through.
+    """
+    config = config or {}
+    staged = _manual_staged_path(base_dir, screen)
+    if not staged.is_file():
+        raise EnvError(
+            f"manual capture: no staged shot for screen {screen['id']!r} at "
+            f"{staged.relative_to(base_dir).as_posix()} — stage the screenshot there "
+            "(capture.transport is 'manual'; servo does not capture it for you).")
+    data = staged.read_bytes()
+    if not data.startswith(_PNG_MAGIC):
+        raise EnvError(
+            f"manual capture: staged shot for screen {screen['id']!r} is not a PNG "
+            f"({staged.relative_to(base_dir).as_posix()}).")
+    # Attest the input the HUMAN SUPPLIED (AC3): hash it once, here, BEFORE any crop
+    # — one read (no double-read / TOCTOU), and `manual_sha256` names the bytes the
+    # human staged, not the retained shot. When `capture.manual.crop` is set the
+    # retained/judged shot below is the cropped derivative, so the hash and the shot
+    # legitimately differ; `source` links the ledger row back to the staged input.
+    att = {
+        "provenance": _MANUAL_PROVENANCE,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "mtime": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(staged.stat().st_mtime)),
+        "source": staged.relative_to(base_dir).as_posix(),
+    }
+    # Optional chrome-crop (parallels the native providers). Only when configured,
+    # so a plain already-framed screenshot needs no pngcrop sibling.
+    crop = ((config.get("capture") or {}).get("manual") or {}).get("crop")
+    if crop:
+        pc = _pngcrop()
+        try:
+            data = pc.crop_png(data, **_crop_insets(crop, where="capture.manual.crop"))
+        except pc.PngCropError as e:
+            raise EnvError(
+                f"manual frame crop failed for screen {screen['id']!r}: {e}") from e
+    out = _shot_out_path(base_dir, screen, run_id)
+    out.write_bytes(data)   # retained shot = the bytes actually judged (cropped when set)
+    return out, att
+
+
 # 027-02: the capture-provider seam. Each provider is invoked per screen as
 # ``fn(base_dir, screen, run_id, config)`` and returns (png, attestation).
-# 027-03 adds `command`; 027-04 adds `android`; 027-05 adds `ios`, all without
-# touching the scoring path. Web is the default.
+# 027-03 adds `command`; 027-04 adds `android`; 027-05 adds `ios`; 029-01 adds
+# `manual`, all without touching the scoring path. Web is the default.
 _CAPTURE_PROVIDERS = {
     "web": _capture_web,
     "command": _capture_command,
     "android": _capture_android,
     "ios": _capture_ios,
+    "manual": _capture_manual,
 }
 
 
@@ -741,11 +811,13 @@ def score(base_dir: Path) -> float:
     _ledger(base_dir, config, per_screen, composite,
             fake_run=fake is not None, provider=provider, capture_command=capture_command)
     composite = max(0.0, min(1.0, composite))
-    _emit_honesty_advisories(config, composite, fake_run=fake is not None)
+    _emit_honesty_advisories(config, composite, fake_run=fake is not None,
+                             provider=provider, per_screen=per_screen)
     return composite
 
 
-def _emit_honesty_advisories(config: dict, composite: float, *, fake_run: bool) -> None:
+def _emit_honesty_advisories(config: dict, composite: float, *, fake_run: bool,
+                             provider: str | None = None, per_screen=None) -> None:
     """Operator-facing warnings on **stderr** (never stdout — oracle.sh parses
     stdout as the single composite float, ``score="$(score_design_fidelity)"``).
     These facts are in ``ledger.jsonl`` too, but the ledger is not surfaced in a
@@ -766,6 +838,18 @@ def _emit_honesty_advisories(config: dict, composite: float, *, fake_run: bool) 
             "capture and no judge ran. The composite is INJECTED, not a "
             "measurement (ledger provenance: not_captured).",
             file=sys.stderr)
+    # 029-01 (ADR-0035 §3): a MANUAL run's tell lives in the loud channel humans
+    # read (stderr), not only the ledger — per screen, naming the sha256 of the
+    # image the human supplied. Masquerade-prevention (this is not servo-captured),
+    # NOT doctoring-detection — nothing can flag a doctored image as fabricated.
+    if provider == "manual" and per_screen:
+        for s, _samp, _lb, att, _shot in per_screen:
+            sha = (att or {}).get("sha256") or "unknown"
+            print(
+                f"design-eval: MANUAL CAPTURE — the shot for screen {s['id']!r} was "
+                f"human-supplied (sha256 {sha[:12]}…), not captured by servo; the "
+                "score reflects whatever image was staged.",
+                file=sys.stderr)
     threshold = config.get("threshold")
     delta = (config.get("samples") or {}).get("delta")
     if threshold is not None and delta:
@@ -788,6 +872,13 @@ def _provenance(att, *, fake_run: bool) -> dict:
     unavailable), because the remedies differ."""
     base = {"engine": None, "engine_version": None, "capture_transport": None,
             "provenance": None, "provenance_error": None}
+    if att is not None and att.get("provenance") == _MANUAL_PROVENANCE:
+        # 029-01 (ADR-0035): a human-staged shot. Distinct from `attested` (servo
+        # captured it) and from `not_captured`/`not_attested`; carries the input
+        # sha256 + mtime + source so a later auditor can open exactly what scored.
+        return {**base, "provenance": _MANUAL_PROVENANCE,
+                "manual_sha256": att.get("sha256"), "manual_mtime": att.get("mtime"),
+                "manual_source": att.get("source")}
     if att is None:
         # `fake_run` is passed in from score() — NOT derived from `att`, which
         # would make this branch and the next indistinguishable and silently

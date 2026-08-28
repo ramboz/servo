@@ -256,6 +256,151 @@ class HonestyAdvisoryTests(unittest.TestCase):
             self.assertNotIn("within noise", err)
 
 
+class ManualCaptureTests(unittest.TestCase):
+    """029-01 / ADR-0035: the `manual` human-supplied-PNG capture provider —
+    staged-file consumption, fail-closed on absent/non-PNG, `manual_capture`
+    provenance with sha256+mtime, a loud per-screen stderr advisory, distinct
+    from both automated capture and the fake-scores hook."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+        os.environ.pop("SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT", None)
+
+    def _stage(self, d: Path, screen_id: str, data=b"\x89PNG-staged"):
+        (d / "manual").mkdir(parents=True, exist_ok=True)
+        (d / "manual" / f"{screen_id}.png").write_bytes(data)
+
+    def test_capture_manual_returns_retained_shot_and_attestation(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            self._stage(d, "home", b"\x89PNG-home-shot")
+            out, att = score._capture_manual(d, {"id": "home"}, "runid-1", {})
+            # retained under shots/, not clobbering the staged input
+            self.assertTrue(out.is_file())
+            self.assertEqual(out.parent.name, "shots")
+            self.assertEqual(out.read_bytes(), b"\x89PNG-home-shot")
+            self.assertEqual(att["provenance"], "manual_capture")
+            self.assertEqual(att["sha256"],
+                             __import__("hashlib").sha256(b"\x89PNG-home-shot").hexdigest())
+            self.assertEqual(att["source"], "manual/home.png")
+            self.assertIn("mtime", att)
+
+    def test_capture_manual_absent_fails_closed(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)  # no manual/ staged
+            with self.assertRaises(score.EnvError) as cm:
+                score._capture_manual(d, {"id": "home"}, "runid-1", {})
+            self.assertIn("no staged shot", str(cm.exception))
+
+    def test_capture_manual_rejects_non_png(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            self._stage(d, "home", b"not-a-png")
+            with self.assertRaises(score.EnvError) as cm:
+                score._capture_manual(d, {"id": "home"}, "runid-1", {})
+            self.assertIn("not a PNG", str(cm.exception))
+
+    def test_provenance_manual_branch(self):
+        prov = score._provenance(
+            {"provenance": "manual_capture", "sha256": "abc123", "mtime": "t",
+             "source": "manual/x.png"},
+            fake_run=False)
+        self.assertEqual(prov["provenance"], "manual_capture")
+        self.assertEqual(prov["manual_sha256"], "abc123")
+        self.assertEqual(prov["manual_source"], "manual/x.png")
+
+    def test_default_transport_still_web(self):
+        self.assertEqual(score._resolve_capture_transport({}), "web")
+        self.assertEqual(score._resolve_capture_transport(
+            {"capture": {"transport": "manual"}}), "manual")
+
+    def _manual_config(self):
+        cfg = _base_config()
+        cfg["capture"] = {"transport": "manual"}
+        return cfg
+
+    def test_manual_run_end_to_end_ledger_and_advisory(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._manual_config())
+            self._stage(d, "home", b"\x89PNG-home")
+            self._stage(d, "settings", b"\x89PNG-settings")
+            de.freeze(tmp)
+            os.environ["ANTHROPIC_API_KEY"] = "test-key"  # passes the up-front guard
+            err = io.StringIO()
+            with mock.patch.object(score, "judge", return_value=0.9), \
+                    contextlib.redirect_stderr(err):
+                composite = score.score(d)
+            self.assertAlmostEqual(composite, 0.9, places=4)
+            # ledger: capture_provider manual; per-screen manual_capture + sha256 + shot
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            self.assertEqual(row["capture_provider"], "manual")
+            for sc in row["screens"]:
+                self.assertEqual(sc["provenance"], "manual_capture")
+                self.assertTrue(sc["manual_sha256"])
+                self.assertTrue(sc["shot"].startswith("shots/"))
+            # loud advisory, per screen, on stderr
+            self.assertEqual(err.getvalue().count("MANUAL CAPTURE"), 2)
+            self.assertIn("home", err.getvalue())
+
+    def test_manual_crop_hashes_input_not_cropped_shot(self):
+        # AC3 + craft-review nit: `capture.manual.crop` retains the CROPPED shot but
+        # `manual_sha256` must hash the SUPPLIED input (pre-crop). They differ when
+        # crop is set; `source` links them.
+        real_png = (HERE / "testdata" / "rgba_filter_sample.png").read_bytes()
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            self._stage(d, "home", real_png)
+            cfg = {"capture": {"manual": {"crop": {"top": 1, "bottom": 1, "left": 1, "right": 1}}}}
+            out, att = score._capture_manual(d, {"id": "home"}, "runid-c", cfg)
+            expected_input_sha = __import__("hashlib").sha256(real_png).hexdigest()
+            self.assertEqual(att["sha256"], expected_input_sha)          # hash of INPUT
+            self.assertNotEqual(out.read_bytes(), real_png)              # shot is cropped
+            cropped = score._pngcrop().crop_png(real_png, top=1, bottom=1, left=1, right=1)
+            self.assertEqual(out.read_bytes(), cropped)                  # shot == judged bytes
+
+    def test_manual_distinct_from_fake_scores(self):
+        # AC5: a manual run and a fake-scores run must not be confusable — a manual
+        # run genuinely runs the judge and records `manual_capture`; a fake-scores
+        # run records `not_captured`. Run BOTH and compare the ledger provenance.
+        os.environ["ANTHROPIC_API_KEY"] = "test-key"
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._manual_config())
+            self._stage(d, "home", b"\x89PNG-home")
+            self._stage(d, "settings", b"\x89PNG-settings")
+            de.freeze(tmp)
+            err = io.StringIO()
+            with mock.patch.object(score, "judge", return_value=0.9), \
+                    contextlib.redirect_stderr(err):
+                score.score(d)
+            manual_row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            self.assertIn("MANUAL CAPTURE", err.getvalue())
+            self.assertNotIn("FAKE SCORES", err.getvalue())
+        # A fake-scores run on an equivalent frozen eval → not_captured, FAKE SCORES.
+        with tempfile.TemporaryDirectory() as t2:
+            tmp2 = Path(t2)
+            d2 = _make_eval_dir(tmp2)
+            de.freeze(tmp2)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.9], "settings": [0.9]})
+            err2 = io.StringIO()
+            with contextlib.redirect_stderr(err2):
+                score.score(d2)
+            fake_row = json.loads((d2 / "ledger.jsonl").read_text().strip().splitlines()[-1])
+        self.assertEqual(manual_row["screens"][0]["provenance"], "manual_capture")
+        self.assertEqual(fake_row["screens"][0]["provenance"], "not_captured")
+        self.assertNotEqual(manual_row["capture_provider"], fake_row["capture_provider"])
+
+
 class InstallTests(unittest.TestCase):
     ORACLE = (
         "#!/usr/bin/env bash\nset -euo pipefail\nTHRESHOLD=\"${THRESHOLD:-0.5}\"\n"
