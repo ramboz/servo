@@ -1,12 +1,22 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "approval_status": "draft",
   "app_url": "http://localhost:4173/",
   "viewport": { "width": 392, "height": 812, "deviceScaleFactor": 2 },
   "judge": { "model": "claude-sonnet-4-6", "transport": "api", "temperature": 0.6, "max_tokens": 1024 },
   "samples": { "n": 4, "k": 1.0, "delta": 0.03 },
   "threshold": 0.8,
-  "rubric": "Score, in [0,1], how faithfully the FIRST image (the implemented app screen) reproduces the SECOND image (the design reference): layout & section order, spacing & proportion, colour palette (accent, neutrals, semantic/tag colours), typography (families, weights, relative sizes), and component shapes (cards, pills, buttons, FAB). IGNORE device chrome (status bar, bezel, home indicator), dynamic content values (specific times, dates, item names), and exact pixel positions. 1.0 = visually indistinguishable in design intent; 0.5 = right structure, wrong styling; 0.0 = unrelated.",
+  "dimensions": [
+    { "id": "layout", "description": "section order, spacing & proportion", "weight": 1.0 },
+    { "id": "palette", "description": "colour palette — accent, neutrals, semantic/tag colours", "weight": 1.0 },
+    { "id": "typography", "description": "families, weights, relative sizes", "weight": 1.0 },
+    { "id": "component-shape", "description": "cards, pills, buttons, FAB", "weight": 1.0 }
+  ],
+  "ignore": [
+    { "id": "device-chrome", "reason": "status bar / bezel / home indicator are the OS frame, not the app design" },
+    { "id": "dynamic-content", "reason": "specific times, dates, and item names vary at runtime" },
+    { "id": "exact-pixel-positions", "reason": "sub-pixel placement is not a design-intent difference" }
+  ],
   "screens": [
     {
       "id": "home",

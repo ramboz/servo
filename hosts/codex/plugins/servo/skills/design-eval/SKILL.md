@@ -15,10 +15,10 @@ a project-authored `score_design_fidelity` that drops into the existing
 toward its mockup and the quality-gate can attest the result.
 
 **Ownership.** servo owns the *mechanism* (capture + judge + freeze + the
-runtime `score.py`); the *project* owns the *policy* (which screens, the rubric,
+runtime `score.py`); the *project* owns the *policy* (which screens, the scoring policy,
 the judge model, `n`/`k`/`δ`/threshold). Honesty is preserved: servo scores, it
 does not prove; a missing key / unreachable judge is `env_error` (rc=2), never a
-silent `0.0`; a changed rubric/dataset/model refuses as stale.
+silent `0.0`; a changed policy/dataset/model refuses as stale.
 
 ## Prerequisites
 
@@ -74,7 +74,27 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
      **deterministic** state (the app is now-dependent: seed entries, pin the
      period/clock) and navigates to the screen;
    - and globally: `app_url`, `viewport`, `samples` (`n`, `k`, `delta`),
-     `threshold`, the `rubric`, and `judge`:
+     `threshold`, the **structured scoring policy** (`schema_version: 2` +
+     `dimensions` + `ignore`, 028-01 / [ADR-0033](../../docs/decisions/adr-0033-design-eval-structured-scoring-policy.md)),
+     and `judge`:
+     - `dimensions: [{id, description, weight?}]` — the aspects that ARE scored
+       (layout, palette, typography, component-shape, …). The judge instruction is
+       **assembled from this list**, so what the judge scores is a function of the
+       approved structure, not hand-written prose. Under the current holistic
+       fallback, `weight` is **advisory to the judge** (passed as relative-importance
+       guidance in the prompt), not a mechanical per-dimension multiplier — editing
+       it changes the guidance (and re-freezes) but does not by itself change the
+       arithmetic; mechanical per-dimension weighting arrives with per-dimension
+       sub-scoring (deferred; `docs/refinement-todo.md`).
+     - `ignore: [{id, reason}]` — the aspects explicitly **excluded** from the
+       score, each a **discrete, reason-bearing item** — never prose buried in a
+       sentence. This is the anti-gaming split: an exclusion is a visible,
+       hashed, reviewable record, not a silent "IGNORE …" clause. (The legacy
+       free-text `rubric` is **gone**: a `schema_version: 1` config refuses at
+       freeze/score time with a re-author message — force re-author, ADR-0033 §5.
+       *Per-dimension* sub-scoring is a deferred follow-up — see
+       `docs/refinement-todo.md`; today the judge returns one holistic score under
+       the structured instruction, the ADR-0033 Kill-criteria fallback shape.)
      - `model` — a **vision-capable** model id (e.g. `claude-sonnet-4-6`);
      - `transport` — `"api"` (default) or `"cli"` (see Prerequisites);
      - `temperature` / `max_tokens` — decoding params that apply to the **`"api"`
@@ -155,7 +175,7 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
    each `referenceSource` to its `reference` PNG (cropped). Eyeball them.
 
 4. **`freeze`** — `python3 design_eval.py freeze <target>` pins + sha256-hashes
-   the definition (model/n/δ/threshold/screens), the rubric, and every reference
+   the definition (model/n/δ/threshold/screens), the structured policy (dimensions + ignore), and every reference
    + setup file, and sets `approval_status: approved`. Any later edit to those
    refuses at score time as **stale** until re-frozen.
 
@@ -166,7 +186,7 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 6. **Run** — `/servo:quality-gate` (or `/servo:agent-loop`) now includes the
    fidelity component in the weighted composite. The component, per run:
    validates the freeze → screenshots the app at each seeded state → judges
-   app-vs-reference `n`× under the rubric → reports a conservative lower bound
+   app-vs-reference `n`× under the structured policy → reports a conservative lower bound
    (`mean − k·stderr`) per screen → weighted-average composite. Each run appends
    the sampled + aggregated scores + hashes to `ledger.jsonl`.
 
@@ -178,7 +198,7 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
 
 | File | Role |
 |---|---|
-| `config.json` | the frozen policy (screens, rubric, model, n/k/δ, threshold, hashes) |
+| `config.json` | the frozen policy (screens, dimensions + ignore, model, n/k/δ, threshold, hashes) |
 | `score.py` | runtime: freeze-validate → capture → judge → aggregate → composite |
 | `fidelity_eval.py` | shared frozen-eval harness (hash/aggregate/ledger/splice), imported by `score.py` (ADR-0024) |
 | `capture.mjs` | Playwright: render references / screenshot the seeded app |
@@ -245,15 +265,15 @@ follow-up in `docs/refinement-todo.md`.)
   for no within-run anti-flap (ADR-0005 clause 3). The example ships `0.6`; lean
   higher for a more conservative judge. (Applies to the `"api"` transport; the
   `"cli"` transport runs at the model's CLI default.)
-- The rubric should score *design intent* (layout/palette/type/shape), not
-  dynamic content. **Exclusions are dangerous, not free.** Every "IGNORE …"
-  clause defines a divergence *out of the score* — and today it lives in
-  free-text prose that the human approving the `freeze` never sees as a
-  discrete, vetoable list. That is exactly how a rubric can be built *backwards*
+- Score *design intent* (layout/palette/type/shape) via `dimensions`, not dynamic
+  content. **Exclusions are dangerous, not free.** Every `ignore` entry defines a
+  divergence *out of the score* — which is how a policy can be built *backwards*
   from a desired pass: widen the ignore-list until only the parts that already
   match are scored, then let `freeze` + hash + n-sampling lend it the look of
-  rigor. So: keep exclusions **minimal and explicit**, list them where a
-  reviewer will read them, and never exclude a dimension you have not confirmed
-  is genuinely out of scope for *this* screen. (A structured, separately-approved
-  `ignore:` list that replaces this prose convention is planned — see
-  `docs/refinement-todo.md`.)
+  rigor (the field report's exact failure). The structured split makes each
+  exclusion a **discrete, hashed, reviewable `{id, reason}`** rather than prose an
+  author can bury — but structure alone does not *prevent* gaming, it makes it
+  **auditable**. Keep exclusions minimal; give each a real `reason`; and remember
+  the load-bearing defense against a thin/omitted catalogue is an **independent
+  re-enumerating reviewer at freeze** (028-02 / 028-03), not the author's own
+  say-so (ADR-0033's 2×2).

@@ -1231,3 +1231,27 @@ correlation id (e.g. the `run_id` stamp) to the request/response filenames.
 
 **Surfaced by:** slice 029-02 arch + craft reviews, 2026-08-27 — both fail
 loud/closed today (no gating or hang risk), so parked rather than fixed.
+
+## design-eval per-dimension sub-scoring (028-01) — deferred pending a live-judge probe
+
+**Deferred:** Slice 028-01 (ADR-0033 structured policy) ships the ADR's Kill-criteria
+**fallback shape**: `dimensions` + `ignore` drive the judge PROMPT + FREEZE + v1
+rejection (the full anti-gaming remedy), but the judge returns ONE holistic score
+per sample — it does NOT yet emit per-dimension sub-scores (ADR-0033 §1 / 028-01
+AC5). Per-dimension scoring requires ADR-0033 Probe #1 (confirm per-dimension
+judging is not materially noisier than holistic), which needs real design-mockup /
+app image pairs and a live vision judge — neither available in the implementing
+environment. Deferring avoids shipping an unvalidated decomposition the Kill
+criteria might reject; the `weight` field is accepted + hashed today (fed to the
+judge as relative-importance guidance) but not yet used for mechanical
+per-dimension aggregation.
+
+**Resolution trigger:** the first design-eval run against real mockup/app pairs with
+a reachable judge (api/cli, or the 029-02 subagent advisory) — run Probe #1 there;
+if per-dimension is not noisier, extend the judge return to `{dimensions: {id:
+score}}`, aggregate weighted per screen, and record per-dimension sub-scores in the
+ledger (AC5). If it IS noisier, keep the holistic fallback and mark `weight`
+guidance-only.
+
+**Surfaced by:** slice 028-01 implementation, 2026-08-27 — scope confirmed with the
+maintainer (fallback shape) because Probe #1 could not run in-environment.

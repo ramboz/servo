@@ -50,7 +50,13 @@ _CASES_KEY = "screens"
 _CASE_FILE_FIELDS = ("reference", "setup")
 # design-eval-specific top-level field pinned into the frozen definition hash
 # (a vision/screenshot concept the shared module itself knows nothing about).
-_EXTRA_HASH_FIELDS = ("viewport",)
+# 028-01 (ADR-0033): the structured scoring policy (`dimensions` + `ignore`) is
+# pinned into the frozen definition alongside the vision `viewport`, so editing a
+# scored dimension or an exclusion re-freezes. A v1 free-text-`rubric` config —
+# which has neither — therefore hashes differently and goes stale, on top of the
+# explicit `_require_schema_v2` refusal below (force re-author, ADR-0033 §5).
+_EXTRA_HASH_FIELDS = ("viewport", "dimensions", "ignore")
+_SCHEMA_VERSION = 2
 
 
 def _load_fidelity_eval():
@@ -608,6 +614,74 @@ def capture_app(base_dir: Path, screen: dict, run_id: str | None = None,
     return fn(base_dir, screen, run_id, config)
 
 
+# --------------------------------------------------------------------------- #
+# 028-01 (ADR-0033): the structured scoring policy — dimensions (what is scored)
+# and ignore (discrete, reason-bearing exclusions) replace the single free-text
+# `rubric`. The judge PROMPT is assembled from the structure, so there is no
+# second free-text channel where an unreviewed instruction can hide. This is the
+# ADR-0033 Kill-criteria FALLBACK shape: a single holistic score under a
+# structured instruction; per-dimension SUB-scoring is a deferred follow-up (see
+# docs/refinement-todo.md) pending a live-judge probe that per-dimension judging
+# is not noisier than holistic.
+# --------------------------------------------------------------------------- #
+
+def _require_schema_v2(config: dict) -> None:
+    """Refuse a legacy v1 (free-text `rubric`) config with a clear re-author message
+    (ADR-0033 §5 force-re-author). Belt-and-braces with the freeze hash, which also
+    goes stale on a v1 config now that `dimensions`/`ignore` are pinned — but this
+    fires first with an actionable message rather than an opaque staleness error."""
+    if int(config.get("schema_version", 1)) < _SCHEMA_VERSION or "rubric" in config:
+        raise EnvError(
+            "this is a legacy v1 free-text-`rubric` design-eval config — design-eval "
+            "now requires a structured schema_version 2 policy (`dimensions` + "
+            "`ignore: [{id, reason}]`). Re-author the config into the split and "
+            "re-freeze (ADR-0033); a v1 rubric no longer scores.")
+
+
+def _validate_policy(config: dict) -> None:
+    """A v2 policy must have a non-empty `dimensions` list (each with an `id`) and,
+    if present, `ignore` entries carrying both `id` and `reason`. Malformed fails
+    closed to `EnvError` — never a silent score against an empty/garbled policy."""
+    dims = config.get("dimensions")
+    if not isinstance(dims, list) or not dims:
+        raise EnvError("structured policy has no `dimensions` — nothing to score (ADR-0033)")
+    for d in dims:
+        if not isinstance(d, dict) or not d.get("id"):
+            raise EnvError(f"each dimension needs an `id`; got {d!r}")
+    for i in config.get("ignore") or []:
+        if not isinstance(i, dict) or not i.get("id") or not i.get("reason"):
+            raise EnvError(
+                f"each ignore entry needs an `id` and a `reason` (ADR-0033); got {i!r}")
+
+
+def _scoring_prompt(config: dict) -> str:
+    """Assemble the judge instruction from the structured policy — NOT a
+    hand-written string (ADR-0033 §6). Names each scored dimension and each ignored
+    id, so what the judge is told is a function of the approved structure."""
+    dims = config.get("dimensions") or []
+    ign = config.get("ignore") or []
+    weighted = any(float(d.get("weight", 1.0)) != 1.0 for d in dims)
+    lines = [
+        "Score, in [0,1], how faithfully the FIRST image (the implemented app "
+        "screen) reproduces the SECOND image (the design reference). Judge fidelity "
+        "of design intent across these dimensions"
+        + (" (weights indicate relative importance)" if weighted else "") + ":"]
+    for d in dims:
+        w = float(d.get("weight", 1.0))
+        suffix = f" (weight {w:g})" if weighted else ""
+        lines.append(f"- {d['id']}: {d.get('description', '').strip()}{suffix}")
+    if ign:
+        lines.append(
+            "IGNORE — do NOT penalise any of these; they are explicitly excluded "
+            "from the score:")
+        for i in ign:
+            lines.append(f"- {i['id']}: {i.get('reason', '').strip()}")
+    lines.append(
+        "1.0 = visually indistinguishable in design intent; 0.5 = right structure, "
+        "wrong styling; 0.0 = unrelated.")
+    return "\n".join(lines)
+
+
 def judge(app_png: Path, ref_png: Path, config: dict) -> float:
     """One vision-judge sample → [0,1]. Dispatches on the frozen ``judge.transport``:
     ``"api"`` (Messages API + ANTHROPIC_API_KEY) or ``"cli"`` (headless ``claude -p``,
@@ -633,7 +707,7 @@ def _judge_cli(app_png: Path, ref_png: Path, config: dict) -> float:
         raise EnvError(
             "`claude` CLI not found — set SERVO_DESIGN_EVAL_CLAUDE_BIN or add it to PATH")
     prompt = (
-        config["rubric"].rstrip()
+        _scoring_prompt(config)
         + "\n\nRead these two images with the Read tool:\n"
         f"- FIRST (the implemented app screen): {app_png.resolve()}\n"
         f"- SECOND (the design reference): {ref_png.resolve()}\n\n"
@@ -678,7 +752,7 @@ def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
     j = config["judge"]
     prompt = (
-        config["rubric"].rstrip()
+        _scoring_prompt(config)
         + "\n\nThe FIRST image is the implemented app screen; the SECOND is the "
         "design reference. Reply with ONLY a JSON object: "
         '{"score": <number 0..1>, "reasoning": "<one sentence>"}.'
@@ -737,7 +811,9 @@ def _fake_scores():
 def score(base_dir: Path) -> float:
     """Composite design-fidelity score for the frozen eval in ``base_dir``."""
     config = json.loads((base_dir / "config.json").read_text())
+    _require_schema_v2(config)         # 028-01: clear force-re-author before staleness
     validate_freeze(config, base_dir)  # StaleError → exit 2
+    _validate_policy(config)           # 028-01: non-empty dimensions / well-formed ignore
 
     n = int(config["samples"]["n"])
     k = float(config["samples"].get("k", 1.0))
@@ -881,7 +957,9 @@ def advisory_read(base_dir: Path) -> tuple[float, str | None]:
     with the SELF-REPORTED model (labelled, never attestation), and returns the
     advisory composite. Refuses unless `judge.transport == 'subagent'`."""
     config = json.loads((base_dir / "config.json").read_text())
+    _require_schema_v2(config)
     validate_freeze(config, base_dir)
+    _validate_policy(config)
     transport = (config.get("judge") or {}).get("transport", "api")
     if transport != "subagent":
         raise EnvError(
@@ -913,7 +991,8 @@ def advisory_read(base_dir: Path) -> tuple[float, str | None]:
             "app": app_png.relative_to(base_dir).as_posix(),
             "reference": screen["reference"],
         })
-    request["rubric"] = config.get("rubric")
+    request["policy"] = {"dimensions": config.get("dimensions"), "ignore": config.get("ignore")}
+    request["prompt"] = _scoring_prompt(config)
     req_path.write_text(json.dumps(request, indent=2) + "\n")
     print(
         f"design-eval: SUBAGENT JUDGE REQUEST for {len(captured)} screen(s) written to "

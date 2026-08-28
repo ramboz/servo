@@ -115,13 +115,17 @@ def capture_refs(target: Path) -> int:
 
 
 def freeze(target: Path) -> dict:
-    """Pin + hash the definition (model/n/δ/threshold/screens) plus the rubric +
-    reference + setup files; set ``approval_status: approved`` (ADR-0005 clause 2)."""
+    """Pin + hash the definition (model/n/δ/threshold/screens) plus the structured
+    policy (dimensions + ignore) + reference + setup files; set
+    ``approval_status: approved`` (ADR-0005 clause 2). Refuses a legacy v1
+    free-text-`rubric` config with a re-author message (028-01 / ADR-0033)."""
     d = _eval_dir(target)
     cfg_path = d / "config.json"
     if not cfg_path.is_file():
         raise FileNotFoundError(f"no config to freeze: {cfg_path}")
     config = json.loads(cfg_path.read_text())
+    _score._require_schema_v2(config)   # 028-01: no v1 rubric freezes
+    _score._validate_policy(config)     # 028-01: dimensions/ignore well-formed
     for s in config.get("screens", []):
         for rel in (s.get("reference"), s.get("setup")):
             if rel and not (d / rel).is_file():
