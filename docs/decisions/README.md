@@ -43,6 +43,7 @@
 - [ADR-0034: In-harness subagent judge transport for design-eval](adr-0034-design-eval-subagent-judge-transport.md) — design-eval's vision judge is reachable through only two frozen transports, and a common Claude Desktop setup can run neither — so a score cannot be produced where Claude Code actually runs. (2026-08-27, Accepted)
 - [ADR-0035: Manual human-supplied capture provider for design-eval](adr-0035-design-eval-manual-capture-provider.md) — [ADR-0032](adr-0032-design-eval-capture-providers.md) made app capture a pluggable provider (`_CAPTURE_PROVIDERS` in `score.py:497-502`: `web`, `command`, `android`, `ios`) and **explicitly deferred** the human-supplied path: *"This ADR covers only capture for targets servo can drive. (2026-08-27, Accepted)
 - [ADR-0036: Approved frozen eval components satisfy the suitability signal](adr-0036-frozen-evals-satisfy-suitability-signal.md) — `suitability.py decide()` calls a spec `suitable` only when both legs hold: at least one evaluable AC, and a compilable signal — `has_signal` reads only `tests`/`ci` from `install.json`, so an approved, frozen, installed eval component flips neither condition and a fully instrumented design-led target is refused the unattended path. (2026-08-30, Proposed)
+- [ADR-0037: Agent-loop preflights headless edit permission before the first paid iteration](adr-0037-agent-loop-permission-preflight.md) — `/servo:agent-loop` subprocesses `claude -p --agent runner` with no permission grant, so in a default-permission context the headless child's `Edit`/`Write` calls are **silently denied**: the runner runs, emits verdicts, and spends real budget making zero source edits (airlock spec 008: two runs, ~$2.2, oracle never moved). Proposes a fail-closed edit-capability probe before iteration 1 — refuse `rc=2` / `edit_permission_unavailable`, naming the grant the user must make; servo never self-grants the bypass. (2026-08-27, Proposed)
 
 ## Pending
 
@@ -68,8 +69,9 @@ dual-host package ADR), `0029` is Accepted (autonomy-readiness pre-flight
 gate), `0030` is Accepted (durable quarantine + lifecycle coordinator),
 `0031`–`0035` are Accepted (the design-eval browser-acquisition,
 capture-provider, structured-scoring-policy, subagent-judge-transport, and
-manual-capture ADRs), and `0036` is reserved (Proposed) by the
-frozen-evals-satisfy-suitability-signal ADR, so the next free number is `0037`:
+manual-capture ADRs), and `0036`–`0037` are reserved (Proposed) by the
+frozen-evals-satisfy-suitability-signal and agent-loop-permission-preflight
+ADRs, so the next free number is `0038`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone proposes a Python or Node oracle alternative.
 
