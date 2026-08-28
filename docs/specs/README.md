@@ -123,6 +123,16 @@
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-02 — transport-selection | DEFERRED | **DEFERRED on missing evidence, not wording** &#8212; 5 critique rounds sharpened it to a factual gap. `capture.mjs`'s import is a static top-level `playwright`, but the footprint saving needs `playwright-core`: keeping `playwright` ships a false success (the ~150&#8211;300&nbsp;MB still lands at install), switching silently breaks `bundled` back-compat. ADR-0031 kill criterion 1. Trigger: run the A1 probe on a Playwright-equipped machine. |
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-03 — ledger-browser-identity | **DONE** | `capture.mjs` **attests** the engine it launched over a marker-delimited stdout channel; `score.py` records it **per screen** (capture_app runs once per screen, so a row has N attestations). Observability, not a gate &#8212; nothing hashed, no new fail-closed mode. 7 frame-critique rounds; compliance+craft each caught 2 shipped bugs (a `fake_run` derived from its own branch predicate; a non-object payload crashing the score); reconciliation caught **DoD boxes ticked over tests that did not exist**. All fixes mutation-verified. |
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-04 — authoring-assist | ABANDONED | **ABANDONED** &#8212; two re-scopes, both net-negative. v1 made servo a package-manager driver in the adopter's repo (servo has zero package-manager detection; a target need not even be a Node project). v2 wrote a laptop's answer into the config CI reads, manufacturing the very failure 026-01 exists to explain. Residual value folded into 026-01's message and 026-02's docs. |
+| [027-design-eval-platform-capture](027-design-eval-platform-capture/spec.md) | 027-01 — shot retention + ledger visibility | **DONE** |  |
+| [027-design-eval-platform-capture](027-design-eval-platform-capture/spec.md) | 027-02 — capture-provider seam + web default | **DONE** |  |
+| [027-design-eval-platform-capture](027-design-eval-platform-capture/spec.md) | 027-03 — custom-command provider (escape hatch) | **DONE** |  |
+| [027-design-eval-platform-capture](027-design-eval-platform-capture/spec.md) | 027-04 — blessed Android provider | **DONE** |  |
+| [027-design-eval-platform-capture](027-design-eval-platform-capture/spec.md) | 027-05 — blessed iOS provider | **DONE** |  |
+| [028-design-eval-policy-honesty](028-design-eval-policy-honesty/spec.md) | 028-01 — structured-policy | DRAFT |  |
+| [028-design-eval-policy-honesty](028-design-eval-policy-honesty/spec.md) | 028-02 — freeze-surfacing | DRAFT |  |
+| [028-design-eval-policy-honesty](028-design-eval-policy-honesty/spec.md) | 028-03 — catalogue-reenumerator | DRAFT |  |
+| [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-01 — manual-capture | DRAFT |  |
+| [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-02 — subagent-advisory | DRAFT |  |
 
 ## Deferred slices
 
