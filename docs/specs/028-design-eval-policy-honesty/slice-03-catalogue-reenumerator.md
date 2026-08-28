@@ -1,10 +1,9 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [028-01, 028-02, adr-0033]
 last_verified: 2026-08-28
 frame_review: true
 arch_review: true
-claimed_by: claude/servo-ux-issue-4a4c28
 ---
 
 ## Slice 028-03 — catalogue-reenumerator
