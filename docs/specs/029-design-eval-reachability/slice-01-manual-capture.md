@@ -1,9 +1,8 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [adr-0035]
 last_verified: 2026-08-27
 frame_review: true
-claimed_by: claude/servo-ux-issue-4a4c28
 ---
 
 ## Slice 029-01 — manual-capture
