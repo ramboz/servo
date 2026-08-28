@@ -167,11 +167,12 @@ class FreezeTests(unittest.TestCase):
         # v1→v2 recomposition — which is exactly why every pre-existing v1 freeze
         # goes stale). This pin now guards the v2 composition: a change to this hash
         # means the frozen-definition field set changed, which must be a deliberate,
-        # reviewed decision (like this one), never an accident.
+        # reviewed decision (like this one), never an accident. Updated by 028-03,
+        # which adds `catalogue` to the frozen definition (a verdict is bound to it).
         config = _base_config()
         h = score.definition_hash(config)
         self.assertEqual(
-            h, "sha256:32106f81d53fd4ca9a9227381c59afac9bd33476f6fef9233297eba8b66b0490")
+            h, "sha256:514e2758f55e648436a270b63b54be964f304f588dd07e295a83d29fcca6d651")
 
 
 class ScoreHonestyTests(unittest.TestCase):
@@ -363,6 +364,213 @@ class StructuredPolicyTests(unittest.TestCase):
             self.assertAlmostEqual(float(out.strip()), 0.85, places=4)
 
 
+class CatalogueReenumeratorTests(unittest.TestCase):
+    """028-03 / ADR-0033 §3: the enumerate-first catalogue + disposition completeness,
+    and the ENFORCED `reviewed` (a recorded independent re-enumeration verdict,
+    distinct from the author, bound to the catalogue) that retires 028-02's
+    honor-system marker."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in ("ANTHROPIC_API_KEY", score._FAKE_SCORES_ENV,
+                  "SERVO_DESIGN_EVAL_ACK_EXCLUSIONS"):
+            os.environ.pop(k, None)
+
+    def _cat_config(self, catalogue):
+        cfg = _base_config(dimensions=[{"id": "layout", "description": "sections"}],
+                           ignore=[{"id": "chrome", "reason": "os frame"}])
+        cfg["catalogue"] = catalogue
+        return cfg
+
+    def test_freeze_refuses_undispositioned_catalogue(self):
+        # AC2: a catalogued divergence neither scored nor ignored blocks freeze —
+        # even with the exclusions acknowledged (the omission is made visible).
+        cfg = self._cat_config([
+            {"id": "layout", "description": "the layout"},        # scored
+            {"id": "chrome", "description": "device chrome"},      # ignored
+            {"id": "filter", "description": "the filter control"},  # UNDISPOSITIONED
+        ])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(de._score.EnvError) as cm:
+                    de.freeze(tmp, acknowledge=True)
+            self.assertIn("filter", str(cm.exception))
+            self.assertIn("undispositioned", str(cm.exception))
+
+    def test_freeze_accepts_fully_dispositioned_catalogue(self):
+        cfg = self._cat_config([
+            {"id": "layout", "description": "the layout"},
+            {"id": "chrome", "description": "device chrome"},
+        ])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            with contextlib.redirect_stderr(io.StringIO()):
+                out = de.freeze(tmp, acknowledge=True)
+            self.assertEqual(out["approval_status"], "approved")
+
+    def test_catalogue_report_is_itemised_with_no_scalar(self):
+        cfg = self._cat_config([
+            {"id": "layout", "description": "sections"},
+            {"id": "filter", "description": "the filter"},
+        ])
+        report = score.catalogue_report(cfg)
+        self.assertIn("[SCORED] layout", report)
+        self.assertIn("[UNDISPOSITIONED] filter", report)
+        # no composite/score leaks into the enumerate-first view
+        self.assertNotIn("composite", report.lower())
+
+    def test_reviewed_requires_recorded_verdict(self):
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(de._score.EnvError) as cm:
+                    de.freeze(tmp, reviewer="rev-1", author="auth-1")  # no recorded verdict
+            self.assertIn("recorded independent re-enumeration", str(cm.exception))
+
+    def test_record_reenumeration_rejects_self_review_at_source(self):
+        # Distinctness is proven by the RECORD: reviewer==author is rejected when the
+        # record is written, not left to an optional freeze flag.
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            with self.assertRaises(de._score.EnvError) as cm:
+                de.record_reenumeration(tmp, reviewer="same", author="same", verdict="pass")
+            self.assertIn("DISTINCT", str(cm.exception))
+
+    def test_record_reenumeration_requires_author(self):
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            with self.assertRaises(de._score.EnvError) as cm:
+                de.record_reenumeration(tmp, reviewer="rev", author="", verdict="pass")
+            self.assertIn("--author", str(cm.exception))
+
+    def test_reviewed_distinctness_holds_even_without_freeze_author_flag(self):
+        # The fail-open hole (compliance/craft/arch blocker): the record proves
+        # distinctness, so `freeze --reviewer` WITHOUT `--author` still enforces it —
+        # and a self-review can never be recorded, so this path cannot be gamed.
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            de.record_reenumeration(tmp, reviewer="rev-1", author="auth-1", verdict="pass")
+            with contextlib.redirect_stderr(io.StringIO()):
+                out = de.freeze(tmp, reviewer="rev-1")  # NO --author flag
+            self.assertEqual(out["approval_provenance"], "reviewed")
+
+    def test_reviewed_requires_nonempty_catalogue(self):
+        cfg = self._cat_config([])  # no enumerated divergences
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            de.record_reenumeration(tmp, reviewer="rev-1", author="auth-1", verdict="pass")
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(de._score.EnvError) as cm:
+                    de.freeze(tmp, reviewer="rev-1", author="auth-1")
+            self.assertIn("non-empty `catalogue`", str(cm.exception))
+
+    def test_reference_swap_invalidates_verdict(self):
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, cfg)
+            de.record_reenumeration(tmp, reviewer="rev-1", author="auth-1", verdict="pass")
+            (d / "refs" / "home.png").write_bytes(b"\x89PNG-SWAPPED-REFERENCE")
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(de._score.EnvError) as cm:
+                    de.freeze(tmp, reviewer="rev-1", author="auth-1")
+            self.assertIn("stale", str(cm.exception).lower())
+
+    def test_disposition_change_invalidates_verdict(self):
+        # Re-filing a scored dimension as ignored after the verdict must stale it
+        # (the reviewer attested §3 completeness against the old disposition).
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, cfg)
+            de.record_reenumeration(tmp, reviewer="rev-1", author="auth-1", verdict="pass")
+            moved = json.loads((d / "config.json").read_text())
+            # move `layout` from dimensions to ignore (still fully dispositioned)
+            moved["dimensions"] = [x for x in moved["dimensions"] if x["id"] != "layout"]
+            moved["dimensions"].append({"id": "spacing", "description": "z"})
+            moved["ignore"].append({"id": "layout", "reason": "reclassified"})
+            moved["catalogue"].append({"id": "spacing", "description": "spacing now scored"})
+            (d / "config.json").write_text(json.dumps(moved))
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(de._score.EnvError) as cm:
+                    de.freeze(tmp, reviewer="rev-1", author="auth-1")
+            self.assertIn("stale", str(cm.exception).lower())
+
+    def test_reviewed_refuses_fail_verdict(self):
+        # AC4: the re-enumerator found the catalogue thin → `reviewed` is refused.
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            de.record_reenumeration(tmp, reviewer="rev-1", author="auth-1",
+                                    verdict="fail", note="you missed the filter divergence")
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(de._score.EnvError) as cm:
+                    de.freeze(tmp, reviewer="rev-1", author="auth-1")
+            self.assertIn("not `pass`", str(cm.exception))
+
+    def test_reviewed_verdict_stale_when_catalogue_changes(self):
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, cfg)
+            de.record_reenumeration(tmp, reviewer="rev-1", author="auth-1", verdict="pass")
+            # edit the catalogue AFTER the verdict (still fully dispositioned)
+            cfg["catalogue"][0]["description"] = "changed since review"
+            (d / "config.json").write_text(json.dumps(cfg))
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(de._score.EnvError) as cm:
+                    de.freeze(tmp, reviewer="rev-1", author="auth-1")
+            self.assertIn("stale", str(cm.exception).lower())
+
+    def test_reviewed_pass_distinct_yields_reviewed(self):
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            _make_eval_dir(tmp, cfg)
+            de.record_reenumeration(tmp, reviewer="rev-1", author="auth-1", verdict="pass")
+            with contextlib.redirect_stderr(io.StringIO()):
+                out = de.freeze(tmp, reviewer="rev-1", author="auth-1")
+            self.assertEqual(out["approval_provenance"], "reviewed")
+            self.assertEqual(out["approved_by"], "rev-1")
+
+    def test_catalogue_edit_re_freezes(self):
+        cfg = self._cat_config([{"id": "layout", "description": "x"},
+                                {"id": "chrome", "description": "y"}])
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, cfg)
+            with contextlib.redirect_stderr(io.StringIO()):
+                de.freeze(tmp, acknowledge=True)
+            frozen = json.loads((d / "config.json").read_text())
+            frozen["catalogue"][0]["description"] = "edited after freeze"
+            with self.assertRaises(score.StaleError):
+                score.validate_freeze(frozen, d)
+
+
 class FreezeSurfacingTests(unittest.TestCase):
     """028-02 / ADR-0033 §4: freeze surfaces the exclusion list and refuses unless a
     distinct reviewer (→ reviewed) or a human-owner ack (→ self_approved) signs off;
@@ -400,12 +608,24 @@ class FreezeSurfacingTests(unittest.TestCase):
             self.assertEqual(cfg["approval_provenance"], "self_approved")
             self.assertEqual(cfg["approved_by"], "self")
 
+    def _reviewed_config(self):
+        # 028-03: `reviewed` requires a non-empty, fully-dispositioned catalogue.
+        c = _base_config(dimensions=[{"id": "layout", "description": "x"}],
+                         ignore=[{"id": "chrome", "reason": "os"}])
+        c["catalogue"] = [{"id": "layout", "description": "l"},
+                          {"id": "chrome", "description": "c"}]
+        return c
+
     def test_distinct_reviewer_yields_reviewed(self):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
-            _make_eval_dir(tmp)
+            _make_eval_dir(tmp, self._reviewed_config())
+            # 028-03: `reviewed` requires a recorded re-enumeration verdict from a
+            # reviewer distinct from the author, over a non-empty catalogue.
+            de.record_reenumeration(tmp, reviewer="human-owner-42",
+                                    author="agent-author", verdict="pass")
             with contextlib.redirect_stderr(io.StringIO()):
-                cfg = de.freeze(tmp, reviewer="human-owner-42")
+                cfg = de.freeze(tmp, reviewer="human-owner-42", author="agent-author")
             self.assertEqual(cfg["approval_provenance"], "reviewed")
             self.assertEqual(cfg["approved_by"], "human-owner-42")
 
@@ -461,9 +681,11 @@ class FreezeSurfacingTests(unittest.TestCase):
     def test_reviewed_run_has_no_self_approved_advisory(self):
         with tempfile.TemporaryDirectory() as t:
             tmp = Path(t)
-            d = _make_eval_dir(tmp)
+            d = _make_eval_dir(tmp, self._reviewed_config())
+            de.record_reenumeration(tmp, reviewer="human-owner-42",
+                                    author="agent-author", verdict="pass")
             with contextlib.redirect_stderr(io.StringIO()):
-                de.freeze(tmp, reviewer="human-owner-42")
+                de.freeze(tmp, reviewer="human-owner-42", author="agent-author")
             os.environ[score._FAKE_SCORES_ENV] = json.dumps(
                 {"home": [0.9], "settings": [0.9]})
             rc, out, err = _capture_main(d)

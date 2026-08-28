@@ -17,6 +17,15 @@
     { "id": "dynamic-content", "reason": "specific times, dates, and item names vary at runtime" },
     { "id": "exact-pixel-positions", "reason": "sub-pixel placement is not a design-intent difference" }
   ],
+  "catalogue": [
+    { "id": "layout", "description": "section order, spacing & proportion" },
+    { "id": "palette", "description": "accent, neutrals, semantic/tag colours" },
+    { "id": "typography", "description": "families, weights, relative sizes" },
+    { "id": "component-shape", "description": "cards, pills, buttons, FAB" },
+    { "id": "device-chrome", "description": "OS status bar / bezel / home indicator" },
+    { "id": "dynamic-content", "description": "specific times, dates, item names" },
+    { "id": "exact-pixel-positions", "description": "sub-pixel placement" }
+  ],
   "screens": [
     {
       "id": "home",

@@ -55,7 +55,7 @@ _CASE_FILE_FIELDS = ("reference", "setup")
 # scored dimension or an exclusion re-freezes. A v1 free-text-`rubric` config —
 # which has neither — therefore hashes differently and goes stale, on top of the
 # explicit `_require_schema_v2` refusal below (force re-author, ADR-0033 §5).
-_EXTRA_HASH_FIELDS = ("viewport", "dimensions", "ignore")
+_EXTRA_HASH_FIELDS = ("viewport", "dimensions", "ignore", "catalogue")
 _SCHEMA_VERSION = 2
 
 
@@ -679,6 +679,66 @@ def _scoring_prompt(config: dict) -> str:
     lines.append(
         "1.0 = visually indistinguishable in design intent; 0.5 = right structure, "
         "wrong styling; 0.0 = unrelated.")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# 028-03 (ADR-0033 §3 / OQ5-6): the enumerate-first catalogue + the disposition
+# completeness rule. The `catalogue` is the itemised divergence list; EVERY item
+# must be dispositioned — scored (a `dimension`) or excluded (an `ignore` entry) —
+# so an omission cannot hide as an unaccounted state. This closes the omission path
+# ONLY when a distinct re-enumerator has confirmed the catalogue is not thin
+# (the enforced `reviewed` verdict, design_eval.py); the completeness check alone
+# is necessary, not sufficient (ADR-0033's 2×2).
+# --------------------------------------------------------------------------- #
+
+def _catalogue_disposition(config: dict) -> tuple:
+    """Partition the catalogue ids into (scored, ignored, undispositioned) against
+    the dimension ids and ignore ids. An undispositioned catalogued divergence is
+    the omission path made visible."""
+    dim_ids = {d.get("id") for d in config.get("dimensions") or []}
+    ign_ids = {i.get("id") for i in config.get("ignore") or []}
+    scored, ignored, undispositioned = [], [], []
+    for c in config.get("catalogue") or []:
+        cid = c.get("id")
+        if cid in dim_ids:
+            scored.append(cid)
+        elif cid in ign_ids:
+            ignored.append(cid)
+        else:
+            undispositioned.append(cid)
+    return scored, ignored, undispositioned
+
+
+def _validate_catalogue(config: dict) -> None:
+    """If a `catalogue` is present, EVERY item must be scored or excluded — no third,
+    unaccounted state (ADR-0033 §3). Fails closed to `EnvError` naming the
+    undispositioned ids (the omission the author left off the score)."""
+    if not config.get("catalogue"):
+        return
+    _, _, undispositioned = _catalogue_disposition(config)
+    if undispositioned:
+        raise EnvError(
+            "catalogue has undispositioned divergences (neither scored as a "
+            f"`dimension` nor excluded via `ignore`): {', '.join(map(str, undispositioned))} "
+            "— dispose of each before freezing (ADR-0033 §3).")
+
+
+def catalogue_report(config: dict) -> str:
+    """The enumerate-first, itemised divergence list with per-item disposition —
+    and NO scalar (028-03 AC1). For a human/reviewer to triage before scoring."""
+    dim_ids = {d.get("id") for d in config.get("dimensions") or []}
+    ign_ids = {i.get("id") for i in config.get("ignore") or []}
+    items = config.get("catalogue") or []
+    lines = [f"design-eval catalogue: {len(items)} divergence(s) for this eval "
+             "(itemised, no score):"]
+    for c in items:
+        cid = c.get("id")
+        disp = ("SCORED" if cid in dim_ids else "IGNORED" if cid in ign_ids
+                else "UNDISPOSITIONED")
+        lines.append(f"  - [{disp}] {cid}: {c.get('description', '').strip()}")
+    if not items:
+        lines.append("  (no catalogue authored — this eval has not enumerated-first)")
     return "\n".join(lines)
 
 

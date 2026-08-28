@@ -194,12 +194,39 @@ silent `0.0`; a changed policy/dataset/model refuses as stale.
    every run — because a self-acked ignore-list carries auditability, **not**
    prevention (a backwards-authored policy would not have been vetoed). The env
    bypass is a human-owner ack; it is **never** silently upgraded to `reviewed`.
-   **Caveat (until 028-03 lands):** `reviewed` is an **asserted, unenforced**
-   marker — `--reviewer <id>` is honor-system (the config carries no author
-   identity to compare against), so it records *who was asserted to have reviewed*,
-   not a verified independent review. Do not read a `reviewed` freeze as
-   independently vetoed yet; the **enforced** independent *re-enumerating* reviewer
-   that truly earns `reviewed` (and defends the omission path) is 028-03.
+   **`reviewed` is ENFORCED (028-03):** `--reviewer <id>` earns `reviewed` only when
+   a **recorded independent re-enumeration verdict** exists that (a) names a
+   `reviewer` **distinct from the author** — distinctness is proven by the *record*
+   (both ids required at `record-reenumeration` time, `reviewer != author` rejected
+   at the source), **not** by an optional freeze flag; (b) is `verdict: pass`;
+   (c) attests a **non-empty** `catalogue`; and (d) still matches the current
+   **policy + reference** fingerprint (a reference swap, a disposition re-file, or a
+   catalogue edit stales it). Without all of that — or on a `fail`, a self-review, an
+   empty catalogue, or a stale verdict — freeze refuses `reviewed` (fall back to
+   `--acknowledge-exclusions` for self_approved). This is what defends the
+   **omission** path — a thin catalogue that silently drops divergences (ADR-0033's
+   2×2): auditability holds unconditionally, but *prevention* rests entirely on this
+   distinct re-enumerator. (`freeze --author <id>` is an optional cross-check against
+   the record; it is not the source of the distinctness guarantee.) **Residual:** the
+   verdict record is a local, author-writable file with no attestation — identity
+   distinctness rests on truthful `--reviewer`/`--author` inputs, so this is a
+   *structured, catalogue-bound* discipline, not forgery-proof; the real teeth are
+   the out-of-band independent reviewer actually doing the re-enumeration.
+
+   **Enumerate-first + the re-enumeration verdict (028-03):**
+   - `catalogue: [{id, description}]` — the **itemised divergence list** for the
+     eval. `python3 design_eval.py catalogue <target>` prints it with each item's
+     disposition (`SCORED` / `IGNORED` / `UNDISPOSITIONED`) and **no score**, for a
+     human/reviewer to triage before any scalar. **Freeze refuses** if any
+     catalogued item is undispositioned (neither a `dimension` nor an `ignore`) — no
+     third, unaccounted state. The catalogue is hashed into the frozen definition,
+     so editing it re-freezes (and invalidates a prior verdict).
+   - `python3 design_eval.py record-reenumeration <target> --reviewer <id> --author
+     <id> --verdict pass|fail [--note …]` records the independent reviewer's verdict
+     (analogous to an ADR frame-critique verdict). The **live vision re-enumeration**
+     — the reviewer actually reading the reference and hunting for an uncatalogued
+     divergence — is that independent reviewer's job (a distinct subagent / human,
+     out of band); servo records + enforces the verdict, it does not fake it.
 
 5. **`install`** — `python3 design_eval.py install <target> [--weight W]`
    splices `score_design_fidelity` into `oracle.sh`, registers it in COMPONENTS

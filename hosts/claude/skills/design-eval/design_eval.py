@@ -15,6 +15,10 @@ Subcommands:
   uninstall <target>     remove it (keeps the frozen artifacts)
   advisory <target>      subagent advisory read (029-02) — a loud, non-frozen
                          fidelity read; NOT the oracle path, NOT a gating score
+  catalogue <target>     itemised divergence list + dispositions, NO score (028-03)
+  record-reenumeration   record an independent re-enumeration verdict that the
+    <target> --reviewer <id> --verdict pass|fail [--author <id>] [--note …]
+                         enforced `reviewed` freeze consumes (028-03)
 
 Python 3.9+ standard library only (ADR-0020).
 """
@@ -120,7 +124,98 @@ def capture_refs(target: Path) -> int:
     return proc.returncode
 
 
-def freeze(target: Path, *, acknowledge: bool = False, reviewer: str = None) -> dict:
+_REENUM_FILE = "reenumeration.json"  # 028-03: the recorded re-enumeration verdict
+
+
+def _reenumeration_fingerprint(config: dict, base_dir: Path) -> str:
+    """Bind a verdict to the WHOLE thing the reviewer attested against — not just the
+    catalogue (craft/arch review): the frozen policy (dimensions/ignore/catalogue via
+    `definition_hash`) AND the reference image *content* (`artifact_hashes`). So a
+    reference swap, a disposition re-file (scored→ignored), or a catalogue edit after
+    the verdict all stale it — the reviewer never saw the changed thing."""
+    return _fe.sha256_text(
+        _score.definition_hash(config) + "|"
+        + json.dumps(_score.artifact_hashes(config, base_dir), sort_keys=True))
+
+
+def record_reenumeration(target: Path, *, reviewer: str, author: str, verdict: str,
+                         note: str = None) -> dict:
+    """Record an independent re-enumeration verdict (028-03 / ADR-0033 §3): a reviewer
+    DISTINCT from the author looked at the reference, re-enumerated the divergences, and
+    judged whether the catalogue is complete (`pass`) or thin/missing an item (`fail`).
+    ``author`` is **required** and must differ from ``reviewer`` — distinctness is
+    proven by the record itself (not an optional freeze-time flag), so a self-review is
+    rejected at the source. Bound to the policy + reference fingerprint. This is the
+    evidence the enforced `reviewed` freeze consumes (an ADR-frame-critique analogue)."""
+    if verdict not in ("pass", "fail"):
+        raise _score.EnvError(f"verdict must be 'pass' or 'fail', got {verdict!r}")
+    if not reviewer or not author:
+        raise _score.EnvError(
+            "record-reenumeration requires both --reviewer and --author (the eval "
+            "author, distinct from the reviewer) — distinctness is proven by the "
+            "record, not a freeze-time flag.")
+    if reviewer == author:
+        raise _score.EnvError(
+            "the re-enumeration reviewer must be DISTINCT from the author — a self-review "
+            "does not earn `reviewed` (ADR-0033).")
+    d = _eval_dir(target)
+    config = json.loads((d / "config.json").read_text())
+    rec = {"reviewer": reviewer, "author": author, "verdict": verdict, "note": note,
+           "fingerprint": _reenumeration_fingerprint(config, d), "at": _fe.iso_now()}
+    (d / _REENUM_FILE).write_text(json.dumps(rec, indent=2) + "\n")
+    return rec
+
+
+def _check_reenumeration(d: Path, config: dict, *, reviewer: str, author: str) -> None:
+    """Enforce `reviewed` (028-03): a recorded `pass` verdict must exist, name THIS
+    reviewer, prove distinctness FROM THE RECORD (both `reviewer` + `author` present and
+    different — unconditional, not gated on the optional freeze flag), attest a
+    **non-empty** catalogue, and match the current policy+reference fingerprint. Any
+    miss fails closed (→ self_approved is the honest fallback)."""
+    if not config.get("catalogue"):
+        raise _score.EnvError(
+            "`reviewed` requires a non-empty `catalogue` — the omission-path defense is "
+            "meaningless with nothing enumerated to re-check (ADR-0033 §3). An empty "
+            "catalogue can be self_approved, never reviewed.")
+    rec_path = d / _REENUM_FILE
+    if not rec_path.is_file():
+        raise _score.EnvError(
+            "`reviewed` requires a recorded independent re-enumeration verdict — run "
+            "`design_eval.py record-reenumeration --reviewer <id> --author <id> "
+            "--verdict pass` (a reviewer DISTINCT from the author who re-enumerated the "
+            "reference and confirmed the catalogue is complete), then freeze. Or use "
+            "--acknowledge-exclusions for self_approved (auditability only). ADR-0033 §3.")
+    rec = json.loads(rec_path.read_text())
+    # Distinctness is proven by the RECORD (unconditional), never by the optional flag.
+    if not rec.get("reviewer") or not rec.get("author"):
+        raise _score.EnvError(
+            "the re-enumeration record lacks a reviewer/author identity — cannot prove "
+            "distinctness; re-record with record-reenumeration --reviewer <id> --author <id>.")
+    if rec["reviewer"] == rec["author"]:
+        raise _score.EnvError(
+            "the recorded re-enumeration is a self-review (reviewer == author) — it does "
+            "not earn `reviewed` (ADR-0033).")
+    if rec["reviewer"] != reviewer:
+        raise _score.EnvError(
+            f"--reviewer {reviewer!r} does not match the recorded re-enumeration reviewer "
+            f"{rec['reviewer']!r} — re-record or fix the flag.")
+    if author is not None and rec["author"] != author:  # optional freeze-time cross-check
+        raise _score.EnvError(
+            f"recorded re-enumeration author {rec['author']!r} ≠ --author {author!r}.")
+    if rec.get("verdict") != "pass":
+        raise _score.EnvError(
+            f"the recorded re-enumeration verdict is {rec.get('verdict')!r}, not `pass` — "
+            "the reviewer found the catalogue thin or an uncatalogued divergence. Fix the "
+            "catalogue and re-review; do not ship `reviewed`.")
+    if rec.get("fingerprint") != _reenumeration_fingerprint(config, d):
+        raise _score.EnvError(
+            "the policy or a reference changed since the re-enumeration verdict was "
+            "recorded — the verdict is stale. Re-run record-reenumeration against the "
+            "current eval.")
+
+
+def freeze(target: Path, *, acknowledge: bool = False, reviewer: str = None,
+           author: str = None) -> dict:
     """Pin + hash the definition (model/n/δ/threshold/screens) plus the structured
     policy (dimensions + ignore) + reference + setup files; set
     ``approval_status: approved`` (ADR-0005 clause 2). Refuses a legacy v1
@@ -137,6 +232,7 @@ def freeze(target: Path, *, acknowledge: bool = False, reviewer: str = None) -> 
     config = json.loads(cfg_path.read_text())
     _score._require_schema_v2(config)   # 028-01: no v1 rubric freezes
     _score._validate_policy(config)     # 028-01: dimensions/ignore well-formed
+    _score._validate_catalogue(config)  # 028-03: every catalogued divergence disposed
     # 028-02 (ADR-0033 §4): SURFACE the exclusion list to an approver, and refuse to
     # stamp `approved` unless a distinct reviewer signed off (→ prevention) or a human
     # owner acknowledged it (→ self_approved / auditability-only). A self-ack is never
@@ -144,6 +240,10 @@ def freeze(target: Path, *, acknowledge: bool = False, reviewer: str = None) -> 
     print(_score._exclusion_summary(config), file=sys.stderr)
     env_ack = os.environ.get(_ACK_EXCLUSIONS_ENV, "").lower() in ("1", "true", "yes", "on")
     if reviewer:
+        # 028-03: `reviewed` is ENFORCED, not asserted — it requires a recorded
+        # independent re-enumeration verdict (verdict=pass) by a reviewer DISTINCT
+        # from the author, tied to THIS catalogue. This retires 028-02's honor-system.
+        _check_reenumeration(d, config, reviewer=reviewer, author=author)
         provenance, approved_by = "reviewed", reviewer
     elif acknowledge or env_ack:
         provenance, approved_by = "self_approved", "self"
@@ -209,18 +309,28 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="design_eval.py", description="Author a design-fidelity eval component.")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("init", "capture-refs", "freeze", "install", "uninstall", "advisory"):
+    for name in ("init", "capture-refs", "freeze", "install", "uninstall", "advisory",
+                 "catalogue", "record-reenumeration"):
         sp = sub.add_parser(name)
         sp.add_argument("target", type=Path)
         if name == "install":
             sp.add_argument("--weight", type=float, default=DEFAULT_WEIGHT)
         if name == "freeze":
-            # 028-02: acknowledge / review the surfaced exclusion list.
+            # 028-02/03: acknowledge / review the surfaced exclusion list.
             sp.add_argument("--acknowledge-exclusions", action="store_true",
                             help="human owner accepts the exclusions (→ self_approved)")
             sp.add_argument("--reviewer", default=None,
-                            help="id of a distinct reviewer who vetted the exclusions "
-                                 "(→ reviewed / the prevention path)")
+                            help="id of the distinct reviewer whose recorded "
+                                 "re-enumeration verdict earns reviewed (028-03)")
+            sp.add_argument("--author", default=None,
+                            help="id of the eval author (must differ from --reviewer)")
+        if name == "record-reenumeration":
+            sp.add_argument("--reviewer", required=True)
+            sp.add_argument("--author", required=True,
+                            help="the eval author (must differ from --reviewer); "
+                                 "distinctness is proven by this record")
+            sp.add_argument("--verdict", required=True, choices=("pass", "fail"))
+            sp.add_argument("--note", default=None)
     args = parser.parse_args(argv)
     target = args.target.resolve()
 
@@ -235,12 +345,29 @@ def main(argv=None) -> int:
         # traceback (mirrors the `advisory` branch below).
         try:
             cfg = freeze(target, acknowledge=args.acknowledge_exclusions,
-                         reviewer=args.reviewer)
+                         reviewer=args.reviewer, author=args.author)
         except (_score.StaleError, _score.EnvError, FileNotFoundError) as e:
             print(f"design-eval: freeze refused — {e}", file=sys.stderr)
             return ENV_ERROR_RC
         print(f"frozen (approval_status=approved, "
               f"approval_provenance={cfg.get('approval_provenance')})")
+    elif args.cmd == "catalogue":
+        # 028-03 AC1: the enumerate-first, itemised divergence list — NO scalar.
+        try:
+            config = json.loads((_eval_dir(target) / "config.json").read_text())
+        except (OSError, ValueError) as e:
+            print(f"design-eval: catalogue unavailable — {e}", file=sys.stderr)
+            return ENV_ERROR_RC
+        print(_score.catalogue_report(config))
+    elif args.cmd == "record-reenumeration":
+        try:
+            rec = record_reenumeration(target, reviewer=args.reviewer,
+                                       verdict=args.verdict, author=args.author,
+                                       note=args.note)
+        except (_score.EnvError, OSError, ValueError) as e:
+            print(f"design-eval: record-reenumeration failed — {e}", file=sys.stderr)
+            return ENV_ERROR_RC
+        print(f"recorded re-enumeration: reviewer={rec['reviewer']} verdict={rec['verdict']}")
     elif args.cmd == "install":
         install(target, args.weight)
         print(f"installed {COMPONENT} (weight {args.weight})")
