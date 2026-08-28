@@ -13,6 +13,8 @@ Subcommands:
   freeze <target>        pin + hash the definition; approval_status=approved
   install <target>       splice score_design_fidelity into oracle.sh + manifest
   uninstall <target>     remove it (keeps the frozen artifacts)
+  advisory <target>      subagent advisory read (029-02) — a loud, non-frozen
+                         fidelity read; NOT the oracle path, NOT a gating score
 
 Python 3.9+ standard library only (ADR-0020).
 """
@@ -173,7 +175,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="design_eval.py", description="Author a design-fidelity eval component.")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("init", "capture-refs", "freeze", "install", "uninstall"):
+    for name in ("init", "capture-refs", "freeze", "install", "uninstall", "advisory"):
         sp = sub.add_parser(name)
         sp.add_argument("target", type=Path)
         if name == "install":
@@ -195,6 +197,19 @@ def main(argv=None) -> int:
     elif args.cmd == "uninstall":
         uninstall(target)
         print(f"uninstalled {COMPONENT}")
+    elif args.cmd == "advisory":
+        # 029-02 (ADR-0034): the ONLY entrypoint that runs the subagent judge — a
+        # loud, non-frozen advisory read, structurally separate from the oracle
+        # `score.py` path (which refuses `subagent` transport). Never prints a bare
+        # float: the output is labelled ADVISORY so it cannot be mistaken for, or
+        # piped as, a gating score.
+        try:
+            composite, model = _score.advisory_read(_eval_dir(target))
+        except (_score.StaleError, _score.EnvError) as e:
+            print(f"design-eval: advisory unavailable — {e}", file=sys.stderr)
+            return ENV_ERROR_RC
+        print(f"ADVISORY (subagent, non-frozen): composite={composite:.4f} — "
+              f"self-reported model {model!r}; NOT a gating score.")
     return 0
 
 

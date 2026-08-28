@@ -35,6 +35,10 @@ from pathlib import Path
 EXIT_OK = 0
 EXIT_ENV_ERROR = 2  # → oracle.sh treats rc=2 as a missing component → gate env_error
 _FAKE_SCORES_ENV = "SERVO_DESIGN_EVAL_FAKE_SCORES"  # test/offline hook (no API/browser)
+# 029-02 (ADR-0034): the subagent advisory transport's request/response channel +
+# the bounded wait that makes "no orchestrator present" fail closed without hanging.
+_SUBAGENT_TIMEOUT_ENV = "SERVO_DESIGN_EVAL_SUBAGENT_TIMEOUT"
+_SUBAGENT_DEFAULT_TIMEOUT = 120.0  # seconds; 0 → check once and fail closed immediately
 # 027-02: capture-provider selector (env overrides config, mirroring
 # SERVO_DESIGN_EVAL_CLAUDE_BIN). Environmental, never frozen (ADR-0031/0032 §6).
 _CAPTURE_TRANSPORT_ENV = "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT"
@@ -744,6 +748,19 @@ def score(base_dir: Path) -> float:
     capture_command = None
     if fake is None:
         transport = (config.get("judge") or {}).get("transport", "api")
+        # 029-02 AC2 (ADR-0034): the ENTRYPOINT gate. `score()` IS the oracle path
+        # (oracle.sh reads its stdout float). A `subagent` transport is advisory-only
+        # and its model cannot be verified, so it must NEVER produce a gating score —
+        # refuse here, regardless of whether a session is present. The discriminator
+        # is the entrypoint, not attendance: even the attended /servo:agent-loop gate
+        # calls score() and so gets env_error, never a subagent number. The advisory
+        # read is reached ONLY via `advisory_read()` (design_eval.py advisory).
+        if transport == "subagent":
+            raise EnvError(
+                "subagent transport is advisory-only (ADR-0034) and cannot be gated — "
+                "the oracle/gate never consumes a self-reported subagent score. Run "
+                "`python3 design_eval.py advisory <target>` for a non-frozen read, or "
+                "set judge.transport to 'api'/'cli' to produce a gating score.")
         if transport == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
             raise EnvError("ANTHROPIC_API_KEY unset — cannot run the vision judge")
         if transport == "cli" and not _resolve_claude():
@@ -814,6 +831,142 @@ def score(base_dir: Path) -> float:
     _emit_honesty_advisories(config, composite, fake_run=fake is not None,
                              provider=provider, per_screen=per_screen)
     return composite
+
+
+# --------------------------------------------------------------------------- #
+# 029-02: the subagent advisory read (ADR-0034). NOT the oracle path — `score()`
+# above refuses `subagent` transport at the entrypoint, so this is reached ONLY
+# via `design_eval.py advisory`. It runs the REAL vision judge (the orchestrating
+# session's own subagent) over the REAL captured shot, but the result is a loud,
+# non-frozen ADVISORY: the model is self-reported (not verifiable across the
+# boundary), so it never wears a frozen score's authority and never gates.
+# --------------------------------------------------------------------------- #
+
+def _await_subagent_response(resp_path: Path) -> dict:
+    """Poll for the session's response file up to a bounded deadline, then FAIL
+    CLOSED (029-02 AC4). Absence of the response is the "no orchestrator present"
+    signal — an unattended run (CI, Routine, no session) finds nothing to answer
+    the request and raises `EnvError` rather than hanging. `timeout=0` (tests)
+    checks once and fails immediately; the loop never blocks past the deadline."""
+    raw_timeout = os.environ.get(_SUBAGENT_TIMEOUT_ENV, _SUBAGENT_DEFAULT_TIMEOUT)
+    try:
+        timeout = float(raw_timeout)
+    except (TypeError, ValueError) as e:
+        raise EnvError(
+            f"{_SUBAGENT_TIMEOUT_ENV}={raw_timeout!r} is not a number") from e
+    deadline = time.time() + timeout
+    while True:
+        if resp_path.is_file():
+            try:
+                return json.loads(resp_path.read_text())
+            except (ValueError, OSError):
+                pass  # possibly a mid-write (non-atomic session write); keep polling
+        if time.time() >= deadline:
+            if resp_path.is_file():   # present but never parseable by the deadline
+                raise EnvError(
+                    f"subagent response {resp_path.name} is present but unparseable — "
+                    "the session must write valid JSON (atomically: temp file + rename).")
+            raise EnvError(
+                "no subagent response (no orchestrator present) — the subagent "
+                "transport is attended-only; a live Claude Code session must judge "
+                f"the request and write {resp_path.name}. It never runs unattended.")
+        time.sleep(min(0.5, max(0.0, deadline - time.time())))
+
+
+def advisory_read(base_dir: Path) -> tuple[float, str | None]:
+    """The subagent ADVISORY read (029-02 / ADR-0034) — a real-judge fidelity read,
+    loudly marked non-frozen, that the oracle path can never consume. Captures each
+    screen's shot with the configured capture provider, writes a judge request, waits
+    for the session to judge and respond, aggregates, records a `subagent` ledger row
+    with the SELF-REPORTED model (labelled, never attestation), and returns the
+    advisory composite. Refuses unless `judge.transport == 'subagent'`."""
+    config = json.loads((base_dir / "config.json").read_text())
+    validate_freeze(config, base_dir)
+    transport = (config.get("judge") or {}).get("transport", "api")
+    if transport != "subagent":
+        raise EnvError(
+            f"advisory read requires judge.transport 'subagent', got {transport!r} — "
+            "the api/cli transports produce a frozen, gating score via the oracle path.")
+    n = int(config["samples"]["n"])
+    k = float(config["samples"].get("k", 1.0))
+    provider = _resolve_capture_transport(config)
+    if provider not in _CAPTURE_PROVIDERS:
+        known = ", ".join(sorted(_CAPTURE_PROVIDERS))
+        raise EnvError(f"unknown capture provider {provider!r} (known: {known})")
+
+    run_id = _run_stamp()
+    subdir = base_dir / "subagent"
+    subdir.mkdir(parents=True, exist_ok=True)
+    req_path, resp_path = subdir / "request.json", subdir / "response.json"
+    if resp_path.exists():
+        resp_path.unlink()  # never consume a stale prior response
+
+    captured, request = [], {"n": n, "screens": []}
+    for screen in config["screens"]:
+        app_png, att = capture_app(base_dir, screen, run_id, provider, config)
+        ref_png = base_dir / screen["reference"]
+        if not ref_png.is_file():
+            raise EnvError(f"reference missing: {screen['reference']}")
+        captured.append((screen, app_png, att))
+        request["screens"].append({
+            "id": screen["id"],
+            "app": app_png.relative_to(base_dir).as_posix(),
+            "reference": screen["reference"],
+        })
+    request["rubric"] = config.get("rubric")
+    req_path.write_text(json.dumps(request, indent=2) + "\n")
+    print(
+        f"design-eval: SUBAGENT JUDGE REQUEST for {len(captured)} screen(s) written to "
+        f"{req_path.relative_to(base_dir).as_posix()} — the orchestrating session must "
+        f"score each app-vs-reference pair and write {resp_path.relative_to(base_dir).as_posix()} "
+        '({"model": "<model>", "screens": {"<id>": [<score 0..1>…]}}). Write it '
+        "atomically (temp file + rename) so a mid-write read cannot see partial JSON.",
+        file=sys.stderr)
+
+    resp = _await_subagent_response(resp_path)
+    if not isinstance(resp, dict):
+        raise EnvError("subagent response must be a JSON object with 'model' + 'screens'")
+    self_model = resp.get("model")
+    resp_screens = resp.get("screens")
+    if not isinstance(resp_screens, dict):
+        raise EnvError("subagent response 'screens' must be an object of id → [scores]")
+    per_screen = []
+    for screen, app_png, att in captured:
+        raw = resp_screens.get(screen["id"])
+        if not isinstance(raw, list) or not raw:
+            raise EnvError(
+                f"subagent response missing/invalid scores for screen {screen['id']!r} "
+                "(expected a non-empty list of numbers)")
+        try:
+            samples = [max(0.0, min(1.0, float(x))) for x in raw]
+        except (TypeError, ValueError) as e:
+            raise EnvError(
+                f"subagent response for screen {screen['id']!r} has a non-numeric score: {e}"
+            ) from e
+        shot = app_png.relative_to(base_dir).as_posix()
+        per_screen.append((screen, samples, aggregate_lower_bound(samples, k), att, shot))
+
+    total_w = sum(float(s.get("weight", 1.0)) for s, _, _, _, _ in per_screen)
+    if total_w <= 0:
+        raise EnvError("total screen weight is zero")
+    composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a, _sh in per_screen) / total_w
+    composite = max(0.0, min(1.0, composite))
+    _ledger(base_dir, config, per_screen, composite, fake_run=False,
+            provider=provider, capture_command=None, self_reported_model=self_model)
+    # 029-02 AC3 + arch-review: the honesty tells STACK. If the shots were
+    # human-staged (manual + subagent — the documented desktop-app case), the
+    # per-screen MANUAL CAPTURE advisory (ADR-0035 §3, "every run") must still fire
+    # alongside the SUBAGENT tell — one dropped tell is a dropped honesty signal.
+    _emit_honesty_advisories(config, composite, fake_run=False,
+                             provider=provider, per_screen=per_screen)
+    # The loud tell on the channel humans read — self-reported, not attested; an
+    # advisory read, structurally below and never a frozen score.
+    print(
+        f"design-eval: SUBAGENT JUDGE — self-reported model {self_model!r}, an advisory "
+        "read (a real judge over the real shot), NOT a verified frozen score and NOT a "
+        "gating measurement. The model is self-reported and cannot be verified.",
+        file=sys.stderr)
+    return composite, self_model
 
 
 def _emit_honesty_advisories(config: dict, composite: float, *, fake_run: bool,
@@ -892,15 +1045,22 @@ def _provenance(att, *, fake_run: bool) -> dict:
 
 
 def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
-            *, fake_run: bool, provider: str | None, capture_command: list | None) -> None:
+            *, fake_run: bool, provider: str | None, capture_command: list | None,
+            self_reported_model: str | None = None) -> None:
     # `fake_run` is keyword-only and REQUIRED on purpose: a default would let a
     # future caller silently get `not_attested` on a synthetic run — the same
     # class of error as deriving it from `att`, which this replaced. `provider`
     # and `capture_command` are likewise required keyword-only (027-02/03).
+    # `self_reported_model` (029-02) is the model the SUBAGENT reported it judged
+    # with — advisory-only, labelled self-reported (NOT attestation), `null` on the
+    # api/cli/fake arms. `model` stays the frozen/requested judge model.
     record = {
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
+        # 029-02 AC3: what the subagent SAID it judged with — never verified; a bare
+        # `null` on non-subagent runs keeps every row the same shape.
+        "self_reported_model": self_reported_model,
         # 027-02 AC5: which capture provider produced this run's shots — advisory,
         # never hashed (ADR-0032 §6). `null` on the fake arm (no capture ran).
         "capture_provider": provider,

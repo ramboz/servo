@@ -15,6 +15,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -399,6 +401,166 @@ class ManualCaptureTests(unittest.TestCase):
         self.assertEqual(manual_row["screens"][0]["provenance"], "manual_capture")
         self.assertEqual(fake_row["screens"][0]["provenance"], "not_captured")
         self.assertNotEqual(manual_row["capture_provider"], fake_row["capture_provider"])
+
+
+class SubagentAdvisoryTests(unittest.TestCase):
+    """029-02 / ADR-0034: the subagent advisory transport — the oracle entrypoint
+    refuses it (env_error, entrypoint-gated, attendance-independent); the separate
+    advisory path runs a real judge over the real shot, fails closed without hanging
+    when no session responds, and records a self-reported (not attested) model."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for k in ("ANTHROPIC_API_KEY", score._FAKE_SCORES_ENV,
+                  "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT", score._SUBAGENT_TIMEOUT_ENV):
+            os.environ.pop(k, None)
+
+    def _subagent_config(self):
+        cfg = _base_config()
+        cfg["judge"]["transport"] = "subagent"
+        cfg["capture"] = {"transport": "manual"}  # the desktop-app + non-automatable case
+        return cfg
+
+    def _stage_manual(self, d: Path):
+        (d / "manual").mkdir(parents=True, exist_ok=True)
+        (d / "manual" / "home.png").write_bytes(b"\x89PNG-home")
+        (d / "manual" / "settings.png").write_bytes(b"\x89PNG-settings")
+
+    def _responder(self, subdir: Path, response: dict):
+        """Simulate the orchestrating session: wait for request.json, then write
+        response.json — faithful to the real channel (session responds to a request)."""
+
+        def run():
+            req = subdir / "request.json"
+            for _ in range(200):  # up to ~10s
+                if req.is_file():
+                    (subdir / "response.json").write_text(json.dumps(response))
+                    return
+                time.sleep(0.05)
+        th = threading.Thread(target=run, daemon=True)
+        th.start()
+        return th
+
+    def test_oracle_entrypoint_refuses_subagent_regardless_of_attendance(self):
+        # AC2: score()/main() (the oracle path) env_errors on subagent transport
+        # whether or not a session/response is present — the discriminator is the
+        # entrypoint, not attendance. No stdout float ever.
+        for attended in (False, True):
+            with tempfile.TemporaryDirectory() as t:
+                tmp = Path(t)
+                d = _make_eval_dir(tmp, self._subagent_config())
+                de.freeze(tmp)
+                if attended:  # a live "session" response sitting there must NOT matter
+                    (d / "subagent").mkdir(parents=True, exist_ok=True)
+                    (d / "subagent" / "response.json").write_text(
+                        json.dumps({"model": "m", "screens": {"home": [0.9], "settings": [0.9]}}))
+                rc, out, err = _capture_main(d)
+                self.assertEqual(rc, score.EXIT_ENV_ERROR, f"attended={attended}")
+                self.assertEqual(out.strip(), "")           # never a gating float
+                self.assertIn("advisory-only", err)
+
+    def test_advisory_read_end_to_end_real_channel(self):
+        # AC1 + AC3: the advisory path runs the real judge (session) over the real
+        # shot, records transport=subagent + self-reported model, loudly marks it.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._subagent_config())
+            self._stage_manual(d)
+            de.freeze(tmp)
+            os.environ[score._SUBAGENT_TIMEOUT_ENV] = "10"
+            self._responder(d / "subagent", {
+                "model": "claude-sonnet-selfreported",
+                "screens": {"home": [0.8, 0.9], "settings": [0.7]}})
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                composite, model = score.advisory_read(d)
+            self.assertGreater(composite, 0.0)
+            self.assertLessEqual(composite, 1.0)
+            self.assertEqual(model, "claude-sonnet-selfreported")
+            self.assertIn("SUBAGENT JUDGE", err.getvalue())
+            self.assertIn("self-reported", err.getvalue())
+            row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+            self.assertEqual(row["transport"], "subagent")
+            self.assertEqual(row["self_reported_model"], "claude-sonnet-selfreported")
+            # `model` stays the frozen/requested judge model, distinct from self-reported
+            self.assertNotEqual(row["model"], row["self_reported_model"])
+
+    def test_advisory_fails_closed_without_hanging_when_unattended(self):
+        # AC4: no session responds → env_error within a bounded wait, never a hang.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._subagent_config())
+            self._stage_manual(d)
+            de.freeze(tmp)
+            os.environ[score._SUBAGENT_TIMEOUT_ENV] = "0"  # check once, fail closed
+            start = time.time()
+            with self.assertRaises(score.EnvError) as cm:
+                score.advisory_read(d)
+            self.assertLess(time.time() - start, 5.0)  # did not hang
+            self.assertIn("no orchestrator present", str(cm.exception))
+
+    def test_advisory_refuses_non_subagent_transport(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            cfg = _base_config()  # transport defaults to api
+            d = _make_eval_dir(tmp, cfg)
+            de.freeze(tmp)
+            with self.assertRaises(score.EnvError) as cm:
+                score.advisory_read(d)
+            self.assertIn("subagent", str(cm.exception))
+
+    def test_advisory_malformed_scores_fail_closed(self):
+        # Craft nit: a parseable response with non-numeric scores must fail closed to
+        # EnvError (uniform env_error surface), not an uncaught traceback.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._subagent_config())
+            self._stage_manual(d)
+            de.freeze(tmp)
+            os.environ[score._SUBAGENT_TIMEOUT_ENV] = "10"
+            self._responder(d / "subagent",
+                            {"model": "m", "screens": {"home": ["oops"], "settings": [0.9]}})
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(score.EnvError) as cm:
+                    score.advisory_read(d)
+            self.assertIn("non-numeric", str(cm.exception))
+
+    def test_advisory_stacks_manual_capture_advisory(self):
+        # Arch nit: on the manual+subagent intersection BOTH honesty tells fire — the
+        # per-screen MANUAL CAPTURE advisory (ADR-0035 §3) and the SUBAGENT advisory.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._subagent_config())
+            self._stage_manual(d)
+            de.freeze(tmp)
+            os.environ[score._SUBAGENT_TIMEOUT_ENV] = "10"
+            self._responder(d / "subagent",
+                            {"model": "m", "screens": {"home": [0.9], "settings": [0.9]}})
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                score.advisory_read(d)
+            self.assertEqual(err.getvalue().count("MANUAL CAPTURE"), 2)  # both screens
+            self.assertIn("SUBAGENT JUDGE", err.getvalue())
+
+    def test_advisory_distinct_from_fake_scores(self):
+        # AC5: a subagent advisory row (transport=subagent + self_reported_model) is
+        # not confusable with a fake-scores row (not_captured, no self-reported model).
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp, self._subagent_config())
+            self._stage_manual(d)
+            de.freeze(tmp)
+            os.environ[score._SUBAGENT_TIMEOUT_ENV] = "10"
+            self._responder(d / "subagent",
+                            {"model": "m-self", "screens": {"home": [0.9], "settings": [0.9]}})
+            with contextlib.redirect_stderr(io.StringIO()):
+                score.advisory_read(d)
+            sub_row = json.loads((d / "ledger.jsonl").read_text().strip().splitlines()[-1])
+        self.assertEqual(sub_row["transport"], "subagent")
+        self.assertEqual(sub_row["self_reported_model"], "m-self")
+        self.assertEqual(sub_row["screens"][0]["provenance"], "manual_capture")
 
 
 class InstallTests(unittest.TestCase):

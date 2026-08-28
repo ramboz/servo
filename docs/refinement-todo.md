@@ -1211,3 +1211,23 @@ now satisfied (ADRs Accepted).**
 satisfied for both specs (all three ADRs Accepted). The two Phase-0 patches already
 shipped; they are mitigations, not the fix — ADR-0033's structured policy +
 re-enumerating reviewer is the actual remedy for the reported failure.
+
+## design-eval subagent advisory (029-02) — two deferred robustness items
+
+**Deferred:** Slice 029-02 (ADR-0034 subagent advisory transport) shipped two
+non-blocking follow-ups the arch/craft reviews surfaced: (a) `score()` and
+`advisory_read()` in `skills/design-eval/score.py` share a capture → aggregate →
+ledger shape, so a future change to weighting/aggregation in `score()` will not
+reach the advisory path — a shared helper would remove the drift surface (the
+paths genuinely differ today: `judge()` calls vs the request/response channel);
+(b) the subagent channel uses fixed filenames (`subagent/request.json` /
+`response.json`) with no correlation id, so two concurrent advisory runs in one
+eval dir would collide.
+
+**Resolution trigger:** (a) the first change to `score()`'s aggregation/weighting
+that must also apply to the advisory path — extract the shared step then; (b) the
+first need for batch/parallel advisory runs against one eval dir — add a per-run
+correlation id (e.g. the `run_id` stamp) to the request/response filenames.
+
+**Surfaced by:** slice 029-02 arch + craft reviews, 2026-08-27 — both fail
+loud/closed today (no gating or hang risk), so parked rather than fixed.

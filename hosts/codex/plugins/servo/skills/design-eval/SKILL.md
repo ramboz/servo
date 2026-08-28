@@ -39,6 +39,24 @@ silent `0.0`; a changed rubric/dataset/model refuses as stale.
   - **`"cli"`** — a headless `claude -p`, which runs the vision judge on a Claude
     subscription with **no API key** (set `judge.transport: "cli"`; needs the
     `claude` CLI on `PATH`, or point `SERVO_DESIGN_EVAL_CLAUDE_BIN` at it).
+  - **`"subagent"`** — an **attended, non-frozen ADVISORY** transport (029-02 /
+    [ADR-0034](../../docs/decisions/adr-0034-design-eval-subagent-judge-transport.md))
+    for the setup where neither of the above is reachable — Claude Code inside the
+    **Claude Desktop app** (no spawnable `claude -p`, no API key). The orchestrating
+    session runs the vision judge itself. **It is not a gating score.** The oracle
+    path (`score.py`, the `score_design_fidelity` component) **refuses** `subagent`
+    transport with `env_error` regardless of attendance — the discriminator is the
+    *entrypoint*, so even the attended `/servo:agent-loop` gate can never consume a
+    subagent number. Reach the read **only** via `python3 design_eval.py advisory
+    <target>`: it captures each screen (any capture provider — pairs naturally with
+    `manual` for a non-automatable target), writes a judge request to
+    `subagent/request.json`, and waits (bounded — `SERVO_DESIGN_EVAL_SUBAGENT_TIMEOUT`,
+    default 120s) for the session to score and write `subagent/response.json`. No
+    session responds → `env_error` (never a hang, never a silent 0.0). The model is
+    **self-reported, not verified** (recorded as `self_reported_model` in the
+    ledger, never attestation), and every run prints a loud `SUBAGENT JUDGE …`
+    stderr advisory. Use it to *steer authoring/iteration*, not to gate — a gating
+    fidelity score still needs `api`/`cli`.
 
 ## Flow
 
