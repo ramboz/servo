@@ -132,7 +132,7 @@
 | [028-design-eval-policy-honesty](028-design-eval-policy-honesty/spec.md) | 028-02 — freeze-surfacing | DRAFT |  |
 | [028-design-eval-policy-honesty](028-design-eval-policy-honesty/spec.md) | 028-03 — catalogue-reenumerator | DRAFT |  |
 | [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-01 — manual-capture | **DONE** |  |
-| [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-02 — subagent-advisory | DRAFT |  |
+| [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-02 — subagent-advisory | **DONE** |  |
 
 ## Deferred slices
 
@@ -159,5 +159,5 @@
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
 - **0** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
-- **5** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
+- **7** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
 - **0** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
