@@ -204,6 +204,58 @@ class ScoreHonestyTests(unittest.TestCase):
             self.assertTrue((d / "ledger.jsonl").is_file())
 
 
+class HonestyAdvisoryTests(unittest.TestCase):
+    """Phase-0 field-report patches: a fake-scores run and a within-noise-of-
+    threshold composite must announce themselves on stderr, while stdout stays a
+    single parseable float (the oracle.sh contract)."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop(score._FAKE_SCORES_ENV, None)
+
+    def test_fake_scores_run_is_loudly_marked_on_stderr(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.90], "settings": [0.90]})
+            rc, out, err = _capture_main(d)
+            self.assertEqual(rc, score.EXIT_OK)
+            self.assertIn("FAKE SCORES", err)
+            # stdout is still exactly one parseable float — the oracle contract.
+            self.assertEqual(len(out.strip().splitlines()), 1)
+            self.assertAlmostEqual(float(out.strip()), 0.90, places=4)
+
+    def test_composite_within_noise_of_threshold_is_flagged(self):
+        # threshold 0.8, δ 0.03; single samples → lower_bound == value, so the
+        # composite is 0.79, |0.79 - 0.80| = 0.01 < 0.03 → a tie.
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.79], "settings": [0.79]})
+            rc, out, err = _capture_main(d)
+            self.assertEqual(rc, score.EXIT_OK)
+            self.assertIn("within noise", err)
+            self.assertAlmostEqual(float(out.strip()), 0.79, places=4)
+
+    def test_composite_far_from_threshold_is_not_flagged(self):
+        with tempfile.TemporaryDirectory() as t:
+            tmp = Path(t)
+            d = _make_eval_dir(tmp)
+            de.freeze(tmp)
+            os.environ[score._FAKE_SCORES_ENV] = json.dumps(
+                {"home": [0.50], "settings": [0.50]})
+            rc, out, err = _capture_main(d)
+            self.assertEqual(rc, score.EXIT_OK)
+            self.assertNotIn("within noise", err)
+
+
 class InstallTests(unittest.TestCase):
     ORACLE = (
         "#!/usr/bin/env bash\nset -euo pipefail\nTHRESHOLD=\"${THRESHOLD:-0.5}\"\n"

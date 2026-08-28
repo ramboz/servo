@@ -212,4 +212,14 @@ follow-up in `docs/refinement-todo.md`.)
   higher for a more conservative judge. (Applies to the `"api"` transport; the
   `"cli"` transport runs at the model's CLI default.)
 - The rubric should score *design intent* (layout/palette/type/shape), not
-  dynamic content; bake the ignore-list into the rubric text.
+  dynamic content. **Exclusions are dangerous, not free.** Every "IGNORE …"
+  clause defines a divergence *out of the score* — and today it lives in
+  free-text prose that the human approving the `freeze` never sees as a
+  discrete, vetoable list. That is exactly how a rubric can be built *backwards*
+  from a desired pass: widen the ignore-list until only the parts that already
+  match are scored, then let `freeze` + hash + n-sampling lend it the look of
+  rigor. So: keep exclusions **minimal and explicit**, list them where a
+  reviewer will read them, and never exclude a dimension you have not confirmed
+  is genuinely out of scope for *this* screen. (A structured, separately-approved
+  `ignore:` list that replaces this prose convention is planned — see
+  `docs/refinement-todo.md`.)

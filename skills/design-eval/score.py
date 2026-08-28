@@ -740,7 +740,45 @@ def score(base_dir: Path) -> float:
     composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a, _sh in per_screen) / total_w
     _ledger(base_dir, config, per_screen, composite,
             fake_run=fake is not None, provider=provider, capture_command=capture_command)
-    return max(0.0, min(1.0, composite))
+    composite = max(0.0, min(1.0, composite))
+    _emit_honesty_advisories(config, composite, fake_run=fake is not None)
+    return composite
+
+
+def _emit_honesty_advisories(config: dict, composite: float, *, fake_run: bool) -> None:
+    """Operator-facing warnings on **stderr** (never stdout — oracle.sh parses
+    stdout as the single composite float, ``score="$(score_design_fidelity)"``).
+    These facts are in ``ledger.jsonl`` too, but the ledger is not surfaced in a
+    loop / CI / Routine log; stderr is — so a synthetic or coin-flip run stops
+    reading as a clean measurement at the point a human actually looks.
+
+    Two advisories:
+    - **fake-scores** (field-report point 4): a ``SERVO_DESIGN_EVAL_FAKE_SCORES``
+      run is byte-identical on stdout to a real one; the only prior tell was
+      ``provenance: not_captured`` buried in the ledger.
+    - **within-noise-of-threshold** (point 5): ``0.7998`` vs ``0.80`` presents as
+      a decisive fail but is a coin flip; ``δ`` (already frozen) is exactly the
+      band width that makes it a tie.
+    """
+    if fake_run:
+        print(
+            "design-eval: FAKE SCORES — SERVO_DESIGN_EVAL_FAKE_SCORES is set; no "
+            "capture and no judge ran. The composite is INJECTED, not a "
+            "measurement (ledger provenance: not_captured).",
+            file=sys.stderr)
+    threshold = config.get("threshold")
+    delta = (config.get("samples") or {}).get("delta")
+    if threshold is not None and delta:
+        try:
+            near = abs(float(composite) - float(threshold)) < float(delta)
+        except (TypeError, ValueError):
+            near = False   # a non-numeric threshold/δ is a config problem, not ours to raise here
+        if near:
+            print(
+                f"design-eval: composite {composite:.4f} is within noise "
+                f"(δ={delta}) of threshold {threshold} — a statistical tie, not "
+                "a decisive pass/fail. Do not read the verdict as settled.",
+                file=sys.stderr)
 
 
 def _provenance(att, *, fake_run: bool) -> dict:
