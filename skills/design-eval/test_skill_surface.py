@@ -208,7 +208,8 @@ class DocumentedCliMatchesCodeTests(unittest.TestCase):
     def test_code_exposes_the_expected_verbs(self):
         self.assertEqual(
             self._code_subcommands(),
-            {"init", "capture-refs", "freeze", "install", "uninstall"},
+            {"init", "capture-refs", "freeze", "install", "uninstall",
+             "advisory", "catalogue", "record-reenumeration"},
         )
 
     def test_flow_documents_every_mutating_verb(self):
@@ -242,8 +243,12 @@ class DocumentedConfigMatchesTemplateTests(unittest.TestCase):
         self.assertIsInstance(self.config, dict)
 
     def test_template_carries_the_documented_policy_keys(self):
-        for key in ("app_url", "viewport", "judge", "samples", "threshold", "rubric", "screens"):
+        # 028-01 (ADR-0033): the free-text `rubric` was replaced by the structured
+        # `dimensions` + `ignore` policy.
+        for key in ("app_url", "viewport", "judge", "samples", "threshold",
+                    "dimensions", "ignore", "screens"):
             self.assertIn(key, self.config, f"config.example.json should define {key!r}")
+        self.assertNotIn("rubric", self.config, "the legacy free-text rubric is gone")
 
     def test_documented_sample_params_exist(self):
         # SKILL.md teaches n / k / δ — the template must actually expose them.
