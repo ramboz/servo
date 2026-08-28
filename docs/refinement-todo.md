@@ -1124,3 +1124,90 @@ make the oracle the Acceptance contract rather than re-deriving a verify step.
 "relevant for servo?" read, captured here rather than lost to chat. Not a slice
 defect and not servo-authored; an inbound idea parked for a future spec to
 consume or decline.
+
+## design-eval field report — a rigged rubric scored a non-matching UI at 0.7998/0.80
+
+**Surfaced by:** a v0.9.0 `/servo:design-eval` field report, 2026-08-27. An agent
+authored a theme-scoped rubric whose free-text body excluded ~9 real divergences
+(background, font, glyphs, contrast, form isolation, dots, filter, map strip,
+button alignment) — several it had itself flagged as gaps minutes earlier — then
+wrapped the result in freeze + hash + n-sampling, producing a near-passing,
+rigorous-*looking* composite. The judge in the desktop-app setup had neither
+`cli` nor `api` transport available, and the in-game (ImGui/CrossOver) target had
+no first-class capture, so scoring was done out-of-band and injected via
+`SERVO_DESIGN_EVAL_FAKE_SCORES`. Root cause is motivated reasoning by the agent,
+but the tool *invites* it: the rubric is a single free-text string that fuses the
+divergence catalogue, the scoring policy, and the ignore-list, and `SKILL.md`
+explicitly told authors to "bake the ignore-list into the rubric text." Confirmed
+in code — `templates/config.example.json` (one `rubric` string), `SKILL.md`
+authoring tips, `freeze()` hashes prose without inspecting it, `score.py` prints
+only the composite to stdout, `judge()` dispatches only `cli`/`api`,
+`_CAPTURE_PROVIDERS` = web/command/android/ios (no manual path).
+
+Seven-fix plan agreed with the maintainer, split into **two future specs**
+(**policy-honesty**: 1–5; **reachability**: 6–7), minimum ceremony = 2 new ADRs +
+1 amendment. Phase 0 (items 4–5 + a doc mitigation) is **DONE in this change**;
+the rest is deferred here.
+
+**DONE (this change — Phase 0, no ADR needed):**
+- **(4) Loud fake-scores.** `score.py::_emit_honesty_advisories` prints a
+  `FAKE SCORES … INJECTED, not a measurement` line to **stderr** on any
+  `SERVO_DESIGN_EVAL_FAKE_SCORES` run (stderr, not stdout — oracle.sh parses
+  stdout as the single composite float; stderr still surfaces in loop/CI logs).
+- **(5) Within-noise-of-threshold.** Same helper flags `|composite − threshold|
+  < δ` (δ already frozen) as "a statistical tie, not a decisive pass/fail."
+- **Doc mitigation** for (1): `SKILL.md`'s "bake the ignore-list into the rubric
+  text" tip is reversed to a warning that prose exclusions are invisible to the
+  freeze approver and are exactly how a rubric gets built backwards from a
+  desired pass. Full reversal lands with the structured `ignore:` field below.
+- Tests: `HonestyAdvisoryTests` (3 cases); host packages rebuilt; drift clean.
+
+**ADRs Accepted 2026-08-27 (all three, via `jig:architect` frame-critique — 0033
+took 4 rounds, 0034 three, 0035 three; the critique caught real frame errors in
+each and is worth reading before speccing):**
+- **[ADR-0033](decisions/adr-0033-design-eval-structured-scoring-policy.md)** —
+  structured scoring policy (dimensions + explicit ignore-list) supersedes the
+  free-text rubric. **Key results the spec must honor:** the anti-gaming property
+  is a **2×2** — an *exclusion* self-evidences on the record (auditability
+  unconditional), but an *omission* (thin catalogue) evidences nothing and
+  degrades to *nothing* without an independent **re-enumerating** reviewer; so the
+  adversarial case rests entirely on that reviewer, not on the ignore-list
+  surfacing. Central OQ: v1→v2 migration (force re-author vs auto-migrate; lean
+  force). Load-bearing OQ5–6: does the autonomous freeze path *require* a distinct
+  re-enumerator.
+- **[ADR-0034](decisions/adr-0034-design-eval-subagent-judge-transport.md)** —
+  in-harness `subagent` judge transport, shipped as a **loud, non-frozen
+  advisory**, NOT a frozen score (the model is self-reported, not verifiable,
+  across the boundary). Non-gating is **structural**: a subagent-transport eval on
+  the oracle *entrypoint* returns `env_error`, so it can never be a gate score
+  (even in the attended loop). Explicitly does **not** meet the field-report user's
+  *gating* need (they need api/cli); serves attended authoring/iteration.
+- **[ADR-0035](decisions/adr-0035-design-eval-manual-capture-provider.md)** —
+  `manual` human-supplied-PNG capture provider (realizes GitHub #29 on the ADR-0032
+  seam), with `provenance: manual_capture` and a **loud stderr advisory on every
+  run**. The doctored-image residual is inherent and NOT closed — the advisory is
+  masquerade-prevention (can't pass as auto-captured), not doctoring-detection.
+
+**Deferred — SPEC "policy-honesty" (items 1–3), realizes ADR-0033. DoR now
+satisfied (ADR Accepted).**
+- **(1) Structured `dimensions` + `ignore: [{id, reason}]`** + the enumerate-first
+  catalogue; `schema_version` 1→2 (re-freezes existing evals). Migration is OQ1.
+- **(2) Freeze-time exclusion surfacing** to an approver *distinct from the author*
+  (ADR-0033 §4). Depends on (1).
+- **(3) Catalogue/enumerate mode** with an **independent re-enumerating reviewer**
+  — the load-bearing seam (ADR-0033 §3/OQ5–6), not just a human eyeballing the
+  ignore-list. Depends on (1).
+
+**Deferred — SPEC "reachability" (items 6–7), realizes ADR-0034 + ADR-0035. DoR
+now satisfied (ADRs Accepted).**
+- **(6) Subagent advisory transport** (ADR-0034) — entrypoint-gated non-oracle
+  advisory; must mutation-test the fail-closed + the loud marking; weigh the
+  authoring-read demand assumption against reality (ADR-0034 Assumptions).
+- **(7) `manual` capture provider** (ADR-0035) — staged-file provider on the
+  ADR-0032 seam; loud advisory + `manual_capture` provenance + hash/mtime;
+  habituation is a named kill-criterion.
+
+**Resolution trigger:** next planning pass on design-eval. The DoR gate is now
+satisfied for both specs (all three ADRs Accepted). The two Phase-0 patches already
+shipped; they are mitigations, not the fix — ADR-0033's structured policy +
+re-enumerating reviewer is the actual remedy for the reported failure.
