@@ -1255,3 +1255,54 @@ guidance-only.
 
 **Surfaced by:** slice 028-01 implementation, 2026-08-27 — scope confirmed with the
 maintainer (fallback shape) because Probe #1 could not run in-environment.
+
+## Figma as a design-eval referenceSource origin
+
+**Deferred:** design-eval references are authored today as browser-renderable
+mockup files — per screen, `referenceSource { file, selector, crop }` rendered
+by `capture-refs` into the frozen `reference` PNG. **vellum** (the sibling
+design-domain plugin that composes `servo:design-eval` for scoring) is adding
+**Figma** as a second design source (vellum's design-source-adapter ADR and
+figma design-source spec, both filed 2026-08-30), so references originating from
+Figma's image-export endpoint — pinned by fileKey + versionId at freeze time —
+are an imminent case. Nothing in the freeze contract blocks it: `freeze`
+sha256-hashes the reference *images* (`artifact_hashes`), so the origin is
+naturally agnostic — a Figma-exported PNG freezes exactly like a rendered one,
+and the pin metadata (fileKey/versionId/nodeId) could ride alongside
+`referenceSource` as provenance. Not built now: no servo-side consumer exists
+yet, and Figma API details (export endpoint shape, version pinning semantics)
+must be verified live at config time, not assumed from memory.
+
+**Resolution trigger:** the first real target whose canonical design lives in
+Figma (vellum's figma pilot is the named candidate). Then decide the seam:
+either `referenceSource` grows an origin variant (e.g.
+`{figma: {fileKey, versionId, nodeId}}`) that `capture-refs` fetches and crops,
+or the contract stays file-only and the Figma export is handled upstream by the
+design-source adapter (vellum-side), with servo recording only the pin
+provenance. Verify the current Figma image-export API at that point.
+
+**Surfaced by:** cross-repo review of vellum + jig + servo, 2026-08-30 —
+companion to vellum's design-source-adapter ADR (same date).
+
+## Composed cross-repo pilot as first-consumer wiring for deferred 012-05
+
+**Deferred:** slice 012-05 (first-consumer-wiring) is DEFERRED because it is
+*project* work servo cannot land in its own tree — its resolution trigger waits
+for "a real design-mockup→UI project that adopts `/servo:design-eval` and can
+host the wiring" (the original candidate, food-log, is a separate repository).
+A new candidate now exists: the **jig × vellum × servo composed
+autonomous-build pilot** (parked in vellum's and jig's inboxes, 2026-08-30) —
+design → consistency pass → redline → build → `design-eval` scoring, end to
+end. That pilot would be design-eval's first end-to-end consumer: a live
+`config.json` with per-screen setups, captured references, a real freeze +
+install, and `score_design_fidelity` gating an actual loop — exactly the wiring
+012-05 parked.
+
+**Resolution trigger:** the composed pilot being scheduled or run. Treat it as
+a candidate revival trigger for 012-05 — re-open by transitioning the slice to
+DRAFT per the board's deferral rule, and host the wiring in the pilot's
+consuming project (servo's tree still only records the evidence).
+
+**Surfaced by:** cross-repo review of vellum + jig + servo, 2026-08-30 —
+companion to the composed-pilot inbox entries filed the same day in vellum and
+jig.
