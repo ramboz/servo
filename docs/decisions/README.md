@@ -42,6 +42,7 @@
 - [ADR-0033: Structured scoring policy (dimensions + explicit ignore-list) supersedes free-text rubric](adr-0033-design-eval-structured-scoring-policy.md) — A v0.9.0 `/servo:design-eval` field report: an agent scored an in-game UI at a frozen, n-sampled composite of **0.7998 against a 0.80 threshold** — "essentially passing" — for a UI that diverged from its mockup on at least nine visible points (background, font, glyphs, contrast, form isolation, left-pane dots, filter, map/localisation strip, button alignment). (2026-08-27, Accepted)
 - [ADR-0034: In-harness subagent judge transport for design-eval](adr-0034-design-eval-subagent-judge-transport.md) — design-eval's vision judge is reachable through only two frozen transports, and a common Claude Desktop setup can run neither — so a score cannot be produced where Claude Code actually runs. (2026-08-27, Accepted)
 - [ADR-0035: Manual human-supplied capture provider for design-eval](adr-0035-design-eval-manual-capture-provider.md) — [ADR-0032](adr-0032-design-eval-capture-providers.md) made app capture a pluggable provider (`_CAPTURE_PROVIDERS` in `score.py:497-502`: `web`, `command`, `android`, `ios`) and **explicitly deferred** the human-supplied path: *"This ADR covers only capture for targets servo can drive. (2026-08-27, Accepted)
+- [ADR-0036: Approved frozen eval components satisfy the suitability signal](adr-0036-frozen-evals-satisfy-suitability-signal.md) — `suitability.py decide()` calls a spec `suitable` only when both legs hold: at least one evaluable AC, and a compilable signal — `has_signal` reads only `tests`/`ci` from `install.json`, so an approved, frozen, installed eval component flips neither condition and a fully instrumented design-led target is refused the unattended path. (2026-08-30, Proposed)
 
 ## Pending
 
@@ -64,8 +65,11 @@ entirely servo-owned), and `0020` is Accepted (minimum supported Python is
 the frozen-eval harness), `0025` is reserved (Proposed) by the
 runner-records / judge-verifies-assumptions ADR, `0026` is Accepted (generic eval-authoring-surface), `0027` is Accepted (goal→eval assisted authoring), and `0028` is Accepted (the
 dual-host package ADR), `0029` is Accepted (autonomy-readiness pre-flight
-gate), and `0030` is reserved (Proposed) by the durable-quarantine /
-lifecycle-coordinator ADR, so the next free number is `0031`:
+gate), `0030` is Accepted (durable quarantine + lifecycle coordinator),
+`0031`–`0035` are Accepted (the design-eval browser-acquisition,
+capture-provider, structured-scoring-policy, subagent-judge-transport, and
+manual-capture ADRs), and `0036` is reserved (Proposed) by the
+frozen-evals-satisfy-suitability-signal ADR, so the next free number is `0037`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone proposes a Python or Node oracle alternative.
 
