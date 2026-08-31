@@ -20,13 +20,17 @@ use_cases: []
 ## Overview
 
 Teach `/servo:edd-suitability` to credit servo's own strictest evidence
-contract: `has_signal` becomes `tests OR ci OR frozen_eval`, where the eval leg
-requires an eval component that is **installed** (registered in
+contract: `has_signal` becomes `tests OR ci OR reviewed_frozen_eval`, where the
+eval leg requires an eval component that is **installed** (registered in
 `install.json`'s `components` by `fidelity_eval.register_manifest`) **and
-approved + frozen** (its `.servo/<eval>/config.json` carries
-`approval_status: "approved"` + `approved_content_hash` + non-empty `hashes` —
-the fields `validate_freeze` enforces at score time). Unfrozen, unapproved, or
-unregistered evals never count; a judged-only signal (no tests, no CI) still
+approved + frozen with reviewed provenance** (its `.servo/<eval>/config.json`
+carries `approval_status: "approved"` + `approval_provenance: "reviewed"` +
+`approved_content_hash` + non-empty `hashes` — the freeze fields
+`validate_freeze` enforces at score time, plus the enforced distinct-approver
+provenance design-eval's `freeze --reviewer` records; ADR-0036 frame-critique
+revision 2026-08-31). Unfrozen, unapproved, self-approved, provenance-less
+(today's content-fidelity / eval-authoring stamps), or unregistered evals never
+count; a judged-only signal (no tests, no CI) still
 returns `suitable` but carries a standing **non-blocking** advisory
 recommending a deterministic counterweight (the ADR-0033 reward-hacking
 lesson). One lean slice: the `suitability.py` rule inputs, the advisory, the
@@ -51,7 +55,13 @@ Current state (probed 2026-08-30):
 - Freeze facts: `freeze()` stamps `hashes` / `approved_content_hash` /
   `approval_status: "approved"` (`design_eval.py:263-268`);
   `fidelity_eval.validate_freeze` (`fidelity_eval.py:222`) refuses `StaleError`
-  → rc 2 at score time unless approved and hash-intact.
+  → rc 2 at score time unless approved and hash-intact. Provenance: only
+  design-eval records `approval_provenance`/`approved_by` (`reviewed` is
+  enforced via the 028-03 distinct-reviewer re-enumeration verdict;
+  `self_approved` via self-ack); `content_fidelity.py freeze` (`:94-115`) and
+  eval-authoring (`eval_authoring.py:1266`) record **no provenance today**, so
+  their components cannot credit the leg until they adopt the shared seam
+  (ADR-0036 OQ1 resolution).
 - Dir↔component mapping is closed: `.servo/design-eval/` → `design_fidelity`
   (`design_eval.py:47`), `.servo/content-fidelity/` → `content_fidelity`
   (`content_fidelity.py:34`), eval-authoring `.servo/<component>/` under its
@@ -82,10 +92,10 @@ manifest facts by direct code probe, and every mechanic lands on files
 suitability already owns or reads.
 
 - **030-01 (Rules)** — the eval-signal leg + judged-only advisory in
-  `suitability.py`, with the three-way test fence (eval-alone → suitable +
-  advisory; unfrozen/unapproved/unregistered → unchanged; tests/ci →
-  byte-identical) and the SKILL.md / docstring updates that retire the
-  "empty on suitable" absolute.
+  `suitability.py`, with the test fence (reviewed-eval-alone → suitable +
+  advisory; self-approved/provenance-less/unfrozen/unapproved/unregistered →
+  unchanged; tests/ci → byte-identical) and the SKILL.md / docstring updates
+  that retire the "empty on suitable" absolute.
 
 ## Slices
 

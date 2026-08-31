@@ -8,12 +8,14 @@ frame_review: true
 ## Slice 030-01 — eval-component-signal
 
 **Goal:** `has_signal` in `/servo:edd-suitability` is additionally satisfied by
-at least one **approved, frozen** eval component **installed** in the target's
+at least one **reviewed, frozen** eval component **installed** in the target's
 oracle — established from the two manifests servo already writes
 (`install.json`'s `components` registration + the eval's own
-`approval_status`/`approved_content_hash`/`hashes` freeze facts) — with a
-standing non-blocking advisory when the judged eval is the *only* signal, and
-today's tests/ci behavior byte-identical.
+`approval_status`/`approval_provenance`/`approved_content_hash`/`hashes`
+freeze facts; only `approval_provenance: "reviewed"` credits, per ADR-0036's
+frame-critique revision 2026-08-31) — with a standing non-blocking advisory
+when the judged eval is the *only* signal, and today's tests/ci behavior
+byte-identical.
 
 **DoR:**
 - ☐ [ADR-0036](../../decisions/adr-0036-frozen-evals-satisfy-suitability-signal.md)
@@ -24,11 +26,12 @@ today's tests/ci behavior byte-identical.
 
 **Acceptance Criteria:**
 
-1. **A frozen + approved + registered eval component alone flips the verdict to
-   `suitable`, with the advisory.** Fixture: a target whose `install.json` has
-   `signals: {tests: false, ci: false, lint: false}` and
+1. **A frozen + reviewed-approved + registered eval component alone flips the
+   verdict to `suitable`, with the advisory.** Fixture: a target whose
+   `install.json` has `signals: {tests: false, ci: false, lint: false}` and
    `components: ["design_fidelity"]`, plus `.servo/design-eval/config.json`
-   carrying `approval_status: "approved"`, `approved_content_hash`, and a
+   carrying `approval_status: "approved"`,
+   `approval_provenance: "reviewed"`, `approved_content_hash`, and a
    non-empty `hashes` map (no live judge, no capture — manifest facts only);
    a spec with ≥1 evaluable AC. `analyze` emits `verdict: "suitable"`, a
    `reasons` entry whose rule code names the eval-signal source (distinct from
@@ -37,15 +40,19 @@ today's tests/ci behavior byte-identical.
    item(s) on the existing `tests`/`ci` kinds recommending at least one
    deterministic component (the ADR-0033 counterweight). No blocking item
    appears. Tested via the CLI (artifact JSON asserted).
-2. **Unfrozen / unapproved / unregistered never counts.** Three negative
-   fixtures, same spec, each yielding today's `needs_evidence` with the
-   blocking `oracle_signal` item: (a) config present but
-   `approval_status: "draft"` (or absent); (b) `approval_status: "approved"`
-   but `hashes` missing/empty (never frozen); (c) config fully approved +
-   frozen but the component absent from `install.json`'s `components`
-   (uninstalled). An unreadable/malformed per-eval config likewise counts as
-   no eval signal (fail-closed) — never an env-error exit and never a torn
-   artifact. Tested.
+2. **Unfrozen / unapproved / self-approved / provenance-less / unregistered
+   never counts.** Five negative fixtures, same spec, each yielding today's
+   `needs_evidence` with the blocking `oracle_signal` item: (a) config present
+   but `approval_status: "draft"` (or absent); (b) `approval_status:
+   "approved"` but `hashes` missing/empty (never frozen); (c) config fully
+   approved + frozen but the component absent from `install.json`'s
+   `components` (uninstalled); (d) approved + frozen but
+   `approval_provenance: "self_approved"` (design-eval's self-ack path —
+   auditability-only per ADR-0033, never creditable); (e) approved + frozen
+   with **no** `approval_provenance` field at all (today's content-fidelity /
+   eval-authoring freeze stamps). An unreadable/malformed per-eval config
+   likewise counts as no eval signal (fail-closed) — never an env-error exit
+   and never a torn artifact. Tested.
 3. **tests/ci behavior is unchanged — byte-identical artifacts.** For targets
    where `tests` or `ci` is truthy (with and without an eval component
    present), the emitted artifact is byte-identical to the pre-slice output:
@@ -55,7 +62,7 @@ today's tests/ci behavior byte-identical.
    matrix.
 4. **The gap's remedy list is truthful.** When no signal of any kind exists,
    the blocking `oracle_signal` item's `detail` now names all three remedies
-   (test command, CI workflow, or an approved + frozen eval component); the
+   (test command, CI workflow, or a reviewed + frozen eval component); the
    `missing_oracle_signal` reason mirror (015-02 AC3 coherence) still holds.
    Tested.
 5. **Docs retire the "empty on suitable" absolute.** SKILL.md's verdict table
@@ -68,8 +75,8 @@ today's tests/ci behavior byte-identical.
 
 **DoD:**
 - [ ] All ACs pass; full test suite green.
-- [ ] Fail-closed branches of AC2 mutation-checked (neutering any of the three
-      predicates goes red).
+- [ ] Fail-closed branches of AC2 mutation-checked (neutering any of the
+      fail-closed predicates goes red).
 - [ ] Host packages rebuilt + drift clean (`build_host_packages.py --check`) —
       `suitability.py` + SKILL.md ship in both host packages.
 - [ ] Independent review passed; deviation log + reconciliation sweep produced
@@ -84,9 +91,15 @@ today's tests/ci behavior byte-identical.
 - The 015-01/02 fixture matrix (stubbed `SERVO_SUITABILITY_ORACLE_PLAN`
   classifier, tempdir targets) extends to the new fixtures without new test
   infrastructure — the eval leg needs only extra JSON files in the tempdir.
+- Advisory emission needs a **new branch**, not literal reuse: today the
+  non-blocking `tests`/`ci` items are emitted only inside
+  `if not has_signal:` (`suitability.py:109-129`), and a judged-only target
+  has `has_signal=True` — so AC1's advisory comes from a judged-only branch
+  that emits those kinds while suppressing the blocking `oracle_signal` item
+  (ADR-0036 round-3 frame-critique note).
 
 **Anti-horizontal-phasing check:** After this slice, a design-led target with
-no test suite but an approved, frozen `score_design_fidelity` component gets
+no test suite but a reviewed, frozen `score_design_fidelity` component gets
 `suitable` (plus the counterweight advisory) from
 `suitability.py analyze` end to end — and the Compile gate (015-03 /
 016-01) admits it — instead of `needs_evidence` demanding tests it does not
