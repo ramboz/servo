@@ -133,6 +133,7 @@
 | [028-design-eval-policy-honesty](028-design-eval-policy-honesty/spec.md) | 028-03 — catalogue-reenumerator | **DONE** |  |
 | [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-01 — manual-capture | **DONE** |  |
 | [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-02 — subagent-advisory | **DONE** |  |
+| [030-suitability-eval-signal](030-suitability-eval-signal/spec.md) | 030-01 — eval-component-signal | DRAFT | DoR gates on ADR-0036 acceptance (Proposed 2026-08-30). |
 
 ## Deferred slices
 
