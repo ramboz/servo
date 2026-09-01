@@ -1306,3 +1306,22 @@ consuming project (servo's tree still only records the evidence).
 **Surfaced by:** cross-repo review of vellum + jig + servo, 2026-08-30 —
 companion to the composed-pilot inbox entries filed the same day in vellum and
 jig.
+
+## `run_loop` now returns rc=2 on a *fully-executed* run (edit-permission-wall relabel) — re-check downstream exit-code consumers
+
+**Deferred (from spec 031-01 reconciliation, 2026-09-01):** ADR-0037's
+edit-permission-wall diagnosis relabels a below-threshold `oracle_plateau` /
+`max_iterations_reached` halt to `edit_permission_unavailable` and returns
+**rc=2** (`EXIT_ENV_ERROR`). This is the first case of a fully-executed
+`run_loop` (not a preflight refusal) exiting rc=2. Consumers that branch on the
+loop's exit code — notably heartbeat dispatch (`docs/architecture.md` §dispatch
+worktree, spec 011-03, which records `tried` vs env-error on the loop's `{0,2}`
+exit) — should be re-checked so a permission-wall relabel is attributed
+correctly (an actionable finding, not a spurious env-error that poisons the
+candidate's sticky state).
+
+**Resolution trigger:** Fold the re-check into **spec 031-02** (goal-driver
+relabel), which extends the same rc=2 behavior to `run_goal_loop` — the natural
+point to audit both drivers' exit-code contract against dispatch together.
+
+**Surfaced by:** spec 031-01 arch + craft reviews (2026-09-01).
