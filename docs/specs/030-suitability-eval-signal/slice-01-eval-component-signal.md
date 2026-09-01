@@ -18,8 +18,9 @@ when the judged eval is the *only* signal, and today's tests/ci behavior
 byte-identical.
 
 **DoR:**
-- ☐ [ADR-0036](../../decisions/adr-0036-frozen-evals-satisfy-suitability-signal.md)
-  **Accepted** (currently Proposed — this slice does not start before that).
+- ☑ [ADR-0036](../../decisions/adr-0036-frozen-evals-satisfy-suitability-signal.md)
+  **Accepted** (2026-09-01, after a 3-round frame-critique → reviewed-provenance-only
+  eval leg; evidence at `docs/decisions/reviews/adr-0036-frame-critique.md`).
 - ☐ Alias map re-confirmed against the tree at implementation time
   (`design-eval` → `design_fidelity`, `content-fidelity` → `content_fidelity`,
   eval-authoring dir == component name) — the closed set ADR-0036 assumes.

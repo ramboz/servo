@@ -200,3 +200,21 @@ the **Compile precondition only**; the heartbeat does not consult it and keeps
 `gate.py` as its evaluability gate, so 011-02's human-only `skipped` invariant
 stands (no inbox-contract change). The verdict contract this ADR defines (closed
 three-state gate, fail-closed, `missing_evidence`) is otherwise unchanged.
+
+### 2026-09-01 — extended by ADR-0036: reviewed frozen evals satisfy `has_signal`
+
+[ADR-0036](adr-0036-frozen-evals-satisfy-suitability-signal.md) (Accepted
+2026-09-01) **widens the *input set* of the `has_signal` predicate** this ADR
+defines, within [ADR-0018](adr-0018-suitability-gates-compile-not-heartbeat.md)'s
+Compile-only scope. Where `has_signal` read only `tests`/`ci` from
+`install.json`, it is now `tests OR ci OR reviewed_frozen_eval`: at least one
+**reviewed** (`approval_provenance: "reviewed"`), frozen, installed eval
+component also satisfies the signal leg — closing the false refusal of a
+fully-instrumented design-led target with no test suite. The **closed
+three-state verdict enum, the fail-closed default, and the `missing_evidence`
+artifact shape are untouched**; the one relaxation is that a `suitable` verdict
+**may now carry non-blocking advisory items** (the judged-only counterweight),
+where 015-02 documented `missing_evidence` as empty for `suitable`. Blocking
+items still never appear on `suitable`, and `unsuitable` still carries an empty
+list. Self-approved and provenance-less freezes do **not** count (fail-closed).
+Implemented by spec 030; this ADR is **not superseded**.

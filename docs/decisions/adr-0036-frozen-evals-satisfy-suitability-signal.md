@@ -1,14 +1,14 @@
 ---
-status: Proposed
+status: Accepted
 dependencies: []
-last_verified: 2026-08-31
+last_verified: 2026-09-01
 ---
 
 # ADR-0036: Approved frozen eval components satisfy the suitability signal
 
 ## Status
 
-Proposed (2026-08-30)
+Accepted (2026-09-01)
 
 Extends [ADR-0015](adr-0015-edd-suitability-gate.md) (still Accepted; the closed
 three-state verdict, fail-closed default, and `missing_evidence` contract are
