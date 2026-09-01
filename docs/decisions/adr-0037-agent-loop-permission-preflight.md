@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 dependencies: []
 last_verified: 2026-09-01
 frame_review: true
@@ -9,7 +9,7 @@ frame_review: true
 
 ## Status
 
-Proposed (2026-08-27)
+Accepted (2026-09-01)
 
 > Filed from a dogfood run against the **airlock** project (spec 008, GA4
 > purchase-conversion). Evidence is external to this repo; the owner should
