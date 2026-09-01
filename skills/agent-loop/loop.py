@@ -1990,33 +1990,37 @@ def _relabel_terminal_reason(
     final_oracle_status: str,
     edit_signal_available: bool,
 ) -> Optional[str]:
-    """Decide the edit-permission-wall relabel (slice 031-01, ADR-0037).
+    """Decide the edit-permission-wall relabel (slices 031-01/031-02, ADR-0037).
 
-    Returns `REASON_EDIT_PERMISSION_UNAVAILABLE` when a loop-driver halt is a
+    Returns `REASON_EDIT_PERMISSION_UNAVAILABLE` when a driver halt is a
     permission-wall signature, else None (keep today's terminal reason). Pure,
-    so every conjunct is mutation-testable in isolation. All four are
-    load-bearing:
+    so every conjunct is mutation-testable in isolation. ONE decision helper
+    serves BOTH drivers (no fork): the loop driver's `oracle_plateau` /
+    `max_iterations_reached` halts (031-01) and the goal driver's
+    `iteration_cap_reached` / `oracle_below_threshold` halts (031-02). All four
+    conjuncts are load-bearing:
 
-    - It fires ONLY at an existing brake halt (`oracle_plateau` /
-      `max_iterations_reached`) — never earlier, so it can never lose a capable
-      run (ADR-0037's core safety property).
-    - `edit_signal_available` (the persisted `edit_signal_computed`: a
-      runner-iteration `_tree_snapshot` returned non-None at least once, so the
-      disk-delta signal was actually computable): a non-git target OR a run whose
-      `git status` errored throughout (snapshot None) leaves it False, so we fall
-      back to today's reason rather than false-relabel a run whose capability we
-      could not observe (AC9). Unified with arming (both key off `_tree_snapshot`,
-      not a separate `_is_git_work_tree` probe) so a rev-parse-healthy tree whose
-      `status` transiently fails cannot mislabel a capable run.
-    - `runner_ever_edited` False: a single runner edit *proves* permission, so an
-      armed run keeps its original reason (AC6).
+    - It fires ONLY at an existing brake / below-threshold halt — never earlier,
+      so it can never lose a capable run (ADR-0037's core safety property).
+    - `edit_signal_available` (the disk-delta signal was actually computable — a
+      `_tree_snapshot` returned non-None): a non-git target OR a run whose `git
+      status` errored (snapshot None) leaves it False, so we fall back to today's
+      reason rather than false-relabel a run whose capability we could not
+      observe. Keyed off `_tree_snapshot`, not a separate `_is_git_work_tree`
+      probe, so a rev-parse-healthy tree whose `status` transiently fails cannot
+      mislabel a capable run.
+    - `runner_ever_edited` False: a single edit *proves* permission, so a run
+      that landed any change keeps its original reason. (For the goal driver,
+      which has no runner/judge split, this is the whole-run delta around the
+      single `claude -p`; for the loop driver, any runner iteration's delta.)
     - `final_oracle_status == below_threshold`: the oracle-below-threshold
-      conjunct confines every signal blind-spot to already-failing runs (AC5). A
-      pass never reaches here anyway (it halts on `oracle_passed`), and an
+      conjunct confines every signal blind-spot to already-failing runs. A pass
+      never reaches here (it halts on `oracle_passed` / `oracle_pass`), and an
       env-error halt is a different diagnosis, not a wall.
     """
     if terminal_reason not in (
         REASON_ORACLE_PLATEAU, REASON_MAX_ITERATIONS_REACHED,
+        REASON_ITERATION_CAP_REACHED, REASON_ORACLE_BELOW_THRESHOLD,
     ):
         return None
     if not edit_signal_available:
@@ -2782,9 +2786,16 @@ def _goal_summary(
     cost_ceiling: float, max_turns: int, final_oracle_status: str,
     composite, threshold, subtype, claude_terminal_reason,
     num_turns: int, transcript_showed_pass: bool,
+    terminal_breadcrumb: Optional[str] = None,
 ) -> dict:
-    """Single source for the goal-mode summary line (every halt path uses it)."""
-    return {
+    """Single source for the goal-mode summary line (every halt path uses it).
+
+    `terminal_breadcrumb` (slice 031-02): the actionable fix hint attached only
+    when the goal terminal is relabeled to `edit_permission_unavailable`. Added
+    *conditionally* (mirroring the loop driver's `_summary`, loop.py:1953) so
+    every other halt line keeps its byte-identical shape.
+    """
+    payload = {
         "driver": DRIVER_GOAL,
         "terminal_reason": terminal_reason,
         "subtype": subtype,
@@ -2799,6 +2810,9 @@ def _goal_summary(
         "transcript_showed_pass": transcript_showed_pass,
         "run_id": run_id,
     }
+    if terminal_breadcrumb is not None:
+        payload["terminal_breadcrumb"] = terminal_breadcrumb
+    return payload
 
 
 def _refuse_goal(
@@ -2930,8 +2944,18 @@ def run_goal_loop(
     def _finalize(terminal_reason, *, cumulative_cost_usd, final_oracle_status,
                   composite=None, threshold=None, subtype=None,
                   claude_terminal_reason=None, num_turns=0,
-                  transcript_showed_pass=False, exit_code):
-        """Persist final state + emit the goal summary; return exit_code."""
+                  transcript_showed_pass=False, terminal_breadcrumb=None,
+                  exit_code):
+        """Persist final state + emit the goal summary; return exit_code.
+
+        `terminal_breadcrumb` (slice 031-02): set only on an
+        `edit_permission_unavailable` relabel; persisted into state and the
+        summary line, both conditionally (other halts keep their existing shape).
+        The whole-run edit-signal flags (`runner_ever_edited` /
+        `edit_signal_computed`) are written onto `state` directly at the invoke
+        bracket, so they ride every `_finalize` path without threading through
+        this signature.
+        """
         state["terminal_reason"] = terminal_reason
         state["cumulative_cost_usd"] = cumulative_cost_usd
         state["final_oracle_status"] = final_oracle_status
@@ -2941,6 +2965,8 @@ def run_goal_loop(
         state["claude_terminal_reason"] = claude_terminal_reason
         state["num_turns"] = num_turns
         state["transcript_showed_pass"] = transcript_showed_pass
+        if terminal_breadcrumb is not None:
+            state["terminal_breadcrumb"] = terminal_breadcrumb
         _atomic_write_state(state, state_path)
         _emit_json(_goal_summary(
             run_id=run_id, terminal_reason=terminal_reason,
@@ -2949,15 +2975,40 @@ def run_goal_loop(
             composite=composite, threshold=threshold, subtype=subtype,
             claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
             transcript_showed_pass=transcript_showed_pass,
+            terminal_breadcrumb=terminal_breadcrumb,
         ))
         return exit_code
 
     goal_prompt = _compose_goal_prompt(prompt, gate_path=vendored_gate)
+    # Slice 031-02 (ADR-0037): whole-run disk delta around the single goal
+    # invoke. The goal driver has no per-iteration checkpoint, so the signal is
+    # bracketed ONCE — snapshot immediately before `_invoke_claude_goal` and
+    # immediately after it returns, BEFORE the final `_invoke_gate` (so the
+    # authoritative gate's writes fall outside the bracket, exactly as the loop
+    # driver excludes its gate call). Reuses 031-01's untracked-inclusive,
+    # bookkeeping-filtered `_tree_snapshot`.
+    snapshot_before = _tree_snapshot(target)
     result_event, raw_stdout, error = _invoke_claude_goal(
         goal_prompt, target,
         max_turns=max_turns, max_budget_usd=ceiling,
         timeout_seconds=claude_timeout_seconds,
     )
+    # "Landed anything" = a non-empty delta (incl. a created untracked file).
+    # `edit_signal_computed` matches 031-01's notion: the signal was observable
+    # only when BOTH snapshots are non-None (a non-git target / a `git status`
+    # error → fall back to today's reason rather than mislabel). The goal driver
+    # does not resume, so these ride local vars + forensic state, not a resume
+    # checkpoint. Recorded on `state` here so every `_finalize` path persists
+    # them without threading the signature.
+    snapshot_after = _tree_snapshot(target) if snapshot_before is not None else None
+    edit_signal_computed = snapshot_before is not None and snapshot_after is not None
+    ever_edited = edit_signal_computed and snapshot_after != snapshot_before
+    # Persist under the SAME state key the loop driver uses (031-01), so a
+    # state.json consumer spanning both drivers reads one name for one concept
+    # (matches docs/architecture.md). The goal driver has no runner/judge split,
+    # so here it means "the single whole-run delta landed a change."
+    state["runner_ever_edited"] = ever_edited
+    state["edit_signal_computed"] = edit_signal_computed
 
     # Pull cost + turn count off the result event once, defensively — every
     # exit path (interrupt, goal_unavailable, the normal verdict) reports the
@@ -3080,12 +3131,32 @@ def run_goal_loop(
     else:
         terminal_reason, exit_code = REASON_ORACLE_BELOW_THRESHOLD, EXIT_OK
 
+    # Slice 031-02 (ADR-0037): relabel a nothing-landed goal run to
+    # edit_permission_unavailable (rc=2) with the shared fix breadcrumb, via the
+    # SAME decision helper the loop driver uses (031-01). It fires only at the
+    # goal driver's two below-threshold terminals (iteration_cap_reached /
+    # oracle_below_threshold) when the whole-run delta landed nothing, the signal
+    # was computable, and the final gate is below threshold — so an oracle_pass
+    # (or a cap whose final gate passed) is never relabeled, and a capable run
+    # (delta non-empty) keeps its original reason.
+    terminal_breadcrumb = None
+    relabel = _relabel_terminal_reason(
+        terminal_reason,
+        runner_ever_edited=ever_edited,
+        final_oracle_status=gate_status,
+        edit_signal_available=edit_signal_computed,
+    )
+    if relabel is not None:
+        terminal_reason, exit_code = relabel, EXIT_ENV_ERROR
+        terminal_breadcrumb = EDIT_PERMISSION_BREADCRUMB
+        sys.stderr.write(f"loop: {terminal_breadcrumb}\n")
+
     return _finalize(
         terminal_reason, cumulative_cost_usd=cost_usd,
         final_oracle_status=gate_status, composite=composite, threshold=threshold,
         subtype=subtype, claude_terminal_reason=claude_terminal_reason,
         num_turns=num_turns, transcript_showed_pass=transcript_showed_pass,
-        exit_code=exit_code,
+        terminal_breadcrumb=terminal_breadcrumb, exit_code=exit_code,
     )
 
 

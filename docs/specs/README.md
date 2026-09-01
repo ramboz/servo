@@ -135,7 +135,7 @@
 | [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-02 — subagent-advisory | **DONE** |  |
 | [030-suitability-eval-signal](030-suitability-eval-signal/spec.md) | 030-01 — eval-component-signal | DRAFT | DoR gates on ADR-0036 acceptance (Proposed 2026-08-30). |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-01 — loop-driver-relabel | **DONE** |  |
-| [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-02 — goal-driver-relabel | DRAFT |  |
+| [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-02 — goal-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-03 — goal-driver-advisory-preflight | DEFERRED |  |
 
 ## Deferred slices
@@ -164,5 +164,5 @@
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
 - **0** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
-- **14** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
+- **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
 - **0** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
