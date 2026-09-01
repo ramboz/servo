@@ -1,117 +1,95 @@
 ---
 adr: 0037
 pass: frame-critique
-verdict: needs-changes
-reviewer: jig:reviewer subagent x2 independent (claude-fable-5), orchestrator-verified against loop.py
-reviewed_at: 2026-09-01T17:07:16Z
+verdict: pass
+reviewer: jig:reviewer subagent, fresh per round x5 (claude-fable-5), orchestrator-verified vs loop.py
+reviewed_at: 2026-09-01T18:28:35Z
 prompt_source: review.py frame-critique docs/decisions/adr-0037-agent-loop-permission-preflight.md
 ---
 
-Frame-critique of ADR-0037 (agent-loop preflights headless edit permission
-before the first paid iteration), two independent `jig:reviewer` subagents
-(claude-fable-5), prompt built by `review.py frame-critique`. **Both returned
-`needs-changes` and independently converged on the same finding**, which the
-orchestrator then verified against the cited code.
+Frame-critique of ADR-0037 (agent-loop diagnoses a missing headless
+edit-permission wall). Multiple fresh `jig:reviewer` subagents (claude-fable-5),
+prompt built by `review.py frame-critique`, each round orchestrator-verified
+against `loop.py`/`runner.md`/`judge.md`. Final verdict: **pass** after four
+needs-changes rounds that each caught a distinct, code-verified defect and drove
+the mechanism to converge (and simplify). The **policy** — refuse loudly on a
+permission wall (ADR-0021) — was never in dispute; every round was about the
+*mechanism*.
 
-## What is settled (not in dispute)
+## Round 1 — two independent critics, both needs-changes
 
-The **policy** is grounded and fine: ADR-0021 (Accepted) requires the loop to
-detect when it cannot edit and "refuse loudly," and the airlock spec-008
-evidence (two runs, ~$2.2, zero edits on a silent permission wall) is real —
-corroborated at n=2 (Bug 002 hit the identical "reads/reasons but Write/Edit
-denied, oracle never moves" failure on a separate dogfood, cwv-workbench spec
-015). The disagreement is only with ADR-0037's *mechanism*.
+Both independently attacked the original **ex-ante probe** shape: cheap XOR
+faithful (a real `claude -p` probe isn't cheap/deterministic; a cheap Python
+write is meaningless since `loop.py` already writes the target), `_settings_args`
+forwards only committed `settings.json` (not the `settings.local.json` grant the
+ADR cited as its fix), and edit-capability is path/tool-scoped, not global — so
+the probe could false-negative (block a capable run — a regression worse than
+status quo) or false-positive. Both proposed the same alternative: post-hoc
+detection. **Owner chose post-hoc/hybrid.**
 
-## Primary finding (both critics) — the exposed assumption is the probe's SHAPE
+## Round 2 — needs-changes: untracked-file blindness
 
-ADR-0037 bets on an **ex-ante** edit-capability probe run before iteration 1,
-"through the same permission resolution the runner's `claude -p` will use"
-(adr-0037:51-52, 72-78). Two problems, both verified:
+Keying the post-hoc signal on `_dirty_tree_paths` was wrong: it excludes
+untracked `??` files (`loop.py:1485`), so a capable runner *creating* new files
+(the common oracle-driven shape, and the Bug 002 case) reads as zero-edit →
+false refusal. Fix: a net-new per-iteration git-tree **delta including untracked
+files**.
 
-1. **Cheap XOR faithful.** The only faithful resolution is the runner's own
-   mechanism — `_invoke_claude` builds `["claude","-p",…] + _settings_args(target)`
-   at `cwd=target` (loop.py:1662-1674). A real `claude -p` probe is neither
-   "instant/free" (contradicting adr-0037:47,84) nor deterministic (a one-turn
-   agent may not emit an `Edit` → false-negative that blocks a capable run). The
-   only genuinely cheap probe — a direct Python scratch-write by loop.py — is
-   meaningless: loop.py already writes into the target unconditionally
-   (`_atomic_write_state`), so it always passes → false-positive, the exact
-   silent-waste the feature exists to prevent.
+## Round 3 — needs-changes: judge-alternation padding
 
-2. **"Same settings layers" is contradicted by the ADR's own cited fix.**
-   VERIFIED: `_settings_args` (loop.py:1607-1621) forwards ONLY the committed
-   `.claude/settings.json`, never `.claude/settings.local.json` — yet the grant
-   the ADR cites as its proof (adr-0037:34-36) was in `settings.local.json`. The
-   runner's real resolution is `--settings <committed>` MERGED with claude's own
-   cwd-hierarchy (user/project/project-local/managed/`defaultMode`), a
-   version-dependent precedence. loop.py knows how to read that full stack for
-   its hook audit (`_layered_settings`, loop.py:851-853 reads settings.local.json)
-   but does NOT forward it. A probe modeled on `_settings_args` would miss the
-   very grant the ADR cites → false-negative.
+`_agent_for_iteration` (`loop.py:444`) alternates runner (odd) / judge (even),
+and the judge is read-only by contract (`judge.md:18`), so judge iterations land
+zero edits by design. Counting raw iterations, a single legit runner no-op
+between two judges hits "3 consecutive zero-edit iterations" and mis-fires. Fix:
+scope the signal to **runner iterations only**; cumulative-zero with
+**disarm-on-first-edit** (any runner edit proves permission for the run).
 
-3. **Edit-capability is not a single global yes/no.** Permissions are path- and
-   tool-scoped (`Edit(src/**)`, Write-vs-Edit). The observed failure was `Edit`
-   on an existing `map.js`; the ADR proposes "a scratch write / a no-op Edit"
-   (adr-0037:76). A scratch *Write* (new path) or a *Bash*-satisfied probe can
-   pass while `Edit`-to-source is denied → false-positive; a scratch path under
-   an `Edit(src/**)`-scoped target is denied though the real edit is allowed →
-   false-negative.
+## Round 4 — needs-changes: valuable-XOR-safe timing tension
 
-**Net downstream risk:** false-positive → the silent-waste failure recurs
-(feature adds cost, delivers nothing); false-negative → blocks runs that would
-have succeeded (**strictly worse than status quo** — a new regression neither
-the status quo nor a post-hoc detector can produce). The ADR *names* the
-fidelity risk (adr-0037:93-95) but does not price it: no grade, no
-drift-detection story, and the kill criterion (99-101) covers only "preflight
-becomes redundant," never "probe is unfaithful / blocks a capable run."
+A mid-run "M runner iterations" threshold cannot align with the plateau brake:
+`_check_plateau` fires at total iteration `window+1`=4 and `break`s
+(`loop.py:588,2328-2334`), but runner iterations are odd totals — so `M=3` →
+total 5 is **dead code**, and `M=2` → total 3 fires *before* the plateau,
+re-introducing the capable-run-blocking regression. Critic-supplied fix, adopted:
+make it a **terminal-reason relabel** at the halt that already happens — never
+earlier, so it can never lose a capable run; it only reports the correct reason.
+Also flagged: the disarm flag must be **persisted** to survive `--resume`
+(`loop.py:2095-2099`, 2037-2042).
 
-## The un-ruled-out alternative (both critics proposed it independently)
+## Round 5 — PASS
 
-A **post-hoc** detector: run iteration 1, and if the runner reports zero edits
-AND the oracle is unmoved, refuse `rc=2` with the same breadcrumb before
-iteration 2. This is grounded in already-shipped machinery:
-- the loop scores the oracle every iteration (`oracle_score_history`);
-- the runner verdict already carries `files_changed` (agents/runner.md:52,64,
-  present only on `verdict: CHANGES_MADE`);
-- the ADR's entire lineage (bugs 001/002/004) is post-hoc result-envelope
-  inspection, and ADR-0021 is shape-agnostic ("detect… and refuse loudly").
+Attacked the new signal-isolation assumption (could stray `.servo/` / gate /
+`claude` artifacts false-arm `runner_ever_edited` and suppress the relabel?) and
+concluded the frame holds: the **oracle-below-threshold conjunct** confines every
+signal blind-spot (edits-then-reverts, unobserved paths, missed edits, false-arm)
+to *already-failing* runs — it can never block or mislabel a progressing/passing
+run, and both error directions degrade to today's status quo (no false pass, no
+blocked capable run). Core claim (relabel-at-existing-halt is always live, never
+early) verified structurally against `loop.py`.
 
-It caps waste at ~one iteration, reads *reality* instead of predicting it, and
-carries NO fidelity burden and NO false-negative regression. ADR-0037's
-Options B/D are strawmen ("warn-and-continue" / "do nothing"); this real
-alternative is never considered, so Option A's "free" pro is measured against a
-strawman.
+Two non-blocking reconciliation notes, **both folded into the ADR before
+recording this pass**:
+1. Over-stated parenthetical corrected: at `--plateau-window 1` / low
+   `--max-iterations` a *single* runner no-op can be the halting state; the
+   one-runner-iteration case is now absorbed by the graded residual, not a false
+   multi-iteration guarantee.
+2. Spec-guidance added: the snapshot must bracket the **runner invoke only**
+   (exclude the gate call `loop.py:2247` and the `.servo/` state write
+   `loop.py:2287`, filter cwd/test artifacts); tests must guard **both**
+   directions (arm on a new source file; **no** false-arm from bookkeeping); and
+   the oracle-below-threshold conjunct is now stated explicitly as the property
+   that makes every blind-spot degrade to status quo.
 
-## Scoping asymmetry (critic B) — the likely synthesis
+## Final shape (for the accept decision — still Proposed, owner's call)
 
-The ADR applies the preflight to "both drivers" uniformly (adr-0037:72), but the
-two drivers differ:
-- **loop driver** — per-iteration checkpoints exist, so the cheap robust
-  **post-hoc** option is available.
-- **goal driver** — one long `claude -p`, no cheap mid-run checkpoint, so
-  **ex-ante has genuine value** here. But note its existing audit
-  (`_audit_hook_settings`, loop.py:836-891) reads only
-  `disableAllHooks`/`allowManagedHooksOnly` — a DIFFERENT axis than the
-  `permissions`/`defaultMode` edit-permission the airlock hit (VERIFIED), so a
-  preflight is net-new resolution logic, not an extension of the existing audit.
-
-A hybrid — post-hoc for the loop driver, a best-effort ex-ante check only for
-the goal driver — is the shape both critiques point toward.
-
-## Recommendation to the owner (decision fork)
-
-The mechanism, not the policy, needs a decision. Options:
-- **(A) Post-hoc / hybrid (recommended):** rewrite the Decision to detect
-  zero-edits-after-iteration-1 for the loop driver; reserve a best-effort
-  ex-ante check for the goal driver only, with the fidelity limits named. This
-  is what the convergent critique supports.
-- **(B) Keep the ex-ante probe but re-price it honestly:** define the probe as a
-  real `claude -p` micro-invocation (accept the cost), scope it to `Edit` on an
-  existing in-repo file, and add the missing kill criterion for the
-  false-negative case. Weaker; still carries the fidelity burden.
-- **(C) Accept as-is:** not advised — ships a self-admitted fidelity burden plus
-  a new capable-run-blocking regression.
-
-This is the owner's call (the ADR itself says the owner should run
-frame-critique before adopting). `accept` stays correctly blocked until a
-revised frame earns a pass.
+Mechanism: a persisted `runner_ever_edited` bool set by an untracked-inclusive,
+runner-only, per-invoke disk delta; at the existing `oracle_plateau` /
+`iteration_cap_reached` halt, if the flag is false and the oracle is red, relabel
+the terminal reason to `edit_permission_unavailable` (rc=2) with a fix
+breadcrumb. Goal driver: same relabel at its terminal point, plus an optional
+advisory/fail-open ex-ante check. It delivers a *correct, actionable terminal
+reason* — not earlier halting (the existing brakes already bound the run). Named
+residuals: capable-but-stuck-from-first-iteration mislabel (run was halting
+anyway); non-git targets uncovered (fall back to `oracle_plateau`); the
+implementation must get the delta isolation and flag persistence right (the
+load-bearing surfaces, with required fixtures named).
