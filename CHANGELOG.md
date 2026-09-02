@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.11.0](https://github.com/ramboz/servo/compare/v0.10.0...v0.11.0) (2026-09-02)
+
+
+### Features
+
+* **agent-loop:** edit-permission-wall diagnosis (spec 031, ADR-0037) ([#35](https://github.com/ramboz/servo/issues/35)) ([f66dc72](https://github.com/ramboz/servo/commit/f66dc7201322d8a3ae35e138cfdfb1692a4e79f4))
+
+
+### Documentation
+
+* **decisions:** accept ADR-0036 + amend ADR-0015; unblock 030-01 DoR ([9a1b6c9](https://github.com/ramboz/servo/commit/9a1b6c95ca420406836755e9f4b0c39fb5e98d7e))
+* **decisions:** accept ADR-0037 (agent-loop permission-wall diagnosis) ([2b8ed87](https://github.com/ramboz/servo/commit/2b8ed87fff39dd704993fa676b83edb45b0a27d9))
+* **decisions:** add ADR-0037 — agent-loop permission preflight (Proposed) ([ae79576](https://github.com/ramboz/servo/commit/ae79576f54906109caed35fe8c3431f6ffe1f416))
+* **decisions:** frame-critique ADR-0036 (3 rounds → pass) — reviewed-provenance-only eval signal ([5b0f22f](https://github.com/ramboz/servo/commit/5b0f22f828a85a3b53e25d7d85075cea43d22714))
+* **decisions:** frame-critique ADR-0037 → needs-changes (probe shape exposed) ([c7b625c](https://github.com/ramboz/servo/commit/c7b625c032a37f3b9ab35c2b5efc513fcf2e77fc))
+* **decisions:** frame-critique ADR-0037 → pass (5 rounds) — post-hoc terminal relabel ([6e155e3](https://github.com/ramboz/servo/commit/6e155e394e16d7426e96c32f43098fc79531f655))
+* **edd-suitability:** propose ADR-0036 + draft spec 030 — frozen evals satisfy the suitability signal ([#33](https://github.com/ramboz/servo/issues/33)) ([ddf0323](https://github.com/ramboz/servo/commit/ddf0323e47d3d0f39a854ac1f652f771dd94d8aa))
+
 ## [0.10.0](https://github.com/ramboz/servo/compare/v0.9.0...v0.10.0) (2026-08-28)
 
 
