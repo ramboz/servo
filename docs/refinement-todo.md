@@ -1306,3 +1306,36 @@ consuming project (servo's tree still only records the evidence).
 **Surfaced by:** cross-repo review of vellum + jig + servo, 2026-08-30 —
 companion to the composed-pilot inbox entries filed the same day in vellum and
 jig.
+
+## ~~`run_loop` now returns rc=2 on a *fully-executed* run (edit-permission-wall relabel) — re-check downstream exit-code consumers~~ — RESOLVED 2026-09-01 (spec 031-02 reconciliation)
+
+**Resolution:** Audited heartbeat dispatch against the new rc=2 /
+`edit_permission_unavailable`. Dispatch classifies a candidate's outcome by the
+loop's `final_oracle_status` (still `below_threshold` for a walled run → `tried`,
+unchanged) and treats a loop as an env-error only when it exits **without a
+parseable summary** (`heartbeat.py:299-308`) — a walled run writes a fully
+parseable summary, so the rc=2 does **not** flip it to env-error. Net: no
+classification regression. The one behavior change is that a walled run's
+terminal reason is now `edit_permission_unavailable`, so it no longer matches the
+plateau→quarantine string-trigger (`REASON_ORACLE_PLATEAU`, `heartbeat.py:251`) —
+correct, since a permission wall is not a genuine plateau to quarantine. A deeper
+end-to-end dispatch test with a walled loop (and optionally surfacing the fix
+breadcrumb to the operator) is a bounded optional enhancement, not a correctness
+gap. Documented in `docs/architecture.md` (edit-permission-wall paragraph).
+
+**Original deferral (from spec 031-01 reconciliation, 2026-09-01):** ADR-0037's
+edit-permission-wall diagnosis relabels a below-threshold `oracle_plateau` /
+`max_iterations_reached` halt to `edit_permission_unavailable` and returns
+**rc=2** (`EXIT_ENV_ERROR`). This is the first case of a fully-executed
+`run_loop` (not a preflight refusal) exiting rc=2. Consumers that branch on the
+loop's exit code — notably heartbeat dispatch (`docs/architecture.md` §dispatch
+worktree, spec 011-03, which records `tried` vs env-error on the loop's `{0,2}`
+exit) — should be re-checked so a permission-wall relabel is attributed
+correctly (an actionable finding, not a spurious env-error that poisons the
+candidate's sticky state).
+
+**Resolution trigger:** Fold the re-check into **spec 031-02** (goal-driver
+relabel), which extends the same rc=2 behavior to `run_goal_loop` — the natural
+point to audit both drivers' exit-code contract against dispatch together.
+
+**Surfaced by:** spec 031-01 arch + craft reviews (2026-09-01).

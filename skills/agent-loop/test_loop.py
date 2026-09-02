@@ -7677,5 +7677,765 @@ class ReadinessGateBypassTests(unittest.TestCase):
             shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+# ============================================================================
+# Slice 031-01 — edit-permission-wall diagnosis (ADR-0037)
+#
+# The loop driver relabels a nothing-landed halt (oracle_plateau /
+# max_iterations_reached, oracle below threshold, runner never edited) to
+# `edit_permission_unavailable` (rc=2) with a fix breadcrumb, on a git target.
+# The signal is an untracked-inclusive per-runner-iteration disk delta persisted
+# as `runner_ever_edited`. Test classes map to ACs:
+#   AC1/AC5/AC6/AC9 (helper) → RelabelDecisionUnitTests
+#   AC2/AC7 (helper)         → TreeSnapshotUnitTests
+#   AC1/AC5/AC8 (loop)       → EditPermissionRelabelLoopTests
+#   AC2/AC3 (loop)           → RunnerEverEditedArmTests
+#   AC4 (loop)               → JudgeIterationExclusionTests
+#   AC6 (loop)               → CapableRunNotMislabeledTests
+#   AC7 (loop)               → BookkeepingNoFalseArmTests
+#   AC9 (loop)               → NonGitFallbackTests
+# ============================================================================
+
+
+def _edit_perm_git_target(tmp: Path, oracle_body: str) -> Path:
+    """A scaffolded git-repo target: manifest + oracle committed, clean tree."""
+    target = tmp / "demo"
+    target.mkdir()
+    _make_manifest(target)
+    _make_oracle(target, oracle_body)
+    _git_init(target)
+    _git_commit_all(target)
+    return target
+
+
+def _mock_claude_editing(
+    bindir: Path, counter_file: Path, *, create_rel: str, when: str,
+) -> Path:
+    """Mock claude that writes `<cwd>/<create_rel>` when the shell test `when`
+    (on `$n`, the 1-indexed invocation count) passes. cwd is the target (per
+    `_invoke_claude`), so `create_rel` lands inside the git tree under test.
+    """
+    payload = _claude_json_payload()
+    body = textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        counter_file='{counter_file}'
+        if [ -f "$counter_file" ]; then n=$(cat "$counter_file"); else n=0; fi
+        n=$((n + 1))
+        echo "$n" > "$counter_file"
+        if {when}; then
+            mkdir -p "$(dirname '{create_rel}')" 2>/dev/null || true
+            echo "content-$n" > '{create_rel}'
+        fi
+        cat <<'__JSON_EOF__'
+        {payload}
+        __JSON_EOF__
+    """)
+    return _make_mock_claude(bindir, body)
+
+
+def _mock_claude_bookkeeping_only(bindir: Path, counter_file: Path) -> Path:
+    """Mock claude whose only on-disk residue is servo/tooling bookkeeping
+    (`.servo/`, `__pycache__`, `*.pyc`, coverage) — the false-arm hazard AC7
+    guards against.
+    """
+    payload = _claude_json_payload()
+    body = textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        counter_file='{counter_file}'
+        if [ -f "$counter_file" ]; then n=$(cat "$counter_file"); else n=0; fi
+        n=$((n + 1))
+        echo "$n" > "$counter_file"
+        mkdir -p "__pycache__" ".servo/scratch" 2>/dev/null || true
+        echo x > "__pycache__/mod.cpython-313.pyc"
+        echo x > ".servo/scratch/junk-$n.txt"
+        echo x > ".coverage"
+        cat <<'__JSON_EOF__'
+        {payload}
+        __JSON_EOF__
+    """)
+    return _make_mock_claude(bindir, body)
+
+
+class TreeSnapshotUnitTests(unittest.TestCase):
+    """AC2/AC7 (helper): `_tree_snapshot` is untracked-inclusive, delta-able,
+    None on a non-git target, and filters bookkeeping paths."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-snap-")
+        self.target = Path(self.tmpdir) / "demo"
+        self.target.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _repo(self):
+        (self.target / "a.txt").write_text("x")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+
+    def test_non_git_returns_none(self):
+        # AC9 at helper level: mirrors _dirty_tree_paths' None for non-git.
+        (self.target / "a.txt").write_text("x")
+        self.assertIsNone(self.m._tree_snapshot(self.target))
+
+    def test_untracked_new_file_registers_in_delta(self):
+        # AC2 + mutation (c): a created untracked file MUST change the snapshot
+        # (unlike _dirty_tree_paths, which drops `??`).
+        self._repo()
+        before = self.m._tree_snapshot(self.target)
+        (self.target / "created.py").write_text("new")
+        after = self.m._tree_snapshot(self.target)
+        self.assertIsNotNone(before)
+        self.assertIsNotNone(after)
+        self.assertNotEqual(before, after)
+        self.assertNotEqual(after - before, set())
+
+    def test_modified_tracked_file_registers_in_delta(self):
+        self._repo()
+        before = self.m._tree_snapshot(self.target)
+        (self.target / "a.txt").write_text("changed")
+        after = self.m._tree_snapshot(self.target)
+        self.assertNotEqual(before, after)
+
+    def test_bookkeeping_paths_filtered(self):
+        # AC7: .servo/, __pycache__, *.pyc, coverage never enter the snapshot,
+        # so a runner subprocess that only touches them cannot false-arm.
+        self._repo()
+        before = self.m._tree_snapshot(self.target)
+        (self.target / ".servo").mkdir(exist_ok=True)
+        (self.target / ".servo" / "scratch.txt").write_text("x")
+        (self.target / "__pycache__").mkdir(exist_ok=True)
+        (self.target / "__pycache__" / "m.pyc").write_text("x")
+        (self.target / ".coverage").write_text("x")
+        after = self.m._tree_snapshot(self.target)
+        self.assertEqual(before, after)
+
+
+class RelabelDecisionUnitTests(unittest.TestCase):
+    """AC1/AC5/AC6/AC9 (helper): the `_relabel_terminal_reason` conjuncts, each
+    proven load-bearing by an isolating case."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+
+    def _call(self, reason, *, edited, status, git=True):
+        return self.m._relabel_terminal_reason(
+            reason, runner_ever_edited=edited,
+            final_oracle_status=status, edit_signal_available=git,
+        )
+
+    def test_reason_constant_value(self):
+        # AC1: the new terminal-reason string is stable contract.
+        self.assertEqual(
+            self.m.REASON_EDIT_PERMISSION_UNAVAILABLE,
+            "edit_permission_unavailable",
+        )
+
+    def test_plateau_below_unarmed_git_relabels(self):
+        self.assertEqual(
+            self._call(self.m.REASON_ORACLE_PLATEAU, edited=False,
+                       status=self.m.STATUS_BELOW_THRESHOLD),
+            self.m.REASON_EDIT_PERMISSION_UNAVAILABLE)
+
+    def test_max_iterations_below_unarmed_git_relabels(self):
+        self.assertEqual(
+            self._call(self.m.REASON_MAX_ITERATIONS_REACHED, edited=False,
+                       status=self.m.STATUS_BELOW_THRESHOLD),
+            self.m.REASON_EDIT_PERMISSION_UNAVAILABLE)
+
+    def test_iteration_cap_below_unarmed_git_relabels(self):
+        # 031-02: the goal driver's iteration-cap terminal is relabel-eligible
+        # through the SAME shared helper (unit-level, complementing the
+        # end-to-end GoalEditPermissionRelabelTests).
+        self.assertEqual(
+            self._call(self.m.REASON_ITERATION_CAP_REACHED, edited=False,
+                       status=self.m.STATUS_BELOW_THRESHOLD),
+            self.m.REASON_EDIT_PERMISSION_UNAVAILABLE)
+
+    def test_oracle_below_threshold_reason_unarmed_git_relabels(self):
+        # 031-02: the goal driver's below-threshold terminal is relabel-eligible.
+        self.assertEqual(
+            self._call(self.m.REASON_ORACLE_BELOW_THRESHOLD, edited=False,
+                       status=self.m.STATUS_BELOW_THRESHOLD),
+            self.m.REASON_EDIT_PERMISSION_UNAVAILABLE)
+
+    def test_pass_status_suppresses_relabel(self):
+        # Mutation (a): the not-a-pass conjunct. A pass is never relabeled.
+        self.assertIsNone(
+            self._call(self.m.REASON_ORACLE_PLATEAU, edited=False,
+                       status=self.m.STATUS_PASS))
+
+    def test_env_error_status_suppresses_relabel(self):
+        # A broken-gate (env_error) halt is a different diagnosis, not a wall.
+        self.assertIsNone(
+            self._call(self.m.REASON_MAX_ITERATIONS_REACHED, edited=False,
+                       status=self.m.STATUS_ENV_ERROR))
+
+    def test_armed_flag_suppresses_relabel(self):
+        # Mutation (b): an edit proves permission → never relabel.
+        self.assertIsNone(
+            self._call(self.m.REASON_ORACLE_PLATEAU, edited=True,
+                       status=self.m.STATUS_BELOW_THRESHOLD))
+
+    def test_non_git_suppresses_relabel(self):
+        # AC9: no computable signal → keep today's terminal reason.
+        self.assertIsNone(
+            self._call(self.m.REASON_ORACLE_PLATEAU, edited=False,
+                       status=self.m.STATUS_BELOW_THRESHOLD, git=False))
+
+    def test_other_terminal_reasons_never_relabel(self):
+        # Only the four relabel-eligible halts (two loop + two goal) fire; any
+        # other reason never relabels, even with the other conjuncts satisfied
+        # (so the relabel never fires early / on a cost-ceiling or context halt).
+        for reason in (self.m.REASON_ORACLE_PASSED,
+                       self.m.REASON_COST_CEILING_REACHED,
+                       self.m.REASON_CONTEXT_FULL,
+                       self.m.REASON_INTERRUPTED):
+            self.assertIsNone(
+                self._call(reason, edited=False,
+                           status=self.m.STATUS_BELOW_THRESHOLD),
+                msg=reason)
+
+
+class EditPermissionRelabelLoopTests(unittest.TestCase):
+    """AC1/AC5/AC8: a walled loop-driver run (git target, runner never edits,
+    oracle below threshold) relabels to edit_permission_unavailable, rc=2, with
+    a fix breadcrumb — for both max-iterations and plateau halts."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-editperm-")
+        tmp = Path(self.tmpdir)
+        self.target = _edit_perm_git_target(tmp, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def test_max_iterations_halt_relabels_rc2(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"],
+                         "edit_permission_unavailable")
+        # AC1: distinct from a clean max_iterations exit (rc=0).
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+
+    def test_plateau_halt_relabels_rc2(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "5",
+                           "--plateau-window", "1", mock_bindir=self.bindir)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"],
+                         "edit_permission_unavailable")
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+
+    def test_breadcrumb_present_in_terminal_record(self):
+        # AC8: the terminal record names the grant to add.
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir)
+        summary = self._summary(result)
+        self.assertIn("terminal_breadcrumb", summary)
+        crumb = summary["terminal_breadcrumb"]
+        self.assertIn("settings.local.json", crumb)
+        self.assertIn("Routine", crumb)
+
+    def test_state_records_runner_never_edited(self):
+        _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                  mock_bindir=self.bindir)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertFalse(state["runner_ever_edited"])
+        # On a real git target the signal WAS computable — the relabel is
+        # gated on this, not on a fresh _is_git_work_tree probe.
+        self.assertTrue(state["edit_signal_computed"])
+
+
+class RunnerEverEditedArmTests(unittest.TestCase):
+    """AC2/AC3: the untracked-inclusive delta arms runner_ever_edited on the
+    first runner edit, treats a pre-existing dirty tree as not-this-iteration's
+    change, and persists the flag across --resume."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-arm-")
+        self.tmp = Path(self.tmpdir)
+        self.target = _edit_perm_git_target(self.tmp, _below_threshold_oracle())
+        self.bindir = self.tmp / "bin"
+        self.counter = self.tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_created_untracked_file_arms_flag(self):
+        # AC2: a runner whose only change is CREATING a new untracked file arms.
+        _mock_claude_editing(self.bindir, self.counter,
+                             create_rel="created_module.py",
+                             when='[ "$n" -eq 1 ]')
+        _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                  mock_bindir=self.bindir)
+        run_id = _find_only_run_id(self.target)
+        self.assertTrue(_read_state(self.target, run_id)["runner_ever_edited"])
+
+    def test_preexisting_untracked_dirt_does_not_arm(self):
+        # AC2: a delta, not an absolute clean-tree check — a pre-existing
+        # untracked file is in both snapshots, so it is not this iteration's
+        # change (guards the --allow-dirty / --resume dirty-tree case).
+        (self.target / "preexisting.txt").write_text("was here before\n")
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+        _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                  mock_bindir=self.bindir)
+        run_id = _find_only_run_id(self.target)
+        self.assertFalse(_read_state(self.target, run_id)["runner_ever_edited"])
+
+    def test_flag_persists_across_resume(self):
+        # AC3: arm at iter 1, resume; the reloaded state still shows armed even
+        # though the resumed judge iteration lands nothing (proves persistence,
+        # not re-derivation).
+        _mock_claude_editing(self.bindir, self.counter,
+                             create_rel="created_module.py",
+                             when='[ "$n" -eq 1 ]')
+        _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                  mock_bindir=self.bindir)
+        run_id = _find_only_run_id(self.target)
+        self.assertTrue(_read_state(self.target, run_id)["runner_ever_edited"])
+        _run_loop(self.target, "--resume", run_id, "--max-iterations", "2",
+                  mock_bindir=self.bindir)
+        self.assertTrue(_read_state(self.target, run_id)["runner_ever_edited"])
+
+
+class JudgeIterationExclusionTests(unittest.TestCase):
+    """AC4: only runner iterations arm/count. A judge iteration that lands a
+    change (contrary to its read-only contract) must NOT arm the flag, so a run
+    whose only on-disk change came on a judge turn is still relabeled."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-judge-")
+        tmp = Path(self.tmpdir)
+        self.target = _edit_perm_git_target(tmp, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        # Creates a file only on EVEN invocations (= judge iterations).
+        _mock_claude_editing(self.bindir, self.counter,
+                             create_rel="judge_only_edit.txt",
+                             when='[ $((n % 2)) -eq 0 ]')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_judge_edit_does_not_arm_and_run_is_relabeled(self):
+        # Mutation (d): if judge iterations were snapshotted, the judge's edit
+        # would arm the flag and suppress the relabel.
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "2",
+                           mock_bindir=self.bindir)
+        run_id = _find_only_run_id(self.target)
+        self.assertFalse(_read_state(self.target, run_id)["runner_ever_edited"])
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"],
+                         "edit_permission_unavailable")
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+
+
+class CapableRunNotMislabeledTests(unittest.TestCase):
+    """AC6: once the runner edits, a later plateau / max-iterations halt keeps
+    its original reason — the edit proves permission."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-capable-")
+        tmp = Path(self.tmpdir)
+        self.target = _edit_perm_git_target(tmp, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_editing(self.bindir, self.counter,
+                             create_rel="real_edit.py", when='[ "$n" -eq 1 ]')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def test_edit_then_max_iterations_keeps_reason(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir)
+        self.assertEqual(self._summary(result)["terminal_reason"],
+                         "max_iterations_reached")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_edit_then_plateau_keeps_reason(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "5",
+                           "--plateau-window", "1", mock_bindir=self.bindir)
+        self.assertEqual(self._summary(result)["terminal_reason"],
+                         "oracle_plateau")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+
+class BookkeepingNoFalseArmTests(unittest.TestCase):
+    """AC7: a walled runner whose only residue is gate/.servo/cache bookkeeping
+    leaves runner_ever_edited false, so the halt is still relabeled."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-bk-")
+        tmp = Path(self.tmpdir)
+        self.target = _edit_perm_git_target(tmp, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_bookkeeping_only(self.bindir, self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_bookkeeping_does_not_arm_and_relabels(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir)
+        run_id = _find_only_run_id(self.target)
+        self.assertFalse(_read_state(self.target, run_id)["runner_ever_edited"])
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"],
+                         "edit_permission_unavailable")
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+
+
+class NonGitFallbackTests(unittest.TestCase):
+    """AC9: on a non-git target the delta cannot be computed; the loop keeps
+    today's terminal reason and never crashes or false-relabels."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-nongit-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_non_git_keeps_max_iterations_reason(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        self.assertFalse(_read_state(self.target, run_id)["runner_ever_edited"])
+
+
+def _make_fake_git(bindir: Path) -> Path:
+    """A PATH-injected fake `git`: `rev-parse` reports a healthy work tree, but
+    `status` always fails. Simulates a rev-parse-healthy tree whose `git status`
+    errors during the run — the case that must NOT relabel (nit 1)."""
+    bindir.mkdir(parents=True, exist_ok=True)
+    body = textwrap.dedent("""\
+        #!/usr/bin/env bash
+        for a in "$@"; do
+            if [ "$a" = "status" ]; then exit 1; fi
+            if [ "$a" = "rev-parse" ]; then echo "true"; exit 0; fi
+        done
+        exit 0
+    """)
+    git = bindir / "git"
+    git.write_text(body)
+    _make_executable(git)
+    return git
+
+
+def _below_threshold_oracle_that_writes(marker_rel: str) -> str:
+    """A below-threshold oracle that ALSO creates a non-bookkeeping untracked
+    file when it runs (cwd=target). The gate/oracle runs AFTER the runner invoke
+    returns, so this residue falls OUTSIDE the before/after-invoke bracket and
+    must not arm runner_ever_edited (nit 2)."""
+    return textwrap.dedent(f"""\
+        #!/usr/bin/env bash
+        echo 'gate-oracle-ran' > '{marker_rel}'
+        echo 'oracle: composite=0.2000 threshold=0.5'
+        exit 1
+    """)
+
+
+class PersistentGitErrorFallbackTests(unittest.TestCase):
+    """Nit 1 (reconciliation): the relabel gates on `edit_signal_computed` (a
+    runner-iteration `_tree_snapshot` returned non-None at least once), NOT a
+    fresh `_is_git_work_tree` probe. A rev-parse-healthy tree whose `git status`
+    fails throughout leaves the signal never-computed → keep today's terminal
+    reason, so a capable-but-below-threshold run is never mislabeled."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-giterr-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+        _make_fake_git(self.bindir)  # rev-parse -> true, status -> fail
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_persistent_git_status_error_no_relabel(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "max_iterations_reached")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        # Signal never computable → gate stays closed even though rev-parse is
+        # healthy (the exact case the old _is_git_work_tree guard mislabeled).
+        self.assertFalse(state["edit_signal_computed"])
+        self.assertFalse(state["runner_ever_edited"])
+
+
+class GateResidueBracketTests(unittest.TestCase):
+    """Nit 2 (reconciliation): proves the before/after-INVOKE bracket, not just
+    the bookkeeping filter, is load-bearing. A gate/oracle that writes a
+    NON-bookkeeping untracked file (after the runner invoke returns) must not arm
+    the flag — so snapshot_after must be taken BEFORE the gate call."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-bracket-")
+        tmp = Path(self.tmpdir)
+        self.target = _edit_perm_git_target(
+            tmp, _below_threshold_oracle_that_writes("oracle_marker.txt"))
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_gate_residue_after_invoke_does_not_arm(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir)
+        # The oracle actually ran and left its non-bookkeeping marker...
+        self.assertTrue((self.target / "oracle_marker.txt").exists())
+        run_id = _find_only_run_id(self.target)
+        # ...but it landed AFTER snapshot_after, so it did not arm the flag.
+        self.assertFalse(_read_state(self.target, run_id)["runner_ever_edited"])
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"],
+                         "edit_permission_unavailable")
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+
+
+# ============================================================================
+# Slice 031-02 — edit-permission-wall diagnosis, GOAL driver (ADR-0037)
+#
+# The goal driver (`run_goal_loop`) issues ONE long `claude -p` with no
+# per-iteration checkpoint. This slice extends the 031-01 relabel to it: a
+# whole-run disk delta bracketing the single `_invoke_claude_goal` call, and a
+# terminal relabel of `iteration_cap_reached` / `oracle_below_threshold` to
+# `edit_permission_unavailable` (rc=2) with the shared breadcrumb when nothing
+# landed and the oracle is below threshold. Reuses 031-01's `_tree_snapshot`,
+# `_is_bookkeeping_path`, `_relabel_terminal_reason`, and the breadcrumb string.
+# Test classes map to ACs:
+#   AC1 (whole-run delta)                    → GoalEditSignalRecordingTests
+#   AC2 (relabel, both reasons, pass never)  → GoalEditPermissionRelabelTests
+#   AC3 (capable run never mislabeled)       → GoalCapableRunNotMislabeledTests
+#   AC4 (bookkeeping no false-arm / non-git) → GoalBookkeepingAndNonGitTests
+# ============================================================================
+
+
+class _GoalGitTargetMixin(_GoalTargetMixin):
+    """A `_GoalTargetMixin` whose scaffolded target is a committed git repo, so
+    `_tree_snapshot` yields a computable (non-None) whole-run delta."""
+
+    def _setup_git_target(self, oracle_body: str):
+        self._setup_target(oracle_body)
+        _git_init(self.target)
+        _git_commit_all(self.target)
+
+
+def _mock_claude_goal_editing(bindir: Path, jsonl: str, *, create_rel: str) -> Path:
+    """Goal-driver mock that creates a NON-bookkeeping file (`<cwd>/<create_rel>`,
+    cwd=target) during the single /goal invoke, then emits the stream-json — a
+    *capable* goal run that lands a real edit. The `--version` short-circuit in
+    `_make_mock_claude` means the file lands only on the real `-p` invoke (the
+    sole non-version claude call in a goal run), which falls inside the
+    before/after-invoke bracket."""
+    body = "\n".join([
+        "#!/usr/bin/env bash",
+        f"mkdir -p \"$(dirname '{create_rel}')\" 2>/dev/null || true",
+        f"printf 'goal-created\\n' > '{create_rel}'",
+        "cat <<'__JSONL_EOF__'",
+        jsonl,
+        "__JSONL_EOF__",
+        "",
+    ])
+    return _make_mock_claude(bindir, body)
+
+
+def _mock_claude_goal_bookkeeping(bindir: Path, jsonl: str) -> Path:
+    """Goal-driver mock whose only on-disk residue is servo/tooling bookkeeping
+    (`.servo/`, `__pycache__`, `*.pyc`, coverage) — the false-arm hazard AC4
+    guards against — then emits the stream-json."""
+    body = "\n".join([
+        "#!/usr/bin/env bash",
+        "mkdir -p '__pycache__' '.servo/scratch' 2>/dev/null || true",
+        "echo x > '__pycache__/mod.cpython-313.pyc'",
+        "echo x > '.servo/scratch/junk.txt'",
+        "echo x > '.coverage'",
+        "cat <<'__JSONL_EOF__'",
+        jsonl,
+        "__JSONL_EOF__",
+        "",
+    ])
+    return _make_mock_claude(bindir, body)
+
+
+class GoalEditSignalRecordingTests(_GoalGitTargetMixin, unittest.TestCase):
+    """AC1: the whole-run disk delta around `_invoke_claude_goal` records a goal
+    run that lands a change as edited, and one that lands nothing as not."""
+
+    def test_nothing_landed_records_not_edited(self):
+        self._setup_git_target(_below_threshold_oracle())
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate, still failing",
+            result_event=_goal_result_event(subtype="success"),
+        ))
+        _run_goal(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                  extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        state = self._state()
+        self.assertFalse(state["runner_ever_edited"])
+        # On a real git target the signal WAS computable.
+        self.assertTrue(state["edit_signal_computed"])
+
+    def test_created_file_records_edited(self):
+        self._setup_git_target(_below_threshold_oracle())
+        _mock_claude_goal_editing(
+            self.bindir,
+            _goal_stream_jsonl(assistant_text="made a change",
+                               result_event=_goal_result_event(subtype="success")),
+            create_rel="capable_edit.py")
+        _run_goal(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                  extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertTrue((self.target / "capable_edit.py").exists())
+        state = self._state()
+        self.assertTrue(state["runner_ever_edited"])
+        self.assertTrue(state["edit_signal_computed"])
+
+
+class GoalEditPermissionRelabelTests(_GoalGitTargetMixin, unittest.TestCase):
+    """AC2: a walled goal run (git target, nothing landed, oracle below
+    threshold) relabels iteration_cap_reached / oracle_below_threshold to
+    edit_permission_unavailable (rc=2) with the breadcrumb; a passing oracle is
+    never relabeled."""
+
+    def _walled(self, *, subtype):
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate, still red",
+            result_event=_goal_result_event(
+                subtype=subtype, is_error=subtype.startswith("error_")),
+        ))
+        return _run_goal(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                         extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+
+    def test_oracle_below_threshold_relabels_rc2(self):
+        self._setup_git_target(_below_threshold_oracle())
+        result = self._walled(subtype="success")
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "edit_permission_unavailable")
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        crumb = summary["terminal_breadcrumb"]
+        self.assertIn("settings.local.json", crumb)
+        self.assertIn("Routine", crumb)
+
+    def test_iteration_cap_reached_relabels_rc2(self):
+        self._setup_git_target(_below_threshold_oracle())
+        result = self._walled(subtype="error_max_turns")
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "edit_permission_unavailable")
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        self.assertIn("settings.local.json", summary["terminal_breadcrumb"])
+
+    def test_oracle_passed_is_never_relabeled(self):
+        # Mutation (a): the oracle-below-threshold conjunct as it applies to the
+        # goal reasons. subtype=error_max_turns → iteration_cap_reached, but the
+        # final gate PASSED (not below threshold) → no relabel, rc=0.
+        self._setup_git_target(_passing_oracle())
+        result = self._walled(subtype="error_max_turns")
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "iteration_cap_reached")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotIn("terminal_breadcrumb", summary)
+
+
+class GoalCapableRunNotMislabeledTests(_GoalGitTargetMixin, unittest.TestCase):
+    """AC3: a goal run that lands any change keeps its original terminal reason —
+    the edit proves permission (guards the did-anything-land gate)."""
+
+    def _capable(self, *, subtype, oracle_body):
+        self._setup_git_target(oracle_body)
+        _mock_claude_goal_editing(
+            self.bindir,
+            _goal_stream_jsonl(
+                assistant_text="edited a file",
+                result_event=_goal_result_event(
+                    subtype=subtype, is_error=subtype.startswith("error_"))),
+            create_rel="capable_edit.py")
+        return _run_goal(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                         extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+
+    def test_created_file_keeps_oracle_below_threshold(self):
+        # Mutation (b): the did-anything-land gate. A capable run below threshold
+        # keeps oracle_below_threshold (rc=0), NOT relabel.
+        result = self._capable(subtype="success",
+                               oracle_body=_below_threshold_oracle())
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "oracle_below_threshold")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotIn("terminal_breadcrumb", summary)
+
+    def test_created_file_keeps_iteration_cap_reached(self):
+        result = self._capable(subtype="error_max_turns",
+                               oracle_body=_below_threshold_oracle())
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "iteration_cap_reached")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertNotIn("terminal_breadcrumb", summary)
+
+
+class GoalBookkeepingAndNonGitTests(_GoalGitTargetMixin, unittest.TestCase):
+    """AC4: gate/.servo/cache residue must not count as an edit, and a non-git
+    target falls back to today's terminal reason rather than false-relabeling."""
+
+    def test_bookkeeping_only_still_relabels(self):
+        self._setup_git_target(_below_threshold_oracle())
+        _mock_claude_goal_bookkeeping(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate, still red",
+            result_event=_goal_result_event(subtype="success")))
+        result = _run_goal(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        state = self._state()
+        self.assertFalse(state["runner_ever_edited"])
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "edit_permission_unavailable")
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+
+    def test_non_git_target_falls_back(self):
+        # Non-git target: _tree_snapshot is None → signal not computable → keep
+        # today's terminal reason, never crash or false-relabel.
+        self._setup_target(_below_threshold_oracle())  # NOTE: no git init
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate, still red",
+            result_event=_goal_result_event(subtype="success")))
+        result = _run_goal(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "oracle_below_threshold")
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        state = self._state()
+        self.assertFalse(state["edit_signal_computed"])
+        self.assertFalse(state["runner_ever_edited"])
+
+
 if __name__ == "__main__":
     unittest.main()
