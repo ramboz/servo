@@ -66,10 +66,14 @@ Three servo-specific things break or degrade under Copilot as-is:
    (`build_host_packages._render_codex_skill`, `_CODEX_DESCRIPTION_MAX = 1024`):
    strip the `servo:` namespace from the loaded name **and** collapse the
    multi-paragraph `description:` to its first (routing-summary) paragraph — ≤1024
-   chars (verified max 726) — with the full description text preserved in the
-   skill body. Both fixes, not just the name-strip: a namespace-only render would
-   ship 9 skills whose descriptions silently fail Copilot's loader, violating this
-   ADR's own "degrade *visibly*, never silently" invariant.
+   chars (verified max 726). Both fixes, not just the name-strip: a namespace-only
+   render would ship 9 skills whose descriptions silently fail Copilot's loader,
+   violating this ADR's own "degrade *visibly*, never silently" invariant. **Note
+   the Codex renderer *drops* description paragraphs 2+** (it skips the remainder,
+   not relocating them), relying on the body already duplicating that detail; to
+   honor the same invariant here, the Copilot renderer must **append any dropped
+   description paragraphs to the skill body** so no routing/trigger nuance is
+   silently lost (a fidelity refinement over Codex, tested in 028-02).
 2. **Hooks port but differ.** servo's oracle gate is a Claude `Stop` hook; Copilot
    has `agentStop`. The **decision output is identical** — both take
    `{"decision":"block","reason":…}` where `reason` becomes the next turn's prompt
@@ -126,8 +130,9 @@ renderer that:
 
 - renders skills loader-safe (`servo:`-namespace stripped from the loaded name
   **and** the multi-paragraph `description:` collapsed to its ≤1024-char first
-  paragraph, full text preserved in the skill body — reusing the Codex renderer's
-  treatment) plus a Copilot instructions file, **into the committed
+  paragraph, with dropped description paragraphs 2+ appended to the skill body so
+  nothing is silently lost — a fidelity refinement over the Codex renderer) plus a
+  Copilot instructions file, **into the committed
   `hosts/copilot/` plugin package** (Agent-Plugins-1.0 layout — see Assumptions),
   leaving Claude/Codex output byte-unchanged. (servo ships no `.mcp.json`, so no
   MCP config is rendered; the empty-set is recorded, not silently skipped.)
@@ -158,14 +163,26 @@ renderer that:
   and gates on the oracle *in servo's own Python loop* — it is self-driving and
   maps cleanly to per-iteration `copilot -p -s --agent runner --allow-all-tools`.
   **It does not need, and should not use, Copilot Autopilot.**
-- servo's **goal driver** (ADR-0008) delegates continuation to the host's native
-  long-running mode and wraps it with caps + a final oracle check. Copilot's
-  native equivalent is **Autopilot** (`--autopilot`, bounded by
-  `--max-autopilot-continues` and `--max-ai-credits`). Autopilot exposes **only a
-  turn/credit cap — no oracle-gated internal stop** (verified live). That is
-  sufficient for the goal driver *because the goal driver never gated internally
-  either* (it caps + final-checks); the exact fidelity of that mapping is a spec
-  028-01 / 028-05 validation item, not an assumption.
+- servo's **goal driver** (ADR-0008) delegates *continuation* to the host's
+  native long-running mode but **keeps oracle authority via a per-turn gate** —
+  ADR-0008's explicit load-bearing invariant: the loop body prints the oracle
+  verdict into the transcript every turn, the host's stopping-judge stops the turn
+  the oracle passes, and the meta-judge `Stop` hook blocks a premature stop while
+  the oracle fails. Copilot **Autopilot** (`--autopilot`, bounded by
+  `--max-autopilot-continues` / `--max-ai-credits`) has **no oracle-gated stop** —
+  it self-stops when it judges the task complete, bounded by those caps, with no
+  `/goal`-style transcript-judge stop-on-oracle-pass (verified live). So the goal
+  driver's gate does **not** map to Autopilot's caps as-is (mapping it that way
+  would silently drop the per-turn gate — the failure this ADR's honesty invariant
+  forbids). The gate's *block-while-failing* half reconstructs via the
+  `Stop`→`agentStop` hook (the same 028-04 translation; `agentStop`'s
+  `{decision:block,reason}` re-drives exactly as the meta-judge does); whether a
+  per-continuation `agentStop` can fully reconstruct the per-turn gate under
+  Autopilot is a **028-01/05 validation item**. If it cannot, the goal driver
+  under Copilot **falls back to the loop driver's external-gate path** (servo
+  drives per-iteration `copilot -p` and gates in its own Python — a servo feature
+  that ports regardless), or is recorded as a Claude-only residual. Either way the
+  user keeps oracle-gated autonomy; nothing degrades silently.
 - The ADR-0033 headless edit-permission preflight → Copilot's permission dials
   (`--allow-all-tools` / `--allow-tool` / `--deny-tool`; experimental
   `--assisted-approval`). Autonomy and tool-permission are distinct dials.
@@ -181,9 +198,12 @@ not a silent drop. Gates and primitives degrade *visibly*.
 
 **Becomes easier:**
 - servo installs natively for Copilot CLI at parity with Claude/Codex; its oracle
-  gate and *both* loop drivers work under Copilot (the loop driver via
-  per-iteration `copilot -p`; the goal driver via Autopilot's caps + final oracle)
-  rather than silently no-op'ing.
+  gate and the **loop driver** work under Copilot (external Python gate +
+  per-iteration `copilot -p`) rather than silently no-op'ing. The **goal driver**'s
+  per-turn-gated autonomy ports iff a per-continuation `agentStop` gate
+  reconstructs it under Autopilot (028-01/05); if not, Copilot users get the loop
+  driver's equivalent oracle-gated autonomy, or the goal driver is a documented
+  Claude-only residual — never a silently un-gated run.
 - A servo-scaffolded target that commits Copilot config (`.github/`) has it
   picked up by Copilot's cloud agent + code review — a downstream scaffold-time
   benefit, distinct from the installed `hosts/copilot/` plugin package this ADR
@@ -236,11 +256,11 @@ not a silent drop. Gates and primitives degrade *visibly*.
   justification).
 - `/plugin` cannot install servo's package and no `.github/`-native path works →
   rethink the package shape (shared unknown with jig spec 113-01).
-- The goal driver's `/goal`→Autopilot mapping proves infidelitous under live test
-  (e.g. Autopilot cannot honor servo's outer caps + final oracle check) → the
-  **goal driver** stays Claude-only under Copilot, documented as residual; the
-  **loop driver** still ports via per-iteration `copilot -p`, and the eval/oracle
-  skills port regardless.
+- A per-continuation `agentStop` hook cannot reconstruct the goal driver's
+  **per-turn oracle-gated stop** under Autopilot (e.g. `agentStop` does not fire
+  between Autopilot continuations, or cannot re-drive) → the goal driver under
+  Copilot falls back to the **loop driver's external-gate path**, or is documented
+  as a Claude-only residual; the loop driver and eval/oracle skills port regardless.
 
 ## Open questions
 
