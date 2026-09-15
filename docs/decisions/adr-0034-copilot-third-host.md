@@ -54,15 +54,22 @@ jig, but were **verified against live `copilot` 1.0.84-8** (not inherited):
 Three servo-specific things break or degrade under Copilot as-is:
 
 1. **Skill-loader limits.** Copilot fails to load a skill whose name contains `:`
-   or whose description exceeds 1,024 characters. A **probe of servo source
-   (2026-09-15)** found servo's exposure is the *inverse* of jig's: **0 of 12
-   skills exceed the description limit** (longest discovery paragraph is 727
-   chars, `content-fidelity`), but **9 of 12 skills are namespaced `servo:<skill>`**
-   (the other 3 — `content-fidelity`, `eval-authoring`, `design-eval` — already
-   carry bare names) — so servo's dominant loader hazard is the `:` in the loaded
-   name, not description length. The render layer must strip the `servo:`
-   namespace from the loaded Copilot name (as the Codex renderer already does)
-   while preserving the full skill body.
+   or whose `description:` **field** exceeds 1,024 characters. A **probe of servo
+   source (2026-09-15)** found servo carries **both** hazards, co-located on the
+   same skills: **9 of 12 skills are namespaced `servo:<skill>` AND have a full
+   `description:` field over the limit** (1,043–2,138 chars: `agent-loop` 2138,
+   `autonomy-readiness` 2019, `execution-planner` 1616, `edd-suitability` 1557,
+   `oracle-hook` 1408, `spec-oracle` 1401, `quality-gate` 1129, `heartbeat` 1087,
+   `scaffold-init` 1043); the other 3 (`content-fidelity`, `eval-authoring`,
+   `design-eval`) carry bare names and short (<730-char) descriptions. So the
+   render layer must apply **the same treatment the Codex renderer already does**
+   (`build_host_packages._render_codex_skill`, `_CODEX_DESCRIPTION_MAX = 1024`):
+   strip the `servo:` namespace from the loaded name **and** collapse the
+   multi-paragraph `description:` to its first (routing-summary) paragraph — ≤1024
+   chars (verified max 726) — with the full description text preserved in the
+   skill body. Both fixes, not just the name-strip: a namespace-only render would
+   ship 9 skills whose descriptions silently fail Copilot's loader, violating this
+   ADR's own "degrade *visibly*, never silently" invariant.
 2. **Hooks port but differ.** servo's oracle gate is a Claude `Stop` hook; Copilot
    has `agentStop`. The **decision output is identical** — both take
    `{"decision":"block","reason":…}` where `reason` becomes the next turn's prompt
@@ -99,7 +106,8 @@ Extend ADR-0028's committed-per-host model to a tri-host layout, adding a Copilo
 host renderer + committed `hosts/copilot/` package, drift guard, and a
 host-explicit release archive — the render layer absorbing loader limits, hook
 translation, and the execution-primitive mapping.
-- **Pros:** symmetric with Claude/Codex; honors `.github/` as Copilot's durable
+- **Pros:** symmetric with Claude/Codex (an installed plugin package, as they
+  are); honors Copilot's native config homes as its durable
   home; keeps servo's guardrails/oracles working under Copilot; extends ADR-0028
   + spec 022's release parity to tri-host along the same pattern jig ADR-0061 /
   spec 113 establish in parallel.
@@ -116,14 +124,22 @@ translation, and the execution-primitive mapping.
 Adopt **Option C**. servo's builder gains a Copilot arm and a Copilot host
 renderer that:
 
-- renders skills (loader-safe: `servo:`-namespace stripped from the loaded name,
-  descriptions ≤1024 chars with full text preserved in the body), instructions,
-  and MCP config into the `.github/` homes — leaving Claude/Codex output
-  byte-unchanged;
+- renders skills loader-safe (`servo:`-namespace stripped from the loaded name
+  **and** the multi-paragraph `description:` collapsed to its ≤1024-char first
+  paragraph, full text preserved in the skill body — reusing the Codex renderer's
+  treatment) plus a Copilot instructions file, **into the committed
+  `hosts/copilot/` plugin package** (Agent-Plugins-1.0 layout — see Assumptions),
+  leaving Claude/Codex output byte-unchanged. (servo ships no `.mcp.json`, so no
+  MCP config is rendered; the empty-set is recorded, not silently skipped.)
 - translates servo's oracle `Stop` hook to Copilot `agentStop` (identical
   `{decision,reason}` output; adapted input-payload access), plus any quality-gate
   `preToolUse`/`permissionRequest`, with a **mapped-or-explicitly-unmappable
-  inventory** that enumerates *every* source hook so none is silently dropped;
+  inventory** that enumerates *every* source hook so none is silently dropped.
+  (servo ships **no** plugin-level hooks today — its one hook, the oracle `Stop`,
+  is installed target-side by the `oracle-hook` skill; the translation therefore
+  teaches that skill to emit an `agentStop` hook for a Copilot target. The
+  inventory over the source set is a one-entry map, but the enumeration guard
+  still holds.)
 - maps the optional loop/oracle **execution primitives** to their Copilot
   equivalents (see below), recording any primitive that genuinely does not port as
   an explicit residual;
@@ -168,7 +184,10 @@ not a silent drop. Gates and primitives degrade *visibly*.
   gate and *both* loop drivers work under Copilot (the loop driver via
   per-iteration `copilot -p`; the goal driver via Autopilot's caps + final oracle)
   rather than silently no-op'ing.
-- Copilot's cloud agent + code review pick up servo's `.github/` config.
+- A servo-scaffolded target that commits Copilot config (`.github/`) has it
+  picked up by Copilot's cloud agent + code review — a downstream scaffold-time
+  benefit, distinct from the installed `hosts/copilot/` plugin package this ADR
+  builds.
 
 **Becomes harder:**
 - A third generated package to drift-guard, version, and release.
@@ -178,6 +197,13 @@ not a silent drop. Gates and primitives degrade *visibly*.
 **Invariants:**
 - Repository root stays canonical source; `hosts/copilot/` is drift-guarded
   build output; Claude/Codex output byte-unchanged.
+- **The committed artifact is an installed *plugin package* under `hosts/copilot/`**
+  (Agent-Plugins-1.0: `plugin.json` + `skills/` + `com.github.copilot/{agents,hooks}`),
+  **not** repo-root `.github/`. Rendering into the repository root would collide
+  with ADR-0028's root-is-canonical-source invariant; repo-native `.github/`
+  discovery (`.github/skills`, `.github/agents`, `.github/hooks`,
+  `.github/copilot-instructions.md`) is a *scaffolded-target* concern, orthogonal
+  to this host package.
 - The render layer enforces Copilot loader limits + schema.
 - Every servo hook and Claude-specific primitive is mapped or recorded as
   residual — enumerated over the source set, never silently dropped or
@@ -192,10 +218,10 @@ not a silent drop. Gates and primitives degrade *visibly*.
 - **Plugin layout (Agent Plugins 1.0):** a `hosts/copilot/` package presents
   `plugin.json` (with `$schema:
   https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`), `skills/<name>/SKILL.md`,
-  `mcp.json`, and `com.github.copilot/{agents/<name>.agent.md, hooks/hooks.json}`.
-  Confirmed from GitHub's plugin docs + `copilot plugin install --help`; the exact
-  marketplace-descriptor field set is re-checked in 028-01 (shared unknown with
-  jig spec 113-01).
+  and `com.github.copilot/{agents/<name>.agent.md, hooks/hooks.json}` — no
+  `mcp.json` (servo ships no MCP config). Confirmed from GitHub's plugin docs +
+  `copilot plugin install --help`; the exact marketplace-descriptor field set is
+  re-checked in 028-01 (shared unknown with jig spec 113-01).
 - **Autopilot has no oracle-gated stop** (verified: only `--max-autopilot-continues`
   / `--max-ai-credits`). Load-bearing consequence already absorbed in the mapping
   above — the loop driver ports without Autopilot; the goal driver's cap+final
