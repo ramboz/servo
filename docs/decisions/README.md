@@ -40,7 +40,7 @@
 - [ADR-0031: design-eval browser acquisition — runtime preflight, unfrozen capture transport, browser identity in the ledger](adr-0031-design-eval-browser-acquisition.md) — `/servo:design-eval` ([ADR-0009](adr-0009-design-fidelity-eval-recipe.md), spec 012) scores UI fidelity by screenshotting the running app and comparing it to a frozen mockup reference. (2026-08-19, Accepted)
 - [ADR-0032: Pluggable capture providers for design-eval (platform-agnostic app capture)](adr-0032-design-eval-capture-providers.md) — `/servo:design-eval` ([ADR-0009](adr-0009-design-fidelity-eval-recipe.md), spec 012) can only score a **web** UI. (2026-08-21, Accepted)
 - [ADR-0033: Agent-loop preflights headless edit permission before the first paid iteration](adr-0033-agent-loop-permission-preflight.md) — `/servo:agent-loop` (`loop.py`) subprocesses `claude -p --agent runner` with **no** `--dangerously-skip-permissions` and no `acceptEdits` / allow-list. (2026-08-27, Proposed)
-- [ADR-0034: GitHub Copilot CLI as a third committed host](adr-0034-copilot-third-host.md) — Adobe disables Claude Code on **2026-09-28** and makes GitHub Copilot the primary coding agent (internal migration hub, read 2026-09-15). (2026-09-15, Proposed)
+- [ADR-0034: GitHub Copilot CLI as a third committed host](adr-0034-copilot-third-host.md) — extend ADR-0028's committed-per-host model to a tri-host layout (`hosts/copilot/` rendered into Copilot's `.github/` home), mirroring jig's shipped keystone (ADR-0061/spec 113); the bar is parity with Claude/Codex, not the 2026-09-28 cutover. (2026-09-18, Accepted)
 
 ## Pending
 
