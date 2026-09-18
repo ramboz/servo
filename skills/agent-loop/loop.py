@@ -65,6 +65,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -134,6 +135,14 @@ DEFAULT_PLATEAU_NOISE_FLOOR = 0.0
 AGENT_RUNNER = "runner"
 AGENT_JUDGE = "judge"
 
+# Slice 028-05 execution-primitive mapping (ADR-0034). The optional loop driver
+# runs under either Claude Code (`claude -p`) or GitHub Copilot CLI
+# (`copilot -p`), selected by `--host`. Default is `claude` — zero change for
+# Claude users. Only the loop driver ports to Copilot; the goal driver refuses
+# under `--host copilot` (Autopilot has no oracle-gated stop; see main()).
+HOST_CLAUDE = "claude"
+HOST_COPILOT = "copilot"
+
 # Slice 003-05 verdict-block schema version (ADR-0003). Mirrors gate.py's
 # `schema_version` mechanism: refuse loudly on mismatch rather than
 # silently mis-decoding. Spec 005's variant-race will reuse the judge
@@ -185,6 +194,12 @@ REASON_STATE_MISSING = "state_missing"
 REASON_STATE_SCHEMA_MISMATCH = "state_schema_mismatch"
 REASON_CLAUDE_VERSION_MISMATCH = "claude_version_mismatch"
 REASON_RUN_ID_COLLISION = "run_id_collision"
+# Slice 028-05 (ADR-0034): the /goal family (`--driver goal`, `--background`,
+# `--emit-routine-prompt`) refuses under `--host copilot` — Copilot Autopilot
+# has no oracle-gated stop and the target-side agentStop gate's live firing is
+# unverifiable headless (jig 113-08). The loop driver ports fully; the goal
+# driver is a documented residual. Refuse explicitly, never a silent un-gated run.
+REASON_GOAL_UNSUPPORTED_HOST = "goal_driver_unsupported_host"
 
 # Slice 003-07 preflight refusal shared by both drivers (ADR-0008 V4): a
 # scheduled / unattended run against a dirty working tree can score leftover
@@ -1621,14 +1636,311 @@ def _settings_args(target: Path) -> list[str]:
     return []
 
 
+def _build_copilot_cmd(
+    prompt: str, *,
+    agent_name: Optional[str],
+    session_id: Optional[str],
+    usage_file: Path,
+    max_ai_credits: Optional[float],
+) -> list[str]:
+    """Assemble the Copilot loop-driver argv (slice 028-05 AC1, ADR-0034).
+
+    Mirrors the spike's live-verified form (`copilot` 1.0.86):
+    `copilot -p <prompt> -s --allow-all-tools --agent <name> --output-format
+    json --usage-output-file <f>`. `-p` takes the prompt as its VALUE (verified
+    against `copilot --help`), `-s` (silent) trims non-response chatter,
+    `--allow-all-tools` is the headless-edit enabler (Copilot's analog of the
+    ADR-0033 permission wall — AC4), `--output-format json` yields a JSONL event
+    stream, and `--usage-output-file` writes the cost + `codeChanges` edit-signal.
+
+    `--max-ai-credits` is forwarded only when a positive cap is set (AC2's honest
+    per-invocation brake; USD does not convert to Copilot's premium-request /
+    nano-AIU units — see `_normalize_copilot_result`). `--resume=<session>` is
+    added when a session id is carried forward (the `=` form is used because
+    Copilot's `-r/--resume` takes an OPTIONAL value, so a space-separated value
+    would be ambiguous). No `--max-budget-usd`: that is a Claude-only knob.
+    """
+    cmd: list[str] = ["copilot", "-p", prompt, "-s", "--allow-all-tools"]
+    if agent_name:
+        cmd.extend(["--agent", agent_name])
+    cmd.extend(["--output-format", "json", "--usage-output-file", str(usage_file)])
+    if max_ai_credits is not None and max_ai_credits > 0:
+        # Integer credits when whole (Copilot's flag reads a credit count);
+        # `g` drops a trailing `.0` so `5.0` renders as `5`.
+        cmd.extend(["--max-ai-credits", f"{max_ai_credits:g}"])
+    if session_id:
+        cmd.append(f"--resume={session_id}")
+    return cmd
+
+
+def _parse_copilot_usage(usage_path: Path) -> dict:
+    """Parse Copilot's `--usage-output-file` JSON (slice 028-05 AC2).
+
+    Returns native cost (`totalPremiumRequestCost` / `totalNanoAiu` — premium
+    requests / nano-AIU, NOT USD), the native edit-signal
+    (`codeChanges.filesModifiedCount`, where 0 ⇒ the runner made no edits —
+    ADR-0033/0037's "did the runner edit?" check), and `tokenDetails`.
+
+    Tolerant by design: a missing or malformed file yields zeros rather than
+    raising. Cost accounting under Copilot is a documented USD-unit residual
+    (the USD `--cost-ceiling` does not gate Copilot), so a missing usage file
+    must degrade to "no cost signal", never crash the loop.
+    """
+    default = {
+        "premium_request_cost": 0,
+        "nano_aiu": 0,
+        "files_modified": 0,
+        "token_details": {},
+    }
+    try:
+        data = json.loads(usage_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return default
+    if not isinstance(data, dict):
+        return default
+
+    def _as_int(value) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    files_modified = 0
+    code_changes = data.get("codeChanges")
+    if isinstance(code_changes, dict):
+        files_modified = _as_int(code_changes.get("filesModifiedCount"))
+
+    token_details = data.get("tokenDetails")
+    if not isinstance(token_details, dict):
+        token_details = {}
+
+    return {
+        "premium_request_cost": _as_int(data.get("totalPremiumRequestCost")),
+        "nano_aiu": _as_int(data.get("totalNanoAiu")),
+        "files_modified": files_modified,
+        "token_details": token_details,
+    }
+
+
+def _extract_copilot_text(event: dict) -> str:
+    """Pull the response text out of a Copilot terminal `result` event.
+
+    Copilot's JSONL `data` field shape is not frozen across releases, so this
+    reads defensively: a bare string `data`, or a dict with a `content` / `text`
+    / `message` / `result` / `response` string, or a `content` list of
+    `{type,text}` parts. Anything else yields "" (the loop tolerates an empty
+    agent turn — the verdict parser simply finds no block).
+    """
+    data = event.get("data")
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        for key in ("content", "text", "message", "result", "response"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value
+        content = data.get("content")
+        if isinstance(content, list):
+            parts = [
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            ]
+            if any(parts):
+                return "\n".join(parts)
+    return ""
+
+
+def _extract_copilot_session_id(event: Optional[dict]) -> str:
+    """Best-effort session id from a Copilot event (top-level or under `data`).
+
+    Copilot's JSONL is not documented to carry a session id; if none is present
+    this returns "" and the next iteration runs a fresh session (a documented
+    resume residual — servo re-assembles per-iteration context into the prompt
+    regardless, so continuity is not correctness-critical).
+    """
+    if not isinstance(event, dict):
+        return ""
+    containers = [event]
+    data = event.get("data")
+    if isinstance(data, dict):
+        containers.append(data)
+    for container in containers:
+        for key in ("session_id", "sessionId"):
+            value = container.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
+def _parse_copilot_jsonl(stdout: str) -> tuple[Optional[dict], str]:
+    """Parse Copilot's `--output-format json` JSONL stream (slice 028-05 AC1).
+
+    Filters `ephemeral: true` events (progress / tool chatter); the LAST
+    non-ephemeral event is the terminal result and carries the response text.
+    Returns `(terminal_event, result_text)`, or `(None, "")` when no
+    non-ephemeral event is present. Non-JSON noise lines are tolerated (skipped),
+    mirroring `_invoke_claude_goal`'s stream scan.
+    """
+    terminal: Optional[dict] = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("ephemeral") is True:
+            continue
+        terminal = event  # last non-ephemeral event wins
+    if terminal is None:
+        return None, ""
+    return terminal, _extract_copilot_text(terminal)
+
+
+def _normalize_copilot_result(
+    terminal_event: dict, result_text: str, session_id: str, usage: dict,
+) -> dict:
+    """Normalize Copilot's JSONL + usage into `_invoke_claude`'s result-dict shape.
+
+    The loop body (`run_loop`) consumes a fixed set of keys off the returned
+    dict — `session_id`, `total_cost_usd`, `terminal_reason`, `usage.*_tokens`,
+    `result` (verdict text), `is_error` / `subtype`. This maps Copilot onto
+    exactly those keys so the downstream is untouched (slice 028-05 AC1).
+
+    Cost-unit decision (AC2 — resolved honestly, ADR-0034): Copilot reports
+    premium-requests / nano-AIU, NOT USD, and there is no faithful conversion.
+    `total_cost_usd` is therefore **0.0** — never a fabricated USD number — so
+    the cumulative USD `--cost-ceiling` stays honest (it does not brake Copilot;
+    that is a documented residual — the loop is bounded by `--max-iterations`
+    plus an optional `--max-ai-credits` per-invocation cap). Copilot's native
+    cost + edit-signal are surfaced under `copilot_*` keys for observability;
+    they are additive and ignored by the Claude-shaped downstream.
+
+    No `modelUsage` is synthesized (Copilot's usage carries no `contextWindow`),
+    so the context-fill gate fails open under Copilot — its documented behavior
+    when the ratio is uncomputable (the iteration cap and any credit cap still
+    apply).
+    """
+    token_details = usage.get("token_details") or {}
+
+    def _as_int(value) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "session_id": session_id,
+        "total_cost_usd": 0.0,
+        "terminal_reason": "",
+        "result": result_text,
+        "usage": {
+            "input_tokens": _as_int(token_details.get("input")),
+            "cache_read_input_tokens": _as_int(token_details.get("cache_read")),
+            "cache_creation_input_tokens": _as_int(token_details.get("cache_write")),
+            "output_tokens": _as_int(token_details.get("output")),
+        },
+        # Copilot-native signals (AC2/AC4) — additive; the Claude-shaped loop
+        # body reads them only when present (host == copilot).
+        "copilot_premium_request_cost": _as_int(usage.get("premium_request_cost")),
+        "copilot_nano_aiu": _as_int(usage.get("nano_aiu")),
+        "copilot_files_modified": _as_int(usage.get("files_modified")),
+    }
+
+
+def _invoke_copilot(
+    prompt: str, target: Path, *,
+    timeout_seconds: Optional[float] = None,
+    session_id: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    max_ai_credits: Optional[float] = None,
+) -> tuple[Optional[dict], Optional[str]]:
+    """Copilot loop-driver invocation (slice 028-05 AC1), the `_invoke_claude`
+    peer under `--host copilot`.
+
+    Runs `copilot -p <prompt> -s --allow-all-tools --agent <name>
+    --output-format json --usage-output-file <tmp>` via the SAME SIGINT-
+    forwarding `Popen`/`_active_subprocess` pattern as `_invoke_claude`, parses
+    the JSONL + usage file, and returns a dict in `_invoke_claude`'s shape
+    (success) or `(None, breadcrumb)` (failure), mirroring its AC9 split. A
+    parseable terminal event is the iteration's result regardless of exit code
+    (a cap halt can exit non-zero with a real, scoreable turn — same posture as
+    the Claude `--max-budget-usd` path).
+    """
+    global _active_subprocess
+    usage_fd, usage_name = tempfile.mkstemp(prefix="servo-copilot-usage-", suffix=".json")
+    os.close(usage_fd)
+    usage_path = Path(usage_name)
+    cmd = _build_copilot_cmd(
+        prompt, agent_name=agent_name, session_id=session_id,
+        usage_file=usage_path, max_ai_credits=max_ai_credits,
+    )
+    try:
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=str(target),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+        except FileNotFoundError:
+            return None, "copilot not on PATH"
+        except OSError as exc:
+            return None, f"OS error invoking copilot: {exc}"
+
+        _active_subprocess = proc
+        try:
+            try:
+                stdout, _stderr = proc.communicate(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                return None, f"copilot -p timed out after {timeout_seconds}s (killed)"
+        finally:
+            _active_subprocess = None
+
+        terminal_event, result_text = _parse_copilot_jsonl(stdout)
+        if terminal_event is None:
+            if proc.returncode != 0:
+                return None, (
+                    f"copilot -p exited {proc.returncode} without a parseable "
+                    "non-ephemeral event"
+                )
+            return None, "copilot -p emitted no parseable non-ephemeral event"
+
+        usage = _parse_copilot_usage(usage_path)
+        resolved_session = _extract_copilot_session_id(terminal_event) or (session_id or "")
+        return _normalize_copilot_result(
+            terminal_event, result_text, resolved_session, usage,
+        ), None
+    finally:
+        try:
+            usage_path.unlink()
+        except OSError:
+            pass
+
+
 def _invoke_claude(
     prompt: str, target: Path, *,
     max_budget_usd: float,
     timeout_seconds: Optional[float] = None,
     session_id: Optional[str] = None,
     agent_name: Optional[str] = None,
+    host: str = HOST_CLAUDE,
+    max_ai_credits: Optional[float] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
+
+    Slice 028-05: when `host == HOST_COPILOT`, delegates to `_invoke_copilot`
+    (which returns a dict in this function's shape so the loop body is
+    unchanged). The Claude path below is byte-for-byte unchanged for the default
+    `host == HOST_CLAUDE` — `--max-budget-usd` and every Claude flag are
+    untouched, and `max_ai_credits` is ignored (a Copilot-only knob).
 
     `session_id` (slice 003-04): when non-empty, the invocation includes
     `--resume <session_id>` so the conversation continues across iterations
@@ -1659,6 +1971,12 @@ def _invoke_claude(
     Behavior is otherwise identical to `subprocess.run`.
     """
     global _active_subprocess
+    if host == HOST_COPILOT:
+        return _invoke_copilot(
+            prompt, target,
+            timeout_seconds=timeout_seconds, session_id=session_id,
+            agent_name=agent_name, max_ai_credits=max_ai_credits,
+        )
     cmd: list[str] = ["claude", "-p", "--output-format", "json"]
     cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
     cmd.extend(_settings_args(target))
@@ -1867,6 +2185,8 @@ def run_loop(
     resume_run_id: Optional[str] = None,
     resume_anyway: bool = False,
     allow_dirty: bool = False,
+    host: str = HOST_CLAUDE,
+    max_ai_credits: Optional[float] = None,
 ) -> int:
     """Drive the iteration loop with state persistence + resume + signal handling.
 
@@ -2164,6 +2484,8 @@ def run_loop(
             timeout_seconds=claude_timeout_seconds,
             session_id=session_id_arg,
             agent_name=agent_name,
+            host=host,
+            max_ai_credits=max_ai_credits,
         )
 
         # Interrupt-during-claude (AC9): the iteration is treated as
@@ -2215,6 +2537,23 @@ def run_loop(
         state["cumulative_output_tokens"] += iter_output_tokens
         if session_id:
             state["current_session_id"] = session_id
+
+        # Slice 028-05 (AC2/AC4): under `--host copilot` surface the native cost
+        # (premium-requests / nano-AIU — NOT USD; the USD `--cost-ceiling` does
+        # not brake Copilot, an ADR-0034 residual) and the edit-signal
+        # (`codeChanges.filesModifiedCount`; 0 ⇒ the runner made no edits). Keyed
+        # on a Copilot-only field so this is a no-op on the Claude path.
+        copilot_files_modified = claude_data.get("copilot_files_modified")
+        if copilot_files_modified is not None:
+            sys.stderr.write(
+                f"loop: copilot iteration {iteration}: "
+                f"files_modified={copilot_files_modified}, "
+                f"premium_request_cost="
+                f"{claude_data.get('copilot_premium_request_cost', 0)}, "
+                f"nano_aiu={claude_data.get('copilot_nano_aiu', 0)} "
+                "(native units; USD cost-ceiling does not apply under "
+                "--host copilot — ADR-0034 residual)\n"
+            )
 
         # Context-fill ratio (slice 003-03).
         context_fill_ratio, ratio_error = _extract_context_fill_ratio(claude_data)
@@ -3148,6 +3487,38 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--host",
+        choices=[HOST_CLAUDE, HOST_COPILOT],
+        default=HOST_CLAUDE,
+        help=(
+            "Coding-agent host the loop driver subprocesses per iteration "
+            "(slice 028-05, ADR-0034). `claude` (default) runs "
+            "`claude -p --output-format json` — zero change for Claude users. "
+            "`copilot` runs `copilot -p <prompt> -s --allow-all-tools --agent "
+            "<name> --output-format json --usage-output-file <f>` and "
+            "normalizes Copilot's JSONL + usage file into the same result "
+            "shape, so the loop's own Python per-iteration oracle gate is "
+            "unchanged (it does NOT use Copilot Autopilot). Only the loop "
+            "driver ports to Copilot; the goal driver (`--driver goal` / "
+            "`--background` / `--emit-routine-prompt`) refuses under "
+            "`--host copilot` (a documented residual — Autopilot has no "
+            "oracle-gated stop). The USD `--cost-ceiling` does not apply under "
+            "Copilot (premium-request / nano-AIU units); use `--max-ai-credits`."
+        ),
+    )
+    parser.add_argument(
+        "--max-ai-credits",
+        type=float,
+        default=None,
+        help=(
+            "Copilot-only (slice 028-05): forward `--max-ai-credits <n>` as the "
+            "per-invocation credit cap for each `copilot -p` call — the honest "
+            "per-invocation brake under `--host copilot`, where the USD "
+            "`--cost-ceiling` cannot convert to Copilot's premium-request / "
+            "nano-AIU units. Ignored (with a warning) under `--host claude`."
+        ),
+    )
+    parser.add_argument(
         "--prompt",
         default=None,
         help=(
@@ -3354,6 +3725,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--max-iterations must be >= 1")
     if args.cost_ceiling is not None and args.cost_ceiling < 0:
         parser.error("--cost-ceiling must be >= 0")
+    if args.max_ai_credits is not None and args.max_ai_credits < 0:
+        parser.error("--max-ai-credits must be >= 0")
     if args.context_fill_threshold is not None and (
         args.context_fill_threshold < 0 or args.context_fill_threshold > 1
     ):
@@ -3376,6 +3749,52 @@ def main(argv: Optional[list[str]] = None) -> int:
                      "continuation to /goal); --driver loop runs in the "
                      "foreground — detach it with your shell's nohup/&, or use "
                      "--resume for unattended continuation")
+
+    # ---- Host selection: Copilot goal-family refusal (slice 028-05 AC3) -----
+    # The loop driver ports fully under Copilot (per-iteration `copilot -p`), but
+    # the /goal family does NOT: Copilot Autopilot has no oracle-gated stop, and
+    # the target-side agentStop gate's live firing is unverifiable headless (jig
+    # 113-08 / ADR-0034). So `--driver goal`, `--background` (a detached goal
+    # run), and `--emit-routine-prompt` (a /goal Routine prompt) refuse under
+    # `--host copilot` — EXPLICITLY, never a silent un-gated run. This runs
+    # before the readiness preflight / --emit-routine-prompt handler / routing
+    # so the refusal is the single, first thing a Copilot goal-family invocation
+    # hits. `--max-ai-credits` under Claude is a no-op knob; warn rather than
+    # error so a host-agnostic wrapper script can pass it unconditionally.
+    if args.host == HOST_COPILOT:
+        goal_family = None
+        if args.background:
+            goal_family = "--background (a detached goal run)"
+        elif args.emit_routine_prompt:
+            goal_family = "--emit-routine-prompt (a /goal Routine prompt)"
+        elif args.driver == DRIVER_GOAL:
+            goal_family = "--driver goal"
+        if goal_family is not None:
+            sys.stderr.write(
+                f"loop: {goal_family} is unsupported under --host copilot. The "
+                "goal driver is a documented residual under Copilot (Autopilot "
+                "has no oracle-gated stop; ADR-0034). Use --driver loop — the "
+                "loop driver ports fully under --host copilot, gating on servo's "
+                "own Python per-iteration oracle check.\n"
+            )
+            return _refuse_goal(
+                run_id=_generate_preflight_run_id(),
+                reason=REASON_GOAL_UNSUPPORTED_HOST,
+                message=(
+                    f"{goal_family} unsupported under --host copilot "
+                    "(ADR-0034 residual); use --driver loop"
+                ),
+                cost_ceiling=(args.cost_ceiling if args.cost_ceiling is not None
+                              else DEFAULT_COST_CEILING_USD),
+                max_turns=(args.max_iterations if args.max_iterations is not None
+                           else DEFAULT_MAX_ITERATIONS),
+            )
+    elif args.max_ai_credits is not None:
+        sys.stderr.write(
+            "loop: --max-ai-credits is a Copilot-only per-invocation cap and is "
+            "ignored under --host claude (Claude uses --max-budget-usd / "
+            "--cost-ceiling).\n"
+        )
 
     # ---- Readiness preflight (slice 023-02, ADR-0029) -----------------------
     # Gates ONLY the two unattended long-horizon launch surfaces pinned by
@@ -3534,7 +3953,13 @@ def main(argv: Optional[list[str]] = None) -> int:
     # `--driver goal` was requested — an unsupported host refuses rather than
     # silently downgrading to a non-detachable loop run.
     routing_driver = DRIVER_GOAL if args.background else effective_arg_driver
-    if routing_driver == DRIVER_LOOP:
+    if args.host == HOST_COPILOT:
+        # Slice 028-05: under Copilot the goal family already refused above, so
+        # only the loop driver remains. `auto` resolves to `loop` WITHOUT the
+        # claude `/goal` host-support probe (`_decide_route` reads `claude
+        # --version` + Claude settings — Claude-specific, irrelevant to Copilot).
+        effective_driver = DRIVER_LOOP
+    elif routing_driver == DRIVER_LOOP:
         effective_driver = DRIVER_LOOP
     else:
         verdict = _decide_route(target, routing_driver)
@@ -3653,6 +4078,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         resume_run_id=args.resume,
         resume_anyway=args.resume_anyway,
         allow_dirty=args.allow_dirty,
+        host=args.host,
+        max_ai_credits=args.max_ai_credits,
     )
 
 

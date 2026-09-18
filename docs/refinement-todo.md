@@ -31,6 +31,58 @@ Copilot hooks.
 
 ---
 
+## Copilot loop cost is tracked in native units, not against a USD ceiling
+
+**Deferred:** slice 028-05 runs the optional loop driver under `--host copilot`
+(`copilot -p`). Copilot reports cost as **premium-requests / nano-AIU**
+(`--usage-output-file`), not USD, and there is no faithful conversion. So servo
+does **not** fabricate a USD number: under Copilot the normalized
+`total_cost_usd` is `0.0` and the cumulative USD `--cost-ceiling` **does not
+brake the loop** — it is bounded by `--max-iterations` (host-neutral) plus the
+optional per-invocation `--max-ai-credits`. Copilot's native cost + the
+`codeChanges.filesModifiedCount` edit-signal are parsed and surfaced per
+iteration on stderr, but there is no *cumulative Copilot-native ceiling*
+guardrail (the USD one is inert under Copilot). `--max-ai-credits`' live effect
+on a single non-Autopilot `copilot -p` is also not live-verified (fixture-tested
+only, per the no-live-run rule).
+
+**Resolution trigger:** a Copilot user needs a cumulative cost brake under the
+loop driver (repeated runs burn credits) → add a `--copilot-credit-ceiling`
+(cumulative nano-AIU / premium-request) guardrail that halts on
+`sum(totalNanoAiu)` the way `--cost-ceiling` halts on `sum(total_cost_usd)`, and
+live-verify `--max-ai-credits` against a real `copilot -p` session.
+
+**Surfaced by:** slice 028-05 (ADR-0034); enumerated in `docs/architecture.md`
+"Copilot host execution-primitive inventory".
+
+---
+
+## Copilot goal-driver fidelity under Autopilot is unverified (driver refuses)
+
+**Deferred:** the goal driver (`/goal` + per-turn oracle-gated stop, ADR-0008)
+does **not** port to Copilot: Autopilot has no oracle-gated stop (only
+`--max-autopilot-continues` / `--max-ai-credits`, verified live in 028-01), and
+whether a per-continuation `agentStop` hook reconstructs the per-turn gate under
+Autopilot is **not headlessly verifiable** (jig 113-08). Per ADR-0034's honesty
+invariant (never a silent un-gated run), slice 028-05 makes the `/goal` family
+(`--driver goal`, `--background`, `--emit-routine-prompt`) **refuse under
+`--host copilot`** (`goal_driver_unsupported_host`) and points the user to
+`--driver loop` — the loop driver ports fully and delivers equivalent
+oracle-gated autonomy under Copilot. So Copilot users are not *blocked* from
+oracle-gated autonomy; they use the loop driver.
+
+**Resolution trigger:** Copilot gains a reliable way to observe repo-hook firing
+under Autopilot / `copilot -p` (see the sibling hook residual above), so the
+per-continuation `agentStop` gate can be validated end-to-end. If it fully
+reconstructs the per-turn gate, lift the refusal and map the goal driver to
+Autopilot caps + the `agentStop` gate; if it cannot, the refusal stands as the
+permanent honest posture (goal driver = Claude-only), per ADR-0034 kill criteria.
+
+**Surfaced by:** slice 028-05 (ADR-0034); enumerated in `docs/architecture.md`
+"Copilot host execution-primitive inventory".
+
+---
+
 ## ~~Shellcheck verification falls back to skip on dev machines~~ — RESOLVED 2026-05-15
 
 **Resolution:** `scripts/shellcheck.sh` wraps both the local binary (preferred) and the `koalaman/shellcheck:stable` Docker image (fallback), exiting 127 only when neither is available. `ShellcheckTests.test_rendered_oracle_shellcheck_clean` now invokes the wrapper and skips only on exit 127, so on any dev box with Docker the assertion actually runs. Verified: 34/34 tests green with zero skips on this branch even though the local `shellcheck` binary is absent.

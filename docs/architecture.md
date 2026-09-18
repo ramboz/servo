@@ -307,7 +307,7 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 > prompt before/during a loop, but never these guardrails — see
 > [Host-native phase hints](#host-native-phase-hints-spec-013).
 
-Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own.
+Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own. Slice 028-05 adds `--host copilot` so the loop driver runs under GitHub Copilot CLI (`copilot -p`) too, with the guardrails unchanged — see the [Copilot host execution-primitive inventory](#copilot-host-execution-primitive-inventory-mapped-or-residual) for the mapping and its residuals.
 
 | Guardrail | Mechanism | Default | Disable | Terminal reason |
 |---|---|---|---|---|
@@ -481,6 +481,60 @@ preflight, not a plugin hook.
 verified *statically* — the emitted-JSON shape + the adapter unit test
 (`skills/oracle-hook/test_copilot_hook_adapter.py`) — and live firing is recorded
 as a residual in [refinement-todo](refinement-todo.md).
+
+## Copilot host execution-primitive inventory (mapped-or-residual)
+
+> Spec 028 slice 028-05 (ADR-0034 "Execution-primitive mapping"). Extends the
+> hook inventory above to the optional loop's execution primitives. Grounded on
+> live `copilot` 1.0.86 (spike 028-01). Every Claude-specific primitive is
+> mapped to a *documented, verified* Copilot equivalent or recorded as an
+> explicit residual — never a silent rename.
+
+servo's optional loop (`skills/agent-loop/loop.py`) subprocesses a coding-agent
+per iteration and gates on the oracle in its own Python loop. `--host
+{claude,copilot}` (default `claude`, zero change for Claude users) selects the
+per-iteration invocation. The Copilot branch normalizes Copilot's JSONL +
+usage-file output into the **same result-dict shape** `_invoke_claude` returns,
+so the loop's guardrails and per-iteration oracle gate are byte-unchanged.
+
+| Claude primitive | Copilot mapping | Status |
+|---|---|---|
+| `claude -p --output-format json --agent <name>` (loop driver) | `copilot -p <prompt> -s --allow-all-tools --agent <name> --output-format json --usage-output-file <f>` | **mapped** (028-05 AC1) |
+| `--output-format json` = single result dict | `--output-format json` = **JSONL** event stream; filter `ephemeral:true`, take the terminal non-ephemeral event's text | **mapped** (shape differs — normalized) |
+| `--resume <session-id>` | `--resume=<session-id>` (Copilot's `-r/--resume` takes an optional value → `=` form) | **mapped**, with a resume residual (below) |
+| ADR-0033 headless edit-permission preflight | `--allow-all-tools` (the headless-edit enabler; env `COPILOT_ALLOW_ALL`) | **mapped** (028-05 AC4) |
+| ADR-0033/0037 "did the runner edit?" signal | `codeChanges.filesModifiedCount` from `--usage-output-file` (`0` ⇒ no edits) | **mapped** (028-05 AC2/AC4) |
+| cumulative cost ceiling in **USD** (`--cost-ceiling` / `--max-budget-usd`) | Copilot reports **premium-requests / nano-AIU**, not USD — no faithful conversion | **residual** (cost-unit; below) |
+| per-invocation cost brake (`--max-budget-usd`) | `--max-ai-credits <n>` (forwarded when set) + the host-neutral `--max-iterations` cap | **mapped** (best-effort; live efficacy is a residual) |
+| goal driver (`/goal` + per-turn oracle-gated stop, ADR-0008) | Copilot **Autopilot** has no oracle-gated stop; the target-side `agentStop` gate's live firing is unverifiable headless | **residual** — refuses under `--host copilot` (below) |
+| context-fill gate (`modelUsage.<model>.contextWindow`) | Copilot's usage file carries no `contextWindow` | **residual** — gate fails open under Copilot (documented fail-open behavior; the iteration + credit caps still apply) |
+
+**Cost-unit residual (AC2, resolved honestly).** servo's cumulative ceiling is
+USD; Copilot's cost is premium-requests / nano-AIU. servo does **not** fabricate
+a USD conversion: under `--host copilot` the normalized `total_cost_usd` is
+`0.0`, so the USD `--cost-ceiling` stays honest — it simply **does not brake
+Copilot**. The Copilot loop is bounded instead by `--max-iterations` (host-neutral)
+plus the optional per-invocation `--max-ai-credits`. Copilot's native cost +
+edit-signal are parsed (`_parse_copilot_usage`) and surfaced per iteration on
+stderr for observability. A Copilot-native cumulative ceiling is deferred (see
+[refinement-todo](refinement-todo.md)).
+
+**Goal-driver residual (AC3, resolved honestly).** The loop driver ports fully
+to Copilot (servo drives per-iteration `copilot -p` and gates in its own Python).
+The **goal driver does not**: Autopilot has no oracle-gated stop (verified live,
+028-01), and reconstructing the per-turn gate via a per-continuation `agentStop`
+hook is unverifiable headless (jig 113-08). Rather than ship a silently un-gated
+Autopilot run — the failure ADR-0034's honesty invariant forbids — the `/goal`
+family (`--driver goal`, `--background`, `--emit-routine-prompt`) **refuses under
+`--host copilot`** (`goal_driver_unsupported_host`), pointing the user to
+`--driver loop`, which delivers equivalent oracle-gated autonomy under Copilot.
+
+**Resume residual.** Copilot's JSONL is not documented to carry a session id;
+`_invoke_copilot` maps `--resume` when one is present but otherwise each
+iteration is a fresh session. servo re-assembles per-iteration context (last
+oracle JSON + verdict) into the prompt regardless, so session continuity is not
+correctness-critical. `--host` itself is not persisted in the run state, so a
+resumed loop must re-pass `--host copilot`.
 
 ## Decision records
 
