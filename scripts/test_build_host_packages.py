@@ -275,6 +275,79 @@ class HostPackageTests(unittest.TestCase):
         problems = build_host_packages.validate_copilot_package(self.hosts / "copilot")
         self.assertTrue(any("design-eval" in p for p in problems), problems)
 
+    # ------------------------------------------------------------------ #
+    # Slice 028-03 — Copilot agents (`.github/agents/<name>.agent.md`).
+    # ------------------------------------------------------------------ #
+
+    def test_copilot_agents_rendered_with_mapped_tools(self):
+        # AC1/AC2: source agents/<name>.md render to
+        # .github/agents/<name>.agent.md with Claude tool names mapped to
+        # Copilot's vocabulary, order preserved.
+        runner = self.hosts / "copilot/.github/agents/runner.agent.md"
+        judge = self.hosts / "copilot/.github/agents/judge.agent.md"
+        self.assertTrue(runner.is_file())
+        self.assertTrue(judge.is_file())
+        runner_fm, _ = build_host_packages._split_frontmatter(runner.read_text())
+        judge_fm, _ = build_host_packages._split_frontmatter(judge.read_text())
+        self.assertEqual(
+            build_host_packages._frontmatter_list(runner_fm, "tools"),
+            ["view", "create", "edit", "bash", "glob", "grep"],
+        )
+        self.assertEqual(
+            build_host_packages._frontmatter_list(judge_fm, "tools"),
+            ["view", "glob", "grep"],
+        )
+
+    def test_copilot_judge_agent_has_no_write_or_exec_tool(self):
+        # AC4: judge's read-only tool set (no create/edit/bash) is preserved.
+        judge = self.hosts / "copilot/.github/agents/judge.agent.md"
+        fm, _ = build_host_packages._split_frontmatter(judge.read_text())
+        tools = build_host_packages._frontmatter_list(fm, "tools")
+        self.assertNotIn("create", tools)
+        self.assertNotIn("edit", tools)
+        self.assertNotIn("bash", tools)
+
+    def test_copilot_agent_name_description_and_body_preserved(self):
+        # AC1: name/description/body are preserved verbatim; only the
+        # `tools:` block changes.
+        for name in ("runner", "judge"):
+            with self.subTest(agent=name):
+                rendered = (
+                    self.hosts / f"copilot/.github/agents/{name}.agent.md"
+                ).read_text()
+                source = (REPO_ROOT / f"agents/{name}.md").read_text()
+                rendered_fm, rendered_body = build_host_packages._split_frontmatter(rendered)
+                source_fm, source_body = build_host_packages._split_frontmatter(source)
+                self.assertEqual(rendered_body, source_body)
+                self.assertEqual(
+                    build_host_packages._frontmatter_value(rendered_fm, "name"),
+                    build_host_packages._frontmatter_value(source_fm, "name"),
+                )
+                self.assertEqual(
+                    build_host_packages._frontmatter_value(rendered_fm, "description"),
+                    build_host_packages._frontmatter_value(source_fm, "description"),
+                )
+
+    def test_copilot_agents_carry_no_model_field_or_id(self):
+        # AC3: no rendered agent carries a model: field or a hard-coded
+        # opus/sonnet model id.
+        for name in ("runner", "judge"):
+            with self.subTest(agent=name):
+                text = (self.hosts / f"copilot/.github/agents/{name}.agent.md").read_text()
+                self.assertNotIn("model:", text)
+                self.assertNotIn("opus", text.lower())
+                self.assertNotIn("sonnet", text.lower())
+
+    def test_copilot_manifest_agents_path_resolves_to_real_files(self):
+        # AC1: the manifest's `agents: ".github/agents"` path (written in
+        # 028-02) now resolves to real rendered agent files matching source.
+        manifest = json.loads((self.hosts / "copilot/.plugin/plugin.json").read_text())
+        agents_dir = self.hosts / "copilot" / manifest["agents"]
+        self.assertEqual(
+            {p.name.removesuffix(".agent.md") for p in agents_dir.glob("*.agent.md")},
+            {p.stem for p in (REPO_ROOT / "agents").glob("*.md")},
+        )
+
     def test_scaffold_init_runs_under_copilot_layout_without_claude_tree(self):
         # AC6: the packaged scaffold-init helper runs under the Copilot .github/
         # layout (CLAUDE_PLUGIN_ROOT unset) and emits servo's host-agnostic
@@ -365,6 +438,65 @@ class CopilotRenderUnitTests(unittest.TestCase):
         source = b"---\nname: servo:a:b\ndescription: short\n---\nbody\n"
         with self.assertRaises(ValueError):
             build_host_packages._render_copilot_skill(source, "a")
+
+    # -------------------------------------------------------------- #
+    # Slice 028-03 — agent tool mapping + `.agent.md` rendering.
+    # -------------------------------------------------------------- #
+
+    def test_copilot_tool_names_maps_claude_to_copilot_vocabulary(self):
+        self.assertEqual(
+            build_host_packages._copilot_tool_names(
+                ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
+            ),
+            ["view", "create", "edit", "bash", "glob", "grep"],
+        )
+
+    def test_copilot_tool_names_preserves_order_for_read_only_subset(self):
+        self.assertEqual(
+            build_host_packages._copilot_tool_names(["Read", "Glob", "Grep"]),
+            ["view", "glob", "grep"],
+        )
+
+    def test_copilot_tool_names_rejects_unmapped_tool(self):
+        with self.assertRaisesRegex(ValueError, "no Copilot tool mapping"):
+            build_host_packages._copilot_tool_names(["Read", "Sudo"])
+
+    def test_render_copilot_agent_maps_tools_preserves_name_description_body(self):
+        source = (
+            b"---\nname: runner\ndescription: does things\ntools:\n  - Read\n"
+            b"  - Write\n  - Edit\n  - Bash\n  - Glob\n  - Grep\n---\n\n# Body\n\ntext\n"
+        )
+        rendered = build_host_packages._render_copilot_agent(source, "runner")
+        fm, body = build_host_packages._split_frontmatter(rendered.decode("utf-8"))
+        self.assertEqual(
+            build_host_packages._frontmatter_list(fm, "tools"),
+            ["view", "create", "edit", "bash", "glob", "grep"],
+        )
+        self.assertEqual(build_host_packages._frontmatter_value(fm, "name"), "runner")
+        self.assertEqual(
+            build_host_packages._frontmatter_value(fm, "description"), "does things"
+        )
+        self.assertEqual(body, "\n# Body\n\ntext\n")
+
+    def test_render_copilot_agent_rejects_unmapped_tool(self):
+        source = b"---\nname: x\ndescription: d\ntools:\n  - Sudo\n---\nbody\n"
+        with self.assertRaises(ValueError):
+            build_host_packages._render_copilot_agent(source, "x")
+
+    def test_render_copilot_agent_rejects_model_field(self):
+        source = b"---\nname: x\ndescription: d\nmodel: opus\ntools:\n  - Read\n---\nbody\n"
+        with self.assertRaisesRegex(ValueError, "model"):
+            build_host_packages._render_copilot_agent(source, "x")
+
+    def test_render_copilot_agent_no_frontmatter_raises(self):
+        with self.assertRaises(ValueError):
+            build_host_packages._render_copilot_agent(b"no frontmatter here\n", "x")
+
+    def test_render_copilot_agent_is_deterministic(self):
+        source = (REPO_ROOT / "agents/runner.md").read_bytes()
+        first = build_host_packages._render_copilot_agent(source, "runner")
+        second = build_host_packages._render_copilot_agent(source, "runner")
+        self.assertEqual(first, second)
 
 
 class ServoRootLocatorTests(unittest.TestCase):

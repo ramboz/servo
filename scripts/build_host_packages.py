@@ -66,6 +66,22 @@ _COPILOT_MANIFEST_AGENTS = ".github/agents"
 # rewriter so both agree on where "the value continues on later lines".
 _DESCRIPTION_BLOCK_MARKERS = (">", "|", ">-", "|-", ">+", "|+")
 
+# Slice 028-03 — servo's `agents/<name>.md` (runner, judge) render as Copilot
+# custom agents under `.github/agents/<name>.agent.md`, mirroring jig's
+# `render_copilot_agent` + `CLAUDE_TO_COPILOT_TOOLS`. A closed, hand-verified
+# Claude-tool -> Copilot-tool-name mapping: an unmapped tool is a source
+# defect (or an un-updated mapping) to fix, never silently dropped or passed
+# through unmapped into a rendered `.agent.md` (mapped-or-explicit, no silent
+# pass — the same stance `_copilot_safe_skill_name` takes for skill names).
+CLAUDE_TO_COPILOT_TOOLS = {
+    "Read": "view",
+    "Glob": "glob",
+    "Grep": "grep",
+    "Write": "create",
+    "Edit": "edit",
+    "Bash": "bash",
+}
+
 
 def _load_object(path: Path) -> dict:
     data = json.loads(path.read_text())
@@ -358,6 +374,94 @@ def _render_copilot_skill(data: bytes, skill_name: str) -> bytes:
     return text.encode("utf-8")
 
 
+def _copilot_tool_names(claude_tools: list[str]) -> list[str]:
+    """Map a source agent's Claude `tools:` list to Copilot's tool-name
+    vocabulary (`CLAUDE_TO_COPILOT_TOOLS`), preserving order. Raises on any
+    name absent from that mapping — a render-layer guard, not a transform:
+    an unmapped tool is a source defect (or an un-updated mapping) to fix,
+    never silently dropped or passed through unmapped."""
+    mapped: list[str] = []
+    for tool in claude_tools:
+        try:
+            mapped.append(CLAUDE_TO_COPILOT_TOOLS[tool])
+        except KeyError as exc:
+            raise ValueError(
+                f"no Copilot tool mapping for Claude tool {tool!r} — add an "
+                "entry to CLAUDE_TO_COPILOT_TOOLS"
+            ) from exc
+    return mapped
+
+
+def _frontmatter_list(frontmatter: str, key: str) -> list[str]:
+    """Return the items of a YAML block list under `key:` (`key:` followed by
+    `  - item` lines) in `frontmatter`, or `[]` if `key` is absent or empty.
+    A targeted reader (like `_frontmatter_value`), not a general YAML parser —
+    sufficient for the flat `tools:` lists servo's source agents carry."""
+    items: list[str] = []
+    capturing = False
+    for line in frontmatter.splitlines():
+        if capturing:
+            if line.startswith("  - "):
+                items.append(line[len("  - "):].strip())
+                continue
+            break
+        if re.match(rf"^{re.escape(key)}:\s*$", line):
+            capturing = True
+    return items
+
+
+def _replace_tools_block(frontmatter: str, new_tools: list[str]) -> str:
+    """Replace a frontmatter's `tools:` block list with `new_tools`, leaving
+    every other line — including `name:`/`description:` — untouched.
+    `frontmatter` includes both `---` fences."""
+    lines = frontmatter.splitlines(keepends=True)
+    out: list[str] = []
+    i = 0
+    replaced = False
+    while i < len(lines):
+        line = lines[i]
+        if not replaced and line.rstrip("\n") == "tools:":
+            out.append("tools:\n")
+            out.extend(f"  - {tool}\n" for tool in new_tools)
+            i += 1
+            while i < len(lines) and lines[i].startswith("  - "):
+                i += 1
+            replaced = True
+            continue
+        out.append(line)
+        i += 1
+    return "".join(out)
+
+
+def _render_copilot_agent(data: bytes, name: str) -> bytes:
+    """Render one `agents/<name>.md` source agent to Copilot's `.agent.md`
+    custom-agent form (slice 028-03; mirrors jig's `render_copilot_agent`):
+    `tools:` mapped Claude->Copilot (`_copilot_tool_names`); `name:`/
+    `description:`/body preserved untouched (a surgical edit, like
+    `_replace_description_field`, not a rebuild-from-scratch).
+
+    Model-id neutrality: raises if the source frontmatter carries a
+    `model:` field — Copilot agent rendering must never emit one (model
+    selection defers to Copilot's own `/model`). servo's source agents
+    already omit `model:`; this guards against regression rather than
+    papering over one, mirroring jig's `CopilotSkillNameError` stance for
+    skill names."""
+    text = data.decode("utf-8")
+    fm, body = _split_frontmatter(text)
+    if not fm:
+        raise ValueError(f"agent {name!r} source has no YAML frontmatter to render")
+    if re.search(r"^model:", fm, re.MULTILINE):
+        raise ValueError(
+            f"agent {name!r} source frontmatter carries a 'model:' field — "
+            "Copilot agent rendering never emits a model id; remove it from "
+            "the source before regenerating"
+        )
+    claude_tools = _frontmatter_list(fm, "tools")
+    copilot_tools = _copilot_tool_names(claude_tools)
+    fm = _replace_tools_block(fm, copilot_tools)
+    return (fm + body).encode("utf-8")
+
+
 def _copy_runtime_tree(source_root: Path, plugin_root: Path, host: str) -> None:
     for root_name in _TOP_LEVEL_RUNTIME:
         source_dir = source_root / root_name
@@ -399,13 +503,13 @@ def _write_marketplace(path: Path) -> None:
 
 def _copy_copilot_tree(source_root: Path, github_root: Path) -> None:
     """Populate `hosts/copilot/.github/` — skills (loader-safe + $SERVO_ROOT
-    rewrite), templates (unrendered), and the servo_root.py locator.
+    rewrite), agents (Claude->Copilot tools map, `.agent.md` form), templates
+    (unrendered), and the servo_root.py locator.
 
-    Agents (`.github/agents/`) are populated by slice 028-03; the manifest's
-    `agents` path points there ahead of that. servo's Copilot package ships no
-    plugin hooks (ADR-0034), so there is no `.github/hooks/`. Exclusions match
-    the Claude/Codex builders (`_is_runtime_file`), so the skill set is identical
-    across hosts."""
+    servo's Copilot package ships no plugin hooks (ADR-0034), so there is no
+    `.github/hooks/`. Exclusions match the Claude/Codex builders
+    (`_is_runtime_file`), so the skill and agent sets are identical across
+    hosts."""
     # Skills → .github/skills/<name>/ (public skills + shared _common infra).
     skills_src = source_root / "skills"
     for source in sorted(skills_src.rglob("*")):
@@ -417,6 +521,17 @@ def _copy_copilot_tree(source_root: Path, github_root: Path) -> None:
         data = source.read_bytes()
         if source.name == "SKILL.md":
             data = _render_copilot_skill(data, rel.parent.name)
+        target.write_bytes(data)
+        target.chmod(0o755 if source.stat().st_mode & 0o111 else 0o644)
+    # Agents → .github/agents/<name>.agent.md (slice 028-03).
+    agents_src = source_root / "agents"
+    for source in sorted(agents_src.rglob("*")):
+        if not _is_runtime_file(source, source_root):
+            continue
+        name = source.stem
+        data = _render_copilot_agent(source.read_bytes(), name)
+        target = github_root / "agents" / f"{name}.agent.md"
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         target.chmod(0o755 if source.stat().st_mode & 0o111 else 0o644)
     # Templates → .github/templates/ (UNRENDERED — canonical ${CLAUDE_PLUGIN_ROOT}
@@ -469,8 +584,10 @@ def validate_copilot_package(
     `expected_skills` is given) matches the source skill set exactly; every
     SKILL.md frontmatter is loader-safe (name `:`-free, description <=1024).
 
-    Agents (`.github/agents/`) are slice 028-03's deliverable, so agent files
-    are not required here. Returns diagnostics (empty == valid)."""
+    Agent files (`.github/agents/*.agent.md`, rendered by slice 028-03) are
+    not checked here — this validator's scope stayed skills-only; extending
+    it to agents was not required by 028-03's ACs. Returns diagnostics
+    (empty == valid)."""
     problems: list[str] = []
     manifest_path = plugin_root / ".plugin" / "plugin.json"
     skills_rel = _COPILOT_MANIFEST_SKILLS
