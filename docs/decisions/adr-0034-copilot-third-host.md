@@ -1,5 +1,5 @@
 ---
-status: Proposed
+status: Accepted
 dependencies: ["adr-0028-committed-dual-host-plugin-packages"]
 last_verified: 2026-09-18
 frame_review: true
@@ -9,7 +9,7 @@ frame_review: true
 
 ## Status
 
-Proposed (2026-09-15; re-aligned to jig's shipped keystone 2026-09-18)
+Accepted (2026-09-18)
 
 > Filed as part of the cross-repo GitHub Copilot migration. **jig ADR-0061 / spec
 > 113 are now SHIPPED** (Accepted and merged to jig `main`; committed
@@ -183,10 +183,12 @@ ported as functions into servo's function-based builder):
   installed *target-side* by the `oracle-hook` skill into the *consuming repo's*
   config, so the Copilot work lives in that skill: it learns to emit a Copilot
   `agentStop` hook (flat `{version,hooks:{agentStop:[{type,bash,timeoutSec?}]}}`
-  schema) and to install `copilot_hook_adapter.py` (ported near-verbatim from jig)
-  as a skill **resource** alongside it, so the adapter re-shapes Copilot's
-  camelCase stdin (`sessionId`/`transcriptPath`/…) into the snake_case the
-  `meta-judge.sh` reads. The `Stop`→`agentStop` event map and the identical
+  schema) and to install `copilot_hook_adapter.py` as a skill **resource**
+  alongside it. servo ports **only the adapter's stdin-reshaping half** from jig
+  (re-shape Copilot's camelCase stdin — `sessionId`/`transcriptPath`/… — into the
+  snake_case the `meta-judge.sh` reads); it does **not** wire jig's SessionStart
+  root-publisher half (`merge_root_context`), consistent with servo's hook-free
+  package. The `Stop`→`agentStop` event map and the identical
   `{decision:block,reason}` output vocabulary come straight from jig's adapter. A
   **mapped-or-explicitly-unmappable inventory** enumerates servo's hook set; today
   it is the single entry `{Stop→agentStop}` with an empty residual. (servo needs
