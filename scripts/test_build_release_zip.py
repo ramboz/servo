@@ -50,6 +50,27 @@ class ReleaseZipTests(unittest.TestCase):
         self.assertFalse(any(name.startswith("hosts/") for name in names))
         self.assertIn("extract-then-add", output)
 
+    def test_copilot_zip_is_flat_plugin_package(self):
+        # AC1: the copilot zip archives hosts/copilot/ with the legacy manifest
+        # at the zip root and the .github/ config tree beside it — no wrong-host
+        # content (no hosts/ prefix, no Claude/Codex descriptors).
+        archive, output = self.build("copilot")
+        with zipfile.ZipFile(archive) as zf:
+            names = set(zf.namelist())
+        self.assertIn(".plugin/plugin.json", names)
+        self.assertIn(".github/skills/spec-oracle/SKILL.md", names)
+        self.assertIn(".github/agents/runner.agent.md", names)
+        self.assertFalse(any(name.startswith("hosts/") for name in names))
+        self.assertFalse(
+            any(
+                name.startswith(
+                    (".claude-plugin/", ".codex-plugin/", ".agents/", "plugins/")
+                )
+                for name in names
+            )
+        )
+        self.assertIn("copilot", output.lower())
+
     def test_default_names_are_host_specific(self):
         self.assertEqual(
             build_release_zip.default_output_path(REPO_ROOT, "claude", VERSION),
@@ -59,15 +80,19 @@ class ReleaseZipTests(unittest.TestCase):
             build_release_zip.default_output_path(REPO_ROOT, "codex", VERSION),
             REPO_ROOT / f"dist/servo-codex-v{VERSION}.zip",
         )
+        self.assertEqual(
+            build_release_zip.default_output_path(REPO_ROOT, "copilot", VERSION),
+            REPO_ROOT / f"dist/servo-copilot-v{VERSION}.zip",
+        )
 
     def test_builds_are_deterministic_per_host(self):
-        for host in ("claude", "codex"):
+        for host in ("claude", "codex", "copilot"):
             first, _ = self.build(host, f"{host}-1.zip")
             second, _ = self.build(host, f"{host}-2.zip")
             self.assertEqual(first.read_bytes(), second.read_bytes())
 
     def test_version_mismatch_refuses_archive(self):
-        for host in ("claude", "codex"):
+        for host in ("claude", "codex", "copilot"):
             target = self.tmp / f"{host}.zip"
             out = io.StringIO()
             rc = build_release_zip.build(host, HOSTS_ROOT, "9.9.9", target, out=out)
@@ -76,11 +101,34 @@ class ReleaseZipTests(unittest.TestCase):
             self.assertFalse(target.exists())
 
     def test_host_specific_smoke_validation(self):
-        for host in ("claude", "codex"):
+        for host in ("claude", "codex", "copilot"):
             archive, _ = self.build(host, f"{host}.zip")
             out = io.StringIO()
             self.assertEqual(build_release_zip.smoke_test(host, archive, out), 0, out.getvalue())
             self.assertIn(host, out.getvalue().lower())
+
+    def test_copilot_smoke_rejects_tampered_zip(self):
+        # AC2 teeth (mutation-verify): _smoke_copilot extracts + runs
+        # validate_copilot_package. Green on the honest artifact; red when the
+        # manifest gains a forbidden `hooks` field (servo's copilot package is
+        # hook-free), proving the smoke actually inspects the extracted tree.
+        source, _ = self.build("copilot", "copilot-ok.zip")
+        out_ok = io.StringIO()
+        self.assertEqual(
+            build_release_zip.smoke_test("copilot", source, out_ok), 0, out_ok.getvalue()
+        )
+        tampered = self.tmp / "copilot-tampered.zip"
+        with zipfile.ZipFile(source) as src, zipfile.ZipFile(tampered, "w") as dst:
+            for info in src.infolist():
+                data = src.read(info.filename)
+                if info.filename == ".plugin/plugin.json":
+                    manifest = json.loads(data)
+                    manifest["hooks"] = ".github/hooks"
+                    data = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
+                dst.writestr(info, data)
+        out = io.StringIO()
+        self.assertEqual(build_release_zip.smoke_test("copilot", tampered, out), 1)
+        self.assertIn("hooks", out.getvalue().lower())
 
     def test_smoke_rejects_archive_missing_runtime_inventory(self):
         for host in ("claude", "codex"):

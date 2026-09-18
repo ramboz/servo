@@ -37,8 +37,8 @@ Goal or criteria → reviewed evaluation → `oracle.sh` → guarded execution �
   evaluation artifacts, and evaluation policy.
 - **Guardrails are executable.** Missing prerequisites, budget exhaustion, and
   inconclusive evidence produce explicit outcomes instead of optimistic passes.
-- **Runtimes are interchangeable.** Humans, CI, Claude Code, Codex, or Servo’s
-  optional loop can consume the same evaluation.
+- **Runtimes are interchangeable.** Humans, CI, Claude Code, Codex, GitHub
+  Copilot CLI, or Servo’s optional loop can consume the same evaluation.
 
 See the [product vision](https://github.com/ramboz/servo/blob/main/docs/product-vision.md)
 for the full product framing and
@@ -66,8 +66,23 @@ codex plugin marketplace add ramboz/servo
 codex plugin add servo@servo
 ```
 
-Optional features that invoke `claude -p`, `/goal`, or Claude `Stop` hooks
-remain Claude-specific.
+**GitHub Copilot CLI plugin**
+
+```bash
+copilot plugin marketplace add ramboz/servo
+copilot plugin install servo@servo
+```
+
+Or install the committed package straight from the repository subdirectory:
+
+```bash
+copilot plugin install ramboz/servo:hosts/copilot
+```
+
+The optional `/goal`-driven autonomy family (`--driver goal`, `--background`,
+Routines) and Claude `Stop` hooks remain Claude-specific. Under Copilot, use the
+portable loop driver (`--driver loop`), which keeps the same oracle-gated
+guardrails.
 
 ## Extension points
 
@@ -80,9 +95,9 @@ remain Claude-specific.
 
 ## Verifying a host install
 
-Claude and Codex packages are generated and verified independently; one host’s
-successful install does not prove the other. Maintainer verification and
-release-archive procedures live in
+Claude, Codex, and Copilot packages are generated and verified independently;
+one host’s successful install does not prove another. Maintainer verification
+and release-archive procedures live in
 [CONTRIBUTING.md](https://github.com/ramboz/servo/blob/main/CONTRIBUTING.md).
 
 ### From source (contributors)
@@ -102,7 +117,7 @@ reviewable `oracle.sh`, `.servo/install.json`, and refinement notes.
 ## Repository structure (for contributors)
 
 Canonical source at the repository root generates committed, drift-guarded
-packages under `hosts/claude` and `hosts/codex`. See the
+packages under `hosts/claude`, `hosts/codex`, and `hosts/copilot`. See the
 [architecture](https://github.com/ramboz/servo/blob/main/docs/architecture.md)
 for contracts and package topology.
 
@@ -115,8 +130,9 @@ and release-please. See
 ## Status
 
 The core evaluation-compilation and guarded-execution paths are available for
-Claude Code and Codex. Live capability status and sequencing are maintained in
-the [roadmap](https://github.com/ramboz/servo/blob/main/docs/specs/ROADMAP.md).
+Claude Code, Codex, and GitHub Copilot CLI. Live capability status and
+sequencing are maintained in the
+[roadmap](https://github.com/ramboz/servo/blob/main/docs/specs/ROADMAP.md).
 
 ## License
 

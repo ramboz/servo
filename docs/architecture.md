@@ -40,8 +40,8 @@ document records only implemented boundaries and contracts.
 
 ## Shape
 
-Servo is a dual Claude Code/Codex plugin with a canonical source tree and two
-generated host packages:
+Servo is a Claude Code / Codex / GitHub Copilot CLI plugin with a canonical
+source tree and three committed, generated host packages:
 
 ```
 servo/
@@ -52,9 +52,12 @@ servo/
 │   └── plugin.json
 ├── .agents/plugins/
 │   └── marketplace.json   (Codex remote-install pointer)
+├── .github/plugin/
+│   └── marketplace.json   (Copilot remote-install pointer → ./hosts/copilot)
 ├── hosts/                  (committed, generated; never hand-edited)
 │   ├── claude/             (flat Claude plugin)
-│   └── codex/              (Codex marketplace + nested plugin)
+│   ├── codex/              (Codex marketplace + nested plugin)
+│   └── copilot/            (Copilot .github/ plugin + legacy .plugin/ manifest)
 ├── skills/
 │   └── <skill-name>/
 │       ├── SKILL.md
@@ -79,7 +82,7 @@ Servo has two distinct layers:
 
 | Layer | What is installed | Destination | Owner |
 |---|---|---|---|
-| **Servo plugin install** | Skills, agents, templates, descriptors | Claude Code or Codex plugin store | Servo |
+| **Servo plugin install** | Skills, agents, templates, descriptors | Claude Code, Codex, or GitHub Copilot CLI plugin store | Servo |
 | **Project oracle install** | `oracle.sh`, `.servo/install.json`, refinement notes | Target project root | Project |
 
 The public path is deliberately sequential: install the Servo plugin from the
@@ -96,14 +99,29 @@ source tree and two committed generated packages:
   remote `codex plugin marketplace add ramboz/servo` flow. Codex skill docs rewrite only the plugin-root environment
   variable to `${PLUGIN_ROOT}`; real Claude-only behavior such as `claude -p`,
   `/goal`, and Claude `Stop` hooks remains named as such.
+- `hosts/copilot/` is the committed GitHub Copilot CLI plugin: a legacy
+  `.plugin/plugin.json` manifest plus Copilot's `.github/` config tree
+  (`skills/`, `agents/*.agent.md`, `scripts/servo_root.py`, and unrendered
+  `templates/`; **no `.github/hooks/`** — servo's Copilot package is hook-free,
+  [ADR-0034](decisions/adr-0034-copilot-third-host.md)). The repo-root
+  `.github/plugin/marketplace.json` (`source: ./hosts/copilot`) is the
+  marketplace entry point. Install either from the marketplace (`copilot plugin
+  marketplace add ramboz/servo` then `copilot plugin install servo@servo`) or
+  straight from the repo subdirectory (`copilot plugin install
+  ramboz/servo:hosts/copilot`). Copilot exposes **no plugin-root env var**, so
+  plugin-mode skill bodies name `$SERVO_ROOT` — resolved by the shipped
+  `.github/scripts/servo_root.py` fresh-shell locator — instead of
+  `${CLAUDE_PLUGIN_ROOT}` (bug 036).
 
-`scripts/build_host_packages.py` regenerates both packages and its `--check`
-mode is a read-only CI drift guard. Release archives and the legacy
+`scripts/build_host_packages.py` regenerates all three packages and its
+`--check` mode is a read-only CI drift guard. Release archives and the legacy
 project-local Claude runtime vendor remain supported maintainer/compatibility
 surfaces, but they are not alternate steps in the public install flow.
 `scripts/build_release_zip.py --host ...` archives the committed packages into:
-`servo-claude-v<version>.zip` (flat plugin) and
-`servo-codex-v<version>.zip` (extract-then-add marketplace; no Codex zip-drop).
+`servo-claude-v<version>.zip` (flat plugin),
+`servo-codex-v<version>.zip` (extract-then-add marketplace; no Codex zip-drop),
+and `servo-copilot-v<version>.zip` (flat, repo-subdirectory-shaped Copilot
+plugin), each smoke-tested by its host-specific validator.
 `scripts/scaffold_runtime.py` remains the explicit legacy Claude project-local
 vendor surface. `scripts/verify_install_surfaces.sh` runs focused install tests.
 `scripts/ci_check.py` is the canonical local CI entry point and mirrors the

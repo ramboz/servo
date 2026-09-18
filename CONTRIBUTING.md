@@ -71,17 +71,18 @@ hand-edited versions:
 
 1. Merge your PRs to `main` as usual (squash, conventional title).
 2. release-please opens/maintains a **release PR** that bumps
-   both root plugin manifests, both committed host-package manifests,
+   both root plugin manifests, all three committed host-package manifests,
    `CHANGELOG.md`, and `.github/.release-please-manifest.json` together.
 3. **Merge the release PR.** That creates the git tag `vX.Y.Z` and a GitHub
    release.
 4. On the created release, the `package` job builds + smoke-tests
-   `servo-claude-v<version>.zip` and `servo-codex-v<version>.zip`, then uploads
-   both. A deprecated `servo-v<version>.zip` Claude alias remains for one
-   compatibility release.
+   `servo-claude-v<version>.zip`, `servo-codex-v<version>.zip`, and
+   `servo-copilot-v<version>.zip`, then uploads all three. A deprecated
+   `servo-v<version>.zip` Claude alias remains for one compatibility release.
 
-**Do not hand-edit plugin-manifest versions**—release-please owns all four.
-Host packages are generated artifacts: edit canonical root source, run
+**Do not hand-edit plugin-manifest versions**—release-please owns all five
+(two root + three committed host-package manifests). Host packages are
+generated artifacts: edit canonical root source, run
 `python3 scripts/build_host_packages.py`, and commit the regenerated `hosts/`
 tree. Never patch `hosts/` by hand.
 
@@ -91,6 +92,7 @@ Local release verification:
 python3 scripts/build_host_packages.py --check
 python3 scripts/build_release_zip.py --host claude --version <version>
 python3 scripts/build_release_zip.py --host codex --version <version>
+python3 scripts/build_release_zip.py --host copilot --version <version>
 ```
 
 ## Before you open a PR

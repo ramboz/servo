@@ -38,8 +38,26 @@ class ManifestValidationTests(unittest.TestCase):
                 ".codex-plugin/plugin.json",
                 "hosts/claude/.claude-plugin/plugin.json",
                 "hosts/codex/plugins/servo/.codex-plugin/plugin.json",
+                "hosts/copilot/.plugin/plugin.json",
             },
         )
+
+    def test_copilot_manifest_version_locks_to_canonical(self) -> None:
+        # AC3: release-please bumps hosts/copilot/.plugin/plugin.json in lockstep
+        # with the other manifests, so its version must equal the canonical
+        # Claude version. (A hand-edit or a stale copilot bump fails here.)
+        canonical = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"]
+        copilot = json.loads(
+            (ROOT / "hosts" / "copilot" / ".plugin" / "plugin.json").read_text()
+        )["version"]
+        self.assertEqual(copilot, canonical)
+
+    def test_release_workflow_ships_copilot_artifact(self) -> None:
+        # AC4: the release `package` job must build, smoke-test, and upload the
+        # copilot zip (release-please config alone does not produce the archive).
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        self.assertIn("--host copilot", release)
+        self.assertIn("servo-copilot-v", release)
 
     def test_root_codex_marketplace_points_to_committed_plugin(self) -> None:
         marketplace = json.loads(

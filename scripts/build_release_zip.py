@@ -11,10 +11,13 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TextIO
 
 ROOT = Path(__file__).resolve().parent.parent
-HOSTS = ("claude", "codex")
+HOSTS = ("claude", "codex", "copilot")
 MANIFESTS = {
     "claude": Path(".claude-plugin/plugin.json"),
     "codex": Path("plugins/servo/.codex-plugin/plugin.json"),
+    # Copilot's committed package is its `.github/` config tree plus a legacy
+    # manifest at the package root (ADR-0034 / slice 028-02).
+    "copilot": Path(".plugin/plugin.json"),
 }
 MTIME = (2026, 1, 1, 0, 0, 0)
 
@@ -65,7 +68,7 @@ def build(
     if out is None:
         out = sys.stdout
     if host not in HOSTS:
-        out.write(f"FAIL: unknown host {host!r}; expected claude or codex\n")
+        out.write(f"FAIL: unknown host {host!r}; expected one of {', '.join(HOSTS)}\n")
         return 1
     package_root = Path(hosts_root) / host
     try:
@@ -96,6 +99,11 @@ def build(
             f"OK: built {output_path} ({len(entries)} entries, version {version}); "
             "Codex extract-then-add marketplace bundle.\n"
         )
+    elif host == "copilot":
+        out.write(
+            f"OK: built {output_path} ({len(entries)} entries, version {version}); "
+            "flat Copilot plugin (.plugin/plugin.json at root, .github/ config tree).\n"
+        )
     else:
         out.write(
             f"OK: built {output_path} ({len(entries)} entries, version {version}); "
@@ -115,12 +123,49 @@ def _safe_names(zf: zipfile.ZipFile) -> tuple[set[str], str | None]:
     return names, None
 
 
+def _smoke_copilot(zip_path: Path, out: TextIO) -> int:
+    """Extract the copilot zip and run build_host_packages.validate_copilot_package
+    (slice 028-02) — the deterministic static substitute for a live `copilot -p`
+    probe (headless Copilot does not reliably fire repo hooks). Unlike the
+    Claude/Codex in-memory path this extracts, because the validator inspects a
+    materialized package tree (manifest at root, loader-safe skills, no `hooks`
+    field). Path safety is checked first via `_safe_names`."""
+    import tempfile
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import build_host_packages  # noqa: E402
+
+    problems: list[str] = []
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            _, error = _safe_names(zf)
+            if error:
+                raise ValueError(error)
+            with tempfile.TemporaryDirectory(prefix="servo-smoke-copilot-") as tmp:
+                tmp_path = Path(tmp)
+                zf.extractall(tmp_path)
+                problems = build_host_packages.validate_copilot_package(tmp_path)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError, zipfile.BadZipFile) as exc:
+        out.write(f"FAIL smoke[copilot]: {exc}\n")
+        return 1
+    if problems:
+        out.write("FAIL smoke[copilot]: " + "; ".join(problems) + "\n")
+        return 1
+    out.write(
+        "PASS smoke[copilot]: validated flat Copilot plugin "
+        "(.plugin/plugin.json at root, loader-safe skills).\n"
+    )
+    return 0
+
+
 def smoke_test(host: str, zip_path: Path, out: TextIO | None = None) -> int:
     if out is None:
         out = sys.stdout
     if host not in HOSTS:
         out.write(f"FAIL smoke[{host}]: unknown host\n")
         return 1
+    if host == "copilot":
+        return _smoke_copilot(Path(zip_path), out)
     try:
         with zipfile.ZipFile(zip_path) as zf:
             names, error = _safe_names(zf)
