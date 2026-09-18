@@ -26,6 +26,13 @@ MARKETPLACES = (
         {"source": "local", "path": "./plugins/servo"},
     ),
 )
+# Copilot's marketplace descriptor lives at its own higher-precedence path
+# (bug 035) and uses a relative-string `source`, NOT the git-subdir OBJECT
+# dialect Claude uses — Copilot rejects the object shape. A separate descriptor
+# per host is required because hosts recognize different paths AND different
+# source dialects.
+COPILOT_MARKETPLACE = Path(".github/plugin/marketplace.json")
+COPILOT_MARKETPLACE_SOURCE = "./hosts/copilot"
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -33,6 +40,30 @@ def _load(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("manifest must contain a JSON object")
     return payload
+
+
+def _copilot_marketplace_errors(marketplace: dict[str, Any]) -> list[str]:
+    """Validate the Copilot marketplace descriptor's source shape (bug 035): the
+    servo plugin's `source` must be a relative-path STRING, not an object."""
+    rel = COPILOT_MARKETPLACE.as_posix()
+    plugins = marketplace.get("plugins")
+    if not isinstance(plugins, list):
+        return [f"{rel}: plugins must be a list"]
+    servo_entry = next(
+        (entry for entry in plugins if isinstance(entry, dict) and entry.get("name") == "servo"),
+        None,
+    )
+    if servo_entry is None:
+        return [f"{rel}: no servo plugin entry"]
+    source = servo_entry.get("source")
+    if not isinstance(source, str):
+        return [
+            f"{rel}: plugins source must be a relative-path string for Copilot "
+            "(not a git-subdir object)"
+        ]
+    if source != COPILOT_MARKETPLACE_SOURCE:
+        return [f"{rel}: source must be {COPILOT_MARKETPLACE_SOURCE!r}"]
+    return []
 
 
 def validate(root: Path = ROOT) -> list[str]:
@@ -96,6 +127,15 @@ def validate(root: Path = ROOT) -> list[str]:
                     )
         except (OSError, StopIteration, ValueError, json.JSONDecodeError) as exc:
             errors.append(f"invalid marketplace {rel.as_posix()}: {exc}")
+
+    copilot_rel = COPILOT_MARKETPLACE.as_posix()
+    try:
+        copilot_marketplace = _load(root / COPILOT_MARKETPLACE)
+        if copilot_marketplace.get("name") != "servo":
+            errors.append(f"{copilot_rel}: name must be 'servo'")
+        errors.extend(_copilot_marketplace_errors(copilot_marketplace))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        errors.append(f"invalid marketplace {copilot_rel}: {exc}")
     return errors
 
 

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "approval_status": "draft",
+  "judge": { "model": "claude-sonnet-4-6", "transport": "api", "temperature": 0.6, "max_tokens": 1024 },
+  "samples": { "n": 4, "k": 1.0, "delta": 0.03 },
+  "threshold": 0.8,
+  "rubric": "Score, in [0,1], how faithfully the GENERATED TEXT UNDER TEST matches the REFERENCE (a rubric/spec text or exemplar): tone and register, key factual/content points present, structure, and adherence to any explicit style-guide rules named in the reference. IGNORE incidental wording differences that preserve meaning and tone. 1.0 = fully matches the reference intent; 0.5 = right topic, wrong tone/structure/missing key points; 0.0 = unrelated or contradicts the reference.",
+  "cases": [
+    {
+      "id": "welcome_email",
+      "reference": "refs/welcome_email.txt",
+      "source": { "type": "file", "path": "generated/welcome_email.txt" },
+      "weight": 1.0
+    },
+    {
+      "id": "support_reply",
+      "reference": "Reply in a warm, concise tone; acknowledge the customer's issue by name; never promise a refund outright, only that it will be reviewed.",
+      "source": { "type": "command", "run": ["node", "generate_support_reply.js"] },
+      "weight": 1.0
+    }
+  ]
+}
