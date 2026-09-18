@@ -457,6 +457,17 @@ def _render_copilot_agent(data: bytes, name: str) -> bytes:
             "the source before regenerating"
         )
     claude_tools = _frontmatter_list(fm, "tools")
+    if re.search(r"^tools:", fm, re.MULTILINE) and not claude_tools:
+        # A `tools:` key exists but the block-list reader found no `  - <tool>`
+        # items — i.e. an inline/flow-sequence form (`tools: [Read, Write]`) the
+        # surgical renderer does not map. Fail loud rather than pass the Claude
+        # tool vocabulary through unmapped: the module contract is
+        # "never silently dropped or passed through unmapped" (see header).
+        raise ValueError(
+            f"agent {name!r} has a 'tools:' key the block-list reader could not "
+            "parse (inline/flow-sequence form unsupported) — declare tools as a "
+            "'tools:' block of '  - <tool>' lines so each is mapped Claude->Copilot"
+        )
     copilot_tools = _copilot_tool_names(claude_tools)
     fm = _replace_tools_block(fm, copilot_tools)
     return (fm + body).encode("utf-8")

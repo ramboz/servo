@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [028-02]
-last_verified:
+last_verified: 2026-09-18
 ---
 
 ## Slice 028-03 — agents
@@ -36,10 +36,10 @@ Copilot `runner`/`judge` to invoke — mirroring jig's `render_copilot_agent`.
    regenerating; Claude/Codex output byte-unchanged.
 
 **DoD:**
-- [ ] All ACs pass; full suite green (venv pytest); new tests fail when the feature is removed.
-- [ ] `--check` clean; Claude/Codex byte-unchanged.
-- [ ] Reviewed by `reviewer` subagent (compliance + craft).
-- [ ] Deviation log + reconciliation sweep produced.
+- [x] All ACs pass; full suite green (1811 passed + inline-tools guard test); new tests fail when the feature is removed (mutation-verified).
+- [x] `--check` clean; Claude/Codex byte-unchanged.
+- [x] Reviewed by `reviewer` subagent (compliance + craft) — PASS; evidence in `reviews/slice-03-{compliance,craft}.md`; finding-1 hardened (inline-`tools:` guard).
+- [x] Deviation log + reconciliation sweep produced.
 
 **Anti-horizontal-phasing check:** After this slice a Copilot user can invoke
 servo's `runner`/`judge` agents — new end-to-end capability, and 028-05's

@@ -492,6 +492,13 @@ class CopilotRenderUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_host_packages._render_copilot_agent(b"no frontmatter here\n", "x")
 
+    def test_render_copilot_agent_rejects_inline_tools_list(self):
+        # An inline/flow-sequence `tools:` the block reader can't parse must fail
+        # loud, never pass the Claude vocabulary through unmapped (module contract).
+        source = b"---\nname: x\ndescription: d\ntools: [Read, Write]\n---\nbody\n"
+        with self.assertRaisesRegex(ValueError, "tools:"):
+            build_host_packages._render_copilot_agent(source, "x")
+
     def test_render_copilot_agent_is_deterministic(self):
         source = (REPO_ROOT / "agents/runner.md").read_bytes()
         first = build_host_packages._render_copilot_agent(source, "runner")
