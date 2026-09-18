@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [028-02, 028-03, 028-04, 028-05]
-last_verified:
+last_verified: 2026-09-18
 # arch_review: true  # extends the builder/drift/release pipeline to a third host
 ---
 
@@ -57,7 +57,7 @@ jig's `build_release_zip.py` copilot arm.
 - [x] `build_release_zip.py --host copilot` produces a deterministic zip that smoke-passes.
 - [x] Reviewed by `reviewer` subagent (compliance + craft + arch) — PASS; evidence in `reviews/slice-06-{compliance,craft,arch}.md`. Finding 1 (smoke didn't verify agent presence) hardened: `validate_copilot_package` now checks `.github/agents/*.agent.md` present + loader-safe (+2 mutation-verified tests). Finding 2 (release.yml "byte-unchanged" wording) corrected in the review record: shared upload/notes steps gained additive copilot lines; claude/codex content + dedicated steps unchanged.
 - [x] Deviation log + reconciliation sweep produced.
-- [ ] Spec 028 closed out: slice board refreshed; load-bearing invariants + residuals migrated to the status-board Notes / refinement-todo.
+- [x] Spec 028 closed out: `docs/specs/README.md` board refreshed (028-01..06 → DONE, 028-06 Notes = tri-host parity + residuals); spec.md → DONE; residuals in `docs/refinement-todo.md` + `docs/architecture.md`.
 
 **Anti-horizontal-phasing check:** After this slice any Copilot user installs servo
 from the marketplace (or a repo-subdir) and gets a released, drift-guarded,

@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: DONE
 skill:
 use_cases: []
 ---
@@ -36,8 +36,11 @@ mirrors jig's shipped solution:
 - **`$SERVO_ROOT` plugin-mode path rewrite (jig bug 036)** — servo's 10 skills
   document `${CLAUDE_PLUGIN_ROOT}/skills/.../*.py`; that variable does **not**
   resolve under Copilot plugin-mode, so the renderer rewrites to `$SERVO_ROOT`,
-  ships a `servo_root.py` locator, and publishes `$SERVO_ROOT` via a `SessionStart`
-  carrier. Templates ship **unrendered** (canonical marker intact).
+  ships a `servo_root.py` fresh-shell locator, and injects a self-contained
+  locator one-liner into each affected skill's root-note. Unlike jig, servo's
+  Copilot package is **hook-free**, so there is **no `SessionStart` carrier** —
+  the locator one-liner is the sole resolution path. Templates ship **unrendered**
+  (canonical marker intact).
 - **Agents** rendered to `.github/agents/<name>.agent.md` (tools mapped, model-neutral).
 - **Hooks via the adapter** — servo's oracle `Stop` maps to Copilot `agentStop`
   through `copilot_hook_adapter.py` (ported from jig); because servo's hook is
