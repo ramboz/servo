@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 dependencies: [028-03, 028-04]
 last_verified:
 # arch_review: true  # maps Claude-only execution primitives onto Copilot; ADR-0028 residual
