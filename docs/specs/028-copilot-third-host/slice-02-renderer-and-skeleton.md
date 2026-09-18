@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [028-01, adr-0034]
-last_verified:
+last_verified: 2026-09-18
 # arch_review: true  # adds the Copilot host renderer + dispatch wiring
 ---
 
@@ -61,11 +61,11 @@ servo's function-based `scripts/build_host_packages.py`).
    and recorded honestly (residual noted if headless firing is unobservable).
 
 **DoD:**
-- [ ] All ACs pass; full suite green (venv pytest); new tests fail when the feature is removed.
+- [x] All ACs pass; full suite green (1798 passed); new tests fail when the feature is removed (mutation-verified).
 - [x] Claude/Codex host output unchanged (drift guard clean for those hosts).
 - [x] `build_host_packages.py --check` clean after regenerating `hosts/copilot/`.
-- [ ] Reviewed by `reviewer` subagent (compliance + craft + arch).
-- [ ] Deviation log + reconciliation sweep produced.
+- [x] Reviewed by `reviewer` subagent (compliance + craft + arch) — PASS; evidence in `reviews/slice-02-{compliance,craft,arch}.md`.
+- [x] Deviation log + reconciliation sweep produced (in this slice; reviewer reconciliation notes recorded).
 
 **Anti-horizontal-phasing check:** After this slice a Copilot user installs servo
 and its skills load — observable end-to-end value.
