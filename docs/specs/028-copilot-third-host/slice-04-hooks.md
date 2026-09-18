@@ -49,11 +49,112 @@ mapped-or-unmappable inventory recorded.
    static install check; live firing recorded as a residual.
 
 **DoD:**
-- [ ] All ACs pass; full suite green (venv pytest); new tests fail when the feature is removed.
-- [ ] Adapter drift-pin test (reverse tool-name map / event map) if servo carries maps.
-- [ ] Inventory in `docs/architecture.md`; residual (live-firing) cross-linked to refinement-todo.
+- [x] All ACs pass; full suite green (venv pytest); new tests fail when the feature is removed.
+- [x] Adapter drift-pin test (reverse tool-name map / event map) if servo carries maps.
+- [x] Inventory in `docs/architecture.md`; residual (live-firing) cross-linked to refinement-todo.
 - [ ] Reviewed by `reviewer` subagent (compliance + craft + arch).
-- [ ] Deviation log + reconciliation sweep produced.
+- [x] Deviation log + reconciliation sweep produced.
 
 **Anti-horizontal-phasing check:** After this slice servo's oracle gate installs
 + (statically) works for a Copilot target, or the residual is documented.
+
+## Deviation log
+
+**Slice 028-04 (hooks) — what built, AC→test mapping, deviations, residuals.**
+Implemented via TDD (failing tests first, then implementation, then green) in the
+`interesting-noyce-2b8f83` worktree. Tree left dirty (not committed), per task.
+
+### What built
+
+1. **Ported adapter `skills/oracle-hook/copilot_hook_adapter.py`** (new) — jig's
+   `copilot_hook_adapter.py` stdin-reshaping half only: reshapes Copilot camelCase
+   `agentStop` stdin → snake_case (`sessionId`→`session_id`,
+   `transcriptPath`→`transcript_path`, `stop_hook_active` passthrough,
+   `hook_event_name` from argv); exports `CLAUDE_PROJECT_DIR` from the payload's
+   `cwd` (fallback `workingDirectory`); execs the target script (`bash` for `.sh`,
+   `python3` for `.py`); forwards stdout + exit code **verbatim**. Fail-open
+   throughout (a `Stop` hook must never trap the session): translation errors
+   forward raw bytes; a too-few-args invocation, a missing target script, or a
+   spawn exception all return exit 0. **Not ported** (servo is hook-free): jig's
+   SessionStart root-publisher half (`merge_root_context`) and the enforcing
+   (`--enforce`/`permissionDecision`) mode.
+2. **`skills/oracle-hook/hook.py` Copilot mode** — added `--host {claude,copilot}`
+   (default `claude`, zero change for existing installs). `--host copilot`:
+   `install` writes `<target>/.github/hooks/servo-oracle.json`
+   (`{version:1,hooks:{agentStop:[{type:"command",bash:"python3 .servo/hooks/copilot_hook_adapter.py Stop \".servo/hooks/meta-judge.sh\"",timeoutSec}]}}`)
+   and installs the adapter + `meta-judge.sh` into `.servo/hooks/`; `uninstall`
+   reverses (marker-matched removal, single backup, scripts left on disk, dedicated
+   `servo-oracle.json` removed when emptied); `status`/report recognizes the
+   Copilot install. Idempotent-merge + single-backup + stable-marker mirror the
+   Claude 004-03/04 contract. Claude path unchanged.
+3. **Inventory** — `docs/architecture.md` gained "Copilot host hook inventory
+   (mapped-or-unmappable)": enumerated `{Stop→agentStop}` (mapped, identical
+   `{decision,reason}`), residual set empty; source of truth is `hook.py`'s
+   `CLAUDE_TO_COPILOT_HOOK_EVENTS` + `COPILOT_HOOK_RESIDUAL`, pinned by a test.
+4. **Host packages regenerated** (`scripts/build_host_packages.py`); `--check`
+   clean. The adapter ships to all three hosts (byte-identical; inert for
+   Claude/Codex). Only oracle-hook (SKILL.md + hook.py) + the new adapter changed
+   under `hosts/`; no other skill/agent perturbed.
+5. Supporting: `.claude-plugin/install-contract.json` lists the adapter as an
+   oracle-hook runtime file; `docs/refinement-todo.md` records the live-firing
+   residual; `skills/oracle-hook/SKILL.md` documents `--host copilot`.
+
+### AC → test mapping
+
+- **AC1 (ported adapter)** — `skills/oracle-hook/test_copilot_hook_adapter.py`:
+  `TranslatePayloadTests` (field reshaping + fail-open), `ProjectDirFromPayloadTests`
+  (`cwd`/`workingDirectory`), `AdapterMainTests` (subprocess in front of a fake
+  target: `CLAUDE_PROJECT_DIR` exported from `cwd`, `stop_hook_active` reaches the
+  child, stdout + exit code forwarded verbatim, block body preserved, fail-open on
+  missing/too-few-args), `InterpreterSelectionTests`.
+- **AC2 (Copilot install)** — `test_hook.py::CopilotInstallTests` (emits `agentStop`
+  JSON with adapter-wrapped bash; installs adapter + meta-judge; idempotent; backup;
+  refuses unscaffolded) + `CopilotUninstallStatusTests` (uninstall reverses; leaves
+  scripts; backup; idempotent; status states).
+- **AC3 (inventory)** — `test_hook.py::HookInventoryTests` (map, residual empty,
+  install-uses-mapped-event, full-set enumeration drift-pin, architecture.md grep).
+- **AC4 (host selection)** — `test_hook.py::ClaudePathUnchangedByHostFlagTests`
+  (default host writes only the Claude `Stop` entry, no Copilot artifacts; explicit
+  `--host claude` matches default). Live-firing recorded as residual.
+
+Mutation-verified: the CLAUDE_PROJECT_DIR-from-cwd export, `stop_hook_active`
+passthrough, exit-code forwarding, servo-marker identification, backup-before-mutate,
+and the inventory drift-pin each fail the relevant test when broken (recorded in the
+implementer run; reverted after).
+
+### Deviations from the spec
+
+- **Reverse tool-name map not ported (DoD bullet 2 satisfied via the *event* map).**
+  jig's adapter carries `_COPILOT_TO_CLAUDE_TOOL_NAME` because jig has tool-matched
+  (`preToolUse`/`postToolUse`) hooks. servo's only hook is `Stop`→`agentStop`, which
+  has **no tool fields** (spike 028-01), so the adapter ports no tool-name map — it
+  would be untethered dead code. The map servo *does* carry is the **event** map
+  (`Stop→agentStop`), drift-pinned by `HookInventoryTests`. This matches the DoD's
+  conditional "…if servo carries maps" and the ADR's naming of the reshaped fields
+  (`sessionId`/`transcriptPath`/…, not tool fields).
+- **`project_dir_from_payload` accepts `cwd` OR `workingDirectory`** (jig reads only
+  `workingDirectory`). servo's `agentStop` stdin uses `cwd` (spike 028-01), so `cwd`
+  is preferred with `workingDirectory` as a faithful fallback.
+- **No `--enforce` mode** ported — servo has no enforcing (deny) hook; the `Stop`
+  hook expresses its decision in stdout, covered by a single verbatim-forward path.
+- **Fail-open uses a pre-spawn existence check** for the target script: a missing
+  meta-judge would make `bash` exit 127, which for a `Stop` hook could read as a
+  block; the adapter returns 0 instead (packaging error must not trap the session),
+  while a *present* script's exit code is forwarded verbatim.
+- **`servo-oracle.json` is removed on uninstall when emptied** (vs the Claude path
+  leaving the user's `settings.json`) — it is servo's own dedicated file, so an empty
+  `{version,hooks:{}}` husk would be detritus; any co-located non-servo hook events
+  are preserved.
+- **Touched `install-contract.json` + `SKILL.md`** (beyond the 4 build items): the
+  adapter is a required runtime resource, so the contract lists it and the skill
+  documents the new `--host copilot` surface. In-scope for the oracle-hook skill.
+
+### Residuals
+
+- **Live `agentStop` firing under headless `copilot -p` is not observable**
+  (jig 113-08). Verified statically (emitted-JSON + adapter unit test); recorded in
+  `docs/refinement-todo.md` and cross-linked from the architecture.md inventory. No
+  live `copilot -p` run was attempted (per task).
+- The meta-judge's baked `gate.py` path under Copilot falls back to servo's absolute
+  path (no `.claude/`-vendored gate on a Copilot target) — orthogonal pre-existing
+  gate-portability concern (ADR-0008 vendored gate), not in this slice's scope.

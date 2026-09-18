@@ -18,7 +18,7 @@
       },
       {
         "name": "oracle-hook",
-        "files": ["SKILL.md", "hook.py"]
+        "files": ["SKILL.md", "hook.py", "copilot_hook_adapter.py"]
       },
       {
         "name": "heartbeat",

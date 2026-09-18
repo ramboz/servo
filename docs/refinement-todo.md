@@ -6,6 +6,31 @@ Each entry: heading, Deferred reason, Resolution trigger.
 
 ---
 
+## Copilot `agentStop` oracle hook is verified statically, not by live firing
+
+**Deferred:** slice 028-04 installs servo's oracle `Stop` hook target-side as a
+Copilot `agentStop` hook (`.github/hooks/servo-oracle.json` + a ported
+`copilot_hook_adapter.py` in `.servo/hooks/`). A repo hook actually *firing*
+under headless `copilot -p` is **not reliably observable** (inherited from jig's
+113-08 finding), so the install is verified only *statically*: the emitted-JSON
+shape (`skills/oracle-hook/test_hook.py::CopilotInstallTests`), the adapter
+payload-reshaping + exit-forwarding unit test
+(`skills/oracle-hook/test_copilot_hook_adapter.py`), and the mapped-or-unmappable
+inventory (`docs/architecture.md`). We have **not** observed an installed
+`agentStop` hook block a real premature stop and re-drive the next turn under a
+live Copilot session.
+
+**Resolution trigger:** Copilot gains a reliable way to observe repo-hook firing
+under `copilot -p` (or a supported interactive equivalent), OR spec 028-05
+validates the goal-driver-under-Autopilot path and needs the same live-firing
+evidence. Until then the static contract stands, matching how jig ships its
+Copilot hooks.
+
+**Surfaced by:** slice 028-04 (ADR-0034); the residual is enumerated in
+`docs/architecture.md` "Copilot host hook inventory".
+
+---
+
 ## ~~Shellcheck verification falls back to skip on dev machines~~ — RESOLVED 2026-05-15
 
 **Resolution:** `scripts/shellcheck.sh` wraps both the local binary (preferred) and the `koalaman/shellcheck:stable` Docker image (fallback), exiting 127 only when neither is available. `ShellcheckTests.test_rendered_oracle_shellcheck_clean` now invokes the wrapper and skips only on exit 127, so on any dev box with Docker the assertion actually runs. Verified: 34/34 tests green with zero skips on this branch even though the local `shellcheck` binary is absent.

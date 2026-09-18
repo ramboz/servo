@@ -99,11 +99,34 @@ python3 "${PLUGIN_ROOT}/skills/oracle-hook/hook.py" status <target>
 python3 "${PLUGIN_ROOT}/skills/oracle-hook/hook.py" status <target> --json
 ```
 
+## Copilot targets (`--host copilot`)
+
+All three subcommands default to `--host claude` (the `Stop` entry in
+`.claude/settings.json` described above). Pass **`--host copilot`** to install
+the same oracle gate for a **GitHub Copilot CLI** target instead ([ADR-0034](../../docs/decisions/adr-0034-copilot-third-host.md), spec 028). Copilot has no `Stop` event; servo's `Stop` maps to Copilot's **`agentStop`** (identical `{"decision":"block","reason":…}` output). Because servo's Copilot plugin package is **hook-free**, the hook is installed target-side:
+
+- a Copilot `agentStop` hook is written to `<target>/.github/hooks/servo-oracle.json` (flat `{version,hooks:{agentStop:[{type,bash,timeoutSec}]}}` schema);
+- the `meta-judge.sh` **and** a ported `copilot_hook_adapter.py` are installed into `<target>/.servo/hooks/`. The adapter reshapes Copilot's camelCase `agentStop` stdin into the snake_case the meta-judge reads and exports `CLAUDE_PROJECT_DIR` from the payload's `cwd` (Copilot sets no such env var), so the meta-judge runs unchanged.
+
+`install` / `uninstall` / `status` mirror the Claude contract (idempotent merge, single backup to `servo-oracle.json.servo-bak`, marker-matched removal, scripts left on disk). Choose the host with the **explicit flag**, not by `.github/` presence — most repos carry `.github/` for Actions.
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/oracle-hook/hook.py" install   <target> --host copilot
+python3 "${PLUGIN_ROOT}/skills/oracle-hook/hook.py" uninstall <target> --host copilot
+python3 "${PLUGIN_ROOT}/skills/oracle-hook/hook.py" status    <target> --host copilot --json
+```
+
+> **Live-firing residual.** A repo `agentStop` hook firing under headless
+> `copilot -p` is not reliably observable (jig 113-08); the Copilot install is
+> verified statically (emitted-JSON shape + the adapter unit test), and live
+> firing is a documented residual (`docs/refinement-todo.md`).
+
 ## Options
 
 | Flag | Applies to | What it does |
 |---|---|---|
-| `--timeout <seconds>` | `install` | The `Stop` hook command timeout written into `settings.json` (default 60). Independently, the installed script bounds its own `gate.py` call via `SERVO_META_JUDGE_GATE_TIMEOUT` (default 45s) — a separate knob, not derived from `--timeout`. At the defaults the gate bound (45s) fires before the hook timeout (60s), so a hung oracle yields a clean fail-open env-error rather than an abrupt hook kill; if you lower `--timeout` below 45, lower `SERVO_META_JUDGE_GATE_TIMEOUT` to keep that ordering. |
+| `--host {claude,copilot}` | all three | Target host. Default `claude` (a `Stop` entry in `.claude/settings.json`). `copilot` writes an `agentStop` hook to `.github/hooks/servo-oracle.json` and installs the adapter + meta-judge into `.servo/hooks/` (see [Copilot targets](#copilot-targets---host-copilot)). |
+| `--timeout <seconds>` | `install` | The hook command timeout written into the config (default 60; `timeoutSec` under Copilot). Independently, the installed script bounds its own `gate.py` call via `SERVO_META_JUDGE_GATE_TIMEOUT` (default 45s) — a separate knob, not derived from `--timeout`. At the defaults the gate bound (45s) fires before the hook timeout (60s), so a hung oracle yields a clean fail-open env-error rather than an abrupt hook kill; if you lower `--timeout` below 45, lower `SERVO_META_JUDGE_GATE_TIMEOUT` to keep that ordering. |
 | `--json` | `status` | Emit one-line JSON (`schema_version=1`) instead of the human-readable line. |
 
 ## Exit contract & refusal handling

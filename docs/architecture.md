@@ -441,6 +441,47 @@ the vocabulary belongs to servo, hosts only render it.
 [heartbeat triage inbox](#runtime-artifacts) (`triage`), and
 [spec 012 design-eval](specs/012-design-eval/spec.md) (`evaluate`).
 
+## Copilot host hook inventory (mapped-or-unmappable)
+
+> Spec 028 (Copilot as a third committed host,
+> [ADR-0034](decisions/adr-0034-copilot-third-host.md)); the target-side hook
+> mapping is slice 028-04.
+
+servo's Copilot plugin package is **hook-free** — the committed `hosts/copilot/`
+ships no `.github/hooks/` (ADR-0034 invariant). servo's one hook, the oracle
+`Stop` (the meta-judge), is installed **target-side** by
+`/servo:oracle-hook install --host copilot`, which writes a Copilot `agentStop`
+hook into the *consuming repo's* `.github/hooks/servo-oracle.json` and installs a
+ported `copilot_hook_adapter.py` (jig's stdin-reshaping half only) plus the
+`meta-judge.sh` into the target's `.servo/hooks/`.
+
+Per the ADR-0034 honesty invariant, every servo hook is **mapped or recorded as
+an explicit residual — enumerated over the source set, never silently dropped or
+mechanically renamed**. This inventory is enumerated in `skills/oracle-hook/hook.py`
+(`CLAUDE_TO_COPILOT_HOOK_EVENTS` + `COPILOT_HOOK_RESIDUAL`) and pinned by a test,
+so a future added hook forces a new row here rather than degrading silently:
+
+| servo hook (Claude event) | Copilot event | Output vocabulary | Status |
+|---|---|---|---|
+| `Stop` (meta-judge) | `agentStop` | `{"decision":"block","reason":…}` — identical in both hosts | **mapped** |
+
+**Residual set: empty.** No servo hook is dropped or mechanically renamed. Only
+the *input payload* differs (Copilot camelCase `sessionId`/`cwd`/`transcriptPath`
+plus snake_case `stop_hook_active`; Claude snake_case). The adapter reshapes it:
+it exports `CLAUDE_PROJECT_DIR` from the payload's `cwd` (Copilot exposes no such
+env var — the load-bearing bit for the meta-judge's oracle lookup) and forwards
+`stop_hook_active`, so the meta-judge's runaway guard and `gate.py` scoring work
+unchanged, and its `{"decision":"block","reason":…}` body re-drives the next turn
+exactly as under Claude. servo needs **no** permissions-floor `preToolUse` hook
+(that is jig-specific); servo's edit-permission concern is the loop's ADR-0033
+preflight, not a plugin hook.
+
+**Live-firing residual.** A repo `agentStop` hook firing under headless
+`copilot -p` is not reliably observable (jig 113-08). The install is therefore
+verified *statically* — the emitted-JSON shape + the adapter unit test
+(`skills/oracle-hook/test_copilot_hook_adapter.py`) — and live firing is recorded
+as a residual in [refinement-todo](refinement-todo.md).
+
 ## Decision records
 
 Relevant decisions are linked beside the contracts they govern. The canonical
