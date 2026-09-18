@@ -215,13 +215,28 @@ class AdapterMainTests(unittest.TestCase):
             {"decision": "block", "reason": "keep working"},
         )
 
-    def test_exit_code_forwarded_verbatim(self):
-        """AC1: a non-zero child exit is forwarded, not masked. Mutation-verify:
-        a hardcoded `return 0` would fail this."""
-        proc = self._run(
-            {"cwd": "/p", "stop_hook_active": False}, env_extra={"FAKE_EXIT": "7"}
+    def test_advisory_never_forwards_nonzero_child_exit(self):
+        """AC1 (advisory posture, jig-faithful): the oracle `agentStop` hook is
+        advisory — its gate decision travels in the child's stdout
+        `{"decision":"block",...}` body, NEVER in the exit code. So even when the
+        meta-judge child exits non-zero, the adapter returns 0: a Stop hook must
+        never trap the Copilot session on an exit code. Mutation-verify: a
+        `return result.returncode` would fail this (child exits 7 → adapter 0)."""
+        block = self.tmp / "exit7-with-decision.sh"
+        block.write_text(
+            "#!/bin/sh\n"
+            "cat >/dev/null\n"
+            'printf \'{"decision":"block","reason":"keep working"}\'\n'
+            "exit 7\n"
         )
-        self.assertEqual(proc.returncode, 7)
+        block.chmod(0o755)
+        proc = self._run({"cwd": "/p", "stop_hook_active": False}, script=block)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # ...and the stdout decision still reaches Copilot verbatim.
+        self.assertEqual(
+            json.loads(proc.stdout.decode()),
+            {"decision": "block", "reason": "keep working"},
+        )
 
     def test_does_not_override_an_existing_claude_project_dir(self):
         """The guard: an already-set CLAUDE_PROJECT_DIR is not clobbered by the

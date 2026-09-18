@@ -136,16 +136,15 @@ def main(argv: list) -> int:
     # repo-committed hooks from the repo root, so the relative
     # `.servo/hooks/meta-judge.sh` lands there). A missing meta-judge must not
     # forward `bash`'s own non-zero "no such file" exit to Copilot — a Stop
-    # hook that traps the session on a packaging bug is worse than no hook. A
-    # script that IS present has its exit code forwarded verbatim below.
+    # hook that traps the session on a packaging bug is worse than no hook.
     if not Path(script_path).is_file():
         return 0
 
     try:
         # No capture: the child's stdout/stderr inherit this process's, so the
-        # meta-judge's `{"decision":"block",...}` body reaches Copilot verbatim;
-        # the child's exit code is forwarded below.
-        result = subprocess.run(
+        # meta-judge's `{"decision":"block",...}` body reaches Copilot verbatim.
+        # The gate decision travels in that stdout body, NEVER in the exit code.
+        subprocess.run(
             [_interpreter_for(script_path), script_path], input=translated, env=env
         )
     except Exception:
@@ -154,7 +153,14 @@ def main(argv: list) -> int:
         # session on a packaging bug is worse than no hook. Mirrors the
         # meta-judge's own never-block-on-breakage contract.
         return 0
-    return result.returncode
+    # ADVISORY posture (jig-faithful): this is not an `--enforce` hook, so the
+    # adapter always exits 0 and lets the child's stdout `{"decision":"block",
+    # "reason":…}` carry the gate decision. Forwarding a non-zero child exit
+    # could trap the Copilot session — the exact "a Stop hook must never trap
+    # the session" invariant this adapter exists to uphold. (servo's meta-judge
+    # exits 0 today; returning 0 unconditionally keeps that a guarantee, not a
+    # coincidence.)
+    return 0
 
 
 if __name__ == "__main__":

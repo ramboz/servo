@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [028-02]
-last_verified:
+last_verified: 2026-09-18
 # arch_review: true  # introduces the hook-protocol translation layer
 ---
 
@@ -25,10 +25,16 @@ mapped-or-unmappable inventory recorded.
    `copilot_hook_adapter.py` (ported from jig — **stdin-reshaping half only**:
    re-shape Copilot camelCase stdin `sessionId`/`stop_hook_active`/… into the
    snake_case servo's `meta-judge.sh` reads, export `CLAUDE_PROJECT_DIR` from
-   `workingDirectory`, exec the target script, forward exit/stdout; **no**
-   SessionStart root-publisher half). It lives as an `oracle-hook` skill resource
+   `cwd`/`workingDirectory`, exec the target script, forward its **stdout**; **no**
+   SessionStart root-publisher half). **Advisory posture (jig-faithful):** servo's
+   oracle hook is advisory — its gate decision travels in the child's stdout
+   `{"decision":"block","reason":…}` body, never in the exit code — so the adapter
+   **always exits 0** (a Stop hook must never trap the session; forwarding a
+   non-zero child exit is not done). It lives as an `oracle-hook` skill resource
    (installed into a target), not a plugin hook. A test drives synthetic Copilot
-   `agentStop` stdin through it and asserts the reshaped payload + preserved exit.
+   `agentStop` stdin through it and asserts the reshaped payload, the forwarded
+   stdout decision, and the always-0 advisory exit even when the child exits
+   non-zero.
 2. **`oracle-hook` installs an `agentStop` hook for a Copilot target.**
    `oracle-hook/hook.py` gains a Copilot mode: instead of a Claude `Stop` entry in
    `.claude/settings.json`, it writes a `.github/hooks/*.json` (flat schema
@@ -52,7 +58,7 @@ mapped-or-unmappable inventory recorded.
 - [x] All ACs pass; full suite green (venv pytest); new tests fail when the feature is removed.
 - [x] Adapter drift-pin test (reverse tool-name map / event map) if servo carries maps.
 - [x] Inventory in `docs/architecture.md`; residual (live-firing) cross-linked to refinement-todo.
-- [ ] Reviewed by `reviewer` subagent (compliance + craft + arch).
+- [x] Reviewed by `reviewer` subagent (compliance + craft + arch) — PASS; evidence in `reviews/slice-04-{compliance,craft,arch}.md`. Finding 1 (advisory exit) resolved: adapter now always exits 0 (jig-faithful advisory posture) so a non-zero meta-judge exit can never trap the session; the gate decision is stdout-only. Finding 2 (uninstall whole-file unlink drops user top-level keys) accepted as low-risk: `servo-oracle.json` is servo-owned and a single backup is taken before mutation.
 - [x] Deviation log + reconciliation sweep produced.
 
 **Anti-horizontal-phasing check:** After this slice servo's oracle gate installs
