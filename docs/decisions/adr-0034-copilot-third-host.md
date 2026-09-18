@@ -65,18 +65,18 @@ Three servo-specific things break or degrade under Copilot as-is:
    `oracle-hook` 1408, `spec-oracle` 1401, `quality-gate` 1129, `heartbeat` 1087,
    `scaffold-init` 1043); the other 3 (`content-fidelity`, `eval-authoring`,
    `design-eval`) carry bare names and short (<730-char) descriptions. So the
-   render layer must apply **the same treatment the Codex renderer already does**
-   (`build_host_packages._render_codex_skill`, `_CODEX_DESCRIPTION_MAX = 1024`):
-   strip the `servo:` namespace from the loaded name **and** collapse the
-   multi-paragraph `description:` to its first (routing-summary) paragraph — ≤1024
-   chars (verified max 726). Both fixes, not just the name-strip: a namespace-only
-   render would ship 9 skills whose descriptions silently fail Copilot's loader,
-   violating this ADR's own "degrade *visibly*, never silently" invariant. **Note
-   the Codex renderer *drops* description paragraphs 2+** (it skips the remainder,
-   not relocating them), relying on the body already duplicating that detail; to
-   honor the same invariant here, the Copilot renderer must **append any dropped
-   description paragraphs to the skill body** so no routing/trigger nuance is
-   silently lost (a fidelity refinement over Codex, tested in 028-02).
+   render layer must, in a dedicated `_render_copilot_skill` (**not** reusing the
+   Codex renderer): (a) **strip the `servo:` invocation namespace** from the loaded
+   `name:` then assert the result is `:`-free; and (b) apply **jig's shipped
+   `loader_safe_description` rule** — keep the full `description:` byte-for-byte if
+   ≤1024, else truncate the frontmatter value **at a word boundary** with a suffix
+   **and append the full original description to the SKILL.md body** as a note, so
+   no routing/trigger text is lost. This is **not** the Codex renderer's
+   first-paragraph collapse (which discards later paragraphs); servo's 9 over-limit
+   skills genuinely trigger this truncate-and-preserve path. Both fixes, not just
+   the name-strip: a namespace-only render would ship 9 skills whose descriptions
+   silently fail Copilot's loader, violating this ADR's "degrade *visibly*, never
+   silently" invariant.
 2. **Hooks port but differ.** servo's oracle gate is a Claude `Stop` hook; Copilot
    has `agentStop`. The **decision output is identical** — both take
    `{"decision":"block","reason":…}` where `reason` becomes the next turn's prompt
@@ -139,14 +139,16 @@ repo root/
   .github/plugin/marketplace.json   Copilot marketplace descriptor: source "./hosts/copilot" (bug 035)
   hosts/copilot/
     .plugin/plugin.json             legacy manifest: name/version/description + component paths
-                                    skills=".github/skills" agents=".github/agents" hooks=".github/hooks/hooks.json"
+                                    skills=".github/skills" agents=".github/agents"  (NO hooks field — servo
+                                    ships no plugin hooks; see below)
     .github/
       skills/<name>/SKILL.md        loader-safe (name `:`-free, description ≤1024); $SERVO_ROOT paths
       agents/<name>.agent.md        rendered Copilot custom agents (model-neutral; tools mapped)
-      hooks/*.json + hooks.json     (only if servo ships plugin hooks — see below) via the adapter
-      hooks/scripts/                copilot_hook_adapter.py, servo_root helpers (if hooks shipped)
       scripts/servo_root.py         $SERVO_ROOT fresh-shell locator (bug 036)
       templates/                    UNRENDERED (canonical ${CLAUDE_PLUGIN_ROOT} intact — bug 036)
+    # NO .github/hooks/ — servo's Copilot plugin is hook-free. The oracle agentStop
+    # hook + copilot_hook_adapter.py ship as `oracle-hook` skill resources, installed
+    # target-side into the *consuming repo's* .github/hooks/ (not the plugin).
 ```
 
 The renderer (mirroring jig's `build_copilot_plugin.py` + `CopilotScaffoldRenderer`,
@@ -164,25 +166,33 @@ ported as functions into servo's function-based builder):
 - **rewrites plugin-mode helper paths (bug 036):** servo's 10 skills document
   `${CLAUDE_PLUGIN_ROOT}/skills/.../*.py` — a path that does **not** resolve under
   Copilot plugin-mode (Copilot exposes no plugin-root env var). The renderer
-  rewrites them to `$SERVO_ROOT/skills/.../*.py`, ships a `servo_root.py`
-  fresh-shell locator, publishes `$SERVO_ROOT` via a `SessionStart` carrier, and
-  injects a root-resolution note into each skill that uses the var. Templates ship
-  **unrendered** (canonical `${CLAUDE_PLUGIN_ROOT}` intact). (servo ships no
-  `.mcp.json`, so no MCP config is rendered; the empty-set is recorded, not
-  silently skipped.)
-- **maps servo's hooks via the adapter mechanism** (`copilot_hook_adapter.py`,
-  ported near-verbatim from jig): Claude PascalCase → Copilot camelCase events
-  (notably `Stop`→`agentStop`), the flat `{version,hooks:{<event>:[{matcher?,type,
-  bash,timeoutSec?}]}}` schema, and camelCase→snake_case payload re-shaping so the
-  hook script reads its expected fields. **servo ships no plugin-level hooks
-  today** (source `hooks/` is empty); its one hook — the oracle `Stop` — is
-  installed *target-side* by the `oracle-hook` skill, so the translation teaches
-  that skill to emit an `agentStop` hook (+ the adapter) for a Copilot target. A
-  **mapped-or-explicitly-unmappable inventory** enumerates the source set so none
-  is silently dropped; today that set is `{Stop→agentStop}` and the residual is
-  empty. (The permissions floor is likewise an **enforcing `preToolUse` hook** if
-  servo needs one — Copilot has no persistent tool-deny setting to write — not a
-  `settings.json`.)
+  rewrites them to `$SERVO_ROOT/skills/.../*.py` and ships a `servo_root.py`
+  fresh-shell locator at `.github/scripts/`. **Unlike jig, servo does not publish
+  `$SERVO_ROOT` via a `SessionStart` carrier hook** — jig can only do that because
+  it is hook-heavy and folds the announcement into an existing SessionStart hook;
+  servo's Copilot package is hook-free (below). Instead, the renderer injects a
+  root-resolution note into each affected skill carrying a **self-contained locator
+  one-liner** that resolves `$SERVO_ROOT` in a fresh shell (this is jig's own
+  fresh-shell fallback — servo simply omits jig's SessionStart-carrier
+  convenience). Templates ship **unrendered** (canonical `${CLAUDE_PLUGIN_ROOT}`
+  intact). (servo ships no `.mcp.json`, so no MCP config is rendered; the empty-set
+  is recorded, not silently skipped.)
+- **maps servo's one hook target-side, not in the plugin.** **servo's Copilot
+  plugin package is hook-free** (source `hooks/` is empty; the manifest omits the
+  `hooks` component-path field). servo's only hook — the oracle `Stop` — is
+  installed *target-side* by the `oracle-hook` skill into the *consuming repo's*
+  config, so the Copilot work lives in that skill: it learns to emit a Copilot
+  `agentStop` hook (flat `{version,hooks:{agentStop:[{type,bash,timeoutSec?}]}}`
+  schema) and to install `copilot_hook_adapter.py` (ported near-verbatim from jig)
+  as a skill **resource** alongside it, so the adapter re-shapes Copilot's
+  camelCase stdin (`sessionId`/`transcriptPath`/…) into the snake_case the
+  `meta-judge.sh` reads. The `Stop`→`agentStop` event map and the identical
+  `{decision:block,reason}` output vocabulary come straight from jig's adapter. A
+  **mapped-or-explicitly-unmappable inventory** enumerates servo's hook set; today
+  it is the single entry `{Stop→agentStop}` with an empty residual. (servo needs
+  **no** permissions-floor hook — that is a jig-specific protected-paths gate;
+  servo's edit-permission concern is the loop's ADR-0033 preflight, handled in the
+  execution-primitive mapping below, not a plugin hook.)
 - maps the optional loop/oracle **execution primitives** to their Copilot
   equivalents (see below), recording any primitive that genuinely does not port as
   an explicit residual;
@@ -257,9 +267,10 @@ not a silent drop. Gates and primitives degrade *visibly*.
   build output, never hand-edited; Claude/Codex output byte-unchanged.
 - **The committed artifact is `hosts/copilot/`, whose *internal* structure is
   Copilot's `.github/` layout** (`.github/{skills/, agents/*.agent.md, scripts/,
-  templates/}`, plus `.github/hooks/` only if servo ships plugin hooks) and a
-  `.plugin/plugin.json` legacy manifest with component-path fields — mirroring
-  jig's shipped package. This `.github/` tree lives **inside the `hosts/copilot/`
+  templates/}` — **no `.github/hooks/`**, servo's Copilot plugin is hook-free) and
+  a `.plugin/plugin.json` legacy manifest with the `skills` + `agents`
+  component-path fields (**no `hooks` field**, since no plugin hooks ship) —
+  mirroring jig's shipped package minus jig's hooks. This `.github/` tree lives **inside the `hosts/copilot/`
   build-output directory**, so it does not touch (or collide with) the
   *repository-root* `.github/`; ADR-0028's root-is-canonical-source invariant is
   preserved. Following jig's shipped rulings, the package ships **no** pre-rendered
@@ -281,17 +292,18 @@ not a silent drop. Gates and primitives degrade *visibly*.
 
 - **Package layout — mirrors jig's shipped `hosts/copilot/` (ADR-0061 / spec 113).**
   The committed package is `hosts/copilot/` with a **legacy** `.plugin/plugin.json`
-  manifest carrying `name`/`version`/`description` **plus the three required
-  component-path fields** (`skills: ".github/skills"`, `agents: ".github/agents"`,
-  `hooks: ".github/hooks/hooks.json"` — required because components live under
-  `.github/`, not Copilot's legacy defaults), and components under `.github/`:
-  `skills/<name>/SKILL.md`, `agents/<name>.agent.md`, `scripts/servo_root.py`,
-  `templates/` (unrendered), and `hooks/` only if servo ships plugin hooks. No
-  `mcp.json` (servo ships no MCP config); no `copilot-instructions.md`; no
-  `copilot/settings.json`. A repo-root `.github/plugin/marketplace.json`
-  (`source: ./hosts/copilot`) is the marketplace entry point. This is no longer an
-  open shape — it is the layout jig already ships; 028-01 confirms the exact field
-  set against jig's package and a live `copilot plugin install`.
+  manifest carrying `name`/`version`/`description` **plus the component-path fields
+  for the components servo actually ships** (`skills: ".github/skills"`,
+  `agents: ".github/agents"` — required because components live under `.github/`,
+  not Copilot's legacy defaults; **no `hooks` field**, since servo's Copilot plugin
+  ships no hooks), and components under `.github/`: `skills/<name>/SKILL.md`,
+  `agents/<name>.agent.md`, `scripts/servo_root.py`, `templates/` (unrendered).
+  No `.github/hooks/`; no `mcp.json` (servo ships no MCP config); no
+  `copilot-instructions.md`; no `copilot/settings.json`. A repo-root
+  `.github/plugin/marketplace.json` (`source: ./hosts/copilot`) is the marketplace
+  entry point. jig's shipped manifest declares all three fields because jig ships
+  hooks; servo's omits `hooks` — 028-01 confirms Copilot accepts a `hooks`-less
+  manifest (expected: component paths are per-component, not mandatory as a set).
 - **Autopilot has no oracle-gated stop** (verified: only `--max-autopilot-continues`
   / `--max-ai-credits`). Load-bearing consequence already absorbed in the mapping
   above — the loop driver ports without Autopilot; the goal driver's cap+final
