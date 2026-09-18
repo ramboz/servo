@@ -596,12 +596,14 @@ def validate_copilot_package(
     SKILL.md frontmatter is loader-safe (name `:`-free, description <=1024).
 
     Agent files (`.github/agents/*.agent.md`, rendered by slice 028-03) are
-    not checked here — this validator's scope stayed skills-only; extending
-    it to agents was not required by 028-03's ACs. Returns diagnostics
+    verified present and loader-safe (name `:`-free, no `model:` field —
+    the 028-03 invariants), so the release smoke gates on every declared
+    component, not just the drift guard. Returns diagnostics
     (empty == valid)."""
     problems: list[str] = []
     manifest_path = plugin_root / ".plugin" / "plugin.json"
     skills_rel = _COPILOT_MANIFEST_SKILLS
+    agents_rel = _COPILOT_MANIFEST_AGENTS
     if not manifest_path.is_file():
         problems.append(".plugin/plugin.json: missing")
     else:
@@ -621,7 +623,9 @@ def validate_copilot_package(
                 skills_rel = manifest["skills"]
             else:
                 problems.append(".plugin/plugin.json: must declare a 'skills' component path")
-            if not isinstance(manifest.get("agents"), str):
+            if isinstance(manifest.get("agents"), str):
+                agents_rel = manifest["agents"]
+            else:
                 problems.append(".plugin/plugin.json: must declare an 'agents' component path")
             if "hooks" in manifest:
                 problems.append(
@@ -651,6 +655,23 @@ def validate_copilot_package(
             problems.append(
                 f"{skills_rel}/{name}/SKILL.md: description is "
                 f"{len(description)} characters (>{_COPILOT_DESCRIPTION_MAX})"
+            )
+    # Agent files (028-03): the release smoke gates on agent presence +
+    # loader-safety, not just the drift guard, so a zip missing its declared
+    # agents fails the smoke rather than shipping incomplete.
+    agents_dir = plugin_root / agents_rel
+    agent_files = sorted(agents_dir.glob("*.agent.md")) if agents_dir.is_dir() else []
+    if not agent_files:
+        problems.append(f"{agents_rel}: no '*.agent.md' agent files present")
+    for agent_md in agent_files:
+        fm, _ = _split_frontmatter(agent_md.read_text())
+        loaded_name = _frontmatter_value(fm, "name")
+        if ":" in loaded_name:
+            problems.append(f"{agents_rel}/{agent_md.name}: name {loaded_name!r} contains ':'")
+        if re.search(r"^model:", fm, re.MULTILINE):
+            problems.append(
+                f"{agents_rel}/{agent_md.name}: carries a 'model:' field "
+                "(Copilot agents are model-neutral)"
             )
     return problems
 

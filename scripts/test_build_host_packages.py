@@ -275,6 +275,26 @@ class HostPackageTests(unittest.TestCase):
         problems = build_host_packages.validate_copilot_package(self.hosts / "copilot")
         self.assertTrue(any("design-eval" in p for p in problems), problems)
 
+    def test_validate_copilot_package_flags_missing_agents(self):
+        # 028-06 (review finding 1): the release smoke gates on agent presence,
+        # not just the drift guard. Removing the rendered agents makes the
+        # validator fail rather than pass a package missing its declared agents.
+        agents_dir = self.hosts / "copilot/.github/agents"
+        for agent in agents_dir.glob("*.agent.md"):
+            agent.unlink()
+        problems = build_host_packages.validate_copilot_package(self.hosts / "copilot")
+        self.assertTrue(any("agent" in p.lower() for p in problems), problems)
+
+    def test_validate_copilot_package_flags_agent_model_field(self):
+        # 028-06: model-neutrality is gated by the smoke too — an agent with a
+        # `model:` field fails.
+        agent = self.hosts / "copilot/.github/agents/runner.agent.md"
+        agent.write_text(
+            "---\nname: runner\ndescription: d\nmodel: opus\ntools:\n  - view\n---\nbody\n"
+        )
+        problems = build_host_packages.validate_copilot_package(self.hosts / "copilot")
+        self.assertTrue(any("model" in p for p in problems), problems)
+
     # ------------------------------------------------------------------ #
     # Slice 028-03 — Copilot agents (`.github/agents/<name>.agent.md`).
     # ------------------------------------------------------------------ #

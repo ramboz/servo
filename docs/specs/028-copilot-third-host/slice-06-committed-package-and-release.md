@@ -55,7 +55,7 @@ jig's `build_release_zip.py` copilot arm.
 - [x] All ACs pass; full suite green (venv pytest); new tests fail when the feature is removed.
 - [x] CI-equivalent local gate clean (lint + `build_host_packages.py --check` + `validate_manifests.py`).
 - [x] `build_release_zip.py --host copilot` produces a deterministic zip that smoke-passes.
-- [ ] Reviewed by `reviewer` subagent (compliance + craft + arch).
+- [x] Reviewed by `reviewer` subagent (compliance + craft + arch) — PASS; evidence in `reviews/slice-06-{compliance,craft,arch}.md`. Finding 1 (smoke didn't verify agent presence) hardened: `validate_copilot_package` now checks `.github/agents/*.agent.md` present + loader-safe (+2 mutation-verified tests). Finding 2 (release.yml "byte-unchanged" wording) corrected in the review record: shared upload/notes steps gained additive copilot lines; claude/codex content + dedicated steps unchanged.
 - [x] Deviation log + reconciliation sweep produced.
 - [ ] Spec 028 closed out: slice board refreshed; load-bearing invariants + residuals migrated to the status-board Notes / refinement-todo.
 
