@@ -897,6 +897,21 @@ class ClaudeInvocationFailedTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("loop: claude not on PATH", result.stderr)
+
+    def test_copilot_not_on_path(self):
+        # Slice 028-05: the Copilot loop-driver invocation-failure path mirrors
+        # the Claude one — an empty bindir means `copilot` is not found, and
+        # `_invoke_copilot` returns the `copilot not on PATH` breadcrumb rather
+        # than raising into the loop (fail-closed env error, rc=2).
+        self.bindir.mkdir()
+        result = _run_loop(
+            self.target,
+            "--prompt", "x",
+            "--host", "copilot",
+            path_override=f"{self.bindir}:{SYSTEM_PATH}",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("copilot not on PATH", result.stderr)
         summary = self._summary(result.stdout)
         self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
         self.assertEqual(summary["iterations_completed"], 0)

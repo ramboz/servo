@@ -1875,8 +1875,14 @@ def _invoke_copilot(
     the Claude `--max-budget-usd` path).
     """
     global _active_subprocess
-    usage_fd, usage_name = tempfile.mkstemp(prefix="servo-copilot-usage-", suffix=".json")
-    os.close(usage_fd)
+    # The usage tempfile is created before the try/finally, so guard it: an
+    # OSError here (e.g. an unwritable temp dir) must return a breadcrumb like
+    # every other invocation-failure path, never raise into `run_loop`.
+    try:
+        usage_fd, usage_name = tempfile.mkstemp(prefix="servo-copilot-usage-", suffix=".json")
+        os.close(usage_fd)
+    except OSError as exc:
+        return None, f"OS error creating copilot usage tempfile: {exc}"
     usage_path = Path(usage_name)
     cmd = _build_copilot_cmd(
         prompt, agent_name=agent_name, session_id=session_id,
@@ -3788,6 +3794,19 @@ def main(argv: Optional[list[str]] = None) -> int:
                               else DEFAULT_COST_CEILING_USD),
                 max_turns=(args.max_iterations if args.max_iterations is not None
                            else DEFAULT_MAX_ITERATIONS),
+            )
+        else:
+            # Loop driver under Copilot: warn ONCE at launch that the USD
+            # `--cost-ceiling` is inert (Copilot bills in premium-requests /
+            # nano-AIU, not USD — ADR-0034 residual), symmetric with the
+            # `--max-ai-credits`-under-claude warning below. The per-iteration
+            # native-cost advisory reinforces it as the loop runs; this makes
+            # the cost model clear up front, before the first paid iteration.
+            sys.stderr.write(
+                "loop: --host copilot — the loop is bounded by --max-iterations "
+                "and any --max-ai-credits; the USD --cost-ceiling does NOT apply "
+                "(Copilot bills in premium-requests / nano-AIU; ADR-0034 "
+                "residual). Native per-iteration cost is surfaced as it runs.\n"
             )
     elif args.max_ai_credits is not None:
         sys.stderr.write(

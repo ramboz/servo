@@ -83,6 +83,34 @@ permanent honest posture (goal driver = Claude-only), per ADR-0034 kill criteria
 
 ---
 
+## Copilot loop driver has no hard-error-envelope guard (soft failure scored, not env-erroring)
+
+**Deferred:** the Claude loop path has a "Bug 001"-style guard: a hard
+auth/API-error envelope halts with `EXIT_ENV_ERROR` rather than being scored as a
+real iteration. `_invoke_copilot`/`_normalize_copilot_result` (slice 028-05) have
+no analog — a **soft** Copilot failure (auth/rate-limit) that still emits a
+parseable non-ephemeral JSONL event is normalized as `is_error: False` and scored
+as a real (likely empty) iteration instead of env-erroring. **Bounded and safe
+today:** the oracle scores target state independently (no false pass), and
+`--max-iterations` + plateau detection self-limit the run; the common
+binary-absent / timeout / no-parseable-event cases already return
+`(None, breadcrumb)` → `EXIT_ENV_ERROR` correctly (pinned by
+`test_copilot_not_on_path`). The gap is only the *soft* error-envelope case,
+which depends on Copilot's error-envelope JSON shape — **not capturable
+headlessly** (same no-live-error-data constraint as the hook-firing residual).
+
+**Resolution trigger:** a live Copilot error envelope (auth/rate-limit) shape is
+captured → teach `_normalize_copilot_result` to detect it and return
+`(None, breadcrumb)` like the Claude path's Bug-001 guard, with a regression test
+mirroring `ClaudeErrorEnvelopeTests`. Pairs with the hook-firing + `--max-ai-credits`
+live-validation residuals above (one live-Copilot-session validation pass closes
+all three).
+
+**Surfaced by:** slice 028-05 independent review (`jig:reviewer`, PASS with
+low-severity findings, 2026-09-18); finding logged rather than papered over.
+
+---
+
 ## ~~Shellcheck verification falls back to skip on dev machines~~ — RESOLVED 2026-05-15
 
 **Resolution:** `scripts/shellcheck.sh` wraps both the local binary (preferred) and the `koalaman/shellcheck:stable` Docker image (fallback), exiting 127 only when neither is available. `ShellcheckTests.test_rendered_oracle_shellcheck_clean` now invokes the wrapper and skips only on exit 127, so on any dev box with Docker the assertion actually runs. Verified: 34/34 tests green with zero skips on this branch even though the local `shellcheck` binary is absent.

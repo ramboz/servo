@@ -1,7 +1,7 @@
 ---
-status: IN_PROGRESS
+status: DONE
 dependencies: [028-03, 028-04]
-last_verified:
+last_verified: 2026-09-18
 # arch_review: true  # maps Claude-only execution primitives onto Copilot; ADR-0028 residual
 ---
 
@@ -53,8 +53,8 @@ spike's resolved findings, recording any true residual honestly.
 - [x] All ACs pass; full suite green (venv pytest); new tests fail when the feature is removed.
 - [x] The Autopilot/goal-driver verdict + residuals documented in `docs/architecture.md`
       + refinement-todo.
-- [ ] Reviewed by `reviewer` subagent (compliance + craft + arch).
-- [ ] Deviation log + reconciliation sweep produced.
+- [x] Reviewed by `reviewer` subagent (compliance + craft + arch) — PASS; evidence in `reviews/slice-05-{compliance,craft,arch}.md`. Findings resolved: #2 (mkstemp raise) guarded; #4 (symmetric `--cost-ceiling`-under-copilot launch advisory) added; #3 pinned with `test_copilot_not_on_path`; #1 (soft-error-envelope guard) deferred to refinement-todo (needs live Copilot error-envelope data).
+- [x] Deviation log + reconciliation sweep produced (in this slice; reviewer reconciliation notes recorded; residuals in refinement-todo + architecture.md).
 
 **Anti-horizontal-phasing check:** After this slice a Copilot user runs servo's
 loop driver end-to-end (per-iteration `copilot -p`), and knows precisely what of
