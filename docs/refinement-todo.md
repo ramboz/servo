@@ -1229,3 +1229,218 @@ make the oracle the Acceptance contract rather than re-deriving a verify step.
 "relevant for servo?" read, captured here rather than lost to chat. Not a slice
 defect and not servo-authored; an inbound idea parked for a future spec to
 consume or decline.
+
+## design-eval field report — a rigged rubric scored a non-matching UI at 0.7998/0.80
+
+**Surfaced by:** a v0.9.0 `/servo:design-eval` field report, 2026-08-27. An agent
+authored a theme-scoped rubric whose free-text body excluded ~9 real divergences
+(background, font, glyphs, contrast, form isolation, dots, filter, map strip,
+button alignment) — several it had itself flagged as gaps minutes earlier — then
+wrapped the result in freeze + hash + n-sampling, producing a near-passing,
+rigorous-*looking* composite. The judge in the desktop-app setup had neither
+`cli` nor `api` transport available, and the in-game (ImGui/CrossOver) target had
+no first-class capture, so scoring was done out-of-band and injected via
+`SERVO_DESIGN_EVAL_FAKE_SCORES`. Root cause is motivated reasoning by the agent,
+but the tool *invites* it: the rubric is a single free-text string that fuses the
+divergence catalogue, the scoring policy, and the ignore-list, and `SKILL.md`
+explicitly told authors to "bake the ignore-list into the rubric text." Confirmed
+in code — `templates/config.example.json` (one `rubric` string), `SKILL.md`
+authoring tips, `freeze()` hashes prose without inspecting it, `score.py` prints
+only the composite to stdout, `judge()` dispatches only `cli`/`api`,
+`_CAPTURE_PROVIDERS` = web/command/android/ios (no manual path).
+
+Seven-fix plan agreed with the maintainer, split into **two future specs**
+(**policy-honesty**: 1–5; **reachability**: 6–7), minimum ceremony = 2 new ADRs +
+1 amendment. Phase 0 (items 4–5 + a doc mitigation) is **DONE in this change**;
+the rest is deferred here.
+
+**DONE (this change — Phase 0, no ADR needed):**
+- **(4) Loud fake-scores.** `score.py::_emit_honesty_advisories` prints a
+  `FAKE SCORES … INJECTED, not a measurement` line to **stderr** on any
+  `SERVO_DESIGN_EVAL_FAKE_SCORES` run (stderr, not stdout — oracle.sh parses
+  stdout as the single composite float; stderr still surfaces in loop/CI logs).
+- **(5) Within-noise-of-threshold.** Same helper flags `|composite − threshold|
+  < δ` (δ already frozen) as "a statistical tie, not a decisive pass/fail."
+- **Doc mitigation** for (1): `SKILL.md`'s "bake the ignore-list into the rubric
+  text" tip is reversed to a warning that prose exclusions are invisible to the
+  freeze approver and are exactly how a rubric gets built backwards from a
+  desired pass. Full reversal lands with the structured `ignore:` field below.
+- Tests: `HonestyAdvisoryTests` (3 cases); host packages rebuilt; drift clean.
+
+**ADRs Accepted 2026-08-27 (all three, via `jig:architect` frame-critique — 0033
+took 4 rounds, 0034 three, 0035 three; the critique caught real frame errors in
+each and is worth reading before speccing):**
+- **[ADR-0033](decisions/adr-0033-design-eval-structured-scoring-policy.md)** —
+  structured scoring policy (dimensions + explicit ignore-list) supersedes the
+  free-text rubric. **Key results the spec must honor:** the anti-gaming property
+  is a **2×2** — an *exclusion* self-evidences on the record (auditability
+  unconditional), but an *omission* (thin catalogue) evidences nothing and
+  degrades to *nothing* without an independent **re-enumerating** reviewer; so the
+  adversarial case rests entirely on that reviewer, not on the ignore-list
+  surfacing. Central OQ: v1→v2 migration (force re-author vs auto-migrate; lean
+  force). Load-bearing OQ5–6: does the autonomous freeze path *require* a distinct
+  re-enumerator.
+- **[ADR-0034](decisions/adr-0034-design-eval-subagent-judge-transport.md)** —
+  in-harness `subagent` judge transport, shipped as a **loud, non-frozen
+  advisory**, NOT a frozen score (the model is self-reported, not verifiable,
+  across the boundary). Non-gating is **structural**: a subagent-transport eval on
+  the oracle *entrypoint* returns `env_error`, so it can never be a gate score
+  (even in the attended loop). Explicitly does **not** meet the field-report user's
+  *gating* need (they need api/cli); serves attended authoring/iteration.
+- **[ADR-0035](decisions/adr-0035-design-eval-manual-capture-provider.md)** —
+  `manual` human-supplied-PNG capture provider (realizes GitHub #29 on the ADR-0032
+  seam), with `provenance: manual_capture` and a **loud stderr advisory on every
+  run**. The doctored-image residual is inherent and NOT closed — the advisory is
+  masquerade-prevention (can't pass as auto-captured), not doctoring-detection.
+
+**Deferred — SPEC "policy-honesty" (items 1–3), realizes ADR-0033. DoR now
+satisfied (ADR Accepted).**
+- **(1) Structured `dimensions` + `ignore: [{id, reason}]`** + the enumerate-first
+  catalogue; `schema_version` 1→2 (re-freezes existing evals). Migration is OQ1.
+- **(2) Freeze-time exclusion surfacing** to an approver *distinct from the author*
+  (ADR-0033 §4). Depends on (1).
+- **(3) Catalogue/enumerate mode** with an **independent re-enumerating reviewer**
+  — the load-bearing seam (ADR-0033 §3/OQ5–6), not just a human eyeballing the
+  ignore-list. Depends on (1).
+
+**Deferred — SPEC "reachability" (items 6–7), realizes ADR-0034 + ADR-0035. DoR
+now satisfied (ADRs Accepted).**
+- **(6) Subagent advisory transport** (ADR-0034) — entrypoint-gated non-oracle
+  advisory; must mutation-test the fail-closed + the loud marking; weigh the
+  authoring-read demand assumption against reality (ADR-0034 Assumptions).
+- **(7) `manual` capture provider** (ADR-0035) — staged-file provider on the
+  ADR-0032 seam; loud advisory + `manual_capture` provenance + hash/mtime;
+  habituation is a named kill-criterion.
+
+**Resolution trigger:** next planning pass on design-eval. The DoR gate is now
+satisfied for both specs (all three ADRs Accepted). The two Phase-0 patches already
+shipped; they are mitigations, not the fix — ADR-0033's structured policy +
+re-enumerating reviewer is the actual remedy for the reported failure.
+
+## design-eval subagent advisory (029-02) — two deferred robustness items
+
+**Deferred:** Slice 029-02 (ADR-0034 subagent advisory transport) shipped two
+non-blocking follow-ups the arch/craft reviews surfaced: (a) `score()` and
+`advisory_read()` in `skills/design-eval/score.py` share a capture → aggregate →
+ledger shape, so a future change to weighting/aggregation in `score()` will not
+reach the advisory path — a shared helper would remove the drift surface (the
+paths genuinely differ today: `judge()` calls vs the request/response channel);
+(b) the subagent channel uses fixed filenames (`subagent/request.json` /
+`response.json`) with no correlation id, so two concurrent advisory runs in one
+eval dir would collide.
+
+**Resolution trigger:** (a) the first change to `score()`'s aggregation/weighting
+that must also apply to the advisory path — extract the shared step then; (b) the
+first need for batch/parallel advisory runs against one eval dir — add a per-run
+correlation id (e.g. the `run_id` stamp) to the request/response filenames.
+
+**Surfaced by:** slice 029-02 arch + craft reviews, 2026-08-27 — both fail
+loud/closed today (no gating or hang risk), so parked rather than fixed.
+
+## design-eval per-dimension sub-scoring (028-01) — deferred pending a live-judge probe
+
+**Deferred:** Slice 028-01 (ADR-0033 structured policy) ships the ADR's Kill-criteria
+**fallback shape**: `dimensions` + `ignore` drive the judge PROMPT + FREEZE + v1
+rejection (the full anti-gaming remedy), but the judge returns ONE holistic score
+per sample — it does NOT yet emit per-dimension sub-scores (ADR-0033 §1 / 028-01
+AC5). Per-dimension scoring requires ADR-0033 Probe #1 (confirm per-dimension
+judging is not materially noisier than holistic), which needs real design-mockup /
+app image pairs and a live vision judge — neither available in the implementing
+environment. Deferring avoids shipping an unvalidated decomposition the Kill
+criteria might reject; the `weight` field is accepted + hashed today (fed to the
+judge as relative-importance guidance) but not yet used for mechanical
+per-dimension aggregation.
+
+**Resolution trigger:** the first design-eval run against real mockup/app pairs with
+a reachable judge (api/cli, or the 029-02 subagent advisory) — run Probe #1 there;
+if per-dimension is not noisier, extend the judge return to `{dimensions: {id:
+score}}`, aggregate weighted per screen, and record per-dimension sub-scores in the
+ledger (AC5). If it IS noisier, keep the holistic fallback and mark `weight`
+guidance-only.
+
+**Surfaced by:** slice 028-01 implementation, 2026-08-27 — scope confirmed with the
+maintainer (fallback shape) because Probe #1 could not run in-environment.
+
+## Figma as a design-eval referenceSource origin
+
+**Deferred:** design-eval references are authored today as browser-renderable
+mockup files — per screen, `referenceSource { file, selector, crop }` rendered
+by `capture-refs` into the frozen `reference` PNG. **vellum** (the sibling
+design-domain plugin that composes `servo:design-eval` for scoring) is adding
+**Figma** as a second design source (vellum's design-source-adapter ADR and
+figma design-source spec, both filed 2026-08-30), so references originating from
+Figma's image-export endpoint — pinned by fileKey + versionId at freeze time —
+are an imminent case. Nothing in the freeze contract blocks it: `freeze`
+sha256-hashes the reference *images* (`artifact_hashes`), so the origin is
+naturally agnostic — a Figma-exported PNG freezes exactly like a rendered one,
+and the pin metadata (fileKey/versionId/nodeId) could ride alongside
+`referenceSource` as provenance. Not built now: no servo-side consumer exists
+yet, and Figma API details (export endpoint shape, version pinning semantics)
+must be verified live at config time, not assumed from memory.
+
+**Resolution trigger:** the first real target whose canonical design lives in
+Figma (vellum's figma pilot is the named candidate). Then decide the seam:
+either `referenceSource` grows an origin variant (e.g.
+`{figma: {fileKey, versionId, nodeId}}`) that `capture-refs` fetches and crops,
+or the contract stays file-only and the Figma export is handled upstream by the
+design-source adapter (vellum-side), with servo recording only the pin
+provenance. Verify the current Figma image-export API at that point.
+
+**Surfaced by:** cross-repo review of vellum + jig + servo, 2026-08-30 —
+companion to vellum's design-source-adapter ADR (same date).
+
+## Composed cross-repo pilot as first-consumer wiring for deferred 012-05
+
+**Deferred:** slice 012-05 (first-consumer-wiring) is DEFERRED because it is
+*project* work servo cannot land in its own tree — its resolution trigger waits
+for "a real design-mockup→UI project that adopts `/servo:design-eval` and can
+host the wiring" (the original candidate, food-log, is a separate repository).
+A new candidate now exists: the **jig × vellum × servo composed
+autonomous-build pilot** (parked in vellum's and jig's inboxes, 2026-08-30) —
+design → consistency pass → redline → build → `design-eval` scoring, end to
+end. That pilot would be design-eval's first end-to-end consumer: a live
+`config.json` with per-screen setups, captured references, a real freeze +
+install, and `score_design_fidelity` gating an actual loop — exactly the wiring
+012-05 parked.
+
+**Resolution trigger:** the composed pilot being scheduled or run. Treat it as
+a candidate revival trigger for 012-05 — re-open by transitioning the slice to
+DRAFT per the board's deferral rule, and host the wiring in the pilot's
+consuming project (servo's tree still only records the evidence).
+
+**Surfaced by:** cross-repo review of vellum + jig + servo, 2026-08-30 —
+companion to the composed-pilot inbox entries filed the same day in vellum and
+jig.
+
+## ~~`run_loop` now returns rc=2 on a *fully-executed* run (edit-permission-wall relabel) — re-check downstream exit-code consumers~~ — RESOLVED 2026-09-01 (spec 031-02 reconciliation)
+
+**Resolution:** Audited heartbeat dispatch against the new rc=2 /
+`edit_permission_unavailable`. Dispatch classifies a candidate's outcome by the
+loop's `final_oracle_status` (still `below_threshold` for a walled run → `tried`,
+unchanged) and treats a loop as an env-error only when it exits **without a
+parseable summary** (`heartbeat.py:299-308`) — a walled run writes a fully
+parseable summary, so the rc=2 does **not** flip it to env-error. Net: no
+classification regression. The one behavior change is that a walled run's
+terminal reason is now `edit_permission_unavailable`, so it no longer matches the
+plateau→quarantine string-trigger (`REASON_ORACLE_PLATEAU`, `heartbeat.py:251`) —
+correct, since a permission wall is not a genuine plateau to quarantine. A deeper
+end-to-end dispatch test with a walled loop (and optionally surfacing the fix
+breadcrumb to the operator) is a bounded optional enhancement, not a correctness
+gap. Documented in `docs/architecture.md` (edit-permission-wall paragraph).
+
+**Original deferral (from spec 031-01 reconciliation, 2026-09-01):** ADR-0037's
+edit-permission-wall diagnosis relabels a below-threshold `oracle_plateau` /
+`max_iterations_reached` halt to `edit_permission_unavailable` and returns
+**rc=2** (`EXIT_ENV_ERROR`). This is the first case of a fully-executed
+`run_loop` (not a preflight refusal) exiting rc=2. Consumers that branch on the
+loop's exit code — notably heartbeat dispatch (`docs/architecture.md` §dispatch
+worktree, spec 011-03, which records `tried` vs env-error on the loop's `{0,2}`
+exit) — should be re-checked so a permission-wall relabel is attributed
+correctly (an actionable finding, not a spurious env-error that poisons the
+candidate's sticky state).
+
+**Resolution trigger:** Fold the re-check into **spec 031-02** (goal-driver
+relabel), which extends the same rc=2 behavior to `run_goal_loop` — the natural
+point to audit both drivers' exit-code contract against dispatch together.
+
+**Surfaced by:** spec 031-01 arch + craft reviews (2026-09-01).

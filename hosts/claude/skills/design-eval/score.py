@@ -20,6 +20,7 @@ Python 3.9+ standard library only (servo constraint, ADR-0020).
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib.util
 import json
 import os
@@ -34,6 +35,10 @@ from pathlib import Path
 EXIT_OK = 0
 EXIT_ENV_ERROR = 2  # → oracle.sh treats rc=2 as a missing component → gate env_error
 _FAKE_SCORES_ENV = "SERVO_DESIGN_EVAL_FAKE_SCORES"  # test/offline hook (no API/browser)
+# 029-02 (ADR-0034): the subagent advisory transport's request/response channel +
+# the bounded wait that makes "no orchestrator present" fail closed without hanging.
+_SUBAGENT_TIMEOUT_ENV = "SERVO_DESIGN_EVAL_SUBAGENT_TIMEOUT"
+_SUBAGENT_DEFAULT_TIMEOUT = 120.0  # seconds; 0 → check once and fail closed immediately
 # 027-02: capture-provider selector (env overrides config, mirroring
 # SERVO_DESIGN_EVAL_CLAUDE_BIN). Environmental, never frozen (ADR-0031/0032 §6).
 _CAPTURE_TRANSPORT_ENV = "SERVO_DESIGN_EVAL_CAPTURE_TRANSPORT"
@@ -45,7 +50,13 @@ _CASES_KEY = "screens"
 _CASE_FILE_FIELDS = ("reference", "setup")
 # design-eval-specific top-level field pinned into the frozen definition hash
 # (a vision/screenshot concept the shared module itself knows nothing about).
-_EXTRA_HASH_FIELDS = ("viewport",)
+# 028-01 (ADR-0033): the structured scoring policy (`dimensions` + `ignore`) is
+# pinned into the frozen definition alongside the vision `viewport`, so editing a
+# scored dimension or an exclusion re-freezes. A v1 free-text-`rubric` config —
+# which has neither — therefore hashes differently and goes stale, on top of the
+# explicit `_require_schema_v2` refusal below (force re-author, ADR-0033 §5).
+_EXTRA_HASH_FIELDS = ("viewport", "dimensions", "ignore", "catalogue")
+_SCHEMA_VERSION = 2
 
 
 def _load_fidelity_eval():
@@ -490,15 +501,84 @@ def _capture_ios(base_dir: Path, screen: dict, run_id: str | None = None,
     return out, None  # no attestation channel from simctl → not_attested
 
 
+# --------------------------------------------------------------------------- #
+# 029-01: manual human-supplied capture provider (ADR-0035). For non-automatable
+# targets (an in-game overlay, a Windows-only plugin on a Mac host) there is no
+# command that drives + shoots the app — the only real capture is a human staging
+# a screenshot. This provider consumes that staged PNG. It does NOT drive or shoot;
+# state-seeding and framing are the human's job (like the `command` provider). The
+# doctored-image residual is inherent and NOT closed (ADR-0035 §6) — the honesty
+# gain over the fake-scores hook is a real, retained, hashed image plus a loud
+# stderr advisory on every run (masquerade-prevention, not doctoring-detection).
+# --------------------------------------------------------------------------- #
+
+_MANUAL_PROVENANCE = "manual_capture"  # 029-01: distinct ledger provenance token
+_PNG_MAGIC = b"\x89PNG"
+
+
+def _manual_staged_path(base_dir: Path, screen: dict) -> Path:
+    """The staged-shot path a human places the screenshot at (029-01 DoR: fixed
+    convention ``manual/<screen-id>.png`` under the eval dir — discoverable next to
+    ``refs/`` and ``shots/``; no template knob in v1)."""
+    return base_dir / "manual" / f"{screen['id']}.png"
+
+
+def _capture_manual(base_dir: Path, screen: dict, run_id: str | None = None,
+                    config: dict | None = None) -> tuple[Path, dict | None]:
+    """The **manual** capture provider (029-01 / ADR-0035): consume the PNG a human
+    staged at ``manual/<screen-id>.png``, optionally chrome-crop it, retain it as
+    this run's shot, and return it with a ``manual_capture`` attestation carrying
+    the input's sha256 + mtime (the audit trail). Absent / unreadable / non-PNG
+    input fails **closed** to `EnvError` — never a silent 0.0, never a fall-through.
+    """
+    config = config or {}
+    staged = _manual_staged_path(base_dir, screen)
+    if not staged.is_file():
+        raise EnvError(
+            f"manual capture: no staged shot for screen {screen['id']!r} at "
+            f"{staged.relative_to(base_dir).as_posix()} — stage the screenshot there "
+            "(capture.transport is 'manual'; servo does not capture it for you).")
+    data = staged.read_bytes()
+    if not data.startswith(_PNG_MAGIC):
+        raise EnvError(
+            f"manual capture: staged shot for screen {screen['id']!r} is not a PNG "
+            f"({staged.relative_to(base_dir).as_posix()}).")
+    # Attest the input the HUMAN SUPPLIED (AC3): hash it once, here, BEFORE any crop
+    # — one read (no double-read / TOCTOU), and `manual_sha256` names the bytes the
+    # human staged, not the retained shot. When `capture.manual.crop` is set the
+    # retained/judged shot below is the cropped derivative, so the hash and the shot
+    # legitimately differ; `source` links the ledger row back to the staged input.
+    att = {
+        "provenance": _MANUAL_PROVENANCE,
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "mtime": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(staged.stat().st_mtime)),
+        "source": staged.relative_to(base_dir).as_posix(),
+    }
+    # Optional chrome-crop (parallels the native providers). Only when configured,
+    # so a plain already-framed screenshot needs no pngcrop sibling.
+    crop = ((config.get("capture") or {}).get("manual") or {}).get("crop")
+    if crop:
+        pc = _pngcrop()
+        try:
+            data = pc.crop_png(data, **_crop_insets(crop, where="capture.manual.crop"))
+        except pc.PngCropError as e:
+            raise EnvError(
+                f"manual frame crop failed for screen {screen['id']!r}: {e}") from e
+    out = _shot_out_path(base_dir, screen, run_id)
+    out.write_bytes(data)   # retained shot = the bytes actually judged (cropped when set)
+    return out, att
+
+
 # 027-02: the capture-provider seam. Each provider is invoked per screen as
 # ``fn(base_dir, screen, run_id, config)`` and returns (png, attestation).
-# 027-03 adds `command`; 027-04 adds `android`; 027-05 adds `ios`, all without
-# touching the scoring path. Web is the default.
+# 027-03 adds `command`; 027-04 adds `android`; 027-05 adds `ios`; 029-01 adds
+# `manual`, all without touching the scoring path. Web is the default.
 _CAPTURE_PROVIDERS = {
     "web": _capture_web,
     "command": _capture_command,
     "android": _capture_android,
     "ios": _capture_ios,
+    "manual": _capture_manual,
 }
 
 
@@ -534,6 +614,151 @@ def capture_app(base_dir: Path, screen: dict, run_id: str | None = None,
     return fn(base_dir, screen, run_id, config)
 
 
+# --------------------------------------------------------------------------- #
+# 028-01 (ADR-0033): the structured scoring policy — dimensions (what is scored)
+# and ignore (discrete, reason-bearing exclusions) replace the single free-text
+# `rubric`. The judge PROMPT is assembled from the structure, so there is no
+# second free-text channel where an unreviewed instruction can hide. This is the
+# ADR-0033 Kill-criteria FALLBACK shape: a single holistic score under a
+# structured instruction; per-dimension SUB-scoring is a deferred follow-up (see
+# docs/refinement-todo.md) pending a live-judge probe that per-dimension judging
+# is not noisier than holistic.
+# --------------------------------------------------------------------------- #
+
+def _require_schema_v2(config: dict) -> None:
+    """Refuse a legacy v1 (free-text `rubric`) config with a clear re-author message
+    (ADR-0033 §5 force-re-author). Belt-and-braces with the freeze hash, which also
+    goes stale on a v1 config now that `dimensions`/`ignore` are pinned — but this
+    fires first with an actionable message rather than an opaque staleness error."""
+    if int(config.get("schema_version", 1)) < _SCHEMA_VERSION or "rubric" in config:
+        raise EnvError(
+            "this is a legacy v1 free-text-`rubric` design-eval config — design-eval "
+            "now requires a structured schema_version 2 policy (`dimensions` + "
+            "`ignore: [{id, reason}]`). Re-author the config into the split and "
+            "re-freeze (ADR-0033); a v1 rubric no longer scores.")
+
+
+def _validate_policy(config: dict) -> None:
+    """A v2 policy must have a non-empty `dimensions` list (each with an `id`) and,
+    if present, `ignore` entries carrying both `id` and `reason`. Malformed fails
+    closed to `EnvError` — never a silent score against an empty/garbled policy."""
+    dims = config.get("dimensions")
+    if not isinstance(dims, list) or not dims:
+        raise EnvError("structured policy has no `dimensions` — nothing to score (ADR-0033)")
+    for d in dims:
+        if not isinstance(d, dict) or not d.get("id"):
+            raise EnvError(f"each dimension needs an `id`; got {d!r}")
+    for i in config.get("ignore") or []:
+        if not isinstance(i, dict) or not i.get("id") or not i.get("reason"):
+            raise EnvError(
+                f"each ignore entry needs an `id` and a `reason` (ADR-0033); got {i!r}")
+
+
+def _scoring_prompt(config: dict) -> str:
+    """Assemble the judge instruction from the structured policy — NOT a
+    hand-written string (ADR-0033 §6). Names each scored dimension and each ignored
+    id, so what the judge is told is a function of the approved structure."""
+    dims = config.get("dimensions") or []
+    ign = config.get("ignore") or []
+    weighted = any(float(d.get("weight", 1.0)) != 1.0 for d in dims)
+    lines = [
+        "Score, in [0,1], how faithfully the FIRST image (the implemented app "
+        "screen) reproduces the SECOND image (the design reference). Judge fidelity "
+        "of design intent across these dimensions"
+        + (" (weights indicate relative importance)" if weighted else "") + ":"]
+    for d in dims:
+        w = float(d.get("weight", 1.0))
+        suffix = f" (weight {w:g})" if weighted else ""
+        lines.append(f"- {d['id']}: {d.get('description', '').strip()}{suffix}")
+    if ign:
+        lines.append(
+            "IGNORE — do NOT penalise any of these; they are explicitly excluded "
+            "from the score:")
+        for i in ign:
+            lines.append(f"- {i['id']}: {i.get('reason', '').strip()}")
+    lines.append(
+        "1.0 = visually indistinguishable in design intent; 0.5 = right structure, "
+        "wrong styling; 0.0 = unrelated.")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+# 028-03 (ADR-0033 §3 / OQ5-6): the enumerate-first catalogue + the disposition
+# completeness rule. The `catalogue` is the itemised divergence list; EVERY item
+# must be dispositioned — scored (a `dimension`) or excluded (an `ignore` entry) —
+# so an omission cannot hide as an unaccounted state. This closes the omission path
+# ONLY when a distinct re-enumerator has confirmed the catalogue is not thin
+# (the enforced `reviewed` verdict, design_eval.py); the completeness check alone
+# is necessary, not sufficient (ADR-0033's 2×2).
+# --------------------------------------------------------------------------- #
+
+def _catalogue_disposition(config: dict) -> tuple:
+    """Partition the catalogue ids into (scored, ignored, undispositioned) against
+    the dimension ids and ignore ids. An undispositioned catalogued divergence is
+    the omission path made visible."""
+    dim_ids = {d.get("id") for d in config.get("dimensions") or []}
+    ign_ids = {i.get("id") for i in config.get("ignore") or []}
+    scored, ignored, undispositioned = [], [], []
+    for c in config.get("catalogue") or []:
+        cid = c.get("id")
+        if cid in dim_ids:
+            scored.append(cid)
+        elif cid in ign_ids:
+            ignored.append(cid)
+        else:
+            undispositioned.append(cid)
+    return scored, ignored, undispositioned
+
+
+def _validate_catalogue(config: dict) -> None:
+    """If a `catalogue` is present, EVERY item must be scored or excluded — no third,
+    unaccounted state (ADR-0033 §3). Fails closed to `EnvError` naming the
+    undispositioned ids (the omission the author left off the score)."""
+    if not config.get("catalogue"):
+        return
+    _, _, undispositioned = _catalogue_disposition(config)
+    if undispositioned:
+        raise EnvError(
+            "catalogue has undispositioned divergences (neither scored as a "
+            f"`dimension` nor excluded via `ignore`): {', '.join(map(str, undispositioned))} "
+            "— dispose of each before freezing (ADR-0033 §3).")
+
+
+def catalogue_report(config: dict) -> str:
+    """The enumerate-first, itemised divergence list with per-item disposition —
+    and NO scalar (028-03 AC1). For a human/reviewer to triage before scoring."""
+    dim_ids = {d.get("id") for d in config.get("dimensions") or []}
+    ign_ids = {i.get("id") for i in config.get("ignore") or []}
+    items = config.get("catalogue") or []
+    lines = [f"design-eval catalogue: {len(items)} divergence(s) for this eval "
+             "(itemised, no score):"]
+    for c in items:
+        cid = c.get("id")
+        disp = ("SCORED" if cid in dim_ids else "IGNORED" if cid in ign_ids
+                else "UNDISPOSITIONED")
+        lines.append(f"  - [{disp}] {cid}: {c.get('description', '').strip()}")
+    if not items:
+        lines.append("  (no catalogue authored — this eval has not enumerated-first)")
+    return "\n".join(lines)
+
+
+def _exclusion_summary(config: dict) -> str:
+    """The human-facing surfacing at freeze (028-02 / ADR-0033 §4): what the eval
+    SCORES vs what it EXCLUDES, so an approver sees the ignore-list explicitly and
+    can veto it — exactly the record the field-report author buried in prose."""
+    dims = [d.get("id", "?") for d in config.get("dimensions") or []]
+    ign = [(i.get("id", "?"), i.get("reason", "")) for i in config.get("ignore") or []]
+    lines = [f"design-eval freeze: SCORES {len(dims)} dimension(s): "
+             + (", ".join(dims) or "(none)")]
+    if ign:
+        lines.append(f"design-eval freeze: EXCLUDES {len(ign)} dimension(s) — confirm "
+                     "each is genuinely out of scope for these screens:")
+        lines += [f"  - {iid}: {reason}" for iid, reason in ign]
+    else:
+        lines.append("design-eval freeze: EXCLUDES 0 dimensions.")
+    return "\n".join(lines)
+
+
 def judge(app_png: Path, ref_png: Path, config: dict) -> float:
     """One vision-judge sample → [0,1]. Dispatches on the frozen ``judge.transport``:
     ``"api"`` (Messages API + ANTHROPIC_API_KEY) or ``"cli"`` (headless ``claude -p``,
@@ -559,7 +784,7 @@ def _judge_cli(app_png: Path, ref_png: Path, config: dict) -> float:
         raise EnvError(
             "`claude` CLI not found — set SERVO_DESIGN_EVAL_CLAUDE_BIN or add it to PATH")
     prompt = (
-        config["rubric"].rstrip()
+        _scoring_prompt(config)
         + "\n\nRead these two images with the Read tool:\n"
         f"- FIRST (the implemented app screen): {app_png.resolve()}\n"
         f"- SECOND (the design reference): {ref_png.resolve()}\n\n"
@@ -604,7 +829,7 @@ def _judge_api(app_png: Path, ref_png: Path, config: dict) -> float:
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
     j = config["judge"]
     prompt = (
-        config["rubric"].rstrip()
+        _scoring_prompt(config)
         + "\n\nThe FIRST image is the implemented app screen; the SECOND is the "
         "design reference. Reply with ONLY a JSON object: "
         '{"score": <number 0..1>, "reasoning": "<one sentence>"}.'
@@ -663,7 +888,9 @@ def _fake_scores():
 def score(base_dir: Path) -> float:
     """Composite design-fidelity score for the frozen eval in ``base_dir``."""
     config = json.loads((base_dir / "config.json").read_text())
+    _require_schema_v2(config)         # 028-01: clear force-re-author before staleness
     validate_freeze(config, base_dir)  # StaleError → exit 2
+    _validate_policy(config)           # 028-01: non-empty dimensions / well-formed ignore
 
     n = int(config["samples"]["n"])
     k = float(config["samples"].get("k", 1.0))
@@ -674,6 +901,19 @@ def score(base_dir: Path) -> float:
     capture_command = None
     if fake is None:
         transport = (config.get("judge") or {}).get("transport", "api")
+        # 029-02 AC2 (ADR-0034): the ENTRYPOINT gate. `score()` IS the oracle path
+        # (oracle.sh reads its stdout float). A `subagent` transport is advisory-only
+        # and its model cannot be verified, so it must NEVER produce a gating score —
+        # refuse here, regardless of whether a session is present. The discriminator
+        # is the entrypoint, not attendance: even the attended /servo:agent-loop gate
+        # calls score() and so gets env_error, never a subagent number. The advisory
+        # read is reached ONLY via `advisory_read()` (design_eval.py advisory).
+        if transport == "subagent":
+            raise EnvError(
+                "subagent transport is advisory-only (ADR-0034) and cannot be gated — "
+                "the oracle/gate never consumes a self-reported subagent score. Run "
+                "`python3 design_eval.py advisory <target>` for a non-frozen read, or "
+                "set judge.transport to 'api'/'cli' to produce a gating score.")
         if transport == "api" and not os.environ.get("ANTHROPIC_API_KEY"):
             raise EnvError("ANTHROPIC_API_KEY unset — cannot run the vision judge")
         if transport == "cli" and not _resolve_claude():
@@ -740,7 +980,207 @@ def score(base_dir: Path) -> float:
     composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a, _sh in per_screen) / total_w
     _ledger(base_dir, config, per_screen, composite,
             fake_run=fake is not None, provider=provider, capture_command=capture_command)
-    return max(0.0, min(1.0, composite))
+    composite = max(0.0, min(1.0, composite))
+    _emit_honesty_advisories(config, composite, fake_run=fake is not None,
+                             provider=provider, per_screen=per_screen)
+    return composite
+
+
+# --------------------------------------------------------------------------- #
+# 029-02: the subagent advisory read (ADR-0034). NOT the oracle path — `score()`
+# above refuses `subagent` transport at the entrypoint, so this is reached ONLY
+# via `design_eval.py advisory`. It runs the REAL vision judge (the orchestrating
+# session's own subagent) over the REAL captured shot, but the result is a loud,
+# non-frozen ADVISORY: the model is self-reported (not verifiable across the
+# boundary), so it never wears a frozen score's authority and never gates.
+# --------------------------------------------------------------------------- #
+
+def _await_subagent_response(resp_path: Path) -> dict:
+    """Poll for the session's response file up to a bounded deadline, then FAIL
+    CLOSED (029-02 AC4). Absence of the response is the "no orchestrator present"
+    signal — an unattended run (CI, Routine, no session) finds nothing to answer
+    the request and raises `EnvError` rather than hanging. `timeout=0` (tests)
+    checks once and fails immediately; the loop never blocks past the deadline."""
+    raw_timeout = os.environ.get(_SUBAGENT_TIMEOUT_ENV, _SUBAGENT_DEFAULT_TIMEOUT)
+    try:
+        timeout = float(raw_timeout)
+    except (TypeError, ValueError) as e:
+        raise EnvError(
+            f"{_SUBAGENT_TIMEOUT_ENV}={raw_timeout!r} is not a number") from e
+    deadline = time.time() + timeout
+    while True:
+        if resp_path.is_file():
+            try:
+                return json.loads(resp_path.read_text())
+            except (ValueError, OSError):
+                pass  # possibly a mid-write (non-atomic session write); keep polling
+        if time.time() >= deadline:
+            if resp_path.is_file():   # present but never parseable by the deadline
+                raise EnvError(
+                    f"subagent response {resp_path.name} is present but unparseable — "
+                    "the session must write valid JSON (atomically: temp file + rename).")
+            raise EnvError(
+                "no subagent response (no orchestrator present) — the subagent "
+                "transport is attended-only; a live Claude Code session must judge "
+                f"the request and write {resp_path.name}. It never runs unattended.")
+        time.sleep(min(0.5, max(0.0, deadline - time.time())))
+
+
+def advisory_read(base_dir: Path) -> tuple[float, str | None]:
+    """The subagent ADVISORY read (029-02 / ADR-0034) — a real-judge fidelity read,
+    loudly marked non-frozen, that the oracle path can never consume. Captures each
+    screen's shot with the configured capture provider, writes a judge request, waits
+    for the session to judge and respond, aggregates, records a `subagent` ledger row
+    with the SELF-REPORTED model (labelled, never attestation), and returns the
+    advisory composite. Refuses unless `judge.transport == 'subagent'`."""
+    config = json.loads((base_dir / "config.json").read_text())
+    _require_schema_v2(config)
+    validate_freeze(config, base_dir)
+    _validate_policy(config)
+    transport = (config.get("judge") or {}).get("transport", "api")
+    if transport != "subagent":
+        raise EnvError(
+            f"advisory read requires judge.transport 'subagent', got {transport!r} — "
+            "the api/cli transports produce a frozen, gating score via the oracle path.")
+    n = int(config["samples"]["n"])
+    k = float(config["samples"].get("k", 1.0))
+    provider = _resolve_capture_transport(config)
+    if provider not in _CAPTURE_PROVIDERS:
+        known = ", ".join(sorted(_CAPTURE_PROVIDERS))
+        raise EnvError(f"unknown capture provider {provider!r} (known: {known})")
+
+    run_id = _run_stamp()
+    subdir = base_dir / "subagent"
+    subdir.mkdir(parents=True, exist_ok=True)
+    req_path, resp_path = subdir / "request.json", subdir / "response.json"
+    if resp_path.exists():
+        resp_path.unlink()  # never consume a stale prior response
+
+    captured, request = [], {"n": n, "screens": []}
+    for screen in config["screens"]:
+        app_png, att = capture_app(base_dir, screen, run_id, provider, config)
+        ref_png = base_dir / screen["reference"]
+        if not ref_png.is_file():
+            raise EnvError(f"reference missing: {screen['reference']}")
+        captured.append((screen, app_png, att))
+        request["screens"].append({
+            "id": screen["id"],
+            "app": app_png.relative_to(base_dir).as_posix(),
+            "reference": screen["reference"],
+        })
+    request["policy"] = {"dimensions": config.get("dimensions"), "ignore": config.get("ignore")}
+    request["prompt"] = _scoring_prompt(config)
+    req_path.write_text(json.dumps(request, indent=2) + "\n")
+    print(
+        f"design-eval: SUBAGENT JUDGE REQUEST for {len(captured)} screen(s) written to "
+        f"{req_path.relative_to(base_dir).as_posix()} — the orchestrating session must "
+        f"score each app-vs-reference pair and write {resp_path.relative_to(base_dir).as_posix()} "
+        '({"model": "<model>", "screens": {"<id>": [<score 0..1>…]}}). Write it '
+        "atomically (temp file + rename) so a mid-write read cannot see partial JSON.",
+        file=sys.stderr)
+
+    resp = _await_subagent_response(resp_path)
+    if not isinstance(resp, dict):
+        raise EnvError("subagent response must be a JSON object with 'model' + 'screens'")
+    self_model = resp.get("model")
+    resp_screens = resp.get("screens")
+    if not isinstance(resp_screens, dict):
+        raise EnvError("subagent response 'screens' must be an object of id → [scores]")
+    per_screen = []
+    for screen, app_png, att in captured:
+        raw = resp_screens.get(screen["id"])
+        if not isinstance(raw, list) or not raw:
+            raise EnvError(
+                f"subagent response missing/invalid scores for screen {screen['id']!r} "
+                "(expected a non-empty list of numbers)")
+        try:
+            samples = [max(0.0, min(1.0, float(x))) for x in raw]
+        except (TypeError, ValueError) as e:
+            raise EnvError(
+                f"subagent response for screen {screen['id']!r} has a non-numeric score: {e}"
+            ) from e
+        shot = app_png.relative_to(base_dir).as_posix()
+        per_screen.append((screen, samples, aggregate_lower_bound(samples, k), att, shot))
+
+    total_w = sum(float(s.get("weight", 1.0)) for s, _, _, _, _ in per_screen)
+    if total_w <= 0:
+        raise EnvError("total screen weight is zero")
+    composite = sum(lb * float(s.get("weight", 1.0)) for s, _, lb, _a, _sh in per_screen) / total_w
+    composite = max(0.0, min(1.0, composite))
+    _ledger(base_dir, config, per_screen, composite, fake_run=False,
+            provider=provider, capture_command=None, self_reported_model=self_model)
+    # 029-02 AC3 + arch-review: the honesty tells STACK. If the shots were
+    # human-staged (manual + subagent — the documented desktop-app case), the
+    # per-screen MANUAL CAPTURE advisory (ADR-0035 §3, "every run") must still fire
+    # alongside the SUBAGENT tell — one dropped tell is a dropped honesty signal.
+    _emit_honesty_advisories(config, composite, fake_run=False,
+                             provider=provider, per_screen=per_screen)
+    # The loud tell on the channel humans read — self-reported, not attested; an
+    # advisory read, structurally below and never a frozen score.
+    print(
+        f"design-eval: SUBAGENT JUDGE — self-reported model {self_model!r}, an advisory "
+        "read (a real judge over the real shot), NOT a verified frozen score and NOT a "
+        "gating measurement. The model is self-reported and cannot be verified.",
+        file=sys.stderr)
+    return composite, self_model
+
+
+def _emit_honesty_advisories(config: dict, composite: float, *, fake_run: bool,
+                             provider: str | None = None, per_screen=None) -> None:
+    """Operator-facing warnings on **stderr** (never stdout — oracle.sh parses
+    stdout as the single composite float, ``score="$(score_design_fidelity)"``).
+    These facts are in ``ledger.jsonl`` too, but the ledger is not surfaced in a
+    loop / CI / Routine log; stderr is — so a synthetic or coin-flip run stops
+    reading as a clean measurement at the point a human actually looks.
+
+    Two advisories:
+    - **fake-scores** (field-report point 4): a ``SERVO_DESIGN_EVAL_FAKE_SCORES``
+      run is byte-identical on stdout to a real one; the only prior tell was
+      ``provenance: not_captured`` buried in the ledger.
+    - **within-noise-of-threshold** (point 5): ``0.7998`` vs ``0.80`` presents as
+      a decisive fail but is a coin flip; ``δ`` (already frozen) is exactly the
+      band width that makes it a tie.
+    """
+    if fake_run:
+        print(
+            "design-eval: FAKE SCORES — SERVO_DESIGN_EVAL_FAKE_SCORES is set; no "
+            "capture and no judge ran. The composite is INJECTED, not a "
+            "measurement (ledger provenance: not_captured).",
+            file=sys.stderr)
+    # 029-01 (ADR-0035 §3): a MANUAL run's tell lives in the loud channel humans
+    # read (stderr), not only the ledger — per screen, naming the sha256 of the
+    # image the human supplied. Masquerade-prevention (this is not servo-captured),
+    # NOT doctoring-detection — nothing can flag a doctored image as fabricated.
+    if provider == "manual" and per_screen:
+        for s, _samp, _lb, att, _shot in per_screen:
+            sha = (att or {}).get("sha256") or "unknown"
+            print(
+                f"design-eval: MANUAL CAPTURE — the shot for screen {s['id']!r} was "
+                f"human-supplied (sha256 {sha[:12]}…), not captured by servo; the "
+                "score reflects whatever image was staged.",
+                file=sys.stderr)
+    # 028-02 AC3: a SELF-APPROVED freeze (no distinct reviewer) carries auditability
+    # only, not prevention — say so on the loud channel every run, so a consumer
+    # never reads a self-acked exclusion list as an independently-vetoed one.
+    if config.get("approval_provenance") == "self_approved":
+        print(
+            "design-eval: SELF-APPROVED freeze (no distinct reviewer acknowledged the "
+            "exclusion list) — the ignore-list carries AUDITABILITY only, not "
+            "prevention; a backwards-authored policy would not have been vetoed here "
+            "(ADR-0033).", file=sys.stderr)
+    threshold = config.get("threshold")
+    delta = (config.get("samples") or {}).get("delta")
+    if threshold is not None and delta:
+        try:
+            near = abs(float(composite) - float(threshold)) < float(delta)
+        except (TypeError, ValueError):
+            near = False   # a non-numeric threshold/δ is a config problem, not ours to raise here
+        if near:
+            print(
+                f"design-eval: composite {composite:.4f} is within noise "
+                f"(δ={delta}) of threshold {threshold} — a statistical tie, not "
+                "a decisive pass/fail. Do not read the verdict as settled.",
+                file=sys.stderr)
 
 
 def _provenance(att, *, fake_run: bool) -> dict:
@@ -750,6 +1190,13 @@ def _provenance(att, *, fake_run: bool) -> dict:
     unavailable), because the remedies differ."""
     base = {"engine": None, "engine_version": None, "capture_transport": None,
             "provenance": None, "provenance_error": None}
+    if att is not None and att.get("provenance") == _MANUAL_PROVENANCE:
+        # 029-01 (ADR-0035): a human-staged shot. Distinct from `attested` (servo
+        # captured it) and from `not_captured`/`not_attested`; carries the input
+        # sha256 + mtime + source so a later auditor can open exactly what scored.
+        return {**base, "provenance": _MANUAL_PROVENANCE,
+                "manual_sha256": att.get("sha256"), "manual_mtime": att.get("mtime"),
+                "manual_source": att.get("source")}
     if att is None:
         # `fake_run` is passed in from score() — NOT derived from `att`, which
         # would make this branch and the next indistinguishable and silently
@@ -763,15 +1210,26 @@ def _provenance(att, *, fake_run: bool) -> dict:
 
 
 def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
-            *, fake_run: bool, provider: str | None, capture_command: list | None) -> None:
+            *, fake_run: bool, provider: str | None, capture_command: list | None,
+            self_reported_model: str | None = None) -> None:
     # `fake_run` is keyword-only and REQUIRED on purpose: a default would let a
     # future caller silently get `not_attested` on a synthetic run — the same
     # class of error as deriving it from `att`, which this replaced. `provider`
     # and `capture_command` are likewise required keyword-only (027-02/03).
+    # `self_reported_model` (029-02) is the model the SUBAGENT reported it judged
+    # with — advisory-only, labelled self-reported (NOT attestation), `null` on the
+    # api/cli/fake arms. `model` stays the frozen/requested judge model.
     record = {
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
+        # 029-02 AC3: what the subagent SAID it judged with — never verified; a bare
+        # `null` on non-subagent runs keeps every row the same shape.
+        "self_reported_model": self_reported_model,
+        # 028-02 AC3: whether the freeze's exclusion list was independently reviewed
+        # (`reviewed`) or self-approved by the author (`self_approved` →
+        # auditability-only, not prevention). Advisory, never hashed.
+        "approval_provenance": config.get("approval_provenance"),
         # 027-02 AC5: which capture provider produced this run's shots — advisory,
         # never hashed (ADR-0032 §6). `null` on the fake arm (no capture ran).
         "capture_provider": provider,

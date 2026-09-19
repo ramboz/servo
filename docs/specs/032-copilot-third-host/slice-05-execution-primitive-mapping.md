@@ -32,7 +32,7 @@ spike's resolved findings, recording any true residual honestly.
 2. **Cost + edit-signal parse.** The loop parses `copilot`'s
    `--usage-output-file` JSON for cost (`totalPremiumRequestCost`/`totalNanoAiu`)
    toward its ceiling, and reads `codeChanges.filesModifiedCount` as the native
-   edit-signal (maps the ADR-0033/0037 "did the runner edit?" check). A test
+   edit-signal (maps the ADR-0037 "did the runner edit?" check). A test
    covers parsing a sample usage JSON (fixture from the spike's live run).
 3. **`/goal`→Autopilot, honestly (resolved).** The goal driver's per-turn oracle
    gate maps via the **target-side `agentStop` oracle hook** (032-04), with
@@ -43,7 +43,7 @@ spike's resolved findings, recording any true residual honestly.
    host selection but its live fidelity is recorded as an explicit **residual**;
    the loop driver (AC1) is the fully-supported Copilot path. Captured explicitly,
    never a silently un-gated run.
-4. **Preflight → Copilot permissions.** servo's ADR-0033/0037 edit-permission
+4. **Preflight → Copilot permissions.** servo's ADR-0037 edit-permission
    posture maps to `--allow-all-tools` (required for headless tool use) +
    `codeChanges.filesModifiedCount` as the post-hoc edit-signal; recorded in the
    execution-primitive inventory. Any primitive that does not port is listed in
@@ -90,8 +90,8 @@ clean). Full servo suite green; ruff clean.
   `tokenDetails` (tolerant: missing file → zeros, never a crash). The edit-signal
   + native cost are surfaced per iteration on stderr.
 - **AC4 — preflight/permissions.** `--allow-all-tools` recorded as the
-  headless-edit enabler (ADR-0033 wall analog) and `codeChanges.filesModifiedCount`
-  as the post-hoc edit-signal (ADR-0033/0037) in the new
+  headless-edit enabler (ADR-0037 wall analog) and `codeChanges.filesModifiedCount`
+  as the post-hoc edit-signal (ADR-0037) in the new
   `docs/architecture.md` "Copilot host execution-primitive inventory".
 
 ### Cost-unit decision (AC2, resolved honestly)

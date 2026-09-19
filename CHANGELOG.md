@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.10.0](https://github.com/ramboz/servo/compare/v0.9.0...v0.10.0) (2026-08-28)
+
+
+### Features
+
+* **design-eval:** enumerate-first catalogue + enforced re-enumerator (028-03) ([936de4e](https://github.com/ramboz/servo/commit/936de4ec78741a83e37cc8516ab0db56fb87a969))
+* **design-eval:** freeze surfaces the exclusion list + approval provenance (028-02) ([227c930](https://github.com/ramboz/servo/commit/227c930de052d0c8cb7a4cb6ea9593e7c5d941c6))
+* **design-eval:** manual human-supplied capture provider (029-01) ([2247fdb](https://github.com/ramboz/servo/commit/2247fdb0b0aee1b672c8996fcce4e65968ef3baf))
+* **design-eval:** structured scoring policy — dimensions + ignore (028-01) ([7d25318](https://github.com/ramboz/servo/commit/7d2531838139921df1db7eb79c2bf7c189cdf434))
+* **design-eval:** subagent advisory judge transport (029-02) ([7ccae52](https://github.com/ramboz/servo/commit/7ccae529b6e1ac6e6708c3241fa8c466ed48fa5e))
+
+
+### Bug Fixes
+
+* **design-eval:** loudly mark fake-scores and within-noise composites ([af51d38](https://github.com/ramboz/servo/commit/af51d38b882a19946b6a7d825e56b90949f0ae28))
+* **design-eval:** migrate sibling tests to the v2 schema (CI green) ([44d4ddd](https://github.com/ramboz/servo/commit/44d4ddd6c1f7543257ecd0d0433a1e18f8754ba2))
+
+
+### Documentation
+
+* **decisions:** accept ADR-0033/0034/0035 (design-eval honesty & reachability) ([793ba1d](https://github.com/ramboz/servo/commit/793ba1d0e36396287e2c6143d117b3ce14aac897))
+* **refinement-todo:** capture Mystique agentic-loop pickups (push-as-lock, harvest-&-compact, coordination×evaluation) ([bbd5c3e](https://github.com/ramboz/servo/commit/bbd5c3efa69f86572a347290849035793bc5b916))
+* **refinement-todo:** note edd-suitability feasibility-vs-direction risk gap ([9cd28e8](https://github.com/ramboz/servo/commit/9cd28e8a5cf4872b634bb89d515c813d7f5dfc54))
+* **refinement-todo:** record design-eval field report, Phase-0 patch, and ADR plan ([fe41a4e](https://github.com/ramboz/servo/commit/fe41a4ee861d50682b3284eab014ded26193ab9a))
+* **specs:** draft 028 (policy honesty) + 029 (reachability) for design-eval ([488c212](https://github.com/ramboz/servo/commit/488c21248261099a3f242db7eae2eeeb8e4a6acf))
+* **specs:** reserve 028-design-eval-policy-honesty ([31eb15b](https://github.com/ramboz/servo/commit/31eb15b3a5d9300ef98441b0c6d3c60f94e4ce30))
+* **specs:** reserve 029-design-eval-reachability ([9b9564e](https://github.com/ramboz/servo/commit/9b9564e4b67d38825fb1ae6f4e1b5a3be0922663))
+
 ## [0.9.0](https://github.com/ramboz/servo/compare/v0.8.0...v0.9.0) (2026-08-24)
 
 

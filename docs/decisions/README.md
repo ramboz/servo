@@ -39,8 +39,12 @@
 - [ADR-0030: Durable cross-run quarantine and a lifecycle-aware coordinator](adr-0030-durable-quarantine-and-lifecycle-coordinator.md) — Two gaps block servo's heartbeat from being a safe, bounded, long-horizon coordinator. (2026-08-06, Accepted)
 - [ADR-0031: design-eval browser acquisition — runtime preflight, unfrozen capture transport, browser identity in the ledger](adr-0031-design-eval-browser-acquisition.md) — `/servo:design-eval` ([ADR-0009](adr-0009-design-fidelity-eval-recipe.md), spec 012) scores UI fidelity by screenshotting the running app and comparing it to a frozen mockup reference. (2026-08-19, Accepted)
 - [ADR-0032: Pluggable capture providers for design-eval (platform-agnostic app capture)](adr-0032-design-eval-capture-providers.md) — `/servo:design-eval` ([ADR-0009](adr-0009-design-fidelity-eval-recipe.md), spec 012) can only score a **web** UI. (2026-08-21, Accepted)
-- [ADR-0033: Agent-loop preflights headless edit permission before the first paid iteration](adr-0033-agent-loop-permission-preflight.md) — `/servo:agent-loop` (`loop.py`) subprocesses `claude -p --agent runner` with **no** `--dangerously-skip-permissions` and no `acceptEdits` / allow-list. (2026-08-27, Proposed)
-- [ADR-0038: GitHub Copilot CLI as a third committed host](adr-0038-copilot-third-host.md) — extend ADR-0028's committed-per-host model to a tri-host layout (`hosts/copilot/` rendered into Copilot's `.github/` home), mirroring jig's shipped keystone (ADR-0061/spec 113); the bar is parity with Claude/Codex, not the 2026-09-28 cutover. (2026-09-18, Accepted)
+- [ADR-0033: Structured scoring policy (dimensions + explicit ignore-list) supersedes free-text rubric](adr-0033-design-eval-structured-scoring-policy.md) — A v0.9.0 `/servo:design-eval` field report: an agent scored an in-game UI at a frozen, n-sampled composite of **0.7998 against a 0.80 threshold** — "essentially passing" — for a UI that diverged from its mockup on at least nine visible points (background, font, glyphs, contrast, form isolation, left-pane dots, filter, map/localisation strip, button alignment). (2026-08-27, Accepted)
+- [ADR-0034: In-harness subagent judge transport for design-eval](adr-0034-design-eval-subagent-judge-transport.md) — design-eval's vision judge is reachable through only two frozen transports, and a common Claude Desktop setup can run neither — so a score cannot be produced where Claude Code actually runs. (2026-08-27, Accepted)
+- [ADR-0035: Manual human-supplied capture provider for design-eval](adr-0035-design-eval-manual-capture-provider.md) — [ADR-0032](adr-0032-design-eval-capture-providers.md) made app capture a pluggable provider (`_CAPTURE_PROVIDERS` in `score.py:497-502`: `web`, `command`, `android`, `ios`) and **explicitly deferred** the human-supplied path: *"This ADR covers only capture for targets servo can drive. (2026-08-27, Accepted)
+- [ADR-0036: Approved frozen eval components satisfy the suitability signal](adr-0036-frozen-evals-satisfy-suitability-signal.md) — `suitability.py decide()` calls a spec `suitable` only when **both** legs hold: at least one evaluable AC, **and** a compilable signal — `has_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)` with `_SIGNAL_KEYS = ("tests", "ci")` (`suitability.py:71`), read from `<target>/.servo/install.json`'s `signals` object. (2026-09-01, Accepted)
+- [ADR-0037: Agent-loop diagnoses a missing headless edit-permission wall — post-hoc terminal relabel, best-effort goal-driver advisory](adr-0037-agent-loop-permission-preflight.md) — `/servo:agent-loop` (`loop.py`) subprocesses `claude -p --agent runner` with **no** `--dangerously-skip-permissions` and no `acceptEdits` / allow-list. (2026-09-01, Accepted)
+- [ADR-0038: GitHub Copilot CLI as a third committed host](adr-0038-copilot-third-host.md) — extend ADR-0028's committed-per-host model to a tri-host layout (`hosts/copilot/` rendered into Copilot's `.github/` home), mirroring jig's shipped keystone (jig ADR-0061/spec 113); the bar is parity with Claude/Codex, not the 2026-09-28 cutover. (2026-09-18, Accepted)
 
 ## Pending
 
@@ -63,8 +67,12 @@ entirely servo-owned), and `0020` is Accepted (minimum supported Python is
 the frozen-eval harness), `0025` is reserved (Proposed) by the
 runner-records / judge-verifies-assumptions ADR, `0026` is Accepted (generic eval-authoring-surface), `0027` is Accepted (goal→eval assisted authoring), and `0028` is Accepted (the
 dual-host package ADR), `0029` is Accepted (autonomy-readiness pre-flight
-gate), and `0030` is reserved (Proposed) by the durable-quarantine /
-lifecycle-coordinator ADR, so the next free number is `0031`:
+gate), `0030` is Accepted (durable quarantine + lifecycle coordinator),
+`0031`–`0035` are Accepted (the design-eval browser-acquisition,
+capture-provider, structured-scoring-policy, subagent-judge-transport, and
+manual-capture ADRs), and `0036`–`0037` are reserved (Proposed) by the
+frozen-evals-satisfy-suitability-signal and agent-loop-permission-preflight
+ADRs, so the next free number is `0038`:
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone proposes a Python or Node oracle alternative.
 

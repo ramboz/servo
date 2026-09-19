@@ -193,7 +193,7 @@ ported as functions into servo's function-based builder):
   **mapped-or-explicitly-unmappable inventory** enumerates servo's hook set; today
   it is the single entry `{Stop→agentStop}` with an empty residual. (servo needs
   **no** permissions-floor hook — that is a jig-specific protected-paths gate;
-  servo's edit-permission concern is the loop's ADR-0033 preflight, handled in the
+  servo's edit-permission concern is the loop's ADR-0037 preflight, handled in the
   execution-primitive mapping below, not a plugin hook.)
 - maps the optional loop/oracle **execution primitives** to their Copilot
   equivalents (see below), recording any primitive that genuinely does not port as
@@ -207,7 +207,7 @@ ported as functions into servo's function-based builder):
 - `claude -p "…"` → `copilot -p "…" -s` (non-interactive; `--output-format json`
   gives the loop parseable per-line output, `--usage-output-file` the cost).
   **Non-interactive tool use requires `--allow-all-tools`** (or specific
-  `--allow-tool`) or edits are refused — this is Copilot's analog of the ADR-0033
+  `--allow-tool`) or edits are refused — this is Copilot's analog of the ADR-0037
   permission wall and where that preflight maps.
 - servo's **loop driver** subprocesses `claude -p --agent runner` per iteration
   and gates on the oracle *in servo's own Python loop* — it is self-driving and
@@ -233,7 +233,7 @@ ported as functions into servo's function-based builder):
   drives per-iteration `copilot -p` and gates in its own Python — a servo feature
   that ports regardless), or is recorded as a Claude-only residual. Either way the
   user keeps oracle-gated autonomy; nothing degrades silently.
-- The ADR-0033 headless edit-permission preflight → Copilot's permission dials
+- The ADR-0037 headless edit-permission preflight → Copilot's permission dials
   (`--allow-all-tools` / `--allow-tool` / `--deny-tool`; experimental
   `--assisted-approval`). Autonomy and tool-permission are distinct dials.
 

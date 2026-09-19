@@ -1,0 +1,547 @@
+{
+  "spec": "031-edit-permission-wall-diagnosis",
+  "slice": "031-02 \u2014 goal-driver-relabel",
+  "pass": "craft",
+  "category": "pr_review",
+  "run_id": "6fe095bb3e5447768bcdf95236e74b94",
+  "created_at": "2026-09-01T21:07:33Z",
+  "candidates": [
+    {
+      "name": "pr-review",
+      "description": "Multi-perspective code review for GitHub pull requests. Use this skill whenever the user asks to review a PR, code review, diff, changeset, or merge request \u2014 whether they provide a GitHub URL, paste a diff, upload files, or are working in a repo with full context. Also trigger when the user says things like \"check this PR\", \"review these changes\", \"what do you think of this diff\", \"pre-review this before I share it\", or references reviewing code from colleagues. Works with any language/stack (Node.js/TypeScript, Java/AEM, Python, and others). Handles input from GitHub MCP, web-fetched PR URLs, pasted diffs, uploaded files, or full repo context in Claude Code. By default, when a GitHub PR target is reachable, the review is posted to the PR (approve when there are no blockers, request changes when there are), with inline comments pinned to specific lines. All review prose is written in the author's saved voice.",
+      "path": "/Users/ramboz/.claude/skills/pr-review/SKILL.md",
+      "tier": "high-confidence"
+    },
+    {
+      "name": "scout-pr-review",
+      "description": "Review a pull request using Scout's semantic analysis tools. Works on any repo with Scout attached. Blast-radius assessment via `impact`, architectural analysis via `investigate`, test-gap detection via `affected_tests`, memory-informed context via `memory_search`, dead-code check after changes, correctness + security review including agent-integration/supply-chain posture (permission grants, hook installs, network destinations, telemetry gates, update paths, transcript access). Reads existing PR review threads to flag adverse advice and amplify good suggestions; honors `.scout/review-policy.md` for repo-specific rules. Posts findings as inline diff comments pinned to specific lines via `gh api /reviews`. Produces a structured verdict with severity-rated findings. Use when asked to review a PR, review changes, or check a branch before merge.",
+      "path": "/Users/ramboz/.claude/skills/scout-pr-review/SKILL.md",
+      "tier": "high-confidence"
+    },
+    {
+      "name": "servo:agent-loop",
+      "description": "Run a headless agent loop against a scaffolded target. Subprocesses\n`claude -p --agent <runner|judge>` against the target N iterations under\nhard guardrails (iteration cap, cumulative cost ceiling, context-fill\nrefusal, oracle-score plateau detection, SIGINT/SIGTERM cleanup), uses\n`gate.py` as the truth-source after each iteration, and checkpoints state\nto `<target>/.servo/runs/<run-id>/state.json` so an interrupted or capped\nrun can be resumed.\nFire this skill when the user wants to:\n- \"run an agent loop\" / \"iterate on this codebase\" / \"headless loop\"\n- \"let claude iterate against my target\" / \"fire-and-forget claude on this\"\n- \"resume the loop\" / \"continue the prior loop\" / \"pick up where it left off\"\n- \"loop with cost ceiling X\" / \"loop until the oracle passes\"\n- \"use /goal to keep going\" / \"goal-driven loop\" / \"--driver goal\" \u2014 the\nADR-0008 mode that delegates continuation to Claude Code's `/goal` while\nservo keeps the oracle + guardrail layer (caps on the outer call, final\n`gate.py` verdict). `--driver auto` (default) probes the host and picks\ngoal-or-loop; `--driver loop` forces the portable hand-rolled path.\n- \"run it detached / in the background / unattended\" / \"--background\" \u2014\nlaunch the goal loop detached so it survives terminal close (slice 003-08).\n- \"set up a scheduled run\" / \"make this Routine-ready\" /\n\"--emit-routine-prompt\" \u2014 vendor gate.py + print the /goal prompt to paste\ninto a scheduled Routine (web/desktop; gate.py is the in-Routine authority).\nDo NOT fire on:\n- \"score this code\" / \"run the oracle\" / \"what's the oracle score?\" \u2014\nthat's `/servo:quality-gate` (the loop's truth-source, not a sibling).\n- \"set up servo\" / \"scaffold the oracle\" / \"install servo\" \u2014 that's\n`/servo:scaffold-init`; the loop refuses if the target hasn't been\nscaffolded.\n- \"race variants\" / \"run N parallel attempts\" \u2014 future\n`/servo:variant-race` (spec 005); the loop is single-track.\n- \"review my PR\" / \"code review\" \u2014 out of scope. The loop's `judge`\nagent is an internal contract between iterations, not a PR reviewer.\nWhen in doubt, ask which servo skill the user means rather than invent\na trigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/agent-loop/SKILL.md",
+      "tier": "high-confidence"
+    },
+    {
+      "name": "servo:autonomy-readiness",
+      "description": "Decide whether a goal's SCOPE and INITIAL PROMPT are precise and bounded\nenough to hand to an unattended, long-horizon agent loop \u2014 *before* any budget\nis burned. Emits the ADR-0029 **readiness verdict**: a closed three-state gate\n(`ready` / `needs_tightening` / `unsafe_for_autonomy`), fail-closed, written to\n`<target>/.servo/readiness/<goal-id>.json`. Human-owned \u2014 the artifact starts\n`approval_status: proposed` and is never auto-approved; a human reviews the\nscorecard and flips it to `approved`. Readiness sits **upstream of**\n`/servo:edd-suitability`: suitability asks \"can this spec be evaluated?\", this\nasks the prior question \"is the premise safe to run unattended at all?\".\nFire this skill when the user wants to:\n- \"is this goal/brief ready to run unattended?\" / \"is this safe to hand to a\nlong-horizon loop?\"\n- \"why won't the background run / recurring Routine start?\" / \"what's blocking\nautonomy on this goal?\"\n- \"review this prompt before I let it run for a day\" / \"is this brief precise\nand bounded enough?\"\n- \"approve this goal for an unattended run\" / \"check whether <goal> is\napproved for autonomy\"\n- \"is my run identity separated from my merge identity?\" / \"will owner-approval\ngates actually hold?\"\nDo NOT fire on:\n- \"is this spec suitable for EDD?\" / \"what evidence is this spec missing?\" \u2014\nthat's `/servo:edd-suitability`. Readiness sits UPSTREAM of it and hands off\nto it; it does not judge EDD-shape or the acceptance criteria.\n- \"scaffold the oracle\" / \"install servo\" / \"detect signals\" \u2014 that's\n`/servo:scaffold-init`. Readiness *reads* the oracle/signals it produced; it\ndoes not synthesize them.\n- \"run the loop\" / \"iterate on this\" / \"let claude fix it\" \u2014 that's\n`/servo:agent-loop`. Readiness is the *precondition* an unattended launch\nsurface consults, not the run.\n- \"score this build\" / \"what's the oracle score?\" \u2014 that's\n`/servo:quality-gate`. Readiness judges the *premise*, not a build.\nWhen in doubt, ask which servo skill the user means rather than invent a\ntrigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/autonomy-readiness/SKILL.md",
+      "tier": "high-confidence"
+    },
+    {
+      "name": "servo:quality-gate",
+      "description": "Run the scaffolded `oracle.sh` against a target project and surface a\nclosed-contract result (0 = pass / 1 = below threshold / 2 = env error).\nAlso exposes an `audit` subcommand that prints the servo install manifest\nwithout invoking the oracle.\nFire this skill when the user wants to:\n- \"score this code\" / \"score this project\" / \"run quality gate\"\n- \"run the oracle\" / \"what's the oracle score?\"\n- \"check the oracle\" / \"did the oracle pass?\"\n- \"show me the gate result\" / \"is the gate passing?\"\n- \"what does this servo install include?\" (\u2192 audit subcommand)\nDo NOT fire on:\n- \"set up servo\" / \"scaffold oracle\" / \"install servo\" \u2014 those are\n`/servo:scaffold-init`'s territory (a sibling skill, not this one).\n- \"fix the failing test\" / \"make tests pass\" / \"debug this test\" \u2014\nout of scope. The gate reports; it does not modify code or tests.\n- \"run my tests\" / \"lint this\" \u2014 call the underlying tool directly;\nthe gate is the composite scorer, not a single-tool runner.\n- \"review my code\" / \"code review\" \u2014 that's a separate workflow.\nWhen in doubt, ask which servo skill the user means rather than invent\na trigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/quality-gate/SKILL.md",
+      "tier": "high-confidence"
+    },
+    {
+      "name": "access",
+      "description": "Manage Discord channel access \u2014 approve pairings, edit allowlists, set DM/group policy. Use when the user asks to pair, approve someone, check who's allowed, or change policy for the Discord channel.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/skills/access/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "adobe-security-antipatterns",
+      "description": "Detect and fix security anti-patterns specific to Adobe products (ColdFusion, AEM, Commerce, Experience Platform) in Java server-side code. Use when user asks for \"security review\", \"anti-pattern check\", \"common vulnerabilities\", \"product security audit\", or when reviewing Java code for ColdFusion, AEM, or Commerce products.",
+      "path": "/Users/ramboz/.claude/skills/adobe-security-antipatterns/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "adobe-security-audit",
+      "description": "Run security audits and dependency scans using Snyk, npm audit, pip-audit, and manual review before deployment or release. Use when user asks \"is my app secure\", \"run a security scan\", \"check for vulnerabilities\", \"audit dependencies\", or mentions pre-deployment security verification.",
+      "path": "/Users/ramboz/.claude/skills/adobe-security-audit/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "adobe-security-client",
+      "description": "ALWAYS invoke when building web pages, HTML templates, React, Vue, Angular, or Svelte components (.html/.jsx/.tsx/.vue/.svelte), mobile apps (iOS/Android), or working with cookies, sessions, and browser JavaScript. Ensures XSS prevention, Content Security Policy, CSRF defense, clickjacking protection, and secure session handling.",
+      "path": "/Users/ramboz/.claude/skills/adobe-security-client/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "adobe-security-cloud",
+      "description": "ALWAYS invoke when writing Terraform (.tf), CloudFormation (.yaml/.json), Kubernetes manifests, Dockerfiles, or Azure Bicep (.bicep) files, or deploying to AWS, Azure, or GCP. Ensures encrypted data stores, least-privilege IAM, blocked public access, and proper network configuration.",
+      "path": "/Users/ramboz/.claude/skills/adobe-security-cloud/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "adobe-security-foundations",
+      "description": "ALWAYS invoke when writing, generating, reviewing, or modifying code. Ensures input validation, safe credential handling, proper cryptography, injection prevention, and secure error handling are applied by default. Covers web apps, APIs, scripts, CLIs, and all software development tasks.",
+      "path": "/Users/ramboz/.claude/skills/adobe-security-foundations/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "adobe-security-lang",
+      "description": "ALWAYS invoke when writing or reviewing Python (.py), Java (.java), JavaScript/TypeScript (.js/.ts/.tsx), PHP (.php), Ruby (.rb), Rust (.rs), C (.c/.h), C++ (.cpp/.hpp), Go (.go), Kotlin (.kt), Swift (.swift), or C#/.NET (.cs) code. Identifies dangerous functions and replaces them with safe alternatives for each language.",
+      "path": "/Users/ramboz/.claude/skills/adobe-security-lang/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "adobe-security-services",
+      "description": "ALWAYS invoke when building backends, login pages, user registration, REST or GraphQL APIs, database integrations, file upload handlers, or outbound HTTP requests. Ensures proper authentication, authorization, parameterized queries, rate limiting, CORS, and data protection patterns.",
+      "path": "/Users/ramboz/.claude/skills/adobe-security-services/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "agent-development",
+      "description": "This skill should be used when the user asks to \"create an agent\", \"add an agent\", \"write a subagent\", \"agent frontmatter\", \"when to use description\", \"agent examples\", \"agent tools\", \"agent colors\", \"autonomous agent\", or needs guidance on agent structure, system prompts, triggering conditions, or agent development best practices for Claude Code plugins.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/agent-development/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "arch-review",
+      "description": "Multi-perspective review of architecture proposals, technical design documents, RFCs, and system design specs. Use this skill whenever the user asks to review an architecture proposal, design doc, RFC, ADR, technical spec, system design, or migration plan \u2014 whether they provide a document URL, paste content, upload files, or describe a design verbally. Also trigger when the user says things like \"review this design\", \"what do you think of this architecture\", \"poke holes in this proposal\", \"is this design sound\", \"review my RFC\", \"critique this tech spec\", or references evaluating a colleague's design document. Handles input as uploaded documents (PDF, markdown, Word), pasted text, URLs, or verbal descriptions. Works across domains: distributed systems, frontend architecture, data pipelines, API design, cloud infrastructure, and more. All review prose is written in the author's saved voice.",
+      "path": "/Users/ramboz/.claude/skills/arch-review/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "audit-migrator",
+      "description": "Execute the six-phase ASO audit migration plan (migration/audit-migration-plan.md\nin adobe/mysticat-architecture) for porting a single opportunity from\nspacecat-audit-worker (or a Mystique crew/flow) to the Mysticat blackboard.\nUse when: starting a new ASO audit migration, filling out an opportunity\nprofile, building a producer for an opportunity type, porting a crew or\nflow, or answering \"what's left before this migration is Done?\" Triggers:\n\"migrate audit <name>\", \"port <name> to blackboard\", \"start migration for\n<opportunity>\", \"is <opportunity> done migrating?\", \"run phase <N> for\n<opportunity>\". The skill refuses 1:1 ports, refuses in-process DRS, and\nstops at each phase gate until the Definition of Done is green.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/sites-optimizer/skills/audit-migrator/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "block-kit",
+      "description": "Help developers build and validate Block Kit layouts for Slack messages, modals, and Home tabs. Provides authoritative block references and validates with the blocks.validate API. Use this skill whenever the developer wants to compose Slack message layouts, build modals/forms/dialogs, design Home tab interfaces, create interactive messages with buttons or menus, modify existing Block Kit JSON, or asks about any Slack UI component (sections, actions, inputs, headers, alerts, tables, carousels). Also trigger when they mention \"blocks\", \"Block Kit Builder\", want to preview or see the rendered version of blocks, or paste JSON containing block structures like `\"type\": \"section\"`.",
+      "path": "/Users/ramboz/.claude/plugins/cache/claude-plugins-official/slack/1.2.0/skills/block-kit/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "build-mcp-app",
+      "description": "This skill should be used when the user wants to build an \"MCP app\", add \"interactive UI\" or \"widgets\" to an MCP server, \"render components in chat\", build \"MCP UI resources\", make a tool that shows a \"form\", \"picker\", \"dashboard\" or \"confirmation dialog\" inline in the conversation, or mentions \"apps SDK\" in the context of MCP. Use AFTER the build-mcp-server skill has settled the deployment model, or when the user already knows they want UI widgets.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcp-app/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "build-mcp-server",
+      "description": "This skill should be used when the user asks to \"build an MCP server\", \"create an MCP\", \"make an MCP integration\", \"wrap an API for Claude\", \"expose tools to Claude\", \"make an MCP app\", or discusses building something with the Model Context Protocol. It is the entry point for MCP server development \u2014 it interrogates the user about their use case, determines the right deployment model (remote HTTP, MCPB, local stdio), picks a tool-design pattern, and hands off to specialized skills.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcp-server/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "build-mcpb",
+      "description": "This skill should be used when the user wants to \"package an MCP server\", \"bundle an MCP\", \"make an MCPB\", \"ship a local MCP server\", \"distribute a local MCP\", discusses \".mcpb files\", mentions bundling a Node or Python runtime with their MCP server, or needs an MCP server that interacts with the local filesystem, desktop apps, or OS and must be installable without the user having Node/Python set up.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcpb/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "cardputer-buddy",
+      "description": "Iterate on the Cardputer-Adv MicroPython app bundle (Claude Buddy, Snake, Hello) after the device is already provisioned via m5-onboard. Use when the user wants to add a new app, push a single changed .py without re-flashing, watch device serial logs, or run a one-shot REPL command. Trigger on \"add an app\", \"push to the cardputer\", \"tail the device\", \"run on the device\", or follow-up work after /maker-setup.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/cwc-makers/skills/cardputer-buddy/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "claude-automation-recommender",
+      "description": "Analyze a codebase and recommend Claude Code automations (hooks, subagents, skills, plugins, MCP servers). Use when user asks for automation recommendations, wants to optimize their Claude Code setup, mentions improving Claude Code workflows, asks how to first set up Claude Code for a project, or wants to know what Claude Code features they should use.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/claude-code-setup/skills/claude-automation-recommender/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "claude-md-improver",
+      "description": "Audit and improve CLAUDE.md files in repositories. Use when user asks to check, audit, update, improve, or fix CLAUDE.md files. Scans for all CLAUDE.md files, evaluates quality against templates, outputs quality report, then makes targeted updates. Also use when the user mentions \"CLAUDE.md maintenance\" or \"project memory optimization\".",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/claude-md-management/skills/claude-md-improver/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "claude-security",
+      "description": "The Claude Security menu \u2014 pick a job: scan the codebase (the whole repository or a scoped part of it), scan changes (this branch's or a pull request's diff, or one commit), or suggest patches (findings turned into targeted patch files, each verified by a panel of agents, that you apply when you choose).",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/claude-security/skills/claude-security/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "command-development",
+      "description": "This skill should be used when the user asks to \"create a slash command\", \"add a command\", \"write a custom command\", \"define command arguments\", \"use command frontmatter\", \"organize commands\", \"create command with file references\", \"interactive command\", \"use AskUserQuestion in command\", or needs guidance on slash command structure, YAML frontmatter fields, dynamic arguments, bash execution in commands, user interaction patterns, or command development best practices for Claude Code.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/command-development/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "configure",
+      "description": "Set up the Discord channel \u2014 save the bot token and review access policy. Use when the user pastes a Discord bot token, asks to configure Discord, asks \"how do I set this up\" or \"who can reach me,\" or wants to check channel status.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/skills/configure/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "content-fidelity",
+      "description": "Author a frozen text content-fidelity eval component for a project \u2014 the non-visual sibling of servo's design-eval. Use when generated text (a reply, a doc, a templated message) must match an intended rubric or spec (\"does this text match the intended tone/content/style?\") and that fidelity should drive or gate the loop. Gathers the generated text under test (file read or generator command), judges fidelity with a pinned text-capable model (n-sampled, lower-bound), freezes the definition, and installs a `score_content_fidelity` component into the project's `oracle.sh`. Do not use for deterministic checks (use scaffold-init / spec-oracle), for visual/UI fidelity (use design-eval), or for the per-iteration judge agent.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/content-fidelity/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "create-slack-app",
+      "description": "Guide developers through creating a Slack app or agent using the Slack CLI and Bolt (JS or Python). Handles prerequisites, sandbox setup, authentication, project creation from templates, and local development.",
+      "path": "/Users/ramboz/.claude/plugins/cache/claude-plugins-official/slack/1.2.0/skills/create-slack-app/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "cutline",
+      "description": "Read a release plan plus JIG specs/status when present, then recommend include, defer, split, and risk-first boundaries without mutating JIG lifecycle state.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/shaper/skills/cutline/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "debug-workflow",
+      "description": "Diagnose-first debugging and development workflow. Use this skill whenever the user asks to debug a non-trivial issue, investigate a failure, root-cause a bug, fix a flaky test, diagnose a regression, or resolve a cross-layer problem \u2014 whether they provide error logs, stack traces, test output, code references, or a verbal description of the issue. Also trigger when the user says things like \"root-cause this\", \"diagnose before fixing\", \"why is this failing\", \"this broke again\", \"figure out what's wrong\", \"debug this\", \"investigate this failure\", or references a previous fix that didn't stick. Works across any language/stack. Handles input as error logs, test output, stack traces, code snippets, diffs, uploaded files, URLs, or verbal problem descriptions.",
+      "path": "/Users/ramboz/.claude/skills/debug-workflow/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "design-eval",
+      "description": "Author a frozen UI design-fidelity eval component for a project \u2014 the non-deterministic sibling of servo's deterministic component templates. Use when a project must be built to match a design mockup (\"does the UI match the design?\") and that fidelity should drive or gate the loop. Captures app vs reference screenshots, judges fidelity with a pinned vision model (n-sampled, lower-bound), freezes the definition, and installs a `score_design_fidelity` component into the project's `oracle.sh`. Do not use for deterministic checks (use scaffold-init / spec-oracle) or for the per-iteration judge agent.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/design-eval/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "eval-authoring",
+      "description": "Author a frozen text-judged eval from a spec-006 `residual_judgment` AC or a free-form goal. Guides triage, rubric shaping, reference-set collection, frozen n/\u03b4/threshold/judge parameters, ADR-0024 freeze/install, and advisory judge audit. Use to author an eval, turn a goal into acceptance criteria, shape a rubric or reference set, freeze/install an eval, or audit judge trust. Do NOT use to run evals (`quality-gate`/`agent-loop`), classify deterministic checks (`spec-oracle`), decide EDD suitability (`edd-suitability`), or build design/content fidelity evals (use the `design-eval` / `content-fidelity` presets). This is the generic surface for other text-judged criteria.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/eval-authoring/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "example-command",
+      "description": "An example user-invoked skill that demonstrates frontmatter options and the skills/<name>/SKILL.md layout",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/example-plugin/skills/example-command/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "example-skill",
+      "description": "This skill should be used when the user asks to \"demonstrate skills\", \"show skill format\", \"create a skill template\", or discusses skill development patterns. Provides a reference template for creating Claude Code plugin skills.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/example-plugin/skills/example-skill/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "frontend-design",
+      "description": "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design/skills/frontend-design/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "get-content-scrape",
+      "description": "Use when the user wants to see the actual HTML the SpaceCat content scraper captured for a page \u2014 e.g. \"get me the content scrape\", \"fetch the scrape for <url>\", \"what did the scraper capture for this page\", \"is the H1 in the scrape?\", or when investigating why a preflight/audit check (h1, headings, body-size, metatags, alt-text) fired on a page. Fetches scrape.json from the scraper S3 bucket and presents the rawBody HTML plus a diagnostic summary, handling all credentials (klam AWS, mysticat siteId lookup, S3 discovery) automatically.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/mysticat-workspace-extras/.agents/skills/get-content-scrape/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "hook-development",
+      "description": "This skill should be used when the user asks to \"create a hook\", \"add a PreToolUse/PostToolUse/Stop hook\", \"validate tool use\", \"implement prompt-based hooks\", \"use ${CLAUDE_PLUGIN_ROOT}\", \"set up event-driven automation\", \"block dangerous commands\", or mentions hook events (PreToolUse, PostToolUse, Stop, SubagentStop, SessionStart, SessionEnd, UserPromptSubmit, PreCompact, Notification). Provides comprehensive guidance for creating and implementing Claude Code plugin hooks with focus on advanced prompt-based hooks API.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "investigate-alert",
+      "description": "Investigate AEM Cloud Service (Skyline) oncall alerts. Guides through alert triage in Slack, k8s access requests, environment connection, JIRA ticket review, runbook consultation, and alert-specific diagnosis using kubectl and sky CLI. Use when starting an oncall shift, responding to a page, or investigating an active alert. Argument: optional alert name, SKYSI ticket, or cm-pXXXXX-eYYYYYY environment ID.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/skyline-oncall/skills/investigate-alert/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "local-dev",
+      "description": "Use when the user wants to start, stop, check status, or debug the local development environment. Covers shared infrastructure (Postgres, PostgREST, LocalStack), database setup, and running services locally.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/mysticat-workspace-extras/.agents/skills/local-dev/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "m5-onboard",
+      "description": "End-to-end onboarding for a freshly-plugged-in M5Stack ESP32 device (Cardputer, Cardputer-Adv, Core, CoreS3, Stick) \u2014 detect on USB, flash UIFlow 2.0 firmware, and install the Claude Buddy MicroPython app bundle. Use whenever the user plugs in or wants to flash/provision/reset an M5Stack or ESP32 board, or says \"m5-onboard go\".",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/cwc-makers/skills/m5-onboard/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "math-olympiad",
+      "description": "",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/math-olympiad/skills/math-olympiad/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "mcp-integration",
+      "description": "This skill should be used when the user asks to \"add MCP server\", \"integrate MCP\", \"configure MCP in plugin\", \"use .mcp.json\", \"set up Model Context Protocol\", \"connect external service\", mentions \"${CLAUDE_PLUGIN_ROOT} with MCP\", or discusses MCP server types (SSE, stdio, HTTP, WebSocket). Provides comprehensive guidance for integrating Model Context Protocol servers into Claude Code plugins for external tool and service integration.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "morning-ai-radar",
+      "description": "AI news and tooling radar \u2014 fetches curated RSS/GitHub content, triages with Claude, injects an AI Radar section into the daily note. Read-only, no draft staging.",
+      "path": "/Users/ramboz/.claude/skills/morning-ai-radar/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "morning-assistant",
+      "description": "Morning briefing orchestrator \u2014 two modes (Morning Brief + Deep Dive). Coordinates sub-agents across three layers (orchestration, data gathering, draft staging). Writes daily note to Obsidian vault.",
+      "path": "/Users/ramboz/.claude/skills/morning-assistant/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "morning-confluence",
+      "description": "Confluence DC sub-agent \u2014 three-step workflow (gather via REST API script, analyze page changes/mentions, stage draft page comments as local Markdown fragments). Read-only \u2014 never edits pages directly. Supports Morning Brief and Deep Dive modes.",
+      "path": "/Users/ramboz/.claude/skills/morning-confluence/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "morning-github",
+      "description": "GitHub sub-agent \u2014 three-step workflow (gather via connector/API script, analyze notifications/PRs, stage draft PR reviews via pending review API and issue comment drafts as local MD fragments). Supports both GitHub.com and Corporate GitHub. Supports Morning Brief and Deep Dive modes.",
+      "path": "/Users/ramboz/.claude/skills/morning-github/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "morning-jira",
+      "description": "JIRA DC sub-agent \u2014 three-step workflow (gather via REST API script, analyze tickets/discussions, stage draft comments as local Markdown fragments). Supports Morning Brief and Deep Dive modes.",
+      "path": "/Users/ramboz/.claude/skills/morning-jira/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "morning-outlook",
+      "description": "Outlook/Teams sub-agent \u2014 three-step workflow (gather via connector/browser, triage emails, stage draft replies via Claude in Chrome). Supports Morning Brief and Deep Dive modes.",
+      "path": "/Users/ramboz/.claude/skills/morning-outlook/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "morning-slack",
+      "description": "Slack sub-agent \u2014 three-step workflow (gather via connector/API, analyze mentions/DMs/channels, stage drafts via Claude in Chrome). Supports Morning Brief and Deep Dive modes.",
+      "path": "/Users/ramboz/.claude/skills/morning-slack/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "morning-spike",
+      "description": "Phase 0 validation spike \u2014 12 pass/fail tests covering API access, browser draft staging, sub-agent spawning, and infrastructure before running the full agent",
+      "path": "/Users/ramboz/.claude/skills/morning-spike/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "mysticat-debug",
+      "description": "Debug Mysticat production issues. Given a site ID/URL and time window, orchestrates Coralogix MCP (Mysticat logs), Spacecat MCP (site/org lookup), and Splunk MCP (Mystique logs) to query logs, correlate traces across services, and identify root cause. Activate when user asks to debug, investigate, or troubleshoot a site issue.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/sites-optimizer/skills/mysticat-debug/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "playground",
+      "description": "Creates interactive HTML playgrounds \u2014 self-contained single-file explorers that let users configure something visually through controls, see a live preview, and copy out a prompt. Use when the user asks to make a playground, explorer, or interactive tool for a topic.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/playground/skills/playground/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "plugin-settings",
+      "description": "This skill should be used when the user asks about \"plugin settings\", \"store plugin configuration\", \"user-configurable plugin\", \".local.md files\", \"plugin state files\", \"read YAML frontmatter\", \"per-project plugin settings\", or wants to make plugin behavior configurable. Documents the .claude/plugin-name.local.md pattern for storing plugin-specific configuration with YAML frontmatter and markdown content.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "plugin-structure",
+      "description": "This skill should be used when the user asks to \"create a plugin\", \"scaffold a plugin\", \"understand plugin structure\", \"organize plugin components\", \"set up plugin.json\", \"use ${CLAUDE_PLUGIN_ROOT}\", \"add commands/agents/skills/hooks\", \"configure auto-discovery\", or needs guidance on plugin directory layout, manifest configuration, component organization, file naming conventions, or Claude Code plugin architecture best practices.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "project-artifact",
+      "description": "Generate and publish a project status artifact \u2014 an opinionated, tabbed status page for a project too big for one update (overview & success criteria, the workstream sequence, next steps, plus background, plan, risks & open questions, and decisions/FAQ when they earn a tab) \u2014 published with the built-in Artifact tool to a default-private claude.ai page the user can share with teammates. Use when a piece of work spans several workstreams and you want a shareable overview kept current. Each artifact is backed by a small per-project config in the plugin data dir, so refreshing it re-gathers live state, redeploys the same URL, and reports only the delta. For software projects whose workstreams are PRs, also read swe.md (the X.Y PR-numbering convention; pulling PR state with gh/git; a per-PR detail block). Needs the built-in Artifact tool (claude.ai login). Not for single-PR changes or public docs.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/project-artifact/skills/project-artifact/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "query-audits",
+      "description": "Use when querying Spacecat audit data from PostgREST \u2014 checking audit status, finding errored audits, listing audit types for a site, or reviewing audit history and results.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/sites-optimizer/skills/query-audits/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "query-opportunities",
+      "description": "Use when querying Spacecat opportunities or suggestions from PostgREST \u2014 filtering by tags, type, status, origin, date range, or site. Use when exporting opportunity data to CSV, analyzing opportunities across sites, querying suggestions linked to opportunities, or answering questions about which opportunities or suggestions exist with certain properties.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/sites-optimizer/skills/query-opportunities/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "query-scrapes",
+      "description": "Use when querying Spacecat scrape data from PostgREST \u2014 checking scrape job status, finding scrape results for a URL, listing scraped URLs for a job, or reviewing scrape history and failures.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/sites-optimizer/skills/query-scrapes/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "query-sites",
+      "description": "Use when querying Spacecat site data from PostgREST \u2014 looking up sites by URL or ID, finding site organization details, checking entitlements (org-level and site-specific enrollments), or listing sites by filters.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/sites-optimizer/skills/query-sites/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "receipts",
+      "description": "Generate a personal Claude Code usage & impact report (\"receipts\") from this machine's local session transcripts \u2014 for justifying Claude Code usage/spend to a manager, self-review, or \"what have I been using this for\" check-ins. Mines ~/.claude/projects locally (no extra API calls beyond one final write-up), cross-references local git history, and writes a markdown report plus a self-contained HTML receipt to your home directory. Use when the user asks for \"receipts\", an \"impact report\", \"usage report\", wants to \"show my Claude Code activity\", \"prove the value of Claude Code\", or runs `/receipts`.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/receipts/skills/receipts/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "release-check",
+      "description": "Read a release plan plus JIG specs/status and optional servo release signals when present, then give an advisory ship / cut-scope / stop-and-re-shape / extend-with-rationale recommendation without mutating JIG or servo state.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/shaper/skills/release-check/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "release-slate",
+      "description": "Read docs/releases/*.md release plans and write or refresh the compact docs/releases/README.md slate without creating a backlog or duplicating JIG lifecycle state.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/shaper/skills/release-slate/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "run-preflight",
+      "description": "Use when the user wants to run a preflight job against a customer page and observe the AI suggestion output \u2014 e.g. \"run preflight on <url>\", \"what does preflight suggest for this page?\", \"reproduce the bug on <url>\", \"run the metatags suggest step against <customer> page\", or when investigating a customer-reported incorrect AI suggestion. Handles all auth (mysticat session token + IMS promise token via Vault), submits the job, polls in the background, and prints the full audit results. Works for any customer page (author or published URL), any env (prod/dev), and any step (identify/suggest).",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/mysticat-workspace-extras/.claude/skills/run-preflight/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scope-audit",
+      "description": "Read a release plan plus JIG specs/status when present, then flag appetite leakage, creep, unresolved rabbit holes, no-go conflicts, overreach, and orphan specs without mutating JIG lifecycle state.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/shaper/skills/scope-audit/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-autotune",
+      "description": "Automatically tune Scout search quality for a repository. Analyzes project structure, generates or updates `.scout/scout.config.yaml` (ignore/boost/dampen rules), creates a query-set.toml for evaluation, then runs 48 parameter sweeps (including class-aware learned-ranker probes) to find optimal search tune params. Use when asked to \"autotune\", \"scout-autotune\", \"tune search for <repo>\", or \"optimize search quality\".",
+      "path": "/Users/ramboz/.claude/skills/scout-autotune/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-bench-create",
+      "description": "Guided workflow for product engineers to create benchmark evaluation suites for their repos. Produces a search quality query-set (TOML) that can be evaluated immediately with `scout evaluate`, and optionally agent outcome tasks (JSON) for the Scout team's centralized benchmark suite. Use when asked to \"create a benchmark\", \"bench-create\", \"benchmark my repo\", or \"measure Scout quality on my repo\".",
+      "path": "/Users/ramboz/.claude/skills/scout-bench-create/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-memory-init",
+      "description": "Seed Scout's memory bank with a comprehensive set of useful memories about a codebase - architecture overview, domain concepts, coupling observations, execution flows, binary inventory, hub files, directory-template patterns, build system, test framework, and documentation pointers. Runs memory.init + memory_infer, then issues LLM-driven follow-up prompts to capture behavioral, navigational, and workflow knowledge that structural inference alone misses. Use when onboarding a new repo to Scout, when asked to \"initialize scout memory\", \"seed memory\", \"scout-memory-init\", or \"create memories for <repo>\". Produces a ready-to-use memory bank so future investigate/search calls can short-circuit through memory_search.",
+      "path": "/Users/ramboz/.claude/skills/scout-memory-init/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-scrum-master",
+      "description": "Coordinate multiple long-lived coding agents working on the same repo via Scout's peer protocol. Run as a coordination-only agent that reads heartbeats, tracks file claims, posts a single canonical board state via `peer.post_board` (replacing broadcast flooding), nudges stale agents privately, and escalates only true blockers. Uses the structured `peer.heartbeat` (last_progress / next_action / blocked_on / verification_status) and `peer.handoff_files` primitives. Use when running multi-agent efforts (worker fleet, autoresearch, agent teams) and you want one Scrum Master agent to hold the board.",
+      "path": "/Users/ramboz/.claude/skills/scout-scrum-master/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "servo:edd-suitability",
+      "description": "Decide whether an engineering spec is suitable for Evaluation-Driven\nDevelopment before any unattended loop runs against it. Emits the ADR-0015\n**suitability verdict** \u2014 a closed three-state gate (`suitable` /\n`needs_evidence` / `unsuitable`), fail-closed, with an actionable\n`missing_evidence` checklist \u2014 written to\n`<target>/.servo/suitability/<spec-id>.json`. A gate, not a score: the loop\nnever optimizes toward a meaningless green oracle on work that cannot be\nevaluated.\nFire this skill when the user wants to:\n- \"is this spec/work suitable for EDD?\" / \"should this go through servo?\"\n- \"what evidence is this spec missing?\" / \"why isn't this ready to compile?\"\n- \"why won't Compile proceed on this spec?\" / \"explain the suitability verdict\"\n- \"re-check suitability after I added tests\" / \"is <spec> EDD-shaped yet?\"\nDo NOT fire on:\n- \"scaffold the oracle\" / \"install servo\" / \"detect signals\" \u2014 that's\n`/servo:scaffold-init` (001). Suitability *reads* the signals it detects;\nit does not synthesize the oracle.\n- \"classify the acceptance criteria\" / \"map ACs to check families\" \u2014 that's\n`/servo:spec-oracle` (006). Suitability *consults* that classification; it\ndoes not reclassify.\n- \"run the loop\" / \"iterate on this\" / \"let claude fix it\" \u2014 that's\n`/servo:agent-loop` (003). Suitability is the *precondition*, not the run.\n- \"score this code\" / \"what's the oracle score?\" \u2014 that's\n`/servo:quality-gate` (002). Suitability judges the *spec*, not a build.\nWhen in doubt, ask which servo skill the user means rather than invent a\ntrigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/edd-suitability/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "servo:execution-planner",
+      "description": "Assemble the [ADR-0016](../../docs/decisions/adr-0016-execution-plan-artifact.md)\n**execution plan** \u2014 the durable Compile\u2192Run handoff artifact \u2014 from the\nCompile inputs already produced upstream (the suitability verdict, the\noracle, the spec-oracle overlay) and write it to\n`<target>/.servo/plans/<spec-id>/plan.json`. This is the **last step of\nServo Compile**: it decides nothing new, classifies nothing, and adds no\ngate \u2014 it only references what Compile already produced.\nFire this skill when the user wants to:\n- \"compile the execution plan for this spec\"\n- \"produce the Compile\u2192Run handoff\"\n- \"emit `plan.json` for this spec\"\n- \"assemble the ADR-0016 plan for <spec>\" / \"wire up the Compile\u2192Run artifact\"\nDo NOT fire on:\n- \"is this spec suitable for EDD?\" / \"what evidence is missing?\" \u2014 that's\n`/servo:edd-suitability` (015). This skill *consumes* the suitability\nverdict as a hard precondition; it does not decide it.\n- \"classify the acceptance criteria\" / \"build the spec-oracle overlay\" \u2014\nthat's `/servo:spec-oracle` (006). This skill *references* the overlay\nby id + AC counts; it does not classify ACs or build the overlay.\n- \"run the loop\" / \"consume this plan\" / \"iterate on this spec\" \u2014 that's\n`/servo:agent-loop` (003). This skill produces the plan `loop.py --plan`\nreads at Run time; it never runs the loop itself.\n- \"score this build\" / \"what's the oracle score?\" \u2014 that's\n`/servo:quality-gate` (002). This skill has no opinion on a build's\nscore; it only assembles the plan that will later govern a run.\nWhen in doubt, ask which servo skill the user means rather than invent a\ntrigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/execution-planner/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "servo:heartbeat",
+      "description": "Run heartbeat or set up a scheduled heartbeat for a servo-scaffolded target.\nThe heartbeat is servo's Routine-triggered front-end: discover project signals\ninto a triage inbox, read the heartbeat inbox, dispatch heartbeat findings, or\nrun heartbeat end to end under one whole-heartbeat cost ceiling. Fire this\nskill for requests mentioning a Routine, cron, GitHub Actions schedule, or a\nscheduled agent that should invoke servo on an interval.\nDo NOT fire on:\n- \"run the oracle\" / \"score this code\" / \"oracle score\" \u2014 that's\n`/servo:quality-gate`.\n- \"iterate on this\" / \"run an agent loop\" / \"fix this manually with the\nloop\" \u2014 that's `/servo:agent-loop`.\n- \"set up servo\" / \"scaffold the oracle\" / \"install servo in this\nproject\" \u2014 that's `/servo:scaffold-init`.\n- \"install the oracle hook\" / \"oracle hook status\" \u2014 that's\n`/servo:oracle-hook`.\n- \"spec oracle\" / \"turn this spec into checks\" \u2014 that's\n`/servo:spec-oracle`.\n- \"design eval\" / \"visual fidelity score\" \u2014 that's `/servo:design-eval`.\nWhen in doubt, ask which servo skill the user means rather than invent a\ntrigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/heartbeat/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "servo:oracle-hook",
+      "description": "Install, uninstall, or report the status of servo's meta-judge `Stop` hook in\na target project. The installed hook scores every assistant turn against the\nscaffolded oracle (via `gate.py`) and blocks the stop with a structured retry\nhint when the oracle is below threshold \u2014 the interactive cousin of\n`/servo:agent-loop`. Installing it mutates `<target>/.claude/settings.json`,\nso it is a **Tier-2** surface: offered explicitly, never auto-installed.\nFire this skill when the user wants to:\n- \"install the oracle hook\" / \"add the Stop hook\" / \"set up the meta-judge\"\n- \"uninstall the oracle hook\" / \"remove the meta-judge\" / \"remove the Stop hook\"\n- \"is the oracle hook installed?\" / \"oracle hook status\" / \"check the hook\"\nDo NOT fire on:\n- \"run the oracle\" / \"score this code\" / \"what's the oracle score?\" \u2014 that's\n`/servo:quality-gate` (a one-shot score, not the hook installer).\n- \"iterate on this\" / \"run an agent loop\" / \"headless loop\" \u2014 that's\n`/servo:agent-loop` (the headless cousin; this hook is the interactive one).\n- \"set up servo\" / \"scaffold the oracle\" / \"install servo\" \u2014 that's\n`/servo:scaffold-init`; the hook refuses to install until the target is\nservo-scaffolded.\n- \"fix the failing test\" / \"review my code\" \u2014 out of scope. The hook installs\nand reports; it does not modify code or review it.\nWhen in doubt, ask which servo skill the user means rather than invent a\ntrigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/oracle-hook/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "servo:scaffold-init",
+      "description": "Compile a target project's signals into an executable oracle \u2014 the first\nServo Compile step of servo's Evaluation-Driven Development engine. Probes\nthe target for signals (tests, lint, CI, language) and drops a tailored\n`oracle.sh`, `.servo/install.json` manifest, and `.servo/refinement-todo.md`\ndeferred-decisions list.\nFire this skill when the user wants to:\n- \"set up servo\" or \"set up servo on this project\"\n- \"scaffold oracle for this project\" or \"scaffold an oracle\"\n- \"install agent loop infrastructure\"\n- \"install servo here\"\n- \"bring this repo under servo's closed-loop control\"\nDo NOT fire on:\n- bare \"oracle\" or \"score this code\" \u2014 those refer to *running* an\nalready-scaffolded oracle.sh, which is a future runtime skill\n(`/servo:quality-gate`), not this scaffolder.\n- \"review my code\" / \"run my tests\" / \"lint this\" \u2014 out of scope.\n- \"set up jig\" / \"scaffold jig\" \u2014 that's jig's `/jig:scaffold-init`,\na sibling plugin, not this one.\nWhen in doubt, ask the user which servo skill they mean rather than\ninvent a trigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/scaffold-init/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "servo:spec-oracle",
+      "description": "Compile a spec or slice into a reviewable, project-owned **evidence\noverlay**: map each acceptance criterion to a deterministic check family,\nwrite a `plan.md` + `checks.json` under the spec's own `oracle/<id>/`\ndirectory, compile the checks into an installable `oracle.sh` component, and\nfreeze it behind an explicit approval so an unattended loop can optimize\nagainst the spec's promises instead of a hand-waved single judge.\nFire this skill when the user wants to:\n- \"generate an oracle for this spec\" / \"spec oracle for <spec>\"\n- \"turn this spec/slice into checks\" / \"compile acceptance criteria into checks\"\n- \"evaluate / specify an oracle for a spec\" / \"what would servo judge for this spec?\"\n- \"plan the evidence for <spec>\" / \"install the spec overlay\" / \"approve the spec oracle\"\nDo NOT fire on:\n- \"run the oracle\" / \"score this code\" / \"what's the oracle score?\" \u2014\nthat's `/servo:quality-gate`. This skill *builds and installs* the\noverlay; quality-gate *runs* it.\n- \"iterate on this\" / \"run an agent loop\" / \"let claude fix it\" \u2014 that's\n`/servo:agent-loop`. This skill produces the target the loop optimizes\nagainst; it does not iterate.\n- \"set up servo\" / \"scaffold the oracle\" / \"install servo\" \u2014 that's\n`/servo:scaffold-init`, which produces the baseline `oracle.sh` this\noverlay composes onto.\nWhen in doubt, ask which servo skill the user means rather than invent a\ntrigger match.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/servo/skills/spec-oracle/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "session-report",
+      "description": "Generate an explorable HTML report of Claude Code session usage (tokens, cache, subagents, skills, expensive prompts) from ~/.claude/projects transcripts.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/session-report/skills/session-report/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "shape-release",
+      "description": "Create or refine a repo-native release plan in docs/releases/<slug>.md from raw product intent, appetite, no-gos, risks, release-check criteria, and JIG handoff notes.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/shaper/skills/shape-release/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "silence-alert",
+      "description": "Silence an AEM Cloud Service (Skyline) alert via the approved Slack protocol. Guides through finding the OCINC number from ServiceNow, identifying the SKYOPS tracking ticket, and posting the silence command in the correct alert thread. Use after investigation is complete and alert needs to be silenced. MUST NOT use AlertManager UI directly - always use Slack command for audit trail. Argument: SKYSI ticket number or alert thread context.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/skyline-oncall/skills/silence-alert/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "skill-creator",
+      "description": "Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/skill-creator/skills/skill-creator/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "skill-development",
+      "description": "This skill should be used when the user wants to \"create a skill\", \"add a skill to plugin\", \"write a new skill\", \"improve skill description\", \"organize skill content\", or needs guidance on skill structure, progressive disclosure, or skill development best practices for Claude Code plugins.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "slack-api",
+      "description": "Discover, navigate, and call Slack Web API methods (the family.method endpoints at slack.com/api like chat.postMessage, conversations.history, users.info, views.open). Use this skill whenever the developer asks which Slack API method does something, needs a method's required OAuth scopes or token type, wants to call or test a Web API method, is handling cursor pagination (next_cursor), hitting rate limits (tier/ratelimited/Retry-After), or debugging API errors like missing_scope, invalid_auth, or channel_not_found. Also trigger when they paste a slack.com/api/ URL or a docs.slack.dev/reference/methods link, or ask how to list/fetch/post/update Slack resources via the API. This skill covers the Web API method layer: finding the right method, reading its contract (scopes, arguments, errors), and calling it over raw HTTP with curl or through a Slack SDK.",
+      "path": "/Users/ramboz/.claude/plugins/cache/claude-plugins-official/slack/1.2.0/skills/slack-api/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "slack-cli",
+      "description": "Use the Slack CLI to create, run, and manage Slack apps from the terminal. Use whenever the developer wants to log in, add a team, switch workspaces, or authenticate with Slack; whenever Slack CLI commands are needed (local development with `slack run`, managing app lifecycle, the manifest).",
+      "path": "/Users/ramboz/.claude/plugins/cache/claude-plugins-official/slack/1.2.0/skills/slack-cli/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "slack-docs",
+      "description": "Search and read the official Slack platform documentation at docs.slack.dev. Use this skill to answer conceptual or how-to questions about Slack features. You can also use it to look up, fetch, or summarize specific guide pages from provided docs.slack.dev links.",
+      "path": "/Users/ramboz/.claude/plugins/cache/claude-plugins-official/slack/1.2.0/skills/slack-docs/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "slack-messaging",
+      "description": "Compose and format effective Slack messages sent via the Slack MCP tools. Use whenever writing, drafting, scheduling, or improving a Slack message, announcement, or reply. Covers standard markdown formatting, message structure, thread etiquette, reactions, and scheduling, and points to the right dialect for canvases and Block Kit.",
+      "path": "/Users/ramboz/.claude/plugins/cache/claude-plugins-official/slack/1.2.0/skills/slack-messaging/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "slack-search",
+      "description": "Find messages, files, channels, and people across Slack with the search MCP tools. Use whenever locating conversations, gathering context before answering, or looking someone up. Covers search modifiers, file-type filters, natural-language vs. keyword search, and reading results in context.",
+      "path": "/Users/ramboz/.claude/plugins/cache/claude-plugins-official/slack/1.2.0/skills/slack-search/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "spacecat-configuration",
+      "description": "Use when reading, inspecting, or modifying SpaceCat's global configuration \u2014 registering or unregistering audits, enabling/disabling handlers per site or org, updating job intervals or handler properties, managing SQS queue URLs, or restoring an older version. Admin-only.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/local-desktop-app-uploads/spacecat-admin/skills/spacecat-configuration/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "steward",
+      "description": "Conversation-first design memory \u2014 capture a feature's design as durable local artifacts, resume it across sessions, and get an advisory drift review of working changes. Use when starting or resuming design/development work, capturing a decision, or when the user says \"steward\" or \"steward drift\". (Modes and detail are in the body.)",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/mysticat-workspace-extras/.claude/skills/steward/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "test-pr-in-dev",
+      "description": "Use when the user wants to test a PR end-to-end in the dev environment \u2014 e.g. \"I need to test this PR in dev\", \"set up my dev environment for testing\", \"how do I test this end-to-end in dev\", \"deploy my branch to dev\". Covers deploying spacecat-audit-worker and/or spacecat-api-service to a personal named Lambda alias, creating the companion SQS queue, configuring Vault secret overrides, and exercising the full pipeline end-to-end.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/mysticat-workspace-extras/.claude/skills/test-pr-in-dev/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "webpage-replica",
+      "description": "Use when the user wants to clone, replicate, or mirror a public webpage as a static, drop-in-deployable folder of HTML, CSS, and images. Handles JS-hydrated pages (React, Next.js, Adobe Target) by rendering through the chrome-devtools MCP server before scraping.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/mysticat-workspace-extras/.agents/skills/webpage-replica/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "writing-hookify-rules",
+      "description": "This skill should be used when the user asks to \"create a hookify rule\", \"write a hook rule\", \"configure hookify\", \"add a hookify rule\", or needs guidance on hookify rule syntax and patterns.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md",
+      "tier": "speculative"
+    }
+  ],
+  "pick": "pr-review",
+  "picked_at": "2026-09-01T21:07:33Z",
+  "applied_path": "/Users/ramboz/.claude/skills/pr-review/SKILL.md"
+}

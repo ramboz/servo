@@ -336,15 +336,19 @@ class ImportResolutionTests(unittest.TestCase):
     importlib.spec_from_file_location, since that's the real oracle contract."""
 
     def _base_config(self):
+        # 028-01 (ADR-0033): design-eval's score.py requires a structured
+        # schema_version 2 policy (dimensions + ignore); the legacy v1 rubric is
+        # rejected. `catalogue` is optional for the score/oracle path.
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "approval_status": "draft",
             "viewport": {"width": 392, "height": 812, "deviceScaleFactor": 2},
             "app_url": "http://localhost:4173/",
             "judge": {"model": "claude-sonnet-4-6", "temperature": 0.0, "max_tokens": 1024},
             "samples": {"n": 1, "k": 1.0, "delta": 0.03},
             "threshold": 0.8,
-            "rubric": "Score fidelity 0..1.",
+            "dimensions": [{"id": "layout", "description": "section order & spacing"}],
+            "ignore": [{"id": "device-chrome", "reason": "OS frame, not app design"}],
             "screens": [{"id": "home", "reference": "refs/home.png", "weight": 1.0}],
         }
 
@@ -352,18 +356,12 @@ class ImportResolutionTests(unittest.TestCase):
         (d / "refs").mkdir(parents=True, exist_ok=True)
         (d / "refs" / "home.png").write_bytes(b"\x89PNG-home")
         config = self._base_config()
-        config["hashes"] = {
-            "rubric": fe.sha256_text(config["rubric"]),
-            "refs/home.png": fe.sha256_file(d / "refs" / "home.png"),
-        }
-        # Use design-eval's own definition_hash call shape via score.py's wrapper
-        # is unnecessary here: freeze fields must just round-trip through
-        # validate_freeze, so compute the hash the same way score.py will —
-        # including design-eval's "viewport" extra_fields pin (score.py's
-        # own _EXTRA_HASH_FIELDS constant).
-        cases_key, file_fields = "screens", ("reference", "setup")
-        config["approved_content_hash"] = fe.definition_hash(
-            config, cases_key, file_fields, ("viewport",))
+        # Compute the freeze hashes with DESIGN-EVAL'S OWN wrappers (drift-proof —
+        # they carry score.py's real `_EXTRA_HASH_FIELDS`, which now pins
+        # dimensions/ignore/catalogue, not a hardcoded ("viewport",) tuple).
+        de_score = _load("design_eval_score_for_hash", DESIGN_EVAL_DIR / "score.py")
+        config["hashes"] = de_score.artifact_hashes(config, d)
+        config["approved_content_hash"] = de_score.definition_hash(config)
         config["approval_status"] = "approved"
         (d / "config.json").write_text(json.dumps(config, indent=2))
 

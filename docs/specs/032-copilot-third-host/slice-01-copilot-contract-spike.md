@@ -49,13 +49,13 @@ jig's shipped package read at `/Users/ramboz/Projects/misc/jig` (`main`).
 2. **`claude -p`→`copilot -p -s` (verified live, AC4).** `copilot -p "<prompt>" -s
    --allow-all-tools` runs headless, exit 0, prints only the response.
    Non-interactive tool use **requires** `--allow-all-tools` (env `COPILOT_ALLOW_ALL`)
-   or `--allow-tool` — Copilot's analog of the ADR-0033 permission wall.
+   or `--allow-tool` — Copilot's analog of the ADR-0037 permission wall.
    `--agent <name>` is accepted. `--output-format json` emits a **JSONL** event
    stream (`{type,data,id,timestamp,ephemeral}`; filter `ephemeral:true`).
    `--usage-output-file` writes `{totalPremiumRequestCost, totalNanoAiu,
    tokenDetails, codeChanges:{filesModifiedCount,linesAdded,filesModified[]}, …}` —
    a native cost signal **and** an edit signal (`filesModifiedCount==0` ⇒ no edits),
-   which maps servo's cost-ceiling and the ADR-0033/0037 edit-permission signal.
+   which maps servo's cost-ceiling and the ADR-0037 edit-permission signal.
 3. **`Stop`→`agentStop` (AC2).** Copilot `agentStop` stdin
    `{sessionId,timestamp,cwd,transcriptPath,stopReason,stop_hook_active}`; to
    block/continue emit `{"decision":"block","reason":"…"}` (reason → next prompt) —
