@@ -1,13 +1,13 @@
 ---
-slice: 028-04 — hooks
-pass: arch
+slice: 032-04 — hooks
+pass: craft
 verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-09-18T19:36:36Z
+reviewed_at: 2026-09-18T19:36:35Z
 prompt_source: review.py (compliance+craft+arch pass)
 ---
 
-Independent review (compliance + craft + arch) of slice 028-04 by a fresh
+Independent review (compliance + craft + arch) of slice 032-04 by a fresh
 jig:reviewer, cross-checked against jig's shipped adapter/schema. **VERDICT: PASS.**
 All 4 ACs met with mutation-verified pinning tests; faithful to the ADR + jig,
 Claude path provably non-regressive (ClaudePathUnchangedByHostFlagTests). servo's
@@ -37,4 +37,4 @@ Reconciliation: exit-code semantics for a live Copilot `agentStop` are unverifie
 headlessly (jig 113-08) — now moot since the adapter never forwards a non-zero
 exit. `.github/`-presence host auto-detection was consciously dropped (unsafe
 selector — most repos carry `.github/` for Actions); explicit `--host` flag only.
-Safe to mark 028-04 REVIEWED → DONE.
+Safe to mark 032-04 REVIEWED → DONE.

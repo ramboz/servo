@@ -103,7 +103,7 @@ python3 "${PLUGIN_ROOT}/skills/oracle-hook/hook.py" status <target> --json
 
 All three subcommands default to `--host claude` (the `Stop` entry in
 `.claude/settings.json` described above). Pass **`--host copilot`** to install
-the same oracle gate for a **GitHub Copilot CLI** target instead ([ADR-0034](../../docs/decisions/adr-0034-copilot-third-host.md), spec 028). Copilot has no `Stop` event; servo's `Stop` maps to Copilot's **`agentStop`** (identical `{"decision":"block","reason":…}` output). Because servo's Copilot plugin package is **hook-free**, the hook is installed target-side:
+the same oracle gate for a **GitHub Copilot CLI** target instead ([ADR-0038](../../docs/decisions/adr-0038-copilot-third-host.md), spec 032). Copilot has no `Stop` event; servo's `Stop` maps to Copilot's **`agentStop`** (identical `{"decision":"block","reason":…}` output). Because servo's Copilot plugin package is **hook-free**, the hook is installed target-side:
 
 - a Copilot `agentStop` hook is written to `<target>/.github/hooks/servo-oracle.json` (flat `{version,hooks:{agentStop:[{type,bash,timeoutSec}]}}` schema);
 - the `meta-judge.sh` **and** a ported `copilot_hook_adapter.py` are installed into `<target>/.servo/hooks/`. The adapter reshapes Copilot's camelCase `agentStop` stdin into the snake_case the meta-judge reads and exports `CLAUDE_PROJECT_DIR` from the payload's `cwd` (Copilot sets no such env var), so the meta-judge runs unchanged.

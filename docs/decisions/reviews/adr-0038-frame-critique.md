@@ -1,13 +1,13 @@
 ---
-adr: 0034
+adr: 0038
 pass: frame-critique
 verdict: pass
 reviewer: general-purpose
 reviewed_at: 2026-09-18T17:40:17Z
-prompt_source: review.py frame-critique docs/decisions/adr-0034-copilot-third-host.md
+prompt_source: review.py frame-critique docs/decisions/adr-0038-copilot-third-host.md
 ---
 
-Frame-critique of ADR-0034 (GitHub Copilot CLI as a third committed host), run
+Frame-critique of ADR-0038 (GitHub Copilot CLI as a third committed host), run
 pre-implementation with independent general-purpose reviewers, each grounding its
 attack against the live `copilot` CLI (1.0.84→1.0.86) and, in the later rounds,
 against jig's **shipped** keystone (`/Users/ramboz/Projects/misc/jig`, ADR-0061 /
@@ -80,10 +80,10 @@ Invariants, and Assumptions.
 
 - The ADR cites `copilot` 1.0.84-8 (frame-critique-time grounding); the CLI is now
   1.0.86-2. The leaned-on facts are patch-stable and the ADR already mandates
-  re-verification at slice 028-01.
+  re-verification at slice 032-01.
 - The adapter port is scoped to its stdin-reshaping half (post-pass edit); servo
-  does not wire jig's SessionStart root-publisher half — a 028-04 detail.
+  does not wire jig's SessionStart root-publisher half — a 032-04 detail.
 
 Reviewer: independent general-purpose subagents (read-only), 6 rounds
 (3 pre-jig-ship + 1 interrupted + 2 jig-alignment).
-Prompt built via: review.py frame-critique docs/decisions/adr-0034-copilot-third-host.md
+Prompt built via: review.py frame-critique docs/decisions/adr-0038-copilot-third-host.md

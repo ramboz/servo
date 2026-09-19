@@ -1,13 +1,13 @@
 ---
-slice: 028-03 — agents
-pass: compliance
+slice: 032-03 — agents
+pass: craft
 verdict: pass
 reviewer: jig:reviewer
 reviewed_at: 2026-09-18T18:55:46Z
 prompt_source: review.py (compliance+craft pass)
 ---
 
-Independent review (compliance + craft) of slice 028-03 by a fresh jig:reviewer.
+Independent review (compliance + craft) of slice 032-03 by a fresh jig:reviewer.
 **VERDICT: PASS.** All 5 ACs met with tests that genuinely pin behavior (agents
 rendered to `.github/agents/*.agent.md`; tools mapped Read→view/…/Bash→bash with a
 fail-loud unmapped guard; model-neutral — raises on `model:`; judge read-only
@@ -30,4 +30,4 @@ agents are block-form, model-less, special-char-free):
    recorded as a known limitation scoped to the current agent set.
 
 `validate_copilot_package` intentionally left skills-only (agent static validation
-a later concern). Safe to mark 028-03 REVIEWED → DONE.
+a later concern). Safe to mark 032-03 REVIEWED → DONE.

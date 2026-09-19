@@ -103,7 +103,7 @@ source tree and two committed generated packages:
   `.plugin/plugin.json` manifest plus Copilot's `.github/` config tree
   (`skills/`, `agents/*.agent.md`, `scripts/servo_root.py`, and unrendered
   `templates/`; **no `.github/hooks/`** — servo's Copilot package is hook-free,
-  [ADR-0034](decisions/adr-0034-copilot-third-host.md)). The repo-root
+  [ADR-0038](decisions/adr-0038-copilot-third-host.md)). The repo-root
   `.github/plugin/marketplace.json` (`source: ./hosts/copilot`) is the
   marketplace entry point. Install either from the marketplace (`copilot plugin
   marketplace add ramboz/servo` then `copilot plugin install servo@servo`) or
@@ -325,7 +325,7 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 > prompt before/during a loop, but never these guardrails — see
 > [Host-native phase hints](#host-native-phase-hints-spec-013).
 
-Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own. Slice 028-05 adds `--host copilot` so the loop driver runs under GitHub Copilot CLI (`copilot -p`) too, with the guardrails unchanged — see the [Copilot host execution-primitive inventory](#copilot-host-execution-primitive-inventory-mapped-or-residual) for the mapping and its residuals.
+Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own. Slice 032-05 adds `--host copilot` so the loop driver runs under GitHub Copilot CLI (`copilot -p`) too, with the guardrails unchanged — see the [Copilot host execution-primitive inventory](#copilot-host-execution-primitive-inventory-mapped-or-residual) for the mapping and its residuals.
 
 | Guardrail | Mechanism | Default | Disable | Terminal reason |
 |---|---|---|---|---|
@@ -461,19 +461,19 @@ the vocabulary belongs to servo, hosts only render it.
 
 ## Copilot host hook inventory (mapped-or-unmappable)
 
-> Spec 028 (Copilot as a third committed host,
-> [ADR-0034](decisions/adr-0034-copilot-third-host.md)); the target-side hook
-> mapping is slice 028-04.
+> Spec 032 (Copilot as a third committed host,
+> [ADR-0038](decisions/adr-0038-copilot-third-host.md)); the target-side hook
+> mapping is slice 032-04.
 
 servo's Copilot plugin package is **hook-free** — the committed `hosts/copilot/`
-ships no `.github/hooks/` (ADR-0034 invariant). servo's one hook, the oracle
+ships no `.github/hooks/` (ADR-0038 invariant). servo's one hook, the oracle
 `Stop` (the meta-judge), is installed **target-side** by
 `/servo:oracle-hook install --host copilot`, which writes a Copilot `agentStop`
 hook into the *consuming repo's* `.github/hooks/servo-oracle.json` and installs a
 ported `copilot_hook_adapter.py` (jig's stdin-reshaping half only) plus the
 `meta-judge.sh` into the target's `.servo/hooks/`.
 
-Per the ADR-0034 honesty invariant, every servo hook is **mapped or recorded as
+Per the ADR-0038 honesty invariant, every servo hook is **mapped or recorded as
 an explicit residual — enumerated over the source set, never silently dropped or
 mechanically renamed**. This inventory is enumerated in `skills/oracle-hook/hook.py`
 (`CLAUDE_TO_COPILOT_HOOK_EVENTS` + `COPILOT_HOOK_RESIDUAL`) and pinned by a test,
@@ -502,9 +502,9 @@ as a residual in [refinement-todo](refinement-todo.md).
 
 ## Copilot host execution-primitive inventory (mapped-or-residual)
 
-> Spec 028 slice 028-05 (ADR-0034 "Execution-primitive mapping"). Extends the
+> Spec 032 slice 032-05 (ADR-0038 "Execution-primitive mapping"). Extends the
 > hook inventory above to the optional loop's execution primitives. Grounded on
-> live `copilot` 1.0.86 (spike 028-01). Every Claude-specific primitive is
+> live `copilot` 1.0.86 (spike 032-01). Every Claude-specific primitive is
 > mapped to a *documented, verified* Copilot equivalent or recorded as an
 > explicit residual — never a silent rename.
 
@@ -517,11 +517,11 @@ so the loop's guardrails and per-iteration oracle gate are byte-unchanged.
 
 | Claude primitive | Copilot mapping | Status |
 |---|---|---|
-| `claude -p --output-format json --agent <name>` (loop driver) | `copilot -p <prompt> -s --allow-all-tools --agent <name> --output-format json --usage-output-file <f>` | **mapped** (028-05 AC1) |
+| `claude -p --output-format json --agent <name>` (loop driver) | `copilot -p <prompt> -s --allow-all-tools --agent <name> --output-format json --usage-output-file <f>` | **mapped** (032-05 AC1) |
 | `--output-format json` = single result dict | `--output-format json` = **JSONL** event stream; filter `ephemeral:true`, take the terminal non-ephemeral event's text | **mapped** (shape differs — normalized) |
 | `--resume <session-id>` | `--resume=<session-id>` (Copilot's `-r/--resume` takes an optional value → `=` form) | **mapped**, with a resume residual (below) |
-| ADR-0033 headless edit-permission preflight | `--allow-all-tools` (the headless-edit enabler; env `COPILOT_ALLOW_ALL`) | **mapped** (028-05 AC4) |
-| ADR-0033/0037 "did the runner edit?" signal | `codeChanges.filesModifiedCount` from `--usage-output-file` (`0` ⇒ no edits) | **mapped** (028-05 AC2/AC4) |
+| ADR-0033 headless edit-permission preflight | `--allow-all-tools` (the headless-edit enabler; env `COPILOT_ALLOW_ALL`) | **mapped** (032-05 AC4) |
+| ADR-0033/0037 "did the runner edit?" signal | `codeChanges.filesModifiedCount` from `--usage-output-file` (`0` ⇒ no edits) | **mapped** (032-05 AC2/AC4) |
 | cumulative cost ceiling in **USD** (`--cost-ceiling` / `--max-budget-usd`) | Copilot reports **premium-requests / nano-AIU**, not USD — no faithful conversion | **residual** (cost-unit; below) |
 | per-invocation cost brake (`--max-budget-usd`) | `--max-ai-credits <n>` (forwarded when set) + the host-neutral `--max-iterations` cap | **mapped** (best-effort; live efficacy is a residual) |
 | goal driver (`/goal` + per-turn oracle-gated stop, ADR-0008) | Copilot **Autopilot** has no oracle-gated stop; the target-side `agentStop` gate's live firing is unverifiable headless | **residual** — refuses under `--host copilot` (below) |
@@ -540,9 +540,9 @@ stderr for observability. A Copilot-native cumulative ceiling is deferred (see
 **Goal-driver residual (AC3, resolved honestly).** The loop driver ports fully
 to Copilot (servo drives per-iteration `copilot -p` and gates in its own Python).
 The **goal driver does not**: Autopilot has no oracle-gated stop (verified live,
-028-01), and reconstructing the per-turn gate via a per-continuation `agentStop`
+032-01), and reconstructing the per-turn gate via a per-continuation `agentStop`
 hook is unverifiable headless (jig 113-08). Rather than ship a silently un-gated
-Autopilot run — the failure ADR-0034's honesty invariant forbids — the `/goal`
+Autopilot run — the failure ADR-0038's honesty invariant forbids — the `/goal`
 family (`--driver goal`, `--background`, `--emit-routine-prompt`) **refuses under
 `--host copilot`** (`goal_driver_unsupported_host`), pointing the user to
 `--driver loop`, which delivers equivalent oracle-gated autonomy under Copilot.

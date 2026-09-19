@@ -1,14 +1,14 @@
 ---
 status: DONE
 kind: spike
-dependencies: [adr-0034]
+dependencies: [adr-0038]
 last_verified: 2026-09-18
 ---
 
-## Slice 028-01 — copilot-contract-spike
+## Slice 032-01 — copilot-contract-spike
 
 **Goal:** Lock the Copilot contract and servo's execution-primitive mappings so
-028-02..06 commit to a verified shape. Because **jig shipped its Copilot host
+032-02..06 commit to a verified shape. Because **jig shipped its Copilot host
 first** (ADR-0061 / spec 113 on jig `main`), most of the contract is no longer an
 unknown to discover — it is a shipped artifact to *confirm* and port. This spike
 confirms jig's shipped shape against a live `copilot` session and records servo's
@@ -65,14 +65,14 @@ jig's shipped package read at `/Users/ramboz/Projects/misc/jig` (`main`).
    adapter's snake_case reshaping covers it. Live *firing* of a repo hook under
    `copilot -p` is **not reliably observable headless** (jig 113-08 finding) →
    package verification is a static validator; live firing recorded as residual.
-4. **Autopilot oracle-gate (AC3 — load-bearing for 028-05).** `--autopilot` /
+4. **Autopilot oracle-gate (AC3 — load-bearing for 032-05).** `--autopilot` /
    `--mode autopilot` exists but is bounded **only** by `--max-autopilot-continues`
    (default 5) + `--max-ai-credits` — **no oracle/eval-gated stop.** Consequence
-   (per ADR-0034): servo's **loop driver** is self-driving (Python per-iteration
+   (per ADR-0038): servo's **loop driver** is self-driving (Python per-iteration
    gate) and maps to per-iteration `copilot -p -s --agent runner --allow-all-tools`
    — it does not need Autopilot. servo's **goal driver**'s per-turn oracle gate maps
    via the target-side `agentStop` oracle hook (block-while-failing); whether it
-   fully reconstructs under Autopilot is validated in 028-05, with the loop-driver
+   fully reconstructs under Autopilot is validated in 032-05, with the loop-driver
    external-gate path as the honest fallback.
 5. **servo-specific facts.** 12 skills; **9 carry `name: servo:<skill>` AND have a
    `description:` >1024** (same 9), so servo must **strip `servo:`** (unlike jig,
@@ -86,16 +86,16 @@ jig's shipped package read at `/Users/ramboz/Projects/misc/jig` (`main`).
 
 ### Outcome
 
-**028-02..06 unblocked** against jig's shipped, confirmed shape. ADR-0034 open
+**032-02..06 unblocked** against jig's shipped, confirmed shape. ADR-0038 open
 questions resolved: manifest = jig's legacy shape minus `hooks`; Autopilot has no
 oracle gate (loop ports via per-iter `copilot -p`, goal via `agentStop`); no
 mapping failed → no ADR amendment. servo diverges from jig only where its surface
 differs (strip `servo:`; hook-free plugin; loop.py). The 3 jig post-ship bugs
 (034 scaffold-defaults, 035 marketplace-source, 036 `$SERVO_ROOT` path) are
-pre-empted from 028-02.
+pre-empted from 032-02.
 
 **DoR:**
-- ✅ ADR-0034 Accepted.
+- ✅ ADR-0038 Accepted.
 - ✅ Live `copilot` CLI 1.0.86 + jig's shipped `hosts/copilot/` as the reference.
 
 **Acceptance Criteria:** 1 ✅ (contract confirmed vs jig + live CLI) · 2 ✅
@@ -105,8 +105,8 @@ dispositioned, no amendment).
 
 **DoD:**
 - [x] Findings filled with commands + observed output (grounding).
-- [x] Outcome set; 028-02..06 ACs updated to the verified jig-aligned shape.
+- [x] Outcome set; 032-02..06 ACs updated to the verified jig-aligned shape.
 - [x] `docs/refinement-todo.md`: live-hook-firing-under-`copilot -p` residual +
-      Autopilot-goal-driver-fidelity carried to 028-05 (recorded at close-out).
+      Autopilot-goal-driver-fidelity carried to 032-05 (recorded at close-out).
 
-**Anti-horizontal-phasing check:** Exempt — `kind: spike`. Unblocks 028-02..06.
+**Anti-horizontal-phasing check:** Exempt — `kind: spike`. Unblocks 032-02..06.

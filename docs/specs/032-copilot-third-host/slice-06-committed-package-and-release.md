@@ -1,21 +1,21 @@
 ---
 status: DONE
-dependencies: [028-02, 028-03, 028-04, 028-05]
+dependencies: [032-02, 032-03, 032-04, 032-05]
 last_verified: 2026-09-18
 # arch_review: true  # extends the builder/drift/release pipeline to a third host
 ---
 
-## Slice 028-06 — committed-package-and-release
+## Slice 032-06 — committed-package-and-release
 
 **Goal:** The Copilot host reaches full parity with Claude/Codex — the committed
 `hosts/copilot/` is drift-guarded by the single builder (already true since
-028-02), a `servo-copilot-vX.Y.Z.zip` release archive is produced + smoke-tested,
+032-02), a `servo-copilot-vX.Y.Z.zip` release archive is produced + smoke-tested,
 release-please bumps the Copilot manifest in lockstep, and the install path is
 documented — extending ADR-0028 + spec 022's release parity to tri-host, mirroring
 jig's `build_release_zip.py` copilot arm.
 
 **DoR:**
-- ✅ 028-02..05 done (renderer emits the full `hosts/copilot/` content: skills,
+- ✅ 032-02..05 done (renderer emits the full `hosts/copilot/` content: skills,
   agents, servo_root, templates, manifest; oracle-hook + loop copilot modes).
 
 **Acceptance Criteria:**
@@ -28,14 +28,14 @@ jig's `build_release_zip.py` copilot arm.
    2). A test builds + reads back the copilot zip (manifest present, deterministic,
    no wrong-host content).
 2. **Static smoke (`--smoke-test`).** `_smoke_copilot` extracts the zip and runs
-   `validate_copilot_package` (from 028-02: manifest valid + `skills`/`agents`
+   `validate_copilot_package` (from 032-02: manifest valid + `skills`/`agents`
    component paths; skill set == source; every SKILL.md loader-safe; agents
    present) — the deterministic substitute for a live CLI probe (headless
    `copilot -p` does not fire repo hooks). Recorded honestly as the smoke.
 3. **release-please lockstep.** `.github/release-please-config.json` `extra-files`
    gains `{type:json, path:"hosts/copilot/.plugin/plugin.json", jsonpath:"$.version"}`
    so one release bumps the Copilot manifest with the other four (closes the
-   028-02 review nit). A test (extending `test_validate_manifests` / the release
+   032-02 review nit). A test (extending `test_validate_manifests` / the release
    set) asserts the copilot manifest is in the tracked set and its version equals
    the canonical Claude version.
 4. **CI wiring.** `.github/workflows/release.yml` builds + smoke-tests + attaches
@@ -57,7 +57,7 @@ jig's `build_release_zip.py` copilot arm.
 - [x] `build_release_zip.py --host copilot` produces a deterministic zip that smoke-passes.
 - [x] Reviewed by `reviewer` subagent (compliance + craft + arch) — PASS; evidence in `reviews/slice-06-{compliance,craft,arch}.md`. Finding 1 (smoke didn't verify agent presence) hardened: `validate_copilot_package` now checks `.github/agents/*.agent.md` present + loader-safe (+2 mutation-verified tests). Finding 2 (release.yml "byte-unchanged" wording) corrected in the review record: shared upload/notes steps gained additive copilot lines; claude/codex content + dedicated steps unchanged.
 - [x] Deviation log + reconciliation sweep produced.
-- [x] Spec 028 closed out: `docs/specs/README.md` board refreshed (028-01..06 → DONE, 028-06 Notes = tri-host parity + residuals); spec.md → DONE; residuals in `docs/refinement-todo.md` + `docs/architecture.md`.
+- [x] Spec 032 closed out: `docs/specs/README.md` board refreshed (032-01..06 → DONE, 032-06 Notes = tri-host parity + residuals); spec.md → DONE; residuals in `docs/refinement-todo.md` + `docs/architecture.md`.
 
 **Anti-horizontal-phasing check:** After this slice any Copilot user installs servo
 from the marketplace (or a repo-subdir) and gets a released, drift-guarded,
@@ -78,7 +78,7 @@ host, mirroring jig's shipped `build_release_zip.py` copilot arm:
   exit 2). New `_smoke_copilot` extracts the zip (after `_safe_names` path-safety)
   and runs `build_host_packages.validate_copilot_package`.
 - `.github/release-please-config.json` — `extra-files` gains
-  `hosts/copilot/.plugin/plugin.json` `$.version` (closes the 028-02 review nit;
+  `hosts/copilot/.plugin/plugin.json` `$.version` (closes the 032-02 review nit;
   one release now bumps all five plugin manifests in lockstep).
 - `.github/workflows/release.yml` — additive Copilot build + smoke + upload steps
   + a release-notes bullet describing both install routes. **Claude/Codex build,
@@ -122,7 +122,7 @@ host, mirroring jig's shipped `build_release_zip.py` copilot arm:
    every_manifest`), and `test_copilot_manifest_version_locks_to_canonical`.
    Adding copilot to the runtime tuple would churn the "four→five" message + its
    assertion for no added teeth. The copilot *marketplace descriptor* is already
-   validated by `validate_manifests.py` (028-02), so AC4's "validate_manifests
+   validated by `validate_manifests.py` (032-02), so AC4's "validate_manifests
    covers copilot" holds.
 3. **CONTRIBUTING.md release section updated (beyond the AC5-named README +
    architecture.md).** The slice makes "release-please owns all four" and the

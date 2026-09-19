@@ -135,7 +135,7 @@ DEFAULT_PLATEAU_NOISE_FLOOR = 0.0
 AGENT_RUNNER = "runner"
 AGENT_JUDGE = "judge"
 
-# Slice 028-05 execution-primitive mapping (ADR-0034). The optional loop driver
+# Slice 032-05 execution-primitive mapping (ADR-0038). The optional loop driver
 # runs under either Claude Code (`claude -p`) or GitHub Copilot CLI
 # (`copilot -p`), selected by `--host`. Default is `claude` — zero change for
 # Claude users. Only the loop driver ports to Copilot; the goal driver refuses
@@ -194,7 +194,7 @@ REASON_STATE_MISSING = "state_missing"
 REASON_STATE_SCHEMA_MISMATCH = "state_schema_mismatch"
 REASON_CLAUDE_VERSION_MISMATCH = "claude_version_mismatch"
 REASON_RUN_ID_COLLISION = "run_id_collision"
-# Slice 028-05 (ADR-0034): the /goal family (`--driver goal`, `--background`,
+# Slice 032-05 (ADR-0038): the /goal family (`--driver goal`, `--background`,
 # `--emit-routine-prompt`) refuses under `--host copilot` — Copilot Autopilot
 # has no oracle-gated stop and the target-side agentStop gate's live firing is
 # unverifiable headless (jig 113-08). The loop driver ports fully; the goal
@@ -1643,7 +1643,7 @@ def _build_copilot_cmd(
     usage_file: Path,
     max_ai_credits: Optional[float],
 ) -> list[str]:
-    """Assemble the Copilot loop-driver argv (slice 028-05 AC1, ADR-0034).
+    """Assemble the Copilot loop-driver argv (slice 032-05 AC1, ADR-0038).
 
     Mirrors the spike's live-verified form (`copilot` 1.0.86):
     `copilot -p <prompt> -s --allow-all-tools --agent <name> --output-format
@@ -1674,7 +1674,7 @@ def _build_copilot_cmd(
 
 
 def _parse_copilot_usage(usage_path: Path) -> dict:
-    """Parse Copilot's `--usage-output-file` JSON (slice 028-05 AC2).
+    """Parse Copilot's `--usage-output-file` JSON (slice 032-05 AC2).
 
     Returns native cost (`totalPremiumRequestCost` / `totalNanoAiu` — premium
     requests / nano-AIU, NOT USD), the native edit-signal
@@ -1774,7 +1774,7 @@ def _extract_copilot_session_id(event: Optional[dict]) -> str:
 
 
 def _parse_copilot_jsonl(stdout: str) -> tuple[Optional[dict], str]:
-    """Parse Copilot's `--output-format json` JSONL stream (slice 028-05 AC1).
+    """Parse Copilot's `--output-format json` JSONL stream (slice 032-05 AC1).
 
     Filters `ephemeral: true` events (progress / tool chatter); the LAST
     non-ephemeral event is the terminal result and carries the response text.
@@ -1809,9 +1809,9 @@ def _normalize_copilot_result(
     The loop body (`run_loop`) consumes a fixed set of keys off the returned
     dict — `session_id`, `total_cost_usd`, `terminal_reason`, `usage.*_tokens`,
     `result` (verdict text), `is_error` / `subtype`. This maps Copilot onto
-    exactly those keys so the downstream is untouched (slice 028-05 AC1).
+    exactly those keys so the downstream is untouched (slice 032-05 AC1).
 
-    Cost-unit decision (AC2 — resolved honestly, ADR-0034): Copilot reports
+    Cost-unit decision (AC2 — resolved honestly, ADR-0038): Copilot reports
     premium-requests / nano-AIU, NOT USD, and there is no faithful conversion.
     `total_cost_usd` is therefore **0.0** — never a fabricated USD number — so
     the cumulative USD `--cost-ceiling` stays honest (it does not brake Copilot;
@@ -1862,7 +1862,7 @@ def _invoke_copilot(
     agent_name: Optional[str] = None,
     max_ai_credits: Optional[float] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
-    """Copilot loop-driver invocation (slice 028-05 AC1), the `_invoke_claude`
+    """Copilot loop-driver invocation (slice 032-05 AC1), the `_invoke_claude`
     peer under `--host copilot`.
 
     Runs `copilot -p <prompt> -s --allow-all-tools --agent <name>
@@ -1942,7 +1942,7 @@ def _invoke_claude(
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
 
-    Slice 028-05: when `host == HOST_COPILOT`, delegates to `_invoke_copilot`
+    Slice 032-05: when `host == HOST_COPILOT`, delegates to `_invoke_copilot`
     (which returns a dict in this function's shape so the loop body is
     unchanged). The Claude path below is byte-for-byte unchanged for the default
     `host == HOST_CLAUDE` — `--max-budget-usd` and every Claude flag are
@@ -2544,9 +2544,9 @@ def run_loop(
         if session_id:
             state["current_session_id"] = session_id
 
-        # Slice 028-05 (AC2/AC4): under `--host copilot` surface the native cost
+        # Slice 032-05 (AC2/AC4): under `--host copilot` surface the native cost
         # (premium-requests / nano-AIU — NOT USD; the USD `--cost-ceiling` does
-        # not brake Copilot, an ADR-0034 residual) and the edit-signal
+        # not brake Copilot, an ADR-0038 residual) and the edit-signal
         # (`codeChanges.filesModifiedCount`; 0 ⇒ the runner made no edits). Keyed
         # on a Copilot-only field so this is a no-op on the Claude path.
         copilot_files_modified = claude_data.get("copilot_files_modified")
@@ -2558,7 +2558,7 @@ def run_loop(
                 f"{claude_data.get('copilot_premium_request_cost', 0)}, "
                 f"nano_aiu={claude_data.get('copilot_nano_aiu', 0)} "
                 "(native units; USD cost-ceiling does not apply under "
-                "--host copilot — ADR-0034 residual)\n"
+                "--host copilot — ADR-0038 residual)\n"
             )
 
         # Context-fill ratio (slice 003-03).
@@ -3498,7 +3498,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=HOST_CLAUDE,
         help=(
             "Coding-agent host the loop driver subprocesses per iteration "
-            "(slice 028-05, ADR-0034). `claude` (default) runs "
+            "(slice 032-05, ADR-0038). `claude` (default) runs "
             "`claude -p --output-format json` — zero change for Claude users. "
             "`copilot` runs `copilot -p <prompt> -s --allow-all-tools --agent "
             "<name> --output-format json --usage-output-file <f>` and "
@@ -3517,7 +3517,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=float,
         default=None,
         help=(
-            "Copilot-only (slice 028-05): forward `--max-ai-credits <n>` as the "
+            "Copilot-only (slice 032-05): forward `--max-ai-credits <n>` as the "
             "per-invocation credit cap for each `copilot -p` call — the honest "
             "per-invocation brake under `--host copilot`, where the USD "
             "`--cost-ceiling` cannot convert to Copilot's premium-request / "
@@ -3756,11 +3756,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                      "foreground — detach it with your shell's nohup/&, or use "
                      "--resume for unattended continuation")
 
-    # ---- Host selection: Copilot goal-family refusal (slice 028-05 AC3) -----
+    # ---- Host selection: Copilot goal-family refusal (slice 032-05 AC3) -----
     # The loop driver ports fully under Copilot (per-iteration `copilot -p`), but
     # the /goal family does NOT: Copilot Autopilot has no oracle-gated stop, and
     # the target-side agentStop gate's live firing is unverifiable headless (jig
-    # 113-08 / ADR-0034). So `--driver goal`, `--background` (a detached goal
+    # 113-08 / ADR-0038). So `--driver goal`, `--background` (a detached goal
     # run), and `--emit-routine-prompt` (a /goal Routine prompt) refuse under
     # `--host copilot` — EXPLICITLY, never a silent un-gated run. This runs
     # before the readiness preflight / --emit-routine-prompt handler / routing
@@ -3779,7 +3779,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             sys.stderr.write(
                 f"loop: {goal_family} is unsupported under --host copilot. The "
                 "goal driver is a documented residual under Copilot (Autopilot "
-                "has no oracle-gated stop; ADR-0034). Use --driver loop — the "
+                "has no oracle-gated stop; ADR-0038). Use --driver loop — the "
                 "loop driver ports fully under --host copilot, gating on servo's "
                 "own Python per-iteration oracle check.\n"
             )
@@ -3788,7 +3788,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 reason=REASON_GOAL_UNSUPPORTED_HOST,
                 message=(
                     f"{goal_family} unsupported under --host copilot "
-                    "(ADR-0034 residual); use --driver loop"
+                    "(ADR-0038 residual); use --driver loop"
                 ),
                 cost_ceiling=(args.cost_ceiling if args.cost_ceiling is not None
                               else DEFAULT_COST_CEILING_USD),
@@ -3798,14 +3798,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             # Loop driver under Copilot: warn ONCE at launch that the USD
             # `--cost-ceiling` is inert (Copilot bills in premium-requests /
-            # nano-AIU, not USD — ADR-0034 residual), symmetric with the
+            # nano-AIU, not USD — ADR-0038 residual), symmetric with the
             # `--max-ai-credits`-under-claude warning below. The per-iteration
             # native-cost advisory reinforces it as the loop runs; this makes
             # the cost model clear up front, before the first paid iteration.
             sys.stderr.write(
                 "loop: --host copilot — the loop is bounded by --max-iterations "
                 "and any --max-ai-credits; the USD --cost-ceiling does NOT apply "
-                "(Copilot bills in premium-requests / nano-AIU; ADR-0034 "
+                "(Copilot bills in premium-requests / nano-AIU; ADR-0038 "
                 "residual). Native per-iteration cost is surfaced as it runs.\n"
             )
     elif args.max_ai_credits is not None:
@@ -3973,7 +3973,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # silently downgrading to a non-detachable loop run.
     routing_driver = DRIVER_GOAL if args.background else effective_arg_driver
     if args.host == HOST_COPILOT:
-        # Slice 028-05: under Copilot the goal family already refused above, so
+        # Slice 032-05: under Copilot the goal family already refused above, so
         # only the loop driver remains. `auto` resolves to `loop` WITHOUT the
         # claude `/goal` host-support probe (`_decide_route` reads `claude
         # --version` + Claude settings — Claude-specific, irrelevant to Copilot).

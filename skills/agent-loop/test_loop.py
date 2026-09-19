@@ -899,7 +899,7 @@ class ClaudeInvocationFailedTests(unittest.TestCase):
         self.assertIn("loop: claude not on PATH", result.stderr)
 
     def test_copilot_not_on_path(self):
-        # Slice 028-05: the Copilot loop-driver invocation-failure path mirrors
+        # Slice 032-05: the Copilot loop-driver invocation-failure path mirrors
         # the Claude one — an empty bindir means `copilot` is not found, and
         # `_invoke_copilot` returns the `copilot not on PATH` breadcrumb rather
         # than raising into the loop (fail-closed env error, rc=2).
@@ -7693,7 +7693,7 @@ class ReadinessGateBypassTests(unittest.TestCase):
 
 
 # ============================================================================
-# Slice 028-05 — execution-primitive-mapping (Copilot host mode, ADR-0034)
+# Slice 032-05 — execution-primitive-mapping (Copilot host mode, ADR-0038)
 #
 # The optional loop driver gains a `--host {claude,copilot}` mode. The loop's
 # own Python per-iteration oracle gate is unchanged; only the per-iteration
@@ -7715,7 +7715,7 @@ loop_mod = _ilu.module_from_spec(_copilot_spec)
 _copilot_spec.loader.exec_module(loop_mod)
 
 
-# Usage-file fixture built from the spike's recorded live shape (028-01):
+# Usage-file fixture built from the spike's recorded live shape (032-01):
 # cost in premium-requests / nano-AIU (NOT USD), a native edit-signal
 # (`codeChanges.filesModifiedCount`), and `tokenDetails`.
 _COPILOT_USAGE_FIXTURE = {
@@ -8034,7 +8034,7 @@ class CopilotGoalFamilyRefusalTests(unittest.TestCase):
     """AC3 — the /goal family refuses (explicitly) under `--host copilot`.
 
     Autopilot has no oracle-gated stop and the target-side agentStop gate's
-    live firing is unverifiable headless (jig 113-08 / ADR-0034), so the goal
+    live firing is unverifiable headless (jig 113-08 / ADR-0038), so the goal
     driver is a documented residual under Copilot — never a silent un-gated run.
     """
 

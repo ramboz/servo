@@ -5,7 +5,7 @@ last_verified: 2026-09-18
 frame_review: true
 ---
 
-# ADR-0034: GitHub Copilot CLI as a third committed host
+# ADR-0038: GitHub Copilot CLI as a third committed host
 
 ## Status
 
@@ -225,10 +225,10 @@ ported as functions into servo's function-based builder):
   driver's gate does **not** map to Autopilot's caps as-is (mapping it that way
   would silently drop the per-turn gate — the failure this ADR's honesty invariant
   forbids). The gate's *block-while-failing* half reconstructs via the
-  `Stop`→`agentStop` hook (the same 028-04 translation; `agentStop`'s
+  `Stop`→`agentStop` hook (the same 032-04 translation; `agentStop`'s
   `{decision:block,reason}` re-drives exactly as the meta-judge does); whether a
   per-continuation `agentStop` can fully reconstruct the per-turn gate under
-  Autopilot is a **028-01/05 validation item**. If it cannot, the goal driver
+  Autopilot is a **032-01/05 validation item**. If it cannot, the goal driver
   under Copilot **falls back to the loop driver's external-gate path** (servo
   drives per-iteration `copilot -p` and gates in its own Python — a servo feature
   that ports regardless), or is recorded as a Claude-only residual. Either way the
@@ -251,7 +251,7 @@ not a silent drop. Gates and primitives degrade *visibly*.
   gate and the **loop driver** work under Copilot (external Python gate +
   per-iteration `copilot -p`) rather than silently no-op'ing. The **goal driver**'s
   per-turn-gated autonomy ports iff a per-continuation `agentStop` gate
-  reconstructs it under Autopilot (028-01/05); if not, Copilot users get the loop
+  reconstructs it under Autopilot (032-01/05); if not, Copilot users get the loop
   driver's equivalent oracle-gated autonomy, or the goal driver is a documented
   Claude-only residual — never a silently un-gated run.
 - A servo-scaffolded target that commits Copilot config (`.github/`) has it
@@ -289,7 +289,7 @@ not a silent drop. Gates and primitives degrade *visibly*.
 ## Assumptions
 
 <!-- Grounding: live `copilot` CLI 1.0.84-8 probe during frame-critique, plus
-     Adobe's migration guide + terminology map (read 2026-09-15). Spec 028-01
+     Adobe's migration guide + terminology map (read 2026-09-15). Spec 032-01
      records the evidence (commands + output) formally. -->
 
 - **Package layout — mirrors jig's shipped `hosts/copilot/` (ADR-0061 / spec 113).**
@@ -304,14 +304,14 @@ not a silent drop. Gates and primitives degrade *visibly*.
   `copilot-instructions.md`; no `copilot/settings.json`. A repo-root
   `.github/plugin/marketplace.json` (`source: ./hosts/copilot`) is the marketplace
   entry point. jig's shipped manifest declares all three fields because jig ships
-  hooks; servo's omits `hooks` — 028-01 confirms Copilot accepts a `hooks`-less
+  hooks; servo's omits `hooks` — 032-01 confirms Copilot accepts a `hooks`-less
   manifest (expected: component paths are per-component, not mandatory as a set).
 - **Autopilot has no oracle-gated stop** (verified: only `--max-autopilot-continues`
   / `--max-ai-credits`). Load-bearing consequence already absorbed in the mapping
   above — the loop driver ports without Autopilot; the goal driver's cap+final
-  model fits Autopilot's caps. 028-01/05 validate the goal-driver fidelity.
+  model fits Autopilot's caps. 032-01/05 validate the goal-driver fidelity.
 - Mapping `copilot -p --agent runner` presupposes the `runner` agent renders as a
-  Copilot agent (depends on the agent-rendering slice, 028-03).
+  Copilot agent (depends on the agent-rendering slice, 032-03).
 
 ## Kill criteria
 
@@ -329,9 +329,9 @@ not a silent drop. Gates and primitives degrade *visibly*.
 ## Open questions
 
 - Exact `.plugin/plugin.json` field set — **resolved by mirroring jig's shipped
-  manifest**; 028-01 copies jig's field set and confirms against a live `copilot
+  manifest**; 032-01 copies jig's field set and confirms against a live `copilot
   plugin install`. (jig's post-ship bug 035 fixed a marketplace-source-schema
   issue — servo inherits that fix rather than re-discovering it.)
 - Which servo hooks/primitives, if any, have **no** Copilot equivalent (the
-  enumerated inventory is a 028-04/05 deliverable). On current evidence the oracle
+  enumerated inventory is a 032-04/05 deliverable). On current evidence the oracle
   `Stop`→`agentStop` and both loop drivers port; the residual set may be empty.

@@ -1,11 +1,11 @@
 ---
 status: DONE
-dependencies: [028-02]
+dependencies: [032-02]
 last_verified: 2026-09-18
 # arch_review: true  # introduces the hook-protocol translation layer
 ---
 
-## Slice 028-04 — hooks
+## Slice 032-04 — hooks
 
 **Goal:** servo's oracle gate works under Copilot. servo's Copilot **plugin
 package is hook-free** (source `hooks/` is empty); its one hook — the oracle
@@ -15,8 +15,8 @@ teaches `oracle-hook` to install a Copilot **`agentStop`** hook (via a ported
 mapped-or-unmappable inventory recorded.
 
 **DoR:**
-- ✅ 028-02 done (renderer + skeleton; `_render_copilot_skill` + package shape).
-- ✅ 028-01 recorded the Copilot hook JSON schema, the `Stop`→`agentStop` event +
+- ✅ 032-02 done (renderer + skeleton; `_render_copilot_skill` + package shape).
+- ✅ 032-01 recorded the Copilot hook JSON schema, the `Stop`→`agentStop` event +
   identical `{decision,reason}` output, and the adapter payload-reshaping need.
 
 **Acceptance Criteria:**
@@ -66,7 +66,7 @@ mapped-or-unmappable inventory recorded.
 
 ## Deviation log
 
-**Slice 028-04 (hooks) — what built, AC→test mapping, deviations, residuals.**
+**Slice 032-04 (hooks) — what built, AC→test mapping, deviations, residuals.**
 Implemented via TDD (failing tests first, then implementation, then green) in the
 `interesting-noyce-2b8f83` worktree. Tree left dirty (not committed), per task.
 
@@ -133,13 +133,13 @@ implementer run; reverted after).
 - **Reverse tool-name map not ported (DoD bullet 2 satisfied via the *event* map).**
   jig's adapter carries `_COPILOT_TO_CLAUDE_TOOL_NAME` because jig has tool-matched
   (`preToolUse`/`postToolUse`) hooks. servo's only hook is `Stop`→`agentStop`, which
-  has **no tool fields** (spike 028-01), so the adapter ports no tool-name map — it
+  has **no tool fields** (spike 032-01), so the adapter ports no tool-name map — it
   would be untethered dead code. The map servo *does* carry is the **event** map
   (`Stop→agentStop`), drift-pinned by `HookInventoryTests`. This matches the DoD's
   conditional "…if servo carries maps" and the ADR's naming of the reshaped fields
   (`sessionId`/`transcriptPath`/…, not tool fields).
 - **`project_dir_from_payload` accepts `cwd` OR `workingDirectory`** (jig reads only
-  `workingDirectory`). servo's `agentStop` stdin uses `cwd` (spike 028-01), so `cwd`
+  `workingDirectory`). servo's `agentStop` stdin uses `cwd` (spike 032-01), so `cwd`
   is preferred with `workingDirectory` as a faithful fallback.
 - **No `--enforce` mode** ported — servo has no enforcing (deny) hook; the `Stop`
   hook expresses its decision in stdout, covered by a single verbatim-forward path.

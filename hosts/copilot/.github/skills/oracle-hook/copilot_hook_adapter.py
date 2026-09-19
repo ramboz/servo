@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """copilot_hook_adapter.py — servo's oracle `Stop` → Copilot `agentStop`
-input-payload adapter (spec 028, slice 028-04).
+input-payload adapter (spec 032, slice 032-04).
 
 Ported from jig's `copilot_hook_adapter.py` (spec 113-04), the **stdin-reshaping
-half only**. servo's Copilot plugin package is hook-free (ADR-0034): its one
+half only**. servo's Copilot plugin package is hook-free (ADR-0038): its one
 hook, the oracle `Stop` (meta-judge), is installed *target-side* by
 `skills/oracle-hook/hook.py --host copilot`, which ships this adapter into the
 consuming repo's `.servo/hooks/` and wires a Copilot `agentStop` hook that runs:
@@ -14,7 +14,7 @@ Why this exists: servo's `meta-judge.sh` reads Claude-shaped stdin — snake_cas
 `stop_hook_active` — and locates the project via the `CLAUDE_PROJECT_DIR`
 environment variable. Copilot's `agentStop` sends camelCase stdin
 (`{sessionId, timestamp, cwd, transcriptPath, stopReason, stop_hook_active}` —
-spike 028-01) and exposes **no** `CLAUDE_PROJECT_DIR`-analogous env var. This
+spike 032-01) and exposes **no** `CLAUDE_PROJECT_DIR`-analogous env var. This
 adapter sits between Copilot and the UNMODIFIED meta-judge script: it reads
 Copilot's stdin JSON, reshapes it into the snake_case the meta-judge expects,
 exports `CLAUDE_PROJECT_DIR` for the child from the payload's `cwd`, invokes the

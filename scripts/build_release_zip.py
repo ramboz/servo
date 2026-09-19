@@ -16,7 +16,7 @@ MANIFESTS = {
     "claude": Path(".claude-plugin/plugin.json"),
     "codex": Path("plugins/servo/.codex-plugin/plugin.json"),
     # Copilot's committed package is its `.github/` config tree plus a legacy
-    # manifest at the package root (ADR-0034 / slice 028-02).
+    # manifest at the package root (ADR-0038 / slice 032-02).
     "copilot": Path(".plugin/plugin.json"),
 }
 MTIME = (2026, 1, 1, 0, 0, 0)
@@ -125,7 +125,7 @@ def _safe_names(zf: zipfile.ZipFile) -> tuple[set[str], str | None]:
 
 def _smoke_copilot(zip_path: Path, out: TextIO) -> int:
     """Extract the copilot zip and run build_host_packages.validate_copilot_package
-    (slice 028-02) — the deterministic static substitute for a live `copilot -p`
+    (slice 032-02) — the deterministic static substitute for a live `copilot -p`
     probe (headless Copilot does not reliably fire repo hooks). Unlike the
     Claude/Codex in-memory path this extracts, because the validator inspects a
     materialized package tree (manifest at root, loader-safe skills, no `hooks`

@@ -1,11 +1,11 @@
 ---
 status: DONE
-dependencies: [028-01, adr-0034]
+dependencies: [032-01, adr-0038]
 last_verified: 2026-09-18
 # arch_review: true  # adds the Copilot host renderer + dispatch wiring
 ---
 
-## Slice 028-02 — renderer-and-skeleton
+## Slice 032-02 — renderer-and-skeleton
 
 **Goal:** A Copilot user can install servo and invoke its skills — the walking
 skeleton: a Copilot arm in servo's builder that emits a committed, drift-guarded
@@ -14,7 +14,7 @@ skeleton: a Copilot arm in servo's builder that emits a committed, drift-guarded
 servo's function-based `scripts/build_host_packages.py`).
 
 **DoR:**
-- ✅ 028-01 done: contract confirmed vs jig's shipped package + live CLI (manifest
+- ✅ 032-01 done: contract confirmed vs jig's shipped package + live CLI (manifest
   shape, `.github/` layout, loader rules, `$SERVO_ROOT`/bug 036, marketplace/bug 035).
 
 **Acceptance Criteria:**
@@ -28,7 +28,7 @@ servo's function-based `scripts/build_host_packages.py`).
    `agents:".github/agents"` — **no `hooks`**) with skills under
    `.github/skills/<name>/SKILL.md`, `servo_root.py` at `.github/scripts/`, and
    `templates/` copied to `.github/templates/` **unrendered** (canonical
-   `${CLAUDE_PLUGIN_ROOT}` intact). `.github/agents/` is populated by 028-03.
+   `${CLAUDE_PLUGIN_ROOT}` intact). `.github/agents/` is populated by 032-03.
 3. **Loader-safe skill render (`_render_copilot_skill`, distinct from Codex).**
    (a) strip the `servo:` namespace from the loaded `name:`, then assert the result
    is `:`-free (raise on residual `:`); (b) jig's `loader_safe_description` — keep
@@ -134,7 +134,7 @@ satisfied.
 - **Drift** (covers copilot for free): existing `DriftTests`.
 
 ### Deviations / interpretations
-1. **AC6 — INTERPRETED; hook piece DEFERRED to 028-04.** jig bug 034 was its
+1. **AC6 — INTERPRETED; hook piece DEFERRED to 032-04.** jig bug 034 was its
    packaged `scaffold.py` defaulting to the *Claude renderer* (emitting
    `CLAUDE.md` / `host_renderer: "claude"` / a `.claude` tree). servo's
    `skills/scaffold-init/scaffold.py` has **no host-renderer concept**: it probes
@@ -147,7 +147,7 @@ satisfied.
    package's `.github/templates/`) and emits only `oracle.sh` + `.servo/`, no
    `.claude`/`CLAUDE.md`. servo's one genuinely host-specific scaffold behavior —
    the oracle gate installed as a Claude `Stop` hook that must become Copilot
-   `agentStop` — is **hook work deferred to slice 028-04** per the task scope. No
+   `agentStop` — is **hook work deferred to slice 032-04** per the task scope. No
    hook logic implemented here.
 2. **Path rewrite scoped to the canonical `${CLAUDE_PLUGIN_ROOT}/` brace token.**
    All 10 SKILL.md plugin-root refs use the `${CLAUDE_PLUGIN_ROOT}/skills/...`
@@ -170,10 +170,10 @@ satisfied.
    full-original-in-body note are ported exactly. Also added one blank line
    between the root note and the full-description note (readability; the 9
    over-limit skills carry both).
-4. **Root note omits jig's SessionStart carrier** (ADR-0034: servo's Copilot
+4. **Root note omits jig's SessionStart carrier** (ADR-0038: servo's Copilot
    package is hook-free) — the note carries only the self-contained fresh-shell
    locator; it is the sole resolution path.
-5. **`.github/agents/` not created (028-03).** Manifest declares
+5. **`.github/agents/` not created (032-03).** Manifest declares
    `agents: ".github/agents"` (forward-compatible); `validate_copilot_package`
    requires the `agents` field but not agent files. Empty dirs aren't committed
    and the drift guard compares files only, so nothing dangles.
@@ -189,17 +189,17 @@ satisfied.
 
 ### AC7 live-CLI residual (honest)
 `validate_copilot_package` is the deterministic install substitute (headless
-`copilot -p` does not reliably fire repo hooks — spike 028-01 finding). A live
+`copilot -p` does not reliably fire repo hooks — spike 032-01 finding). A live
 `copilot plugin install <dir>` + `copilot skill list` was **not** run: no live
 `copilot` CLI in the implementer sandbox. Recorded as a residual for the owner's
 review pass, consistent with the spike's recorded live-firing residual.
 
 ### Not in scope (later slices)
-Agents rendering (028-03), oracle `Stop`→`agentStop` hook + adapter (028-04),
-release zip / release-please / per-host smoke (028-05/06). `release-please-
+Agents rendering (032-03), oracle `Stop`→`agentStop` hook + adapter (032-04),
+release zip / release-please / per-host smoke (032-05/06). `release-please-
 config.json` and `build_release_zip.py` were left untouched, so
 `hosts/copilot/.plugin/plugin.json` is **not yet** version-tracked by
-release-please nor in the release archive — flagged for 028-06 (nothing parked
+release-please nor in the release archive — flagged for 032-06 (nothing parked
 to `docs/inbox.md`; these are already planned slices).
 
 ### Verification
@@ -223,7 +223,7 @@ to `docs/inbox.md`; these are already planned slices).
   collision-disambiguation vs jig's globally-installed `scaffold-init` skill (the
   rendered `name:` field is `scaffold-init`, `:`-free); servo's non-colliding
   skills display bare. Residual now narrowed to: live *hook firing* under headless
-  `copilot -p` (unobservable per jig 113-08), which is 028-04's concern, not this
+  `copilot -p` (unobservable per jig 113-08), which is 032-04's concern, not this
   slice's.
 - **AC6 adjudicated (accepted).** servo's `scaffold-init` is genuinely
   host-agnostic (scaffolds `.servo/` oracle infra, emits no `.claude`/`AGENTS.md`/
@@ -231,6 +231,6 @@ to `docs/inbox.md`; these are already planned slices).
   analogue; the implementer verified the packaged helper runs under the Copilot
   `.github/` layout without emitting a Claude tree. servo's only host-specific
   scaffold behavior is the oracle `Stop`→`agentStop` hook, correctly deferred to
-  028-04. AC6 satisfied in spirit; no host-inference renderer needed.
+  032-04. AC6 satisfied in spirit; no host-inference renderer needed.
 - Re-ran targeted tests (38 passed/48 subtests), drift `--check` (clean), ruff
   (clean); no mutation/residue in the tree.

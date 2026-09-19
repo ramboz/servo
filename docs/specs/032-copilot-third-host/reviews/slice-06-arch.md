@@ -1,13 +1,13 @@
 ---
-slice: 028-06 — committed-package-and-release
-pass: compliance
+slice: 032-06 — committed-package-and-release
+pass: arch
 verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-09-18T20:55:27Z
+reviewed_at: 2026-09-18T20:55:28Z
 prompt_source: review.py (compliance+craft+arch pass)
 ---
 
-Independent review (compliance + craft + arch) of slice 028-06 by a fresh
+Independent review (compliance + craft + arch) of slice 032-06 by a fresh
 jig:reviewer. **VERDICT: PASS.** All 5 ACs met; release parity correct and the
 copilot artifact cannot ship mislabeled (version-coherence exit-2 + drift guard +
 release-please lockstep + a static lockstep test — belt-and-suspenders). Claude/
@@ -27,7 +27,7 @@ Two low findings, disposition:
    (`test_validate_copilot_package_flags_missing_agents`,
    `..._flags_agent_model_field`). The release gate is now self-sufficient across
    every declared component.
-2. **[wording, corrected here]** The 028-06 deviation log said release.yml's
+2. **[wording, corrected here]** The 032-06 deviation log said release.yml's
    claude/codex "upload and notes steps are byte-unchanged"; precisely, those two
    **shared** steps gained additive copilot lines — the claude/codex *content*
    within them and all *dedicated* claude/codex steps are unchanged. Functional
@@ -37,4 +37,4 @@ Two low findings, disposition:
 
 Post-hardening re-verified: validate tests green (incl. the 2 new agent guards),
 real `servo-copilot-v0.9.0.zip` smoke-passes (now checking agents), drift + lint
-clean. Safe to mark 028-06 REVIEWED → DONE.
+clean. Safe to mark 032-06 REVIEWED → DONE.

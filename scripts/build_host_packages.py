@@ -23,14 +23,14 @@ _EXCLUDED_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
 _CODEX_DESCRIPTION_MAX = 1024
 
 # --------------------------------------------------------------------------- #
-# Copilot host (slice 028-02, mirroring jig's shipped `build_copilot_plugin.py`
+# Copilot host (slice 032-02, mirroring jig's shipped `build_copilot_plugin.py`
 # + `CopilotScaffoldRenderer`, ported as functions into this function-based
 # builder). Copilot's durable config home is `.github/`, so the committed
 # package IS that `.github/` tree plus a legacy `.plugin/plugin.json` manifest.
 # --------------------------------------------------------------------------- #
 
 # Copilot's skill loader rejects a `name:` containing `:` and a `description:`
-# field over 1024 characters (spike 028-01 AC / ADR-0034).
+# field over 1024 characters (spike 032-01 AC / ADR-0038).
 _COPILOT_DESCRIPTION_MAX = 1024
 _COPILOT_DESCRIPTION_SUFFIX = " (full description in skill body)"
 
@@ -49,7 +49,7 @@ _SERVO_ROOT_TOKEN = "$" + _SERVO_ROOT_VAR
 # references `$SERVO_ROOT`. It honours `COPILOT_HOME` (the same override the
 # locator itself reads) and iterates a quoted glob so install paths with spaces
 # still work. Unlike jig, there is NO SessionStart carrier — this locator is the
-# sole resolution path (servo's Copilot package is hook-free, ADR-0034).
+# sole resolution path (servo's Copilot package is hook-free, ADR-0038).
 _SERVO_ROOT_LOCATOR = (
     _SERVO_ROOT_VAR
     + '="$(for f in "${COPILOT_HOME:-$HOME/.copilot}"/installed-plugins/*/*/'
@@ -66,7 +66,7 @@ _COPILOT_MANIFEST_AGENTS = ".github/agents"
 # rewriter so both agree on where "the value continues on later lines".
 _DESCRIPTION_BLOCK_MARKERS = (">", "|", ">-", "|-", ">+", "|+")
 
-# Slice 028-03 — servo's `agents/<name>.md` (runner, judge) render as Copilot
+# Slice 032-03 — servo's `agents/<name>.md` (runner, judge) render as Copilot
 # custom agents under `.github/agents/<name>.agent.md`, mirroring jig's
 # `render_copilot_agent` + `CLAUDE_TO_COPILOT_TOOLS`. A closed, hand-verified
 # Claude-tool -> Copilot-tool-name mapping: an unmapped tool is a source
@@ -435,7 +435,7 @@ def _replace_tools_block(frontmatter: str, new_tools: list[str]) -> str:
 
 def _render_copilot_agent(data: bytes, name: str) -> bytes:
     """Render one `agents/<name>.md` source agent to Copilot's `.agent.md`
-    custom-agent form (slice 028-03; mirrors jig's `render_copilot_agent`):
+    custom-agent form (slice 032-03; mirrors jig's `render_copilot_agent`):
     `tools:` mapped Claude->Copilot (`_copilot_tool_names`); `name:`/
     `description:`/body preserved untouched (a surgical edit, like
     `_replace_description_field`, not a rebuild-from-scratch).
@@ -517,7 +517,7 @@ def _copy_copilot_tree(source_root: Path, github_root: Path) -> None:
     rewrite), agents (Claude->Copilot tools map, `.agent.md` form), templates
     (unrendered), and the servo_root.py locator.
 
-    servo's Copilot package ships no plugin hooks (ADR-0034), so there is no
+    servo's Copilot package ships no plugin hooks (ADR-0038), so there is no
     `.github/hooks/`. Exclusions match the Claude/Codex builders
     (`_is_runtime_file`), so the skill and agent sets are identical across
     hosts."""
@@ -534,7 +534,7 @@ def _copy_copilot_tree(source_root: Path, github_root: Path) -> None:
             data = _render_copilot_skill(data, rel.parent.name)
         target.write_bytes(data)
         target.chmod(0o755 if source.stat().st_mode & 0o111 else 0o644)
-    # Agents → .github/agents/<name>.agent.md (slice 028-03).
+    # Agents → .github/agents/<name>.agent.md (slice 032-03).
     agents_src = source_root / "agents"
     for source in sorted(agents_src.rglob("*")):
         if not _is_runtime_file(source, source_root):
@@ -567,7 +567,7 @@ def _copy_copilot_tree(source_root: Path, github_root: Path) -> None:
 def _write_copilot_manifest(copilot_root: Path, version: str, description: str) -> None:
     """Write `.plugin/plugin.json` in Copilot's legacy format: metadata plus the
     component-path fields for the components servo ships (skills + agents). NO
-    `hooks` field — servo's Copilot plugin ships no hooks (ADR-0034)."""
+    `hooks` field — servo's Copilot plugin ships no hooks (ADR-0038)."""
     payload = {
         "name": "servo",
         "version": version,
@@ -585,7 +585,7 @@ def _write_copilot_manifest(copilot_root: Path, version: str, description: str) 
 def validate_copilot_package(
     plugin_root: Path, expected_skills: set[str] | None = None
 ) -> list[str]:
-    """Statically validate a built Copilot package tree (slice 028-02 AC7) — the
+    """Statically validate a built Copilot package tree (slice 032-02 AC7) — the
     deterministic substitute for a live `copilot plugin install` (headless
     `copilot -p` does not reliably fire repo hooks).
 
@@ -595,9 +595,9 @@ def validate_copilot_package(
     `expected_skills` is given) matches the source skill set exactly; every
     SKILL.md frontmatter is loader-safe (name `:`-free, description <=1024).
 
-    Agent files (`.github/agents/*.agent.md`, rendered by slice 028-03) are
+    Agent files (`.github/agents/*.agent.md`, rendered by slice 032-03) are
     verified present and loader-safe (name `:`-free, no `model:` field —
-    the 028-03 invariants), so the release smoke gates on every declared
+    the 032-03 invariants), so the release smoke gates on every declared
     component, not just the drift guard. Returns diagnostics
     (empty == valid)."""
     problems: list[str] = []
@@ -656,7 +656,7 @@ def validate_copilot_package(
                 f"{skills_rel}/{name}/SKILL.md: description is "
                 f"{len(description)} characters (>{_COPILOT_DESCRIPTION_MAX})"
             )
-    # Agent files (028-03): the release smoke gates on agent presence +
+    # Agent files (032-03): the release smoke gates on agent presence +
     # loader-safety, not just the drift guard, so a zip missing its declared
     # agents fails the smoke rather than shipping incomplete.
     agents_dir = plugin_root / agents_rel

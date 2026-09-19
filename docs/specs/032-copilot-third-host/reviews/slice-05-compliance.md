@@ -1,13 +1,13 @@
 ---
-slice: 028-05 — execution-primitive-mapping
-pass: craft
+slice: 032-05 — execution-primitive-mapping
+pass: compliance
 verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-09-18T20:26:37Z
+reviewed_at: 2026-09-18T20:26:36Z
 prompt_source: review.py (compliance+craft+arch pass)
 ---
 
-Independent review (compliance + craft + arch) of slice 028-05 by a fresh
+Independent review (compliance + craft + arch) of slice 032-05 by a fresh
 jig:reviewer, scrutinizing the normalized-result correctness, cost-honesty, and
 goal-refusal. **VERDICT: PASS.** All 4 ACs met; the Copilot loop mode normalizes
 JSONL+usage into the exact result-dict shape the loop body consumes (every
@@ -40,4 +40,4 @@ Four low-severity findings, disposition:
 
 Post-review changes re-verified: affected tests pass (incl. the new not-on-PATH
 test), host packages regenerated (drift clean), lint clean, Claude path unchanged.
-Safe to mark 028-05 REVIEWED → DONE.
+Safe to mark 032-05 REVIEWED → DONE.

@@ -837,7 +837,7 @@ class ResolveGatePyTests(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
-# Copilot host: agentStop install / uninstall / status (slice 028-04)
+# Copilot host: agentStop install / uninstall / status (slice 032-04)
 # --------------------------------------------------------------------------- #
 REPO_ROOT = HOOK_DIR.parents[1]
 

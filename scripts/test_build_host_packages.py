@@ -144,7 +144,7 @@ class HostPackageTests(unittest.TestCase):
         self.assertFalse(stale.exists())
 
     # ------------------------------------------------------------------ #
-    # Slice 028-02 — Copilot host arm.
+    # Slice 032-02 — Copilot host arm.
     # ------------------------------------------------------------------ #
 
     def test_copilot_arm_renders_committed_layout(self):
@@ -162,7 +162,7 @@ class HostPackageTests(unittest.TestCase):
         self.assertEqual(manifest["version"], canonical["version"])
         self.assertEqual(manifest["skills"], ".github/skills")
         self.assertEqual(manifest["agents"], ".github/agents")
-        # No plugin hooks ship — servo's Copilot package is hook-free (ADR-0034).
+        # No plugin hooks ship — servo's Copilot package is hook-free (ADR-0038).
         self.assertNotIn("hooks", manifest)
 
     def test_copilot_arm_leaves_claude_and_codex_byte_identical(self):
@@ -276,7 +276,7 @@ class HostPackageTests(unittest.TestCase):
         self.assertTrue(any("design-eval" in p for p in problems), problems)
 
     def test_validate_copilot_package_flags_missing_agents(self):
-        # 028-06 (review finding 1): the release smoke gates on agent presence,
+        # 032-06 (review finding 1): the release smoke gates on agent presence,
         # not just the drift guard. Removing the rendered agents makes the
         # validator fail rather than pass a package missing its declared agents.
         agents_dir = self.hosts / "copilot/.github/agents"
@@ -286,7 +286,7 @@ class HostPackageTests(unittest.TestCase):
         self.assertTrue(any("agent" in p.lower() for p in problems), problems)
 
     def test_validate_copilot_package_flags_agent_model_field(self):
-        # 028-06: model-neutrality is gated by the smoke too — an agent with a
+        # 032-06: model-neutrality is gated by the smoke too — an agent with a
         # `model:` field fails.
         agent = self.hosts / "copilot/.github/agents/runner.agent.md"
         agent.write_text(
@@ -296,7 +296,7 @@ class HostPackageTests(unittest.TestCase):
         self.assertTrue(any("model" in p for p in problems), problems)
 
     # ------------------------------------------------------------------ #
-    # Slice 028-03 — Copilot agents (`.github/agents/<name>.agent.md`).
+    # Slice 032-03 — Copilot agents (`.github/agents/<name>.agent.md`).
     # ------------------------------------------------------------------ #
 
     def test_copilot_agents_rendered_with_mapped_tools(self):
@@ -360,7 +360,7 @@ class HostPackageTests(unittest.TestCase):
 
     def test_copilot_manifest_agents_path_resolves_to_real_files(self):
         # AC1: the manifest's `agents: ".github/agents"` path (written in
-        # 028-02) now resolves to real rendered agent files matching source.
+        # 032-02) now resolves to real rendered agent files matching source.
         manifest = json.loads((self.hosts / "copilot/.plugin/plugin.json").read_text())
         agents_dir = self.hosts / "copilot" / manifest["agents"]
         self.assertEqual(
@@ -374,7 +374,7 @@ class HostPackageTests(unittest.TestCase):
         # artifacts (oracle.sh + .servo/), never a Claude host tree. servo's
         # scaffold-init has no Claude-default *renderer* (unlike jig bug 034):
         # it scaffolds oracle infra, not a host config tree. The only
-        # host-specific behavior (the oracle Stop->agentStop hook) is 028-04.
+        # host-specific behavior (the oracle Stop->agentStop hook) is 032-04.
         pkg_scaffold = self.hosts / "copilot/.github/skills/scaffold-init/scaffold.py"
         self.assertTrue(pkg_scaffold.is_file())
         target = self.tmp / "scaffold-target"
@@ -460,7 +460,7 @@ class CopilotRenderUnitTests(unittest.TestCase):
             build_host_packages._render_copilot_skill(source, "a")
 
     # -------------------------------------------------------------- #
-    # Slice 028-03 — agent tool mapping + `.agent.md` rendering.
+    # Slice 032-03 — agent tool mapping + `.agent.md` rendering.
     # -------------------------------------------------------------- #
 
     def test_copilot_tool_names_maps_claude_to_copilot_vocabulary(self):

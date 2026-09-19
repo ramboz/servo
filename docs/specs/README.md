@@ -128,12 +128,12 @@
 | [027-design-eval-platform-capture](027-design-eval-platform-capture/spec.md) | 027-03 — custom-command provider (escape hatch) | **DONE** |  |
 | [027-design-eval-platform-capture](027-design-eval-platform-capture/spec.md) | 027-04 — blessed Android provider | **DONE** |  |
 | [027-design-eval-platform-capture](027-design-eval-platform-capture/spec.md) | 027-05 — blessed iOS provider | **DONE** |  |
-| [028-copilot-third-host](028-copilot-third-host/spec.md) | 🔬 028-01 — copilot-contract-spike | **DONE** |  |
-| [028-copilot-third-host](028-copilot-third-host/spec.md) | 028-02 — renderer-and-skeleton | **DONE** |  |
-| [028-copilot-third-host](028-copilot-third-host/spec.md) | 028-03 — agents | **DONE** |  |
-| [028-copilot-third-host](028-copilot-third-host/spec.md) | 028-04 — hooks | **DONE** |  |
-| [028-copilot-third-host](028-copilot-third-host/spec.md) | 028-05 — execution-primitive-mapping | **DONE** |  |
-| [028-copilot-third-host](028-copilot-third-host/spec.md) | 028-06 — committed-package-and-release | **DONE** | tri-host parity (ADR-0034); residuals: goal-driver Copilot-unsupported &#124; live hook-firing unobservable headless |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 🔬 032-01 — copilot-contract-spike | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-02 — renderer-and-skeleton | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-03 — agents | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-04 — hooks | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-05 — execution-primitive-mapping | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-06 — committed-package-and-release | **DONE** | tri-host parity (ADR-0038); residuals: goal-driver Copilot-unsupported &#124; live hook-firing unobservable headless |
 
 ## Deferred slices
 

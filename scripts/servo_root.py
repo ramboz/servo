@@ -8,7 +8,7 @@ all. Skill bodies therefore spell their helper invocations
 `$SERVO_ROOT` in a fresh shell.
 
 Unlike jig, servo's Copilot package ships **no** `SessionStart` carrier hook
-(servo's Copilot plugin is hook-free, ADR-0034), so this standalone locator is
+(servo's Copilot plugin is hook-free, ADR-0038), so this standalone locator is
 the *only* resolution path — there is no session-context shortcut.
 
 Resolution order:

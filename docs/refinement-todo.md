@@ -8,7 +8,7 @@ Each entry: heading, Deferred reason, Resolution trigger.
 
 ## Copilot `agentStop` oracle hook is verified statically, not by live firing
 
-**Deferred:** slice 028-04 installs servo's oracle `Stop` hook target-side as a
+**Deferred:** slice 032-04 installs servo's oracle `Stop` hook target-side as a
 Copilot `agentStop` hook (`.github/hooks/servo-oracle.json` + a ported
 `copilot_hook_adapter.py` in `.servo/hooks/`). A repo hook actually *firing*
 under headless `copilot -p` is **not reliably observable** (inherited from jig's
@@ -21,19 +21,19 @@ inventory (`docs/architecture.md`). We have **not** observed an installed
 live Copilot session.
 
 **Resolution trigger:** Copilot gains a reliable way to observe repo-hook firing
-under `copilot -p` (or a supported interactive equivalent), OR spec 028-05
+under `copilot -p` (or a supported interactive equivalent), OR spec 032-05
 validates the goal-driver-under-Autopilot path and needs the same live-firing
 evidence. Until then the static contract stands, matching how jig ships its
 Copilot hooks.
 
-**Surfaced by:** slice 028-04 (ADR-0034); the residual is enumerated in
+**Surfaced by:** slice 032-04 (ADR-0038); the residual is enumerated in
 `docs/architecture.md` "Copilot host hook inventory".
 
 ---
 
 ## Copilot loop cost is tracked in native units, not against a USD ceiling
 
-**Deferred:** slice 028-05 runs the optional loop driver under `--host copilot`
+**Deferred:** slice 032-05 runs the optional loop driver under `--host copilot`
 (`copilot -p`). Copilot reports cost as **premium-requests / nano-AIU**
 (`--usage-output-file`), not USD, and there is no faithful conversion. So servo
 does **not** fabricate a USD number: under Copilot the normalized
@@ -52,7 +52,7 @@ loop driver (repeated runs burn credits) → add a `--copilot-credit-ceiling`
 `sum(totalNanoAiu)` the way `--cost-ceiling` halts on `sum(total_cost_usd)`, and
 live-verify `--max-ai-credits` against a real `copilot -p` session.
 
-**Surfaced by:** slice 028-05 (ADR-0034); enumerated in `docs/architecture.md`
+**Surfaced by:** slice 032-05 (ADR-0038); enumerated in `docs/architecture.md`
 "Copilot host execution-primitive inventory".
 
 ---
@@ -61,10 +61,10 @@ live-verify `--max-ai-credits` against a real `copilot -p` session.
 
 **Deferred:** the goal driver (`/goal` + per-turn oracle-gated stop, ADR-0008)
 does **not** port to Copilot: Autopilot has no oracle-gated stop (only
-`--max-autopilot-continues` / `--max-ai-credits`, verified live in 028-01), and
+`--max-autopilot-continues` / `--max-ai-credits`, verified live in 032-01), and
 whether a per-continuation `agentStop` hook reconstructs the per-turn gate under
-Autopilot is **not headlessly verifiable** (jig 113-08). Per ADR-0034's honesty
-invariant (never a silent un-gated run), slice 028-05 makes the `/goal` family
+Autopilot is **not headlessly verifiable** (jig 113-08). Per ADR-0038's honesty
+invariant (never a silent un-gated run), slice 032-05 makes the `/goal` family
 (`--driver goal`, `--background`, `--emit-routine-prompt`) **refuse under
 `--host copilot`** (`goal_driver_unsupported_host`) and points the user to
 `--driver loop` — the loop driver ports fully and delivers equivalent
@@ -76,9 +76,9 @@ under Autopilot / `copilot -p` (see the sibling hook residual above), so the
 per-continuation `agentStop` gate can be validated end-to-end. If it fully
 reconstructs the per-turn gate, lift the refusal and map the goal driver to
 Autopilot caps + the `agentStop` gate; if it cannot, the refusal stands as the
-permanent honest posture (goal driver = Claude-only), per ADR-0034 kill criteria.
+permanent honest posture (goal driver = Claude-only), per ADR-0038 kill criteria.
 
-**Surfaced by:** slice 028-05 (ADR-0034); enumerated in `docs/architecture.md`
+**Surfaced by:** slice 032-05 (ADR-0038); enumerated in `docs/architecture.md`
 "Copilot host execution-primitive inventory".
 
 ---
@@ -87,7 +87,7 @@ permanent honest posture (goal driver = Claude-only), per ADR-0034 kill criteria
 
 **Deferred:** the Claude loop path has a "Bug 001"-style guard: a hard
 auth/API-error envelope halts with `EXIT_ENV_ERROR` rather than being scored as a
-real iteration. `_invoke_copilot`/`_normalize_copilot_result` (slice 028-05) have
+real iteration. `_invoke_copilot`/`_normalize_copilot_result` (slice 032-05) have
 no analog — a **soft** Copilot failure (auth/rate-limit) that still emits a
 parseable non-ephemeral JSONL event is normalized as `is_error: False` and scored
 as a real (likely empty) iteration instead of env-erroring. **Bounded and safe
@@ -106,7 +106,7 @@ mirroring `ClaudeErrorEnvelopeTests`. Pairs with the hook-firing + `--max-ai-cre
 live-validation residuals above (one live-Copilot-session validation pass closes
 all three).
 
-**Surfaced by:** slice 028-05 independent review (`jig:reviewer`, PASS with
+**Surfaced by:** slice 032-05 independent review (`jig:reviewer`, PASS with
 low-severity findings, 2026-09-18); finding logged rather than papered over.
 
 ---

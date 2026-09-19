@@ -42,14 +42,14 @@ DEFAULT_TIMEOUT = 60
 # Single rolling backup of the last pre-mutation settings.json (004-03 AC3).
 BACKUP_NAME = "settings.json.servo-bak"
 
-# --- Copilot host (slice 028-04, ADR-0034) ------------------------------- #
+# --- Copilot host (slice 032-04, ADR-0038) ------------------------------- #
 # servo's Copilot plugin package is hook-free; its one hook — the oracle `Stop`
 # (meta-judge) — is installed *target-side* here as a Copilot `agentStop` hook,
 # via a ported `copilot_hook_adapter.py` that reshapes Copilot's camelCase stdin
 # into the snake_case the meta-judge reads and exports `CLAUDE_PROJECT_DIR` from
 # the payload's `cwd` (Copilot sets no such env var).
 #
-# Mapped-or-unmappable hook inventory (ADR-0034 invariant, AC3): servo's ENTIRE
+# Mapped-or-unmappable hook inventory (ADR-0038 invariant, AC3): servo's ENTIRE
 # hook set, enumerated so a future added hook forces a new entry here (and a new
 # row in docs/architecture.md) rather than degrading silently. Today: one
 # mapped entry `Stop→agentStop` (identical `{"decision":"block","reason":…}`
@@ -318,7 +318,7 @@ def cmd_status(target: Path, *, as_json: bool = False) -> int:
 
 # --------------------------------------------------------------------------- #
 # Copilot host: install/uninstall/report the oracle `agentStop` hook target-side
-# (slice 028-04, ADR-0034). Mirrors the Claude-path contract — idempotent merge,
+# (slice 032-04, ADR-0038). Mirrors the Claude-path contract — idempotent merge,
 # single backup, stable-marker identification — against a Copilot `.github/hooks/
 # servo-oracle.json` instead of `.claude/settings.json`.
 # --------------------------------------------------------------------------- #
@@ -328,7 +328,7 @@ def _copilot_adapter_src() -> Path:
 
 
 def _servo_agentstop_entry(timeout: int) -> dict:
-    """servo's Copilot ``agentStop`` entry (flat schema — spike 028-01 / ADR-0034)."""
+    """servo's Copilot ``agentStop`` entry (flat schema — spike 032-01 / ADR-0038)."""
     return {"type": "command", "bash": COPILOT_HOOK_BASH, "timeoutSec": timeout}
 
 
@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     def _add_host(p: argparse.ArgumentParser) -> None:
-        # Host selection (028-04 AC4): Claude `Stop` (in .claude/settings.json)
+        # Host selection (032-04 AC4): Claude `Stop` (in .claude/settings.json)
         # vs Copilot `agentStop` (in .github/hooks/servo-oracle.json). Defaults
         # to `claude` — zero behavior change for existing installs. An explicit
         # flag (not `.github/` presence, which most repos carry for Actions) is

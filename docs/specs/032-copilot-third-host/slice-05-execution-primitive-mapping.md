@@ -1,11 +1,11 @@
 ---
 status: DONE
-dependencies: [028-03, 028-04]
+dependencies: [032-03, 032-04]
 last_verified: 2026-09-18
 # arch_review: true  # maps Claude-only execution primitives onto Copilot; ADR-0028 residual
 ---
 
-## Slice 028-05 — execution-primitive-mapping
+## Slice 032-05 — execution-primitive-mapping
 
 **Goal:** servo's *optional* unattended loop runs under Copilot. This is the
 servo-specific slice with no jig analogue: servo's `loop.py` subprocesses
@@ -13,9 +13,9 @@ servo-specific slice with no jig analogue: servo's `loop.py` subprocesses
 spike's resolved findings, recording any true residual honestly.
 
 **DoR:**
-- ✅ 028-03 done (a Copilot `runner` agent renders, so `--agent runner` resolves).
-- ✅ 028-04 done (target-side `agentStop` oracle hook + adapter).
-- ✅ 028-01 resolved: Autopilot has **no** oracle-gated stop (only
+- ✅ 032-03 done (a Copilot `runner` agent renders, so `--agent runner` resolves).
+- ✅ 032-04 done (target-side `agentStop` oracle hook + adapter).
+- ✅ 032-01 resolved: Autopilot has **no** oracle-gated stop (only
   `--max-autopilot-continues`/`--max-ai-credits`); `copilot -p -s` needs
   `--allow-all-tools`; `--output-format json` = JSONL; `--usage-output-file`
   exposes cost + `codeChanges.filesModifiedCount`.
@@ -35,7 +35,7 @@ spike's resolved findings, recording any true residual honestly.
    edit-signal (maps the ADR-0033/0037 "did the runner edit?" check). A test
    covers parsing a sample usage JSON (fixture from the spike's live run).
 3. **`/goal`→Autopilot, honestly (resolved).** The goal driver's per-turn oracle
-   gate maps via the **target-side `agentStop` oracle hook** (028-04), with
+   gate maps via the **target-side `agentStop` oracle hook** (032-04), with
    Autopilot's `--max-autopilot-continues`/`--max-ai-credits` as the outer bound —
    **not** via any (nonexistent) Autopilot oracle-gated stop. Whether `agentStop`
    fully reconstructs the gate under Autopilot is **not headlessly verifiable**
@@ -47,7 +47,7 @@ spike's resolved findings, recording any true residual honestly.
    posture maps to `--allow-all-tools` (required for headless tool use) +
    `codeChanges.filesModifiedCount` as the post-hoc edit-signal; recorded in the
    execution-primitive inventory. Any primitive that does not port is listed in
-   the ADR-0028-style inventory (extends 028-04's), never silently renamed.
+   the ADR-0028-style inventory (extends 032-04's), never silently renamed.
 
 **DoD:**
 - [x] All ACs pass; full suite green (venv pytest); new tests fail when the feature is removed.
@@ -108,9 +108,9 @@ deferred (refinement-todo).
 ### Goal-driver AC3 choice: refuse, explicitly
 
 Chose **refuse** over best-effort-map. Autopilot has no oracle-gated stop
-(028-01, live) and the target-side `agentStop` gate's live firing is unverifiable
+(032-01, live) and the target-side `agentStop` gate's live firing is unverifiable
 headless (jig 113-08), so a best-effort Autopilot map risks a silent un-gated run
-— the exact failure ADR-0034's honesty invariant forbids. The `/goal` family
+— the exact failure ADR-0038's honesty invariant forbids. The `/goal` family
 (`--driver goal`, `--background`, `--emit-routine-prompt`) refuses under
 `--host copilot` (`goal_driver_unsupported_host`) and points to `--driver loop`,
 which ports fully and delivers equivalent oracle-gated autonomy under Copilot.

@@ -1,4 +1,4 @@
-"""Tests for `skills/oracle-hook/copilot_hook_adapter.py` — slice 028-04 (hooks).
+"""Tests for `skills/oracle-hook/copilot_hook_adapter.py` — slice 032-04 (hooks).
 
 servo's Copilot plugin package is hook-free; its one hook — the oracle `Stop` —
 is installed target-side as a Copilot `agentStop` hook. This adapter is the

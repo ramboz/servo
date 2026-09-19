@@ -1,18 +1,18 @@
 ---
 status: DONE
-dependencies: [028-02]
+dependencies: [032-02]
 last_verified: 2026-09-18
 ---
 
-## Slice 028-03 — agents
+## Slice 032-03 — agents
 
 **Goal:** servo's agents (`runner`, `judge`) render as Copilot custom agents under
-`hosts/copilot/.github/agents/<name>.agent.md`, so the mapped loop (028-05) has a
+`hosts/copilot/.github/agents/<name>.agent.md`, so the mapped loop (032-05) has a
 Copilot `runner`/`judge` to invoke — mirroring jig's `render_copilot_agent`.
 
 **DoR:**
-- ✅ 028-02 done (Copilot renderer + package skeleton; `build_all` copilot arm).
-- ✅ 028-01 fixed the agent file form (`.agent.md`, frontmatter fields Copilot
+- ✅ 032-02 done (Copilot renderer + package skeleton; `build_all` copilot arm).
+- ✅ 032-01 fixed the agent file form (`.agent.md`, frontmatter fields Copilot
   honors) + the Claude→Copilot tools map.
 
 **Acceptance Criteria:**
@@ -42,7 +42,7 @@ Copilot `runner`/`judge` to invoke — mirroring jig's `render_copilot_agent`.
 - [x] Deviation log + reconciliation sweep produced.
 
 **Anti-horizontal-phasing check:** After this slice a Copilot user can invoke
-servo's `runner`/`judge` agents — new end-to-end capability, and 028-05's
+servo's `runner`/`judge` agents — new end-to-end capability, and 032-05's
 `copilot -p --agent runner` can resolve.
 
 ## Deviation log
@@ -80,9 +80,9 @@ implementer pass covers the code + test half only.
   - `_copy_copilot_tree`: added an agents loop (source `agents/<name>.md` →
     `_render_copilot_agent` → `.github/agents/<name>.agent.md`), positioned
     between the existing skills loop and the templates loop; docstring
-    updated (no longer forward-references "populated by slice 028-03").
+    updated (no longer forward-references "populated by slice 032-03").
   - `validate_copilot_package`'s docstring: one-line wording fix — it
-    referenced agents as "slice 028-03's deliverable" (now current, not
+    referenced agents as "slice 032-03's deliverable" (now current, not
     future); left its actual validation logic untouched, since extending it
     to check agent files is not required by any AC here (would be scope
     creep on a function this slice doesn't need to touch).
@@ -159,7 +159,7 @@ implementer pass covers the code + test half only.
    `Bash`, `Glob`, `Grep` — all six are mapped; nothing else is used, so
    nothing else was added (avoids an unexercised, untested map entry).
 4. **`validate_copilot_package` left functionally unchanged.** Its
-   docstring's forward-reference to "slice 028-03's deliverable" was
+   docstring's forward-reference to "slice 032-03's deliverable" was
    corrected to present tense, but its logic still does not check agent
    files (skills-only, as before). No AC in this slice requires extending
    it, and doing so unasked would be scope creep on a function this slice
@@ -195,8 +195,8 @@ implementer pass covers the code + test half only.
   slice).
 
 ### Not in scope (later slices)
-Oracle `Stop`→`agentStop` hook + adapter (028-04), execution-primitive
-mapping (028-05), release zip / release-please / per-host smoke (028-06).
+Oracle `Stop`→`agentStop` hook + adapter (032-04), execution-primitive
+mapping (032-05), release zip / release-please / per-host smoke (032-06).
 `validate_copilot_package` agent-file checks: not requested by this slice's
 ACs; left as a residual for whichever later slice wants stronger static
 validation of `.github/agents/`.
