@@ -187,7 +187,7 @@ coordination plane was added.
 - [x] Status board regenerated and audited after DONE; Notes retain the
       driver-shape and descriptive-only diagnostics invariants.
 - [x] Primer hygiene checked; this clone has no tracked project primer to edit.
-- [ ] Existing PR updated with review, reconciliation, validation, and recovery links.
+- [x] Existing PR updated with review, reconciliation, validation, and recovery links.
 
 **Anti-horizontal-phasing check:** Driver summaries travel through persisted
 outcomes to operator-visible triage in one independently usable slice.
