@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -10,6 +11,37 @@ ROOT = Path(__file__).resolve().parent
 
 
 class CopilotReplyTests(unittest.TestCase):
+    def test_relative_binary_override_uses_the_same_executable_after_cwd_change(self):
+        runtime = self.runtime()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first, second = root / "first", root / "second"
+            first.mkdir()
+            second.mkdir()
+            for folder, text in ((first, "first executable"), (second, "second executable")):
+                binary = folder / "copilot"
+                binary.write_text(
+                    "#!/usr/bin/env python3\n"
+                    "import json,sys\n"
+                    "if '--version' in sys.argv:\n"
+                    " print('GitHub Copilot CLI 1.0.96-2.')\n"
+                    "else:\n"
+                    f" print(json.dumps({{'type':'assistant.message','data':"
+                    f"{{'content':{text!r},'model':'pinned','phase':'final_answer'}}}}))\n"
+                    " print(json.dumps({'type':'result','exitCode':0,'sessionId':'fresh'}))\n"
+                )
+                binary.chmod(0o755)
+            previous = Path.cwd()
+            try:
+                os.chdir(first)
+                with mock.patch.dict(os.environ, {"SERVO_COPILOT_BIN": "./copilot"}):
+                    reply = runtime.invoke(
+                        "public", model="pinned", frozen_version="1.0.96-2", cwd=second,
+                    )
+                self.assertEqual(reply["text"], "first executable")
+            finally:
+                os.chdir(previous)
+
     def runtime(self):
         path = ROOT / "copilot_eval.py"
         self.assertTrue(path.is_file(), "native evaluation runtime must be shipped")

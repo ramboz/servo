@@ -434,8 +434,11 @@ def _native_candidate_path(base_dir: Path, case: dict) -> Path:
     relative = Path(raw)
     if relative.is_absolute() or ".." in relative.parts or re.match(r"^[A-Za-z]:", raw):
         raise EnvError("Native candidate_file must stay inside the component directory")
-    root = base_dir.resolve()
-    resolved = (root / relative).resolve()
+    try:
+        root = base_dir.resolve()
+        resolved = (root / relative).resolve()
+    except (OSError, RuntimeError) as exc:
+        raise EnvError("Cannot resolve native candidate_file safely") from exc
     try:
         resolved.relative_to(root)
     except ValueError as exc:

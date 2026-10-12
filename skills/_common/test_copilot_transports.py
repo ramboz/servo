@@ -53,10 +53,10 @@ class NativeTransportTests(unittest.TestCase):
         config["candidate_policy"] = "unsupported"
         self.assertNotEqual(module.definition_hash(config), before)
         legacy = dict(config, judge={"transport": "api", "model": "old"})
-        expected = module._fe.definition_hash(
-            legacy, module._CASES_KEY, module._CASE_PIN_FIELDS, module._EXTRA_HASH_FIELDS,
+        self.assertEqual(
+            module.definition_hash(legacy),
+            "sha256:753bf16ef784317efb5ea249ec3e3794f68374f65d66f7d26fee3970eccd5a7f",
         )
-        self.assertEqual(module.definition_hash(legacy), expected)
 
     def test_native_candidate_snapshot_rejects_escapes_binary_and_constraints(self):
         module = load("native_candidate_read", SKILLS / "eval-authoring" / "score.py")
@@ -90,6 +90,11 @@ class NativeTransportTests(unittest.TestCase):
             candidate.write_bytes(b"bad\x00binary")
             with self.assertRaises(module.EnvError):
                 module.acquire_native_candidate(directory, config["cases"][0])
+            (directory / "cycle.txt").symlink_to("cycle.txt")
+            with self.assertRaises(module.EnvError):
+                module.acquire_native_candidate(
+                    directory, dict(config["cases"][0], candidate_file="cycle.txt"),
+                )
             config["cases"][0]["expected_output"]["constraints"] = ["length >= 1"]
             with self.assertRaises(module.EnvError):
                 module.validate_native_candidates(config, directory)
@@ -422,6 +427,9 @@ class NativeTransportTests(unittest.TestCase):
             )
             self.assertEqual(invoke.call_count, 2)
             self.assertEqual(payload["authoring_runtime"]["backend"], "copilot")
+            self.assertTrue(
+                all(ac["approval_status"] == "proposed" for ac in payload["acs"]),
+            )
             self.assertTrue((directory / "criteria.json").is_file())
             self.assertNotEqual(
                 payload["authoring_runtime"]["expansion_session"],
@@ -432,6 +440,18 @@ class NativeTransportTests(unittest.TestCase):
                     "Public fixture goal", Path(temporary), backend="copilot", model="pinned",
                 )
             self.assertEqual(invoke.call_count, 2)
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(
+                    module, "_jig_independent_review_skill_path", return_value=None,
+                ), \
+                mock.patch.object(module, "_copilot_runtime", return_value=runtime), \
+                mock.patch.object(runtime, "invoke", side_effect=[
+                    responses[0], dict(responses[1], session_id="expansion"),
+                ]):
+            with self.assertRaisesRegex(module.EnvError, "fresh session"):
+                module.from_goal_target(
+                    "Public fixture goal", Path(temporary), backend="copilot", model="pinned",
+                )
 
 
 if __name__ == "__main__":
