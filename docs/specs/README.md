@@ -137,7 +137,7 @@
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-01 — loop-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-02 — goal-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-03 — goal-driver-advisory-preflight | DEFERRED |  |
-| [033-heartbeat-handoff-recovery](033-heartbeat-handoff-recovery/spec.md) | 033-01 — diagnostic-handoff | RECONCILED (heartbeat-outcome-handoff) |  |
+| [033-heartbeat-handoff-recovery](033-heartbeat-handoff-recovery/spec.md) | 033-01 — diagnostic-handoff | **DONE** | Retrospective recovery; optional diagnostics only; preserve loop-history/direct-goal score authority; no control-policy change; real review/mutation evidence in spec 033. |
 
 ## Deferred slices
 

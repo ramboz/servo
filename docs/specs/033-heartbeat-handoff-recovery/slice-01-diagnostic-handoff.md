@@ -1,11 +1,10 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [031-02, adr-0039]
 last_verified: 2026-10-12
 arch_review: true
 code_health_review: true
 frame_review: true
-claimed_by: heartbeat-outcome-handoff
 ---
 
 ## Slice 033-01 — diagnostic-handoff
@@ -185,9 +184,9 @@ coordination plane was added.
 
 ### Close-out (post-DONE)
 
-- [ ] Status board regenerated and audited after DONE; Notes retain the
+- [x] Status board regenerated and audited after DONE; Notes retain the
       driver-shape and descriptive-only diagnostics invariants.
-- [ ] Primer hygiene checked; this clone has no tracked project primer to edit.
+- [x] Primer hygiene checked; this clone has no tracked project primer to edit.
 - [ ] Existing PR updated with review, reconciliation, validation, and recovery links.
 
 **Anti-horizontal-phasing check:** Driver summaries travel through persisted
