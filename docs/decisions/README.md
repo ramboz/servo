@@ -44,34 +44,15 @@
 - [ADR-0035: Manual human-supplied capture provider for design-eval](adr-0035-design-eval-manual-capture-provider.md) — [ADR-0032](adr-0032-design-eval-capture-providers.md) made app capture a pluggable provider (`_CAPTURE_PROVIDERS` in `score.py:497-502`: `web`, `command`, `android`, `ios`) and **explicitly deferred** the human-supplied path: *"This ADR covers only capture for targets servo can drive. (2026-08-27, Accepted)
 - [ADR-0036: Approved frozen eval components satisfy the suitability signal](adr-0036-frozen-evals-satisfy-suitability-signal.md) — `suitability.py decide()` calls a spec `suitable` only when **both** legs hold: at least one evaluable AC, **and** a compilable signal — `has_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)` with `_SIGNAL_KEYS = ("tests", "ci")` (`suitability.py:71`), read from `<target>/.servo/install.json`'s `signals` object. (2026-09-01, Accepted)
 - [ADR-0037: Agent-loop diagnoses a missing headless edit-permission wall — post-hoc terminal relabel, best-effort goal-driver advisory](adr-0037-agent-loop-permission-preflight.md) — `/servo:agent-loop` (`loop.py`) subprocesses `claude -p --agent runner` with **no** `--dangerously-skip-permissions` and no `acceptEdits` / allow-list. (2026-09-01, Accepted)
+- [ADR-0039: Heartbeat outcome diagnostics are optional, descriptive extensions](adr-0039-heartbeat-handoff-contract.md) — Heartbeat needs to preserve the stop diagnosis already emitted by its drivers. (2026-10-12, Accepted)
 
 ## Pending
 
-ADR candidates (numbers are *hints* of the next likely allocation order,
-not reservations — the next accepted ADR claims the next free number
-regardless of which candidate fires first). `0005` is Accepted (the
-eval-oracle-component ADR), `0009` is Accepted (the design-fidelity-eval
-recipe), `0010` is Accepted (triage-inbox-schema), `0011` is Accepted
-(host-native phase hints), `0012` is Accepted
-(heartbeat whole-pass cost ceiling), `0013` is Accepted (servo availability
-breadcrumb), `0014` is Accepted (the evaluation-compiler / EDD reframe
-ADR), `0015` is Accepted (the EDD suitability gate), and `0016` is Accepted
-(the execution-plan artifact ADR), `0017` is reserved (Proposed)
-by the conformance-scores ledger ADR, `0018` is Accepted (suitability gates
-Compile, not the heartbeat), `0019` is Accepted (eval authoring stays
-entirely servo-owned), and `0020` is Accepted (minimum supported Python is
-3.9), `0021` is Accepted (oracle-first / agent-loop optional consumer),
-`0022` is Accepted (freeze against parsed ACs), `0023` is Accepted
-(co-locate durable spec-oracle artifacts), and `0024` is Accepted (extract
-the frozen-eval harness), `0025` is reserved (Proposed) by the
-runner-records / judge-verifies-assumptions ADR, `0026` is Accepted (generic eval-authoring-surface), `0027` is Accepted (goal→eval assisted authoring), and `0028` is Accepted (the
-dual-host package ADR), `0029` is Accepted (autonomy-readiness pre-flight
-gate), `0030` is Accepted (durable quarantine + lifecycle coordinator),
-`0031`–`0035` are Accepted (the design-eval browser-acquisition,
-capture-provider, structured-scoring-policy, subagent-judge-transport, and
-manual-capture ADRs), and `0036`–`0037` are reserved (Proposed) by the
-frozen-evals-satisfy-suitability-signal and agent-loop-permission-preflight
-ADRs, so the next free number is `0038`:
+Candidates below are not reservations and have no promised number. Allocate
+through `adr.py new`; its default reserves on `origin/main`, while `--no-push`
+creates a provisional local reservation. Check fetched sibling refs before
+publishing provisional identifiers rather than deriving a "next free" number
+from this narrative. Current record statuses are the derived Index above.
 
 - **A future ADR — Why `oracle.sh` stays project-owned plain bash.** Crystallizes if anyone proposes a Python or Node oracle alternative.
 
