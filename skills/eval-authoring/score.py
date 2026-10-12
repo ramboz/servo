@@ -39,9 +39,11 @@ Grows across 008-02 -> 008-04:
   system under test on a case's `input` to produce the text `judge()`
   scores — see `_gather_candidate` below) and the real per-candidate
   `actual_values` extraction the constraint DSL compares against (see
-  `_case_constraint_score` below). Both raise `EnvError` today rather than
-  fabricating a candidate/actual, which is why a *live* (no-fake-scores)
-  `score()` call always ends in `env_error`, never a placeholder score. The
+  `_case_constraint_score` below). The legacy API/Claude-CLI paths still raise
+  `EnvError` rather than
+  fabricating a candidate/actual, so a *live* legacy `score()` remains
+  unavailable. Native file-v1 instead reads explicit constraint-free output
+  snapshots; it does not add actual-value extraction. The
   comparative archetype's PROPOSED-vs-BASELINE judging (the `baseline`
   per-case field 008-02/008-03 already carry in the case shape) is the same
   kind of seam: widening `judge()`'s signature to consume it is deferred

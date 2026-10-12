@@ -68,8 +68,9 @@ actual-value extraction or automatic system-under-test execution.
 
 Independent native compliance identified discarded usage, native injection-hook
 bypasses and missing generic/packaged proofs. Those corrections and re-review
-are implemented and undergoing independent re-review. Actual consumer evidence
-does not by itself make slices DONE: required craft/architecture/reconciliation
-and final integrated CI remain. Source/test fixtures stay distinct from actual
+are implemented and cleared independent compliance, craft and architecture
+correction reviews. Actual consumer evidence
+does not by itself make slices DONE: required reconciliation and final integrated
+CI remain. Source/test fixtures stay distinct from actual
 CLI consumers. New native judge fields are closed to the deliberate policy;
 native score/actual injection is rejected before runtime/model/capture selection.

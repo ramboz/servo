@@ -54,7 +54,7 @@ candidates and can curate them through the existing workflow.
    provenance. Terminal vendor usage/null is now retained, and actual generated
    Copilot helper execution produced five PROPOSED criteria in distinct sessions,
    preserving both usage objects; details in native-evidence.md.
-3. Craft's native reused-session/proposed-state regression nit is being closed;
+3. Craft's native reused-session/proposed-state regression nit is closed;
    no production auto-approval or provider/permission fallback introduced.
 
 ### Reconciliation sweep

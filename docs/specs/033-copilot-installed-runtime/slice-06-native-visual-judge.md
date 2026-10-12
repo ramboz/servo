@@ -53,7 +53,9 @@ fidelity through the approved frozen component.
 3. Proof is labelled fixture self-approval/one sample, not independent production
    approval, calibration or monetary assurance. Craft found relative executable
    overrides could probe one binary and invoke another under changed cwd;
-   absolute executable identity correction is being completed.
+   absolute executable identity correction is complete, witnessed with real
+   A/B executables across cwd changes and independently re-reviewed. Bare names
+   use PATH and one absolute identity is reused for probing/invocation.
 
 ### Reconciliation sweep
 

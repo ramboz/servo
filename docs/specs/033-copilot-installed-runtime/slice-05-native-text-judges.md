@@ -84,7 +84,9 @@ component, not a new transport enum without end-to-end behavior.
    native calls, not fake hooks; sample/fixture limitations are explicit.
 4. Craft requested a literal historical API hash fixture and qualification of
    stale legacy acquisition prose. Compliance found cyclic-symlink resolution
-   escaping env_error on Python3.9; those narrow corrections are being completed.
+   escaping env_error on Python3.9. Corrections are complete: actual cyclic-path
+   red-to-green on Python3.9, literal historical digest and legacy-only live prose;
+   independent resolution re-review clears the remaining blocker.
 
 ### Reconciliation sweep
 

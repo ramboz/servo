@@ -279,7 +279,7 @@ documented, deliberately-unbuilt placeholder — running the system under test
 on a case's `input` to produce the text the judge scores is out of scope for
 every slice shipped so far (spec 008's non-goal: "this skill authors; it does
 not run"). Concretely: a **live** (no-fake-scores) `score()` call on an
-installed component always raises `env_error` today, never a placeholder
+legacy API/Claude CLI installed component raises `env_error` at that seam, never a placeholder
 score. Offline testing/dry-runs use the `SERVO_EVAL_AUTHORING_FAKE_SCORES`
 (`{case_id: [sample, ...]}`) and `SERVO_EVAL_AUTHORING_FAKE_ACTUALS`
 (`{case_id: {field: value}}`, for constraint-DSL cases) environment hooks to

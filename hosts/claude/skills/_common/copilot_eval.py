@@ -26,16 +26,24 @@ class CopilotError(RuntimeError):
 
 
 def resolve_binary(bin_env: Optional[str] = None) -> str:
-    binary = (
+    override = (
         (os.environ.get(bin_env) if bin_env else None)
         or os.environ.get("SERVO_COPILOT_BIN")
-        or shutil.which("copilot")
     )
+    if override and (os.sep in override or (os.altsep and os.altsep in override)):
+        binary = override
+    else:
+        binary = shutil.which(override or "copilot")
     if not binary:
         raise CopilotError(
             "copilot_not_found", "Copilot CLI not found; set SERVO_COPILOT_BIN or add it to PATH"
         )
-    return binary
+    try:
+        return str(Path(binary).expanduser().resolve())
+    except (OSError, RuntimeError) as exc:
+        raise CopilotError(
+            "copilot_not_executable", "Cannot resolve the Copilot executable",
+        ) from exc
 
 
 def _run(command: list, *, timeout: int, cwd: Optional[Path] = None):
