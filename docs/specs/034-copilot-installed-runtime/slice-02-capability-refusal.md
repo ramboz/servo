@@ -1,10 +1,9 @@
 ---
-status: RECONCILED
+status: DONE
 kind: feature
 dependencies: [adr-0043]
 last_verified: 2026-10-12
 arch_review: true
-claimed_by: claude/adr-0034-specs-028-jig-fe54d4
 ---
 
 ## Slice 034-02 - capability-refusal
@@ -87,4 +86,4 @@ instead of unknowingly funding a run without the requested limits.
 
 ### Close-out (post-DONE)
 
-- [ ] Preserve unavailable native autonomy in board/PR, not native-loop DONE.
+- [x] Preserve unavailable native autonomy in board/PR, not native-loop DONE.

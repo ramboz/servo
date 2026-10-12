@@ -1,10 +1,9 @@
 ---
-status: RECONCILED
+status: DONE
 kind: feature
 dependencies: [adr-0043]
 last_verified: 2026-10-12
 arch_review: true
-claimed_by: claude/adr-0034-specs-028-jig-fe54d4
 ---
 
 ## Slice 034-01 - installed-oracle
@@ -107,4 +106,4 @@ project without Claude, not merely installs new files.
 
 ### Close-out (post-DONE)
 
-- [ ] Regenerate board and retain package/runtime-root and supported-scope notes.
+- [x] Regenerate board and retain package/runtime-root and supported-scope notes.

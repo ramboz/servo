@@ -1,11 +1,10 @@
 ---
-status: RECONCILED
+status: DONE
 kind: feature
 dependencies: [034-05, adr-0043, adr-0040, adr-0034]
 last_verified: 2026-10-12
 arch_review: true
 frame_review: true
-claimed_by: claude/adr-0034-specs-028-jig-fe54d4
 ---
 
 ## Slice 034-06 - native-visual-judge

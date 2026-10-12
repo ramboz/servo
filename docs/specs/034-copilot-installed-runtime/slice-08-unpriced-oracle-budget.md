@@ -1,11 +1,10 @@
 ---
-status: RECONCILED
+status: DONE
 kind: feature
 dependencies: [034-02, 034-05, 034-06, adr-0041]
 last_verified: 2026-10-12
 arch_review: true
 frame_review: true
-claimed_by: claude/adr-0034-specs-028-jig-fe54d4
 ---
 
 ## Slice 034-08 - unpriced-oracle-budget

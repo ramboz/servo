@@ -144,14 +144,14 @@
 | [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-05 — execution-primitive-mapping | **DONE** |  |
 | [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-06 — committed-package-and-release | **DONE** | tri-host parity (ADR-0038); residuals: goal-driver Copilot-unsupported &#124; live hook-firing unobservable headless |
 | [033-heartbeat-handoff-recovery](033-heartbeat-handoff-recovery/spec.md) | 033-01 — diagnostic-handoff | **DONE** | Retrospective recovery; optional diagnostics only; preserve loop-history/direct-goal score authority; no control-policy change; real review/mutation evidence in spec 033. |
-| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-01 - installed-oracle | RECONCILED (claude/adr-0034-specs-028-j…) |  |
-| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-02 - capability-refusal | RECONCILED (claude/adr-0034-specs-028-j…) |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-01 - installed-oracle | **DONE** |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-02 - capability-refusal | **DONE** |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-03 - native-loop-and-consumers | DEFERRED |  |
-| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-04 - native-authoring | RECONCILED (claude/adr-0034-specs-028-j…) |  |
-| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-05 - native-text-judges | RECONCILED (claude/adr-0034-specs-028-j…) |  |
-| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-06 - native-visual-judge | RECONCILED (claude/adr-0034-specs-028-j…) |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-04 - native-authoring | **DONE** |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-05 - native-text-judges | **DONE** |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-06 - native-visual-judge | **DONE** |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | DEFERRED |  |
-| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | RECONCILED (claude/adr-0034-specs-028-j…) |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | **DONE** |  |
 
 ## Deferred slices
 
