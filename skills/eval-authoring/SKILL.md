@@ -259,6 +259,48 @@ tracked as future work, not silently assumed.
 
 ## Authoring tips
 
+### Native Copilot authoring and frozen text judging
+
+Assisted authoring can explicitly use Copilot:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/eval-authoring/eval_authoring.py" \
+  from-goal "<goal>" --backend copilot [--model <model>] --spec-dir <spec-dir>
+```
+
+Expansion and review use separate fresh sessions with read-only tool
+restrictions. Native model/version/session provenance is recorded; criteria
+remain candidates until normal human curation and approval. This choice does
+not select a frozen judge or change the default Claude authoring path.
+
+For a **new, unapproved** rubric, explicitly choose frozen native judging:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/eval-authoring/eval_authoring.py" \
+  params <plan> --ac <AC-id> --transport copilot --model <pinned-model> \
+  --decoding-mode native-default
+```
+
+The definition captures the exact CLI `runtime_version` and contains no
+API-only `temperature`/`max_tokens`. Native controls reject unsupported numeric
+requirements, absent default-decoding consent, auto models and runtime drift.
+Approved configs are not rewritten by this switch: use the normal review and
+re-freeze workflow. `native-default` accepts transport defaults explicitly;
+an exact CLI pin does not claim stable server-side decoding.
+
+The installed runtime also carries `copilot_eval.py` beside `score.py` and
+`fidelity_eval.py`. `SERVO_EVAL_AUTHORING_COPILOT_BIN` or `SERVO_COPILOT_BIN`
+selects an executable. Native errors never fall back to Claude/API or produce
+fabricated criteria/scores. Existing API and Claude `cli` meanings, sampling,
+lower-bound scoring and approval policy remain unchanged.
+
+Native judged components have **unknown USD spend**, recorded as `cost_usd:
+null`, never zero. Installation records their component names in
+`.servo/install.json`'s `unpriced_components` list. An outer loop/heartbeat
+promising a USD ceiling must refuse incompatible unpriced oracle work before
+running it. Standalone attended scoring remains available; the marker is removed
+when a component is uninstalled or deliberately reinstalled as non-native.
+
 - The shipped rubric defaults sample at `temperature: 0.0` (lower than
   content-fidelity's `0.6`) — the n-sample lower bound already absorbs the
   judge's residual stochasticity, so a low-temperature judge here trades a

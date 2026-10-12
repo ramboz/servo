@@ -766,8 +766,19 @@ def judge(app_png: Path, ref_png: Path, config: dict) -> float:
     transport = (config.get("judge") or {}).get("transport", "api")
     if transport == "cli":
         return _judge_cli(app_png, ref_png, config)
+    if transport == "copilot":
+        prompt = (
+            _scoring_prompt(config)
+            + "\n\nThe FIRST attachment is the implemented app screen; "
+            "the SECOND is the design reference. Judge the actual images. "
+            'Reply ONLY JSON: {"score": <number 0..1>, "reasoning": "<one sentence>"}.'
+        )
+        return _fe.copilot_judge(
+            prompt, config, attachments=(app_png, ref_png), cwd=app_png.parent.parent,
+            bin_env="SERVO_DESIGN_EVAL_COPILOT_BIN",
+        )["score"]
     if transport != "api":
-        raise EnvError(f"unknown judge.transport: {transport!r} (expected 'api' or 'cli')")
+        raise EnvError(f"unknown judge.transport: {transport!r} (expected api, cli or copilot)")
     return _judge_api(app_png, ref_png, config)
 
 
@@ -890,6 +901,7 @@ def score(base_dir: Path) -> float:
     config = json.loads((base_dir / "config.json").read_text())
     _require_schema_v2(config)         # 028-01: clear force-re-author before staleness
     validate_freeze(config, base_dir)  # StaleError → exit 2
+    _fe.validate_copilot_definition(config, check_runtime=False)
     _validate_policy(config)           # 028-01: non-empty dimensions / well-formed ignore
 
     n = int(config["samples"]["n"])
@@ -1223,6 +1235,11 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
+        **(
+            {"cost_usd": None, "runtime_version": config["judge"]["runtime_version"],
+             "decoding_mode": config["judge"]["decoding_mode"]}
+            if config.get("judge", {}).get("transport") == "copilot" else {}
+        ),
         # 029-02 AC3: what the subagent SAID it judged with — never verified; a bare
         # `null` on non-subagent runs keeps every row the same shape.
         "self_reported_model": self_reported_model,

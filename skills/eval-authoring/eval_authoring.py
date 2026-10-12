@@ -703,7 +703,12 @@ def _render_rubric_md(config: dict, ac_entry: dict) -> str:
         "",
         f"- Model: `{config['judge']['model']}`",
         f"- Transport: `{config['judge']['transport']}`",
-        f"- Temperature: `{config['judge']['temperature']}`",
+        (
+            f"- Decoding: `{config['judge']['decoding_mode']}` "
+            f"(CLI compatibility version `{config['judge']['runtime_version']}`)"
+            if config["judge"].get("transport") == "copilot"
+            else f"- Temperature: `{config['judge']['temperature']}`"
+        ),
         f"- Samples (n): `{config['samples']['n']}`",
         f"- Threshold: `{config['threshold']}`",
         "",
@@ -1164,25 +1169,50 @@ _PARAM_TRADEOFFS = (
 
 def apply_params(
     config: dict, *, n=None, delta=None, threshold=None, model=None,
-    temperature=None, max_tokens=None, transport=None,
+    temperature=None, max_tokens=None, transport=None, decoding_mode=None,
 ) -> dict:
     """AC1: set/confirm the frozen knobs. Every argument left `None` keeps
     whatever `rubric` already seeded from `DEFAULT_JUDGE`/`DEFAULT_SAMPLES`/
     `DEFAULT_THRESHOLD` — so accepting every default is just calling this
     with no overrides at all. Mutates and returns `config`."""
+    native = transport == "copilot" or (
+        transport is None and config.get("judge", {}).get("transport") == "copilot"
+    )
+    replacement = None
+    if native:
+        if temperature is not None or max_tokens is not None:
+            raise EnvError(
+                "copilot_unsupported_controls", "Copilot has no numeric decoding controls",
+            )
+        if transport is not None or model is not None or decoding_mode is not None:
+            if config.get("approval_status") == "approved":
+                raise EnvError("already_approved", "Do not rewrite an approved judge definition")
+            runtime = _copilot_runtime()
+            try:
+                replacement = runtime.judge_definition(
+                    model, decoding_mode, "SERVO_EVAL_AUTHORING_COPILOT_BIN",
+                )
+            except runtime.CopilotError as exc:
+                raise EnvError(exc.reason, str(exc)) from exc
+    elif decoding_mode is not None:
+        raise EnvError(
+            "invalid_decoding_mode", "native-default decoding requires Copilot transport",
+        )
     if n is not None:
         config["samples"]["n"] = n
     if delta is not None:
         config["samples"]["delta"] = delta
     if threshold is not None:
         config["threshold"] = threshold
-    if model is not None:
+    if replacement is not None:
+        config["judge"] = replacement
+    if model is not None and replacement is None:
         config["judge"]["model"] = model
     if temperature is not None:
         config["judge"]["temperature"] = temperature
     if max_tokens is not None:
         config["judge"]["max_tokens"] = max_tokens
-    if transport is not None:
+    if transport is not None and replacement is None:
         config["judge"]["transport"] = transport
     return config
 
@@ -1191,8 +1221,17 @@ def render_params_guidance(config: dict) -> list:
     """AC1's one-line plain-language trade-off note per knob, over the
     *confirmed* value of each — printed by the CLI so a human sees the
     rationale before accepting/overriding."""
-    return [f"- {label} = {getter(config)} — {note}" for label, getter, note in
-            _PARAM_TRADEOFFS]
+    if config.get("judge", {}).get("transport") == "copilot":
+        lines = [
+            f"- {label} = {getter(config)} — {note}"
+            for label, getter, note in _PARAM_TRADEOFFS if label != "judge.temperature"
+        ]
+        lines.append(
+            "- judge.decoding_mode = native-default — numeric decoding controls are unavailable; "
+            f"CLI compatibility version {config['judge']['runtime_version']} is frozen"
+        )
+        return lines
+    return [f"- {label} = {getter(config)} — {note}" for label, getter, note in _PARAM_TRADEOFFS]
 
 
 def params_target(plan_path: Path, ac_id: str, **overrides):
@@ -1253,6 +1292,10 @@ def freeze_dataset_config(config: dict, out_dir: Path, score_mod) -> dict:
     warning, not a freeze precondition; a human who has already seen it may
     still choose to freeze deliberately).
     """
+    try:
+        score_mod._fe.validate_copilot_definition(config, "SERVO_EVAL_AUTHORING_COPILOT_BIN")
+    except score_mod.EnvError as exc:
+        raise EnvError("copilot_invalid_config", str(exc)) from exc
     cases = config.get("cases") or []
     validate_dataset(cases)
     if not cases:
@@ -1308,19 +1351,32 @@ def install_component(
     if not oracle.is_file():
         raise EnvError(
             "oracle_missing", f"oracle.sh not found: {oracle} (scaffold the target first)")
+    unpriced = config.get("judge", {}).get("transport") == "copilot"
+    if unpriced:
+        try:
+            score_mod._fe.validate_unpriced_registration(target)
+        except score_mod.EnvError as exc:
+            raise EnvError("unpriced_registration_required", str(exc)) from exc
 
+    here = Path(__file__).resolve().parent
+    native_helper = here.parent / "_common" / "copilot_eval.py"
+    if config.get("judge", {}).get("transport") == "copilot" and not native_helper.is_file():
+        raise EnvError("copilot_runtime_missing", "Native evaluation helper is missing")
+    if unpriced:
+        score_mod._fe.register_manifest(target, component, unpriced=True)
     comp_dir = target / ".servo" / component
     comp_dir.mkdir(parents=True, exist_ok=True)
-    here = Path(__file__).resolve().parent
     shutil.copyfile(here / "score.py", comp_dir / "score.py")
     shutil.copyfile(here.parent / "_common" / "fidelity_eval.py", comp_dir / "fidelity_eval.py")
+    if native_helper.is_file():
+        shutil.copyfile(native_helper, comp_dir / "copilot_eval.py")
     (comp_dir / "config.json").write_text(json.dumps(config, indent=2) + "\n")
 
     text = oracle.read_text()
     text = score_mod._fe.splice_component(text, component, _install_fragment(component))
     text = score_mod._fe.splice_components_entry(text, component, weight)
     oracle.write_text(text)
-    score_mod._fe.register_manifest(target, component)
+    score_mod._fe.register_manifest(target, component, unpriced=unpriced)
 
 
 def uninstall_component(target: Path, component: str, score_mod) -> None:
@@ -1781,6 +1837,14 @@ def _resolve_claude() -> "str | None":
     return os.environ.get("SERVO_EVAL_AUTHORING_CLAUDE_BIN") or shutil.which("claude")
 
 
+def _copilot_runtime():
+    score = _load_score()
+    try:
+        return score._fe.copilot_runtime()
+    except score.EnvError as exc:
+        raise EnvError("copilot_runtime_missing", str(exc)) from exc
+
+
 def _invoke_claude_prompt(prompt: str) -> str:
     """One fresh, one-shot `claude -p --output-format json <prompt>` call —
     used for BOTH the expansion step (AC1) and the independent-reviewer step
@@ -2209,7 +2273,9 @@ def criteria_dir_for_goal(spec_dir: Path, goal_slug: str) -> Path:
     return spec_dir / goal_slug
 
 
-def from_goal_target(goal: str, spec_dir: Path, *, force: bool = False) -> tuple:
+def from_goal_target(
+    goal: str, spec_dir: Path, *, force: bool = False, backend: str = "claude", model=None,
+) -> tuple:
     """AC1-AC4: expand the goal -> run the independent-reviewer pass -> emit
     the curated-pending proposal under `<spec_dir>/<goal-slug>/`. Never
     imports or subprocesses `gate.py`/`oracle.sh` (AC6/Decision #5) — the two
@@ -2240,17 +2306,57 @@ def from_goal_target(goal: str, spec_dir: Path, *, force: bool = False) -> tuple
                     "deliberately",
                 )
 
-    expansion_text = _invoke_claude_prompt(_render_expansion_prompt(goal))
+    if backend not in ("claude", "copilot"):
+        raise EnvError("unknown_backend", f"Unknown authoring backend: {backend}")
+    if backend == "claude" and model is not None:
+        raise EnvError("unsupported_model_option", "--model requires the Copilot authoring backend")
+    expansion = None
+    runtime = _copilot_runtime() if backend == "copilot" else None
+    if runtime is not None:
+        try:
+            expansion = runtime.invoke(
+                _render_expansion_prompt(goal), model=model,
+                bin_env="SERVO_EVAL_AUTHORING_COPILOT_BIN",
+                timeout=CLAUDE_PROMPT_TIMEOUT_SECONDS,
+            )
+        except runtime.CopilotError as exc:
+            raise EnvError(exc.reason, str(exc)) from exc
+        expansion_text = expansion["text"]
+    else:
+        expansion_text = _invoke_claude_prompt(_render_expansion_prompt(goal))
     acs = _parse_expansion_reply(expansion_text)
 
     jig_skill_path = _jig_independent_review_skill_path()
     review_prompt = _render_review_prompt(goal, acs, jig_skill_path=jig_skill_path)
-    review_text = _invoke_claude_prompt(review_prompt)
+    review = None
+    if runtime is not None:
+        try:
+            review = runtime.invoke(
+                review_prompt, model=model, bin_env="SERVO_EVAL_AUTHORING_COPILOT_BIN",
+                timeout=CLAUDE_PROMPT_TIMEOUT_SECONDS,
+            )
+        except runtime.CopilotError as exc:
+            raise EnvError(exc.reason, str(exc)) from exc
+        if expansion["session_id"] == review["session_id"]:
+            raise EnvError("copilot_session_reused", "Native reviewer must use a fresh session")
+        review_text = review["text"]
+    else:
+        review_text = _invoke_claude_prompt(review_prompt)
     flags = _parse_review_reply(review_text)
 
     reviewer_source = (
         REVIEWER_SOURCE_JIG if jig_skill_path is not None else REVIEWER_SOURCE_BUILT_IN)
     payload = build_criteria_payload(goal, acs, flags, reviewer_source=reviewer_source)
+    if expansion is not None and review is not None:
+        payload["authoring_runtime"] = {
+            "backend": "copilot",
+            "expansion_session": expansion["session_id"],
+            "review_session": review["session_id"],
+            "expansion_model": expansion["model"],
+            "review_model": review["model"],
+            "expansion_runtime": expansion["runtime_version"],
+            "review_runtime": review["runtime_version"],
+        }
 
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "criteria.json").write_text(json.dumps(payload, indent=2) + "\n")
@@ -2436,7 +2542,8 @@ def _params_main(argv: list) -> int:
     parser.add_argument(
         "--max-tokens", type=int, default=None, dest="max_tokens", help="Judge max_tokens.")
     parser.add_argument(
-        "--transport", choices=("api", "cli"), default=None, help="Judge transport.")
+        "--transport", choices=("api", "cli", "copilot"), default=None, help="Judge transport.")
+    parser.add_argument("--decoding-mode", choices=("native-default",), default=None)
     args = parser.parse_args(argv)
 
     plan_path = Path(args.plan_path).resolve()
@@ -2444,7 +2551,7 @@ def _params_main(argv: list) -> int:
         config, out_dir = params_target(
             plan_path, args.ac, n=args.n, delta=args.delta, threshold=args.threshold,
             model=args.model, temperature=args.temperature, max_tokens=args.max_tokens,
-            transport=args.transport,
+            transport=args.transport, decoding_mode=args.decoding_mode,
         )
     except EnvError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -2528,6 +2635,8 @@ def _from_goal_main(argv: list) -> int:
         ),
     )
     parser.add_argument("goal", help="The free-form goal to expand.")
+    parser.add_argument("--backend", choices=("claude", "copilot"), default="claude")
+    parser.add_argument("--model", default=None, help="Commanded Copilot authoring model.")
     parser.add_argument(
         "--spec-dir", default=".",
         help=(
@@ -2546,7 +2655,9 @@ def _from_goal_main(argv: list) -> int:
 
     spec_dir = Path(args.spec_dir).resolve()
     try:
-        payload, out_dir = from_goal_target(args.goal, spec_dir, force=args.force)
+        payload, out_dir = from_goal_target(
+            args.goal, spec_dir, force=args.force, backend=args.backend, model=args.model,
+        )
     except EnvError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -183,8 +183,13 @@ def judge(generated: str, reference: str, config: dict) -> float:
     transport = (config.get("judge") or {}).get("transport", "api")
     if transport == "cli":
         return _judge_cli(generated, reference, config)
+    if transport == "copilot":
+        return _fe.copilot_judge(
+            _prompt(generated, reference, config), config,
+            bin_env="SERVO_CONTENT_FIDELITY_COPILOT_BIN",
+        )["score"]
     if transport != "api":
-        raise EnvError(f"unknown judge.transport: {transport!r} (expected 'api' or 'cli')")
+        raise EnvError(f"unknown judge.transport: {transport!r} (expected api, cli or copilot)")
     return _judge_api(generated, reference, config)
 
 
@@ -292,6 +297,7 @@ def score(base_dir: Path) -> float:
     """Composite content-fidelity score for the frozen eval in ``base_dir``."""
     config = json.loads((base_dir / "config.json").read_text())
     validate_freeze(config, base_dir)  # StaleError → exit 2
+    _fe.validate_copilot_definition(config, check_runtime=False)
 
     n = int(config["samples"]["n"])
     k = float(config["samples"].get("k", 1.0))
@@ -332,6 +338,11 @@ def _ledger(base_dir: Path, config: dict, per_case, composite: float) -> None:
         "at": _fe.iso_now(),
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
+        **(
+            {"cost_usd": None, "runtime_version": config["judge"]["runtime_version"],
+             "decoding_mode": config["judge"]["decoding_mode"]}
+            if config.get("judge", {}).get("transport") == "copilot" else {}
+        ),
         "composite": round(composite, 4),
         "definition_hash": config.get("approved_content_hash"),
         "cases": [

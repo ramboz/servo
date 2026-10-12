@@ -18,6 +18,7 @@ Python 3.9+ standard library only (servo constraint, ADR-0020).
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -35,6 +36,56 @@ class EnvError(RuntimeError):
 
 class StaleError(RuntimeError):
     """The frozen definition changed — refuse until re-frozen (exit 2)."""
+
+
+_COPILOT_RUNTIME = None
+
+
+def copilot_runtime():
+    """Load only on native use so older API-only installed components still work."""
+    global _COPILOT_RUNTIME
+    if _COPILOT_RUNTIME is None:
+        path = Path(__file__).with_name("copilot_eval.py")
+        if not path.is_file():
+            raise EnvError("Copilot evaluation helper missing; refresh the installed runtime")
+        spec = importlib.util.spec_from_file_location("servo_copilot_eval", path)
+        if spec is None or spec.loader is None:
+            raise EnvError("Cannot load the Copilot evaluation helper")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _COPILOT_RUNTIME = module
+    return _COPILOT_RUNTIME
+
+
+def copilot_definition(model, decoding_mode, bin_env=None) -> dict:
+    native = copilot_runtime()
+    try:
+        return native.judge_definition(model, decoding_mode, bin_env)
+    except native.CopilotError as exc:
+        raise EnvError(str(exc)) from exc
+
+
+def validate_copilot_definition(config: dict, bin_env=None, *, check_runtime=True) -> None:
+    definition = config.get("judge") or {}
+    if definition.get("transport") != "copilot":
+        return
+    native = copilot_runtime()
+    try:
+        native.validate_judge(definition)
+        if check_runtime and native.runtime_version(bin_env) != definition["runtime_version"]:
+            raise EnvError("Copilot runtime differs from the definition; review and re-freeze")
+    except native.CopilotError as exc:
+        raise EnvError(str(exc)) from exc
+
+
+def copilot_judge(prompt, config, *, attachments=(), cwd=None, bin_env=None) -> dict:
+    native = copilot_runtime()
+    try:
+        return native.judge(
+            prompt, config.get("judge") or {}, attachments=attachments, cwd=cwd, bin_env=bin_env,
+        )
+    except native.CopilotError as exc:
+        raise EnvError(str(exc)) from exc
 
 
 # --------------------------------------------------------------------------- #
@@ -366,16 +417,70 @@ def unsplice_component(oracle_text: str, component: str) -> str:
     return text
 
 
-def register_manifest(target: Path, component: str) -> None:
-    """Add ``component`` to ``<target>/.servo/install.json``'s ``components``
-    list if the manifest exists. No-op if there is no manifest to update."""
+def validate_unpriced_registration(target: Path) -> None:
+    manifest = target / ".servo" / "install.json"
+    if not manifest.is_file():
+        raise EnvError(
+            "Native eval installation requires .servo/install.json for cost registration",
+        )
+    try:
+        data = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EnvError("Cannot read the Servo cost-registration manifest") from exc
+    if not isinstance(data, dict):
+        raise EnvError("Servo cost-registration manifest must be an object")
+    components = data.get("components", [])
+    unpriced = data.get("unpriced_components", [])
+    if not isinstance(components, list) or not all(isinstance(item, str) for item in components):
+        raise EnvError("Servo components must be a list of names")
+    if not isinstance(unpriced, list) or not all(isinstance(item, str) for item in unpriced):
+        raise EnvError("Servo unpriced_components must be a list of names")
+    if not set(unpriced).issubset(components):
+        raise EnvError("Servo unpriced_components must identify registered components")
+
+
+def sync_installed_cost(target: Path, component: str, *, unpriced: bool) -> None:
+    """Update only an already-installed component during deliberate re-freeze."""
     manifest = target / ".servo" / "install.json"
     if not manifest.is_file():
         return
+    try:
+        data = json.loads(manifest.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EnvError("Cannot synchronize installed eval cost registration") from exc
+    if not isinstance(data, dict):
+        raise EnvError("Servo cost-registration manifest must be an object")
+    if component in data.get("components", []):
+        register_manifest(target, component, unpriced=unpriced)
+
+
+def register_manifest(target: Path, component: str, *, unpriced: bool = False) -> None:
+    """Add ``component`` to ``<target>/.servo/install.json``'s ``components``
+    list. Native unpriced components require a manifest and are recorded in
+    ``unpriced_components``; legacy non-native registration may remain a no-op
+    when no manifest exists."""
+    manifest = target / ".servo" / "install.json"
+    if unpriced:
+        validate_unpriced_registration(target)
+    if not manifest.is_file():
+        return
     data = json.loads(manifest.read_text())
+    before = json.dumps(data, sort_keys=True)
     components = data.setdefault("components", [])
     if component not in components:
         components.append(component)
+    markers = data.get("unpriced_components", [])
+    if not isinstance(markers, list) or not all(isinstance(item, str) for item in markers):
+        raise EnvError("Servo unpriced_components must be a list of names")
+    if unpriced and component not in markers:
+        markers.append(component)
+    elif not unpriced and component in markers:
+        markers.remove(component)
+    if markers:
+        data["unpriced_components"] = markers
+    else:
+        data.pop("unpriced_components", None)
+    if json.dumps(data, sort_keys=True) != before:
         manifest.write_text(json.dumps(data, indent=2) + "\n")
 
 
@@ -387,9 +492,20 @@ def deregister_manifest(target: Path, component: str) -> None:
     if not manifest.is_file():
         return
     data = json.loads(manifest.read_text())
+    before = json.dumps(data, sort_keys=True)
     components = data.get("components")
     if isinstance(components, list) and component in components:
         components.remove(component)
+    markers = data.get("unpriced_components", [])
+    if not isinstance(markers, list) or not all(isinstance(item, str) for item in markers):
+        raise EnvError("Servo unpriced_components must be a list of names")
+    if component in markers:
+        markers.remove(component)
+    if markers:
+        data["unpriced_components"] = markers
+    else:
+        data.pop("unpriced_components", None)
+    if json.dumps(data, sort_keys=True) != before:
         manifest.write_text(json.dumps(data, indent=2) + "\n")
 
 

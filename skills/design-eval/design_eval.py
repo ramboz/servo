@@ -82,7 +82,7 @@ def _eval_dir(target: Path) -> Path:
     return target / ".servo" / "design-eval"
 
 
-def init(target: Path) -> Path:
+def init(target: Path, *, transport=None, model=None, decoding_mode=None) -> Path:
     """Scaffold ``.servo/design-eval/`` with the runtime + a config skeleton.
 
     Copies ``fidelity_eval.py`` from ``skills/_common/`` alongside the
@@ -90,19 +90,39 @@ def init(target: Path) -> Path:
     import probe (ADR-0024) resolves it from this same-directory copy once
     installed in an arbitrary target."""
     d = _eval_dir(target)
+    cfg = d / "config.json"
+    example = SKILL_DIR / "templates" / "config.example.json"
+    requested = any(value is not None for value in (transport, model, decoding_mode))
+    config = None
+    if requested:
+        if cfg.exists():
+            raise _fe.EnvError("Refusing to overwrite an existing eval definition")
+        config = json.loads(example.read_text())
+        if transport == "copilot":
+            config["judge"] = _fe.copilot_definition(
+                model, decoding_mode, "SERVO_DESIGN_EVAL_COPILOT_BIN",
+            )
+        else:
+            if decoding_mode is not None or transport not in (None, "api", "cli", "subagent"):
+                raise _fe.EnvError("native-default decoding requires Copilot transport")
+            if transport is not None:
+                config["judge"]["transport"] = transport
+            if model is not None:
+                config["judge"]["model"] = model
     for sub in ("", "refs", "setups", "shots"):
         (d / sub).mkdir(parents=True, exist_ok=True)
     for runtime, src_dir in (
         ("score.py", SKILL_DIR), ("capture.mjs", SKILL_DIR),
         ("capture_lib.mjs", SKILL_DIR), ("fidelity_eval.py", COMMON_DIR),
+        ("copilot_eval.py", COMMON_DIR),
         ("pngcrop.py", SKILL_DIR),  # 027-04: sibling stdlib PNG cropper for native providers
     ):
         src = src_dir / runtime
         if src.is_file():
             shutil.copyfile(src, d / runtime)
-    cfg = d / "config.json"
-    example = SKILL_DIR / "templates" / "config.example.json"
-    if not cfg.is_file() and example.is_file():
+    if config is not None:
+        cfg.write_text(json.dumps(config, indent=2) + "\n")
+    elif not cfg.is_file() and example.is_file():
         shutil.copyfile(example, cfg)
     return d
 
@@ -230,6 +250,7 @@ def freeze(target: Path, *, acknowledge: bool = False, reviewer: str = None,
     if not cfg_path.is_file():
         raise FileNotFoundError(f"no config to freeze: {cfg_path}")
     config = json.loads(cfg_path.read_text())
+    _fe.validate_copilot_definition(config, "SERVO_DESIGN_EVAL_COPILOT_BIN")
     _score._require_schema_v2(config)   # 028-01: no v1 rubric freezes
     _score._validate_policy(config)     # 028-01: dimensions/ignore well-formed
     _score._validate_catalogue(config)  # 028-03: every catalogued divergence disposed
@@ -266,7 +287,12 @@ def freeze(target: Path, *, acknowledge: bool = False, reviewer: str = None,
     config["approval_provenance"] = provenance
     config["approved_by"] = approved_by
     config["approved_at"] = _fe.iso_now()
+    unpriced = config.get("judge", {}).get("transport") == "copilot"
+    if unpriced:
+        _fe.sync_installed_cost(target, COMPONENT, unpriced=True)
     cfg_path.write_text(json.dumps(config, indent=2) + "\n")
+    if not unpriced:
+        _fe.sync_installed_cost(target, COMPONENT, unpriced=False)
     return config
 
 
@@ -282,13 +308,20 @@ def install(target: Path, weight: float = DEFAULT_WEIGHT) -> None:
     oracle = target / "oracle.sh"
     if not oracle.is_file():
         raise FileNotFoundError(f"oracle.sh not found: {oracle} (scaffold the target first)")
+    cfg = _eval_dir(target) / "config.json"
+    config = json.loads(cfg.read_text()) if cfg.is_file() else {}
+    unpriced = config.get("judge", {}).get("transport") == "copilot"
+    if unpriced:
+        _fe.validate_unpriced_registration(target)
     init(target)  # ensure runtime is present (won't clobber an existing config.json)
+    if unpriced:
+        _fe.register_manifest(target, COMPONENT, unpriced=True)
 
     text = oracle.read_text()
     text = _fe.splice_component(text, COMPONENT, _FRAGMENT)
     text = _fe.splice_components_entry(text, COMPONENT, weight)
     oracle.write_text(text)
-    _fe.register_manifest(target, COMPONENT)
+    _fe.register_manifest(target, COMPONENT, unpriced=unpriced)
 
 
 def uninstall(target: Path) -> None:
@@ -313,6 +346,10 @@ def main(argv=None) -> int:
                  "catalogue", "record-reenumeration"):
         sp = sub.add_parser(name)
         sp.add_argument("target", type=Path)
+        if name == "init":
+            sp.add_argument("--transport", choices=("api", "cli", "copilot", "subagent"))
+            sp.add_argument("--model")
+            sp.add_argument("--decoding-mode", choices=("native-default",))
         if name == "install":
             sp.add_argument("--weight", type=float, default=DEFAULT_WEIGHT)
         if name == "freeze":
@@ -335,7 +372,14 @@ def main(argv=None) -> int:
     target = args.target.resolve()
 
     if args.cmd == "init":
-        init(target)
+        try:
+            init(
+                target, transport=args.transport, model=args.model,
+                decoding_mode=args.decoding_mode,
+            )
+        except _fe.EnvError as exc:
+            print(f"design-eval: init refused: {exc}", file=sys.stderr)
+            return ENV_ERROR_RC
         print(f"scaffolded {_eval_dir(target)}")
     elif args.cmd == "capture-refs":
         return capture_refs(target)
@@ -369,7 +413,11 @@ def main(argv=None) -> int:
             return ENV_ERROR_RC
         print(f"recorded re-enumeration: reviewer={rec['reviewer']} verdict={rec['verdict']}")
     elif args.cmd == "install":
-        install(target, args.weight)
+        try:
+            install(target, args.weight)
+        except _fe.EnvError as exc:
+            print(f"design-eval: install refused: {exc}", file=sys.stderr)
+            return ENV_ERROR_RC
         print(f"installed {COMPONENT} (weight {args.weight})")
     elif args.cmd == "uninstall":
         uninstall(target)
