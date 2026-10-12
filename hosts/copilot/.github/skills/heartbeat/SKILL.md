@@ -67,6 +67,12 @@ python3 "$SERVO_ROOT/skills/heartbeat/heartbeat.py" discover /path/to/repo
 Read the inbox without running discovery or dispatch. This works with no oracle
 because it only reads `.servo/triage/`.
 
+Human output includes recorded outcomes: the oracle status and composite score,
+the loop's `terminal_reason`, and its `terminal_breadcrumb` fix hint when
+present. This reads the latest dispatch result immediately; the generated
+`inbox.md` includes the same details when the next discovery pass refreshes it.
+`status --json` retains its existing counts-and-candidates shape.
+
 ```bash
 python3 "$SERVO_ROOT/skills/heartbeat/heartbeat.py" status /path/to/repo --json
 ```
@@ -76,6 +82,12 @@ python3 "$SERVO_ROOT/skills/heartbeat/heartbeat.py" status /path/to/repo --json
 Dispatch existing actionable-open inbox findings through the oracle-gated loop.
 This is an execution edge: it needs a valid oracle preflight and creates retained
 worktrees under `<target>/.servo/dispatch/<finding_id>/`.
+
+Dispatch preserves optional stop diagnostics in each finding's sticky `outcome`.
+It records the portable loop's last history score or the goal driver's direct
+`oracle_composite`, including zero. These fields explain the result; they do not
+change dispatch eligibility, retry budgets, or the `oracle_plateau` quarantine
+trigger. Findings without diagnostics retain the original outcome fields.
 
 ```bash
 python3 "$SERVO_ROOT/skills/heartbeat/heartbeat.py" dispatch /path/to/repo \

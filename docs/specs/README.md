@@ -143,6 +143,7 @@
 | [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-04 — hooks | **DONE** |  |
 | [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-05 — execution-primitive-mapping | **DONE** |  |
 | [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-06 — committed-package-and-release | **DONE** | tri-host parity (ADR-0038); residuals: goal-driver Copilot-unsupported &#124; live hook-firing unobservable headless |
+| [033-heartbeat-handoff-recovery](033-heartbeat-handoff-recovery/spec.md) | 033-01 — diagnostic-handoff | **DONE** | Retrospective recovery; optional diagnostics only; preserve loop-history/direct-goal score authority; no control-policy change; real review/mutation evidence in spec 033. |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-01 - installed-oracle | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-02 - capability-refusal | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-03 - native-loop-and-consumers | DEFERRED |  |
@@ -181,7 +182,8 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
 
 - **4** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
 - **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **6** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+- **7** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+  - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
   - `034-copilot-installed-runtime/slice-04-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
   - `034-copilot-installed-runtime/slice-05-craft.md` — applied `pr-review`; declined: scout-pr-review

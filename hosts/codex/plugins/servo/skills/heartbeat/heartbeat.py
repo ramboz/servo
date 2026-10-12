@@ -1052,6 +1052,22 @@ def _status_counts(findings: list[dict]) -> dict[str, int]:
     return counts
 
 
+def _outcome_details(outcome: object) -> list[str]:
+    if not isinstance(outcome, dict):
+        return []
+    details: list[str] = []
+    status = outcome.get("oracle_status")
+    if isinstance(status, str) and status:
+        composite = outcome.get("oracle_composite")
+        score = f", composite={composite}" if composite is not None else ""
+        details.append(f"oracle: {status}{score}")
+    for label, key in (("stopped", "terminal_reason"), ("hint", "terminal_breadcrumb")):
+        value = outcome.get(key)
+        if isinstance(value, str) and value:
+            details.append(f"{label}: {value}")
+    return details
+
+
 def _render_markdown(
     findings: list[dict], source_status: dict[str, dict], target: Path,
 ) -> str:
@@ -1061,7 +1077,8 @@ def _render_markdown(
     source `ran` + finding count, or `skipped` + cause), then a **lifecycle
     summary** (counts by status — the state-spine read-back a reviewer scans),
     THEN the findings grouped by source. Each finding now shows its lifecycle
-    `status`, its `actionable` verdict + machine reason, and an evidence ref.
+    `status`, its `actionable` verdict + machine reason, an evidence ref, and
+    any recorded oracle result, stop reason, and fix hint.
     The header makes a silently-degraded unattended run (e.g. a missing `gh`
     auth surfacing an empty-looking inbox) visible in the artifact a human
     reviews — not only in the stderr breadcrumb.
@@ -1136,6 +1153,7 @@ def _render_markdown(
             detail = (f.get("detail", "") or "").strip()
             if detail:
                 lines.append(f"  - {detail}")
+            lines.extend(f"  - {item}" for item in _outcome_details(f.get("outcome")))
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -1455,7 +1473,7 @@ def run_status(target: Path, *, as_json: bool = False) -> int:
     if as_json:
         sys.stdout.write(json.dumps(summary) + "\n")
     else:
-        sys.stdout.write(_render_status_human(summary, target))
+        sys.stdout.write(_render_status_human(summary, target, records=records))
     return EXIT_OK
 
 
@@ -1499,12 +1517,16 @@ def _summarize_inbox(records: list[dict]) -> dict:
     }
 
 
-def _render_status_human(summary: dict, target: Path) -> str:
+def _render_status_human(
+    summary: dict, target: Path, *, records: Optional[list[dict]] = None,
+) -> str:
     """Render the human `status` summary (AC9).
 
     Counts by status, by source, by actionability, then the open-actionable
     candidate list with each candidate's `last_seen_at` — the read-back a human
-    scans to see what the next dispatch pass would act on.
+    scans to see what the next dispatch pass would act on. Recorded outcomes
+    include oracle results and optional stop diagnostics without changing the
+    machine summary.
     """
     counts = summary["counts"]
     by_status = counts["by_status"]
@@ -1543,6 +1565,21 @@ def _render_status_human(summary: dict, target: Path) -> str:
     else:
         lines.append("open-actionable candidates: none")
     lines.append("")
+    outcome_lines: list[str] = []
+    for record in records or []:
+        details = _outcome_details(record.get("outcome"))
+        if not details:
+            continue
+        outcome_lines.append(
+            f"  - [{record.get('status', STATUS_OPEN)}] "
+            f"{record.get('title') or '(untitled)'} "
+            f"({record.get('finding_id', '')})"
+        )
+        outcome_lines.extend(f"    {item}" for item in details)
+    if outcome_lines:
+        lines.append("recorded outcomes:")
+        lines.extend(outcome_lines)
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -2046,25 +2083,32 @@ def _env_error_outcome() -> dict:
 def _outcome_from_summary(summary: dict) -> dict:
     """Build an `outcome` from a loop.py summary (AC6/AC7) in the reserved shape.
 
-    Reads `run_id`, `final_oracle_status` (→ `oracle_status`),
-    `oracle_score_history[-1].composite` (→ `oracle_composite`), and
-    `cumulative_cost_usd` (→ `cost_usd`). A loop.py env-error summary (preflight
+    Reads `run_id`, `final_oracle_status` (→ `oracle_status`), the loop's last
+    history composite or the goal driver's direct `oracle_composite`, and
+    `cumulative_cost_usd` (→ `cost_usd`). Optional stop diagnostics pass through
+    unchanged. A loop.py env-error summary (preflight
     refusal) carries `final_oracle_status == env_error` and an empty history, so
     it naturally yields an `env_error` outcome with a null composite — no special
-    casing. Key order matches ADR-0010.
+    casing. Base key order matches ADR-0010; optional diagnostics append only
+    when supplied by the loop.
     """
     history = summary.get("oracle_score_history") or []
-    composite = None
+    composite = summary.get("oracle_composite")
     if history and isinstance(history[-1], dict):
         composite = history[-1].get("composite")
     cost = summary.get("cumulative_cost_usd", 0.0)
-    return {
+    outcome = {
         "run_id": summary.get("run_id"),
         "oracle_status": str(summary.get("final_oracle_status", OUTCOME_ENV_ERROR)),
         "oracle_composite": composite,
         "cost_usd": cost if isinstance(cost, (int, float)) else 0.0,
         "dispatched_at": _now_iso(),
     }
+    for key in ("terminal_reason", "terminal_breadcrumb"):
+        value = summary.get(key)
+        if isinstance(value, str) and value:
+            outcome[key] = value
+    return outcome
 
 
 def _outcome_cost_usd(outcome: object) -> float:
