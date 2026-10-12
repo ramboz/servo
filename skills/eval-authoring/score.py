@@ -149,7 +149,14 @@ def definition_hash(config: dict) -> str:
     """AC5: the exact harness definition hash — judge/samples/threshold/
     cases, unchanged shape, so 008-04 can freeze this and spec-006 can
     compile it with no reshaping."""
-    return _fe.definition_hash(config, _CASES_KEY, _CASE_PIN_FIELDS, _EXTRA_HASH_FIELDS)
+    fields, extra = _definition_fields(config)
+    return _fe.definition_hash(config, _CASES_KEY, fields, extra)
+
+
+def _definition_fields(config):
+    if config.get("judge", {}).get("transport") == "copilot":
+        return _CASE_PIN_FIELDS + ("candidate_file",), _EXTRA_HASH_FIELDS + ("candidate_policy",)
+    return _CASE_PIN_FIELDS, _EXTRA_HASH_FIELDS
 
 
 def artifact_hashes(config: dict, base_dir: Path) -> dict:
@@ -157,7 +164,8 @@ def artifact_hashes(config: dict, base_dir: Path) -> dict:
 
 
 def validate_freeze(config: dict, base_dir: Path) -> None:
-    _fe.validate_freeze(config, base_dir, _CASES_KEY, _CASE_PIN_FIELDS, _EXTRA_HASH_FIELDS)
+    fields, extra = _definition_fields(config)
+    _fe.validate_freeze(config, base_dir, _CASES_KEY, fields, extra)
 
 
 def aggregate_lower_bound(samples, k: float) -> float:
@@ -419,6 +427,65 @@ def _gather_candidate(base_dir: Path, case: dict) -> str:
     )
 
 
+def _native_candidate_path(base_dir: Path, case: dict) -> Path:
+    raw = case.get("candidate_file")
+    if not isinstance(raw, str) or not raw or "\x00" in raw or "\\" in raw:
+        raise EnvError("Native candidate_file must be an explicit relative UTF-8 file path")
+    relative = Path(raw)
+    if relative.is_absolute() or ".." in relative.parts or re.match(r"^[A-Za-z]:", raw):
+        raise EnvError("Native candidate_file must stay inside the component directory")
+    root = base_dir.resolve()
+    resolved = (root / relative).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise EnvError("Native candidate_file escapes the component directory") from exc
+    return resolved
+
+
+def validate_native_candidates(config: dict, base_dir: Path) -> None:
+    if config.get("judge", {}).get("transport") != "copilot":
+        return
+    if config.get("candidate_policy") != "component-file-utf8-v1":
+        raise EnvError("Native scoring requires explicit candidate_policy=component-file-utf8-v1")
+    for case in config.get("cases", []):
+        if case.get("category") == "skip_case":
+            continue
+        expected = case.get("expected_output", {})
+        if not isinstance(expected, dict):
+            raise EnvError("Native file candidates require a well-formed expected_output")
+        constraints = expected.get("constraints", [])
+        if not isinstance(constraints, list) or constraints:
+            raise EnvError("Native file-v1 supports constraint-free scored cases only")
+        _native_candidate_path(base_dir, case)
+
+
+def acquire_native_candidate(base_dir: Path, case: dict) -> tuple:
+    path = _native_candidate_path(base_dir, case)
+    try:
+        if not path.is_file():
+            raise EnvError(f"Native candidate file missing: {case['candidate_file']}")
+        with path.open("rb") as handle:
+            before = os.fstat(handle.fileno())
+            data = handle.read()
+            after = os.fstat(handle.fileno())
+        before_signature = (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        after_signature = (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+        if before_signature != after_signature or len(data) != after.st_size:
+            raise EnvError("Native candidate changed during snapshot acquisition")
+        text = data.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise EnvError("Native candidate is unreadable or is not UTF-8 text") from exc
+    if "\x00" in text:
+        raise EnvError("Native candidate contains binary NUL bytes")
+    return text, {
+        "candidate_file": case["candidate_file"],
+        "policy": "component-file-utf8-v1",
+        "sha256": _fe.sha256_text(text),
+        "bytes": len(data),
+    }
+
+
 def _case_constraint_score(case: dict, fake_actuals) -> float:
     """The constraint-DSL gate for one case (AC2's "cheap deterministic
     sub-checks alongside the judged score"): `1.0` when every constraint
@@ -509,6 +576,15 @@ def score(base_dir: Path) -> float:
         config["_native_invocations"] = []
     validate_freeze(config, base_dir)  # StaleError -> exit 2 (AC5)
     _fe.validate_copilot_definition(config, check_runtime=False)
+    validate_native_candidates(config, base_dir)
+    native_candidates = {}
+    if config.get("judge", {}).get("transport") == "copilot":
+        config["_candidate_snapshots"] = {}
+        for case in config.get(_CASES_KEY, []):
+            if case.get("category") != "skip_case":
+                candidate, snapshot = acquire_native_candidate(base_dir, case)
+                native_candidates[case["id"]] = candidate
+                config["_candidate_snapshots"][case["id"]] = snapshot
     n = int(config["samples"]["n"])
     k = float(config["samples"].get("k", 1.0))
     fake_scores = _fake_scores()
@@ -523,8 +599,10 @@ def score(base_dir: Path) -> float:
                 raise EnvError(f"fake scores missing case {case['id']!r}")
             samples = [float(x) for x in fake_scores[case["id"]]]
         else:
-            # Gather is not yet implemented — see _gather_candidate.
-            candidate = _gather_candidate(base_dir, case)
+            if config.get("judge", {}).get("transport") == "copilot":
+                candidate = native_candidates[case["id"]]
+            else:
+                candidate = _gather_candidate(base_dir, case)
             samples = [judge(candidate, config)["score"] for _ in range(n)]
         lower_bound = aggregate_lower_bound(samples, k)
         case_score = lower_bound * _case_constraint_score(case, fake_actuals)
@@ -554,7 +632,13 @@ def _ledger(base_dir: Path, config: dict, per_case, composite: float) -> None:
         "composite": round(composite, 4),
         "definition_hash": config.get("approved_content_hash"),
         "cases": [
-            {"id": c["id"], "samples": [round(x, 4) for x in samp], "score": round(cs, 4)}
+            {
+                "id": c["id"], "samples": [round(x, 4) for x in samp], "score": round(cs, 4),
+                **(
+                    {"candidate_snapshot": config["_candidate_snapshots"][c["id"]]}
+                    if config.get("judge", {}).get("transport") == "copilot" else {}
+                ),
+            }
             for c, samp, cs in per_case
         ],
     }

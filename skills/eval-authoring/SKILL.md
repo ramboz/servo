@@ -241,7 +241,25 @@ Nothing here freezes or runs on its own:
   definition all raise a clean `env_error`/`StaleError` (exit 2) — **never a
   silent `0.0`** (ADR-0005).
 
-## Known limitation: candidate-gather is not yet built
+## Candidate acquisition: native file snapshots; legacy gather remains unbuilt
+
+Explicit Copilot generic scoring supports **constraint-free** cases with
+`candidate_policy: "component-file-utf8-v1"` and a deliberate `candidate_file`
+for each scored case. The path is relative to the directory containing that
+component's `config.json`, not the current working directory. Installed
+components use `<project>/.servo/<component>/`. The external driver writes its
+actual output there; input text is never substituted for output.
+
+The native definition freezes the path and policy, not changing output bytes.
+Absolute/traversing/symlink-escaping paths, missing/non-text files and unsupported
+deterministic constraints fail before judging. Each case is read once into a
+coherent UTF-8 snapshot for its entire sample batch; the ledger records its
+SHA-256/path/policy. No SUT command runner is introduced.
+
+Use `params ... --candidate-policy component-file-utf8-v1` and deliberately
+fill dataset `candidate_file` values before normal emit/review/freeze.
+Native fake-score/actual-value injection is refused. Legacy API/Claude CLI
+candidate acquisition still has the unbuilt seam described below.
 
 **This is a named limitation, not a soft tip.** design-eval/content-fidelity
 both ship a real "gather the candidate under test" step; this skill's

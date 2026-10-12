@@ -38,6 +38,108 @@ def fake_result():
 
 
 class NativeTransportTests(unittest.TestCase):
+    def test_native_candidate_policy_is_frozen_but_moving_bytes_are_not(self):
+        module = load("native_candidate_hash", SKILLS / "eval-authoring" / "score.py")
+        config = {
+            "judge": judge_config(), "candidate_policy": "component-file-utf8-v1",
+            "rubric": "fixture", "samples": {"n": 2}, "threshold": 0.8,
+            "cases": [{"id": "fixture", "input": "not the candidate", "candidate_file": "one.txt",
+                       "expected_output": {"constraints": []}, "category": "happy_path"}],
+        }
+        before = module.definition_hash(config)
+        config["cases"][0]["candidate_file"] = "two.txt"
+        self.assertNotEqual(module.definition_hash(config), before)
+        config["cases"][0]["candidate_file"] = "one.txt"
+        config["candidate_policy"] = "unsupported"
+        self.assertNotEqual(module.definition_hash(config), before)
+        legacy = dict(config, judge={"transport": "api", "model": "old"})
+        expected = module._fe.definition_hash(
+            legacy, module._CASES_KEY, module._CASE_PIN_FIELDS, module._EXTRA_HASH_FIELDS,
+        )
+        self.assertEqual(module.definition_hash(legacy), expected)
+
+    def test_native_candidate_snapshot_rejects_escapes_binary_and_constraints(self):
+        module = load("native_candidate_read", SKILLS / "eval-authoring" / "score.py")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            candidate = directory / "candidate.txt"
+            candidate.write_text("public candidate")
+            config = {"judge": judge_config(), "candidate_policy": "component-file-utf8-v1",
+                      "cases": [{"id": "fixture", "candidate_file": "candidate.txt",
+                                 "expected_output": {"constraints": []}}]}
+            module.validate_native_candidates(config, directory)
+            text, snapshot = module.acquire_native_candidate(directory, config["cases"][0])
+            self.assertEqual(text, "public candidate")
+            self.assertEqual(snapshot["sha256"], module.sha256_text("public candidate"))
+            self.assertEqual(snapshot["candidate_file"], "candidate.txt")
+            for path in ("../outside.txt", str(candidate), "missing.txt"):
+                with self.subTest(path=path), self.assertRaises(module.EnvError):
+                    module.acquire_native_candidate(
+                        directory, dict(config["cases"][0], candidate_file=path),
+                    )
+            outside = directory.parent / (directory.name + "-outside.txt")
+            try:
+                outside.write_text("outside")
+                (directory / "escape.txt").symlink_to(outside)
+                with self.assertRaises(module.EnvError):
+                    module.acquire_native_candidate(
+                        directory, dict(config["cases"][0], candidate_file="escape.txt"),
+                    )
+            finally:
+                outside.unlink(missing_ok=True)
+            candidate.write_bytes(b"bad\x00binary")
+            with self.assertRaises(module.EnvError):
+                module.acquire_native_candidate(directory, config["cases"][0])
+            config["cases"][0]["expected_output"]["constraints"] = ["length >= 1"]
+            with self.assertRaises(module.EnvError):
+                module.validate_native_candidates(config, directory)
+
+    def test_native_candidate_is_one_snapshot_for_the_entire_sample_batch(self):
+        module = load("native_candidate_batch", SKILLS / "eval-authoring" / "score.py")
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            candidate = directory / "candidate.txt"
+            candidate.write_text("first output")
+            config = {
+                "judge": judge_config(), "candidate_policy": "component-file-utf8-v1",
+                "rubric": "fixture", "samples": {"n": 2}, "threshold": 0.8,
+                "cases": [{"id": "fixture", "input": "not an output",
+                           "candidate_file": "candidate.txt", "category": "happy_path",
+                           "expected_output": {"constraints": []}}],
+                "approval_status": "approved",
+            }
+            config["hashes"] = module.artifact_hashes(config, directory)
+            config["approved_content_hash"] = module.definition_hash(config)
+            (directory / "config.json").write_text(json.dumps(config))
+            gathered = []
+
+            def judging(text, _config):
+                gathered.append(text)
+                candidate.write_text("later output")
+                return {"score": 0.8}
+
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch.object(module, "judge", side_effect=judging):
+                self.assertEqual(module.score(directory), 0.8)
+            self.assertEqual(gathered, ["first output", "first output"])
+            record = json.loads((directory / "ledger.jsonl").read_text().splitlines()[-1])
+            self.assertEqual(
+                record["cases"][0]["candidate_snapshot"]["sha256"],
+                module.sha256_text("first output"),
+            )
+            self.assertEqual(module.definition_hash(config), config["approved_content_hash"])
+            config["cases"].append({
+                "id": "missing", "candidate_file": "missing.txt",
+                "expected_output": {"constraints": []}, "category": "happy_path",
+            })
+            config["approved_content_hash"] = module.definition_hash(config)
+            (directory / "config.json").write_text(json.dumps(config))
+            with mock.patch.dict(os.environ, {}, clear=True), \
+                    mock.patch.object(module, "judge") as judge:
+                with self.assertRaises(module.EnvError):
+                    module.score(directory)
+                judge.assert_not_called()
+
     def test_native_score_injection_is_refused_in_every_consumer(self):
         for skill in ("eval-authoring", "content-fidelity", "design-eval"):
             module = load("native_fake_" + skill.replace("-", "_"), SKILLS / skill / "score.py")

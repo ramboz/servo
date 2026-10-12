@@ -1169,7 +1169,7 @@ _PARAM_TRADEOFFS = (
 
 def apply_params(
     config: dict, *, n=None, delta=None, threshold=None, model=None,
-    temperature=None, max_tokens=None, transport=None, decoding_mode=None,
+    temperature=None, max_tokens=None, transport=None, decoding_mode=None, candidate_policy=None,
 ) -> dict:
     """AC1: set/confirm the frozen knobs. Every argument left `None` keeps
     whatever `rubric` already seeded from `DEFAULT_JUDGE`/`DEFAULT_SAMPLES`/
@@ -1179,6 +1179,11 @@ def apply_params(
         transport is None and config.get("judge", {}).get("transport") == "copilot"
     )
     replacement = None
+    if candidate_policy is not None:
+        if not native or candidate_policy != "component-file-utf8-v1":
+            raise EnvError("invalid_candidate_policy", "File-v1 candidate policy requires Copilot")
+        if config.get("approval_status") == "approved":
+            raise EnvError("already_approved", "Do not rewrite an approved candidate policy")
     if native:
         if temperature is not None or max_tokens is not None:
             raise EnvError(
@@ -1206,6 +1211,8 @@ def apply_params(
         config["threshold"] = threshold
     if replacement is not None:
         config["judge"] = replacement
+    if candidate_policy is not None:
+        config["candidate_policy"] = candidate_policy
     if model is not None and replacement is None:
         config["judge"]["model"] = model
     if temperature is not None:
@@ -1294,6 +1301,7 @@ def freeze_dataset_config(config: dict, out_dir: Path, score_mod) -> dict:
     """
     try:
         score_mod._fe.validate_copilot_definition(config, "SERVO_EVAL_AUTHORING_COPILOT_BIN")
+        score_mod.validate_native_candidates(config, out_dir)
     except score_mod.EnvError as exc:
         raise EnvError("copilot_invalid_config", str(exc)) from exc
     cases = config.get("cases") or []
@@ -2546,6 +2554,7 @@ def _params_main(argv: list) -> int:
     parser.add_argument(
         "--transport", choices=("api", "cli", "copilot"), default=None, help="Judge transport.")
     parser.add_argument("--decoding-mode", choices=("native-default",), default=None)
+    parser.add_argument("--candidate-policy", choices=("component-file-utf8-v1",), default=None)
     args = parser.parse_args(argv)
 
     plan_path = Path(args.plan_path).resolve()
@@ -2554,6 +2563,7 @@ def _params_main(argv: list) -> int:
             plan_path, args.ac, n=args.n, delta=args.delta, threshold=args.threshold,
             model=args.model, temperature=args.temperature, max_tokens=args.max_tokens,
             transport=args.transport, decoding_mode=args.decoding_mode,
+            candidate_policy=args.candidate_policy,
         )
     except EnvError as exc:
         print(f"error: {exc}", file=sys.stderr)
