@@ -43,9 +43,25 @@ fidelity through the approved frozen component.
 
 ### Deviation log (after reconciliation)
 
-Pending.
+1. Native vision uses the same approved capture/freeze/statistical machinery
+   with actual candidate/reference image attachments and commanded model.
+   Advisory subagent semantics and old API/CLI capture behavior remain unchanged.
+2. Initial compliance blocked injection bypass and missing installed proof.
+   Native injection now refuses before capture/runtime selection, telemetry is
+   retained without USD conversion, and actual installed manual-capture fixture
+   scored different solid colors0 using real images/no fake scores.
+3. Proof is labelled fixture self-approval/one sample, not independent production
+   approval, calibration or monetary assurance. Craft found relative executable
+   overrides could probe one binary and invoke another under changed cwd;
+   absolute executable identity correction is being completed.
 
 ### Reconciliation sweep
 
-Pending: capture, images, model/transport validation, freeze, score, ledger,
-advisory separation, documentation and generated packages.
+| Surface | Disposition | Rationale |
+|---------|-------------|-----------|
+| Native invocation / attachments / identity | updated | Actual ordered image input and strict model/runtime/control checks. |
+| Capture providers / approval / statistics / advisory transport | no-op | Preserve existing ownership and score policy; no new capture framework. |
+| Freeze / install / ledger / marker | updated | Explicit new native definitions, actual usage/null money and ordered unpriced registration. |
+| Executed evidence | updated | Raw image capability versus full installed consumer/fixture consent clearly separated. |
+| Skill / generated hosts / live docs | updated | Native opt-in without false per-turn/monetary guarantees. |
+| Full CI / reconciliation | deferred | Final integrated gates and independent reconciliation required before DONE. |

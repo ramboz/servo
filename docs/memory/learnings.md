@@ -126,3 +126,9 @@ Generated Copilot packaging supports independent scaffold/gate consumers. Native
 
 ## Review test-class boundaries after parallel merges
 PR37 merge placed new Copilot methods in unrelated main-branch permission-wall fixtures, producing ten CI failures despite both branches passing individually. Restore per-class setup/method boundaries, preserve every assertion and production permission-wall guard, and compare collected test counts. Test-only repair restored all397 historical loop tests before the deliberately new native refusal behavior was added.
+
+## Exercise full native consumers instead of transport-only success
+Spec033 actual generic emit/install/score exposed an inherited candidate-gather stub that direct judge() success could not reveal. ADR0042 deliberately adds native-only constraint-free component-relativeUTF8 output files, freezing policy/path not movingbytes and recording a coherent snapshotSHA. NativeFAKE_SCORES/ACTUALS must refuse before selection; score injection can otherwise falselylabel unsupported runtime/image paths as successfulCopilot. Actual installed content/design/generic and packagedauthoring proofs stay distinct from fakeCLI fixtures.
+
+## Unpriced markers must follow activation and actual gate call sites
+NativeUSDunknown requires mark-before-activation for install and supportedrefreeze, clear-after-successful nonnative approval/removal. Initial launch checks alone missed goal/Routine rawvendoredgate calls; actualcommands nowcarryUSD-budget context while standalonegrade stayscompatible. Heartbeat mustpersist a realchildoutcome/knownUSD before accountinghalt, unlike a predispatch refusal with no outcome. Manifestmarkers are project-owned and not security/exhaustivefinancial attestation; olderAPIaccounting staysseparate.

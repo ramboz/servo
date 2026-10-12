@@ -45,3 +45,4 @@ not counted as delivered by a refusal or by generated prose.
 - [033-05 — native-text-judges](slice-05-native-text-judges.md)
 - [033-06 — native-visual-judge](slice-06-native-visual-judge.md)
 - [033-07 — native-stop-continuation](slice-07-native-stop-continuation.md)
+- [033-08 — unpriced-oracle-budget](slice-08-unpriced-oracle-budget.md)

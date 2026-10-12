@@ -3,26 +3,23 @@ slice: 033-05 - native-text-judges
 pass: frame-critique
 verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-10-12T16:33:41Z
-prompt_source: review.py frame-critique adr0040 and revised033-05
+reviewed_at: 2026-10-12T17:51:36Z
+prompt_source: review.py frame-critique adr0042 and03305 supplement; constraint-free correction
 ---
 
 VERDICT: pass
 
 REASONING:
-The highest-risk assumption is that fresh native invocations provide independent,
-effectively restricted replies from the commanded model. Retained CLI help
-supports proposed mechanisms but does not prove execution semantics. The frame
-survives because executed proof is a readiness prerequisite, unsupported behavior
-refuses and deliberate native configuration replaces neither approval nor policy.
-
-SPECIFIC ISSUES:
-- Nonblocking prerequisite: executed pinned-model/read-only contract remains
-  unverified in reviewed evidence. Conditional positive requirements are not
-  evidence that either consumer currently works.
+Revised Decision6 explicitly limits file-v1 to constraint-free scored cases,
+whose old constraint gate is a no-op, and rejects unsupported/invalid constraints
+and native fake-actuals before model calls. This closes the acquisition-completeness
+blocker without invented metrics, command execution or oldAPI hash changes.
+The supplement correctly states that an installed constraint-free positive proof
+does not establish constrained-case support.
 
 RECONCILIATION NOTES:
-Keep consumers incomplete until respective installed live proofs establish the
-contract. No additional framing deviation.
+Retain constraint-free support and deferred actual-value extraction in proof/logs.
+Frame verdict only, not implementation certification.
 
-Source: fresh jig:reviewer frozen-policy-frame actual returned 033-05 envelope.
+Source: independent jig:reviewer candidate-frame-correction actual ADR0042 and
+supplement03305 pass envelopes.

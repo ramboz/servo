@@ -47,9 +47,24 @@ candidates and can curate them through the existing workflow.
 
 ### Deviation log (after reconciliation)
 
-Pending.
+1. Added explicit native authoring with fresh restricted expansion/review,
+   commanded model when selected and human PROPOSED/curation boundary unchanged.
+   Existing Claude defaults do not switch because the host was installed.
+2. Initial compliance correctly blocked discarded usage and absent package
+   provenance. Terminal vendor usage/null is now retained, and actual generated
+   Copilot helper execution produced five PROPOSED criteria in distinct sessions,
+   preserving both usage objects; details in native-evidence.md.
+3. Craft's native reused-session/proposed-state regression nit is being closed;
+   no production auto-approval or provider/permission fallback introduced.
 
 ### Reconciliation sweep
 
-Pending: authoring CLI/helper, independent review/approval, provenance,
-skill body, generated packages, docs and board.
+| Surface | Disposition | Rationale |
+|---------|-------------|-----------|
+| Authoring CLI / helper | updated | Explicit backend/model, fresh sessions, strict failure and actual usage provenance. |
+| Human curation / approval | no-op | Proposed ACs stay proposed; existing refusal/force semantics and human authority preserved. |
+| Skill / generated hosts | updated | Real native commands and canonical shared helper, no broad host substitution. |
+| Native proof | updated | Source and packaged actual calls distinct from fake CLI fixtures. |
+| README / architecture / decisions / board | updated | Native opt-in, unknown-USD and unchanged old defaults documented; derived records. |
+| Primer / inbox / conventions | no-op | Absent; no unrelated bootstrap. |
+| Full CI / reconciliation | deferred | Final integrated gates and independent reconciliation required before DONE. |

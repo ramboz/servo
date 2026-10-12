@@ -6,6 +6,20 @@ Each entry: heading, Deferred reason, Resolution trigger.
 
 ---
 
+## Native generic constraint actual-value extraction is unsupported
+
+**Deferred:** ADR-0042's native file-v1 supports real constraint-free scored
+outputs only. Acquiring candidate text does not produce the generic engine's
+unbuilt actual-value measurements. Nonempty/invalid native constraints and native
+fake-actuals refuse before judging; no input/reference substitution or SUT
+command runner is hidden behind the transport.
+
+**Resolution trigger:** A separately reviewed acquisition/measurement contract
+with real actual-value extraction, frozen evidence and positive/negative
+consumer proof. Do not amend the closed generic records or reinterpret file-v1.
+
+---
+
 ## Copilot `agentStop` oracle hook is verified statically, not by live firing
 
 **Deferred:** slice 032-04 installs servo's oracle `Stop` hook target-side as a

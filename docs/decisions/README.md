@@ -47,6 +47,8 @@
 - [ADR-0038: GitHub Copilot CLI as a third committed host](adr-0038-copilot-third-host.md) — servo ships today as committed Claude + Codex packages under the source-derived, one-package-per-host model of [ADR-0028](adr-0028-committed-dual-host-plugin-packages.md). (2026-09-18, Accepted)
 - [ADR-0039: Copilot capability boundaries preserve Servo guarantees](adr-0039-copilot-capability-boundaries.md) — Installing Servo must not silently remove its execution safeguards. (2026-10-12, Accepted)
 - [ADR-0040: Freeze explicit native-default decoding for Copilot judges](adr-0040-copilot-frozen-native-decoding.md) — Copilot judges need an explicit frozen policy for controls the CLI cannot set. (2026-10-12, Accepted)
+- [ADR-0041: Unpriced oracle components refuse USD-bounded execution](adr-0041-unpriced-oracles-refuse-usd-execution.md) — Native judged components must not silently bypass a caller's USD budget. (2026-10-12, Accepted)
+- [ADR-0042: Native generic evals read explicit frozen candidate file paths](adr-0042-native-generic-candidate-files.md) — Generic native scoring needs real candidate output, not an injected score. (2026-10-12, Accepted)
 
 ## Pending
 

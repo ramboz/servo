@@ -146,6 +146,8 @@ SCHEMA_VERSION = 3
 # 1 is intentionally unused.
 EXIT_OK = 0
 EXIT_ENV_ERROR = 2
+REASON_UNPRICED_COMPONENTS_INVALID = "unpriced_components_invalid"
+REASON_UNPRICED_ORACLE_COMPONENTS = "unpriced_oracle_components"
 
 # Source identifiers (the closed v1 signal set; the dispatch table below is
 # the documented extension point for more sources later).
@@ -1161,6 +1163,69 @@ def _emit_breadcrumb(message: str) -> None:
     sys.stderr.write(f"heartbeat: {message}\n")
 
 
+def _unpriced_oracle_error(target: Path) -> Optional[tuple[str, str]]:
+    """ADR-0041 accounting boundary, mirrored in loop.py.
+
+    Only installation metadata classifies managed unpriced components; this
+    does not inspect arbitrary project configs or attest all oracle costs.
+    Absent manifests/markers retain the older preflight behavior.
+    """
+    if not target.is_dir():
+        return None  # Existing target preflight owns missing/non-directory errors.
+    manifest = target / ".servo" / "install.json"
+
+    def invalid(detail: str) -> tuple[str, str]:
+        return REASON_UNPRICED_COMPONENTS_INVALID, (
+            f"cannot establish USD accounting from unpriced_components in "
+            f".servo/install.json at {manifest}: {detail}; repair installation "
+            f"registration before bounded execution (ADR-0041)"
+        )
+
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return invalid(f"manifest unreadable or malformed: {exc}")
+    if not isinstance(data, dict):
+        return invalid("manifest must be a JSON object")
+    if "unpriced_components" not in data:
+        return None
+    marker = data["unpriced_components"]
+    if (
+        not isinstance(marker, list)
+        or any(not isinstance(name, str) or not name.strip() for name in marker)
+        or len(set(marker)) != len(marker)
+    ):
+        return invalid("marker must be a unique list of nonempty component names")
+    components = data.get("components")
+    if (
+        not isinstance(components, list)
+        or any(not isinstance(name, str) or not name.strip() for name in components)
+        or not set(marker).issubset(components)
+    ):
+        return invalid("marker names must belong to the registered components list")
+    if marker:
+        return REASON_UNPRICED_ORACLE_COMPONENTS, (
+            f"USD-bounded execution refused: unpriced_components in "
+            f".servo/install.json at {manifest}: {', '.join(marker)}. Native "
+            f"oracle USD spend is unknown. Use standalone attended quality-gate/"
+            f"scoring, or reinstall these components with a priced provider; "
+            f"zero budgets and resume overrides cannot bypass this guard "
+            f"(ADR-0041)."
+        )
+    return None
+
+
+def _unpriced_oracle_preflight(target: Path) -> Optional[int]:
+    err = _unpriced_oracle_error(target)
+    if err is None:
+        return None
+    reason, message = err
+    _emit_breadcrumb(f"{message} ({reason})")
+    return EXIT_ENV_ERROR
+
+
 def run_discover(target: Path) -> int:
     """Read-only discovery pass + lock-guarded merge into the state spine (AC1/AC3).
 
@@ -1542,8 +1607,18 @@ def _run_gate_json(path: Path) -> Optional[dict]:
     (`DEFAULT_TIMEOUT_SECONDS = 300`, `SERVO_GATE_TIMEOUT`-overridable), so a
     wedged oracle on an attacker-influenced repo can't hang the preflight forever.
     """
+    # Recheck at every gateway: registration can change during a heartbeat.
+    err = _unpriced_oracle_error(path)
+    if err is not None:
+        reason, message = err
+        _emit_breadcrumb(f"{message} ({reason})")
+        return {
+            "schema_version": 1, "exit_code": EXIT_ENV_ERROR,
+            "status": OUTCOME_ENV_ERROR, "reason": reason,
+            "composite": None, "threshold": None, "missing": [],
+        }
     gate_py = _resolve_helper(_GATE_PY_ENV, GATE_PY_PATH)
-    argv = [sys.executable, str(gate_py), str(path), "--json"]
+    argv = [sys.executable, str(gate_py), str(path), "--json", "--usd-budget-context"]
     try:
         proc = subprocess.run(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -2220,7 +2295,7 @@ def _reconcile_quarantine(target: Path, findings: list[dict]) -> list[dict]:
 def _dispatch_one(
     target: Path, finding: dict, dispatch_dir: Path, *,
     cost_ceiling: Optional[float], max_iterations: Optional[int],
-) -> tuple[dict, Optional[str]]:
+) -> tuple[Optional[dict], Optional[str]]:
     """Isolate → provision → verify → dispatch one candidate; return (outcome, terminal_reason).
 
     The per-candidate pipeline (AC3 → AC4 → AC5 → AC6). Any env error at any stage
@@ -2229,8 +2304,11 @@ def _dispatch_one(
     never raising, so the serial pass continues over the rest (AC10). On success
     the loop's summary becomes the outcome. The second element is the loop's
     `terminal_reason` (spec 024: `oracle_plateau` triggers a quarantine write) —
-    None for every env-error path that never reached a loop summary. The worktree
-    is RETAINED (v1) so a human can inspect/land the result; GC is out of scope.
+    None for ordinary env-error paths that never reached a loop summary. An
+    accounting refusal before child dispatch returns `(None, reason)` so it
+    cannot fabricate a tried/zero-cost outcome; an actual child summary retains
+    its reported outcome and spend even when it stops for that same reason.
+    The worktree is RETAINED (v1); GC is out of scope.
     """
     fid = str(finding["finding_id"])
 
@@ -2272,7 +2350,19 @@ def _dispatch_one(
             f"(gate reason={reason}); skipping "
             f"(dispatch_env_error: worktree_oracle_unverified)"
         )
+        if reason in (
+            REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
+        ):
+            return None, reason  # Pass-level refusal, not a scored outcome.
         return _env_error_outcome(), None
+
+    # Activation after verification must not fund another bounded model call.
+    for path in (target, worktree):
+        err = _unpriced_oracle_error(path)
+        if err is not None:
+            reason, message = err
+            _emit_breadcrumb(f"{message} ({reason})")
+            return None, reason
 
     # AC5/AC6 — dispatch loop.py with the untrusted-data-framed prompt, prefixed
     # by the normalized structured work-item (slice 025-01: jig-record-shaped when
@@ -2324,6 +2414,10 @@ def run_dispatch(
             f"target is not a directory: {target} (target_not_directory)"
         )
         return EXIT_ENV_ERROR
+
+    accounting_rc = _unpriced_oracle_preflight(target)
+    if accounting_rc is not None:
+        return accounting_rc
 
     triage_dir = target / ".servo" / TRIAGE_DIRNAME
     jsonl_path = triage_dir / INBOX_JSONL_NAME
@@ -2422,6 +2516,9 @@ def run_dispatch(
             budget_halted = False
             budget_deferred = 0
             for finding in capped:
+                accounting_rc = _unpriced_oracle_preflight(target)
+                if accounting_rc is not None:
+                    return accounting_rc  # Preserve completed outcomes; leave the rest open.
                 fid = str(finding.get("finding_id"))
                 # Slice 025-01 (AC3): a finding whose mapped jig bug is claimed or
                 # in the servo-configured skip-status set is SKIPPED before any
@@ -2462,6 +2559,11 @@ def run_dispatch(
                     target, finding, dispatch_dir,
                     cost_ceiling=loop_cost_ceiling, max_iterations=max_iterations,
                 )
+                accounting_refusal = terminal_reason in (
+                    REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
+                )
+                if outcome is None:
+                    return EXIT_ENV_ERROR  # Nothing dispatched: leave the finding open.
                 # Spec 024 (ADR-0030): a plateaued loop parks the finding
                 # `quarantined` (distinct from `tried`) + writes a durable
                 # cross-run record keyed by finding_id, so it stops being a
@@ -2507,6 +2609,14 @@ def run_dispatch(
                 spent += _outcome_cost_usd(outcome)
                 if outcome["oracle_status"] == OUTCOME_ENV_ERROR:
                     env_errors += 1
+                if accounting_refusal:
+                    _emit_breadcrumb(
+                        f"bounded child stopped ({terminal_reason}); recorded its "
+                        f"outcome and reported USD spend, leaving remaining candidates "
+                        f"open. Inspect the child run and repair .servo/install.json "
+                        f"accounting registration before bounded execution."
+                    )
+                    return EXIT_ENV_ERROR
     except OSError as exc:
         _emit_breadcrumb(
             f"cannot acquire inbox lock under {triage_dir}: {exc} "
@@ -2549,6 +2659,10 @@ def run_heartbeat(
     budget. Discovery currently costs $0; when a future LLM triage assist exists,
     its cost should be recorded in the same spine before dispatch.
     """
+    accounting_rc = _unpriced_oracle_preflight(target)
+    if accounting_rc is not None:
+        return accounting_rc
+
     run_started_at = datetime.now(timezone.utc)
     discover_rc = run_discover(target)
     if discover_rc != EXIT_OK:

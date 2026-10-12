@@ -189,6 +189,8 @@ REASON_GATE_INVOCATION_FAILED = "gate_invocation_failed"
 REASON_TARGET_MISSING = "target_missing"
 REASON_TARGET_NOT_DIRECTORY = "target_not_directory"
 REASON_MANIFEST_MISSING = "manifest_missing"
+REASON_UNPRICED_COMPONENTS_INVALID = "unpriced_components_invalid"
+REASON_UNPRICED_ORACLE_COMPONENTS = "unpriced_oracle_components"
 REASON_ORACLE_MISSING = "oracle_missing"
 REASON_STATE_MISSING = "state_missing"
 REASON_STATE_SCHEMA_MISMATCH = "state_schema_mismatch"
@@ -1529,6 +1531,81 @@ def _target_preflight_error(target: Path) -> Optional[tuple[str, str]]:
     return None
 
 
+def _unpriced_oracle_error(target: Path) -> Optional[tuple[str, str]]:
+    """ADR-0041 accounting boundary, mirrored in heartbeat.py.
+
+    Only installation metadata classifies managed unpriced components; this
+    does not inspect arbitrary project configs or attest all oracle costs.
+    Absent manifests/markers retain the older preflight behavior.
+    """
+    if not target.is_dir():
+        return None  # Existing target preflight owns missing/non-directory errors.
+    manifest = target / ".servo" / "install.json"
+
+    def invalid(detail: str) -> tuple[str, str]:
+        return REASON_UNPRICED_COMPONENTS_INVALID, (
+            f"cannot establish USD accounting from unpriced_components in "
+            f".servo/install.json at {manifest}: {detail}; repair installation "
+            f"registration before bounded execution (ADR-0041)"
+        )
+
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return invalid(f"manifest unreadable or malformed: {exc}")
+    if not isinstance(data, dict):
+        return invalid("manifest must be a JSON object")
+    if "unpriced_components" not in data:
+        return None
+    marker = data["unpriced_components"]
+    if (
+        not isinstance(marker, list)
+        or any(not isinstance(name, str) or not name.strip() for name in marker)
+        or len(set(marker)) != len(marker)
+    ):
+        return invalid("marker must be a unique list of nonempty component names")
+    components = data.get("components")
+    if (
+        not isinstance(components, list)
+        or any(not isinstance(name, str) or not name.strip() for name in components)
+        or not set(marker).issubset(components)
+    ):
+        return invalid("marker names must belong to the registered components list")
+    if marker:
+        return REASON_UNPRICED_ORACLE_COMPONENTS, (
+            f"USD-bounded execution refused: unpriced_components in "
+            f".servo/install.json at {manifest}: {', '.join(marker)}. Native "
+            f"oracle USD spend is unknown. Use standalone attended quality-gate/"
+            f"scoring, or reinstall these components with a priced provider; "
+            f"zero budgets and resume overrides cannot bypass this guard "
+            f"(ADR-0041)."
+        )
+    return None
+
+
+def _unpriced_oracle_preflight(
+    target: Path, *, cost_ceiling: Optional[float] = None,
+    context_fill_threshold: Optional[float] = None,
+    run_id: Optional[str] = None,
+) -> Optional[int]:
+    """Render an accounting refusal without launching or writing any state."""
+    err = _unpriced_oracle_error(target)
+    if err is None:
+        return None
+    reason, message = err
+    return _refuse_preflight(
+        run_id=run_id if run_id is not None else _generate_preflight_run_id(),
+        reason=reason, message=message,
+        cost_ceiling=cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD,
+        context_fill_threshold=(
+            context_fill_threshold if context_fill_threshold is not None
+            else DEFAULT_CONTEXT_FILL_THRESHOLD
+        ),
+    )
+
+
 # Cap on how many dirty paths the refusal breadcrumb enumerates, so a wildly
 # dirty tree can't spam the log; the count is always reported in full.
 _DIRTY_PATHS_SHOWN = 20
@@ -2249,7 +2326,18 @@ def _invoke_gate(target: Path, gate_path: Path = GATE_PATH) -> Optional[dict]:
     returns promptly under interrupt).
     """
     global _active_subprocess
-    cmd = [sys.executable, str(gate_path), str(target), "--json"]
+    # A supported install/re-freeze may activate an unpriced oracle mid-run.
+    err = _unpriced_oracle_error(target)
+    if err is not None:
+        reason, message = err
+        sys.stderr.write(f"loop: {message}\n")
+        return {
+            "schema_version": SCHEMA_VERSION, "exit_code": EXIT_ENV_ERROR,
+            "status": STATUS_ENV_ERROR, "reason": reason,
+            "composite": None, "threshold": None, "missing": [],
+            "terminal_breadcrumb": message,
+        }
+    cmd = [sys.executable, str(gate_path), str(target), "--json", "--usd-budget-context"]
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
@@ -2417,6 +2505,13 @@ def run_loop(
     """
     if host == HOST_COPILOT:
         return _refuse_copilot_capability()
+
+    accounting_rc = _unpriced_oracle_preflight(
+        target, cost_ceiling=cost_ceiling,
+        context_fill_threshold=context_fill_threshold, run_id=resume_run_id,
+    )
+    if accounting_rc is not None:
+        return accounting_rc
 
     _install_signal_handlers()
 
@@ -2682,6 +2777,16 @@ def run_loop(
             )
             return EXIT_INTERRUPTED
 
+        err = _unpriced_oracle_error(target)
+        if err is not None:
+            reason, message = err
+            sys.stderr.write(f"loop: {message}\n")
+            _finalize_state_and_summary(
+                state, state_path, terminal_reason=reason,
+                final_oracle_status=STATUS_ENV_ERROR, terminal_breadcrumb=message,
+            )
+            return EXIT_ENV_ERROR
+
         # Pre-iteration context-fill gate (slice 003-03 AC1/AC2/AC4/AC6).
         if (
             state["context_fill_threshold"] > 0
@@ -2864,6 +2969,18 @@ def run_loop(
             )
             return EXIT_ENV_ERROR
 
+        if gate_data.get("reason") in (
+            REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
+        ):
+            # The model completed, but the oracle was refused, not scored.
+            state["iteration_count"] = iteration
+            _finalize_state_and_summary(
+                state, state_path, terminal_reason=gate_data["reason"],
+                final_oracle_status=STATUS_ENV_ERROR,
+                terminal_breadcrumb=gate_data.get("terminal_breadcrumb"),
+            )
+            return EXIT_ENV_ERROR
+
         oracle_exit_code = int(gate_data.get("exit_code", 2))
         oracle_status = str(gate_data.get("status", STATUS_ENV_ERROR))
         oracle_composite = gate_data.get("composite")
@@ -3018,7 +3135,7 @@ def _compose_goal_prompt(
         f"On EVERY turn, after doing work toward the task above, surface the "
         f"servo quality gate's verdict so this loop can decide whether to "
         f"continue:\n"
-        f"1. Run exactly: {python} {gate_path} . --json\n"
+        f"1. Run exactly: {python} {gate_path} . --json --usd-budget-context\n"
         f"2. Read the JSON it prints (fields: exit_code, status, composite, "
         f"threshold).\n"
         f"3. Print EXACTLY this one line (no code fence), substituting the real "
@@ -3242,15 +3359,23 @@ def run_goal_loop(
     fail-closed handling when the transcript and the oracle disagree (AC4), and
     a refuse-don't-degrade posture when `/goal` can't run at all (AC6).
     """
-    _install_signal_handlers()
-    claude_timeout_seconds = _resolve_claude_timeout()
-
     max_turns = (
         max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
     )
     ceiling = (
         cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
     )
+
+    err = _unpriced_oracle_error(target)
+    if err is not None:
+        reason, message = err
+        return _refuse_goal(
+            run_id=run_id or resume_run_id or _generate_preflight_run_id(),
+            reason=reason, message=message, cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    _install_signal_handlers()
+    claude_timeout_seconds = _resolve_claude_timeout()
 
     # AC7: resume of a goal-driven run is out of scope (detachment is 003-08).
     if resume_run_id is not None:
@@ -3372,6 +3497,14 @@ def run_goal_loop(
         return exit_code
 
     goal_prompt = _compose_goal_prompt(prompt, gate_path=vendored_gate)
+    err = _unpriced_oracle_error(target)
+    if err is not None:
+        reason, message = err
+        sys.stderr.write(f"loop: {message}\n")
+        return _finalize(
+            reason, cumulative_cost_usd=0.0, final_oracle_status=STATUS_ENV_ERROR,
+            terminal_breadcrumb=message, exit_code=EXIT_ENV_ERROR,
+        )
     # Slice 031-02 (ADR-0037): whole-run disk delta around the single goal
     # invoke. The goal driver has no per-iteration checkpoint, so the signal is
     # bracketed ONCE — snapshot immediately before `_invoke_claude_goal` and
@@ -3495,6 +3628,17 @@ def run_goal_loop(
             transcript_showed_pass=transcript_showed_pass,
             exit_code=EXIT_ENV_ERROR,
         )
+    if gate_data.get("reason") in (
+        REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
+    ):
+        return _finalize(
+            gate_data["reason"], cumulative_cost_usd=cost_usd,
+            final_oracle_status=STATUS_ENV_ERROR, subtype=subtype,
+            claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
+            transcript_showed_pass=transcript_showed_pass,
+            terminal_breadcrumb=gate_data.get("terminal_breadcrumb"),
+            exit_code=EXIT_ENV_ERROR,
+        )
     gate_exit = int(gate_data.get("exit_code", 2))
     gate_status = str(gate_data.get("status", STATUS_ENV_ERROR))
     composite = gate_data.get("composite")
@@ -3577,6 +3721,10 @@ def _emit_routine_prompt(target: Path, seed: str) -> int:
     gate on *this* host's `/goal` support — the Routine runs on a different host
     (the cloud), whose policy is captured at run time, not here.
     """
+    accounting_rc = _unpriced_oracle_preflight(target)
+    if accounting_rc is not None:
+        return accounting_rc
+
     err = _target_preflight_error(target)
     if err is not None:
         _reason, message = err
@@ -3715,6 +3863,14 @@ def run_goal_loop_background(
     """
     ceiling = cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
     max_turns = max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
+
+    err = _unpriced_oracle_error(target)
+    if err is not None:
+        reason, message = err
+        return _refuse_goal(
+            run_id=_generate_preflight_run_id(), reason=reason, message=message,
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
 
     err = _target_preflight_error(target)
     if err is not None:
@@ -4099,6 +4255,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             "ignored under --host claude (Claude uses --max-budget-usd / "
             "--cost-ceiling).\n"
         )
+
+    accounting_rc = _unpriced_oracle_preflight(
+        target, cost_ceiling=args.cost_ceiling,
+        context_fill_threshold=args.context_fill_threshold,
+        run_id=args.resume or args.detached_run_id,
+    )
+    if accounting_rc is not None:
+        return accounting_rc
 
     # ---- Readiness preflight (slice 023-02, ADR-0029) -----------------------
     # Gates ONLY the two unattended long-horizon launch surfaces pinned by

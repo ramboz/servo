@@ -1,7 +1,7 @@
 ---
 status: IN_PROGRESS
 kind: feature
-dependencies: [033-01, adr-0039, adr-0040, adr-0005, adr-0024]
+dependencies: [033-01, adr-0039, adr-0040, adr-0042, adr-0005, adr-0024]
 last_verified:
 arch_review: true
 frame_review: true
@@ -47,14 +47,53 @@ gating scores without changing existing transport meanings or scoring policy.
 Native commanded model and intended decoding controls can satisfy frozen text
 judging; unsupported requirements must refuse, not silently relax.
 
+### Generic acquisition readiness supplement
+
+The real installed generic probe exposed the pre-existing candidate-gather stub.
+[ADR-0042](../../decisions/adr-0042-native-generic-candidate-files.md) defines the
+bounded native-only file seam needed to satisfy the original positive consumer
+criteria; original criteria above are retained.
+
+- Require per-case candidate_file inside config.json's component base, with
+  frozen `component-file-utf8-v1` policy/path; old API hashes remain unchanged.
+- Freeze path/policy, not moving output bytes. Producer deliberately publishes
+  real output; no case.input-as-output, fake score or command runner.
+- Reject escapes/missing/non-file/non-UTF8/NUL data before judging; read one
+  coherent snapshot per case/sample batch and record path/policy/SHA256.
+- Native injection hooks cannot bypass runtime/model/attachment contracts.
+- Native file-v1 supports only constraint-free scored cases; unsupported
+  expected_output.constraints and native fake-actuals injection refuse before
+  model calls. Actual-value extraction is a separate inherited residual, not
+  supplied by reading a candidate file or by the installed positive proof.
+
 **Anti-horizontal-phasing check:** Consumers get an installed frozen gating
 component, not a new transport enum without end-to-end behavior.
 
 ### Deviation log (after reconciliation)
 
-Pending.
+1. Added explicit native generic/content config/CLI/freeze/install/score through
+   the existing statistical harness, with deliberate native-default/exact-runtime
+   consent, closed native judge controls and no approved-config migration.
+2. Initial compliance blocked native fake-score/actual injection, discarded
+   telemetry and the inherited generic candidate stub. Native injection now
+   refuses before selection, actual vendor usage/null is retained in provenance,
+   and ADR-0042 supplies real component-contained candidate-file snapshots.
+3. ADR-0042 is deliberately constraint-free file-v1: freeze path/policy, not
+   moving output bytes; unsupported constraints/invalid files fail before models.
+   Actual emitted installed generic score1 and installed content score1 are real
+   native calls, not fake hooks; sample/fixture limitations are explicit.
+4. Craft requested a literal historical API hash fixture and qualification of
+   stale legacy acquisition prose. Compliance found cyclic-symlink resolution
+   escaping env_error on Python3.9; those narrow corrections are being completed.
 
 ### Reconciliation sweep
 
-Pending: both config/CLI/freeze/score/ledger surfaces, shared invocation,
-approved historical configs, statistical policy, docs and generated packages.
+| Surface | Disposition | Rationale |
+|---------|-------------|-----------|
+| Generic/content config/CLI/freeze/install/score | updated | Explicit native transport, coherent file-v1 acquisition and unknown usage provenance. |
+| Old API/CLI hashes/configs/statistical policy | no-op | Definitions/call meanings preserved; no automatic migration or replacement aggregation. |
+| Native injection / controls / model/runtime | updated | Unsupported/injected paths refuse rather than fabricate passing scores. |
+| Native registry / re-freeze ordering | updated | Mark before native activation, reverse after approval; bounded caller enforcement is033-08. |
+| Proof / skills / README / architecture | updated | Actual consumers, constraint-free limitation and no SUTcommand/measurement claim. |
+| Old closed records | no-op | Preserved; no amendments authorized. |
+| Full CI / reconciliation | deferred | Final integrated gates and independent reconciliation required before DONE. |

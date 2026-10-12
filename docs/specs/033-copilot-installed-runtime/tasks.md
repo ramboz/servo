@@ -9,5 +9,7 @@
 - 033-05: frozen native generic/content scoring and unchanged statistical policy.
 - 033-06: actual image input/pinned-model vision scoring, advisory separation.
 - 033-07: unproved per-turn continuation; retain resolution trigger.
+- 033-08: newly registered unpriced native oracle components refuse USD-bounded
+  callers before gate/model calls; standalone attended scores remain supported.
 - All active work: generated hosts, full CI gates, zip/install checks, real
   independent evidence, reconciliation, pushed accurate PR #37 without merge.

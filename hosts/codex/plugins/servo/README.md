@@ -115,6 +115,21 @@ After installing, open the target project in a fresh session and say:
 That invokes `/servo:scaffold-init`, which inspects the project and creates a
 reviewable `oracle.sh`, `.servo/install.json`, and refinement notes.
 
+## Native Copilot evaluation
+
+Native authoring is explicit (`from-goal --backend copilot --model <id>`) and
+produces proposed criteria, not automatic approval. New frozen native judges
+require `--transport copilot`, a non-auto model and deliberate
+`--decoding-mode native-default` consent with an exact CLI version. Numeric
+decoding controls and native score injection are rejected; existing approved
+API/Claude configurations are not migrated automatically.
+
+Generic native evals grade real, component-relative output files supplied by the
+producer; file-v1 is constraint-free, not a system command runner. Native judges
+have unknown USD cost: standalone attended scoring works, but registered
+unpriced components refuse USD-bounded loops/heartbeats. See the
+[current decisions](https://github.com/ramboz/servo/blob/main/docs/decisions/README.md).
+
 ## Repository structure (for contributors)
 
 Canonical source at the repository root generates committed, drift-guarded

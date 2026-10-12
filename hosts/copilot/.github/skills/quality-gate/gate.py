@@ -14,6 +14,7 @@ Usage:
     python3 gate.py <target> --json          # invoke: one-line JSON payload
     python3 gate.py <target> --verbose       # invoke: + re-emit oracle output
     python3 gate.py <target> --timeout 60    # invoke: bound at 60s (0 = disable)
+    python3 gate.py <target> --usd-budget-context  # bounded caller: refuse unpriced
     python3 gate.py audit <target>           # audit: human summary of install.json
     python3 gate.py audit <target> --json    # audit: install.json verbatim
 
@@ -228,10 +229,22 @@ def _run_oracle_bounded(
 
 
 def _check_manifest(
-    target: Path, *, json_mode: bool, verbose: bool
+    target: Path, *, json_mode: bool, verbose: bool, usd_budget_context: bool = False,
 ) -> tuple[int, Optional[dict]]:
     """Check manifest precondition. Returns (exit_code, manifest_or_none)."""
     manifest_path = target / ".servo" / "install.json"
+
+    def accounting_invalid(detail: str) -> tuple[int, Optional[dict]]:
+        return (
+            _refuse(
+                f"cannot establish USD accounting from unpriced_components in "
+                f".servo/install.json at {manifest_path}: {detail}; repair installation "
+                f"registration before bounded execution (ADR-0041)",
+                reason="unpriced_components_invalid", json_mode=json_mode, verbose=verbose,
+            ),
+            None,
+        )
+
     try:
         manifest = _load_manifest(target)
     except FileNotFoundError:
@@ -246,6 +259,8 @@ def _check_manifest(
             None,
         )
     except ValueError as exc:
+        if usd_budget_context:
+            return accounting_invalid(f"manifest malformed: {exc}")
         return (
             _refuse(
                 f"manifest at {manifest_path} is malformed: {exc}",
@@ -257,6 +272,8 @@ def _check_manifest(
         )
     except KeyError as exc:
         missing_key = exc.args[0]
+        if usd_budget_context:
+            return accounting_invalid(f"manifest missing required key: {missing_key}")
         return (
             _refuse(
                 f"manifest at {manifest_path} missing required key: "
@@ -267,6 +284,41 @@ def _check_manifest(
             ),
             None,
         )
+    except OSError as exc:
+        if not usd_budget_context:
+            raise  # Preserve standalone behavior; only opted-in callers enforce accounting.
+        return accounting_invalid(f"manifest unreadable: {exc}")
+
+    # Use the already-loaded manifest, not another parser or skill dependency:
+    # the vendored helper must remain self-contained in Goal/Routine clones.
+    # Standalone attended scoring deliberately does not enforce this marker.
+    if usd_budget_context and "unpriced_components" in manifest:
+        marker = manifest["unpriced_components"]
+        if (
+            not isinstance(marker, list)
+            or any(not isinstance(name, str) or not name.strip() for name in marker)
+            or len(set(marker)) != len(marker)
+        ):
+            return accounting_invalid("marker must be a unique list of nonempty component names")
+        components = manifest["components"]
+        if (
+            not isinstance(components, list)
+            or any(not isinstance(name, str) or not name.strip() for name in components)
+            or not set(marker).issubset(components)
+        ):
+            return accounting_invalid("marker names must belong to the registered components list")
+        if marker:
+            return (
+                _refuse(
+                    f"USD-bounded oracle refused: unpriced_components in "
+                    f".servo/install.json at {manifest_path}: {', '.join(marker)}. "
+                    f"Native oracle USD spend is unknown. Use standalone attended "
+                    f"quality-gate/scoring without --usd-budget-context, or reinstall "
+                    f"these components with a priced provider (ADR-0041).",
+                    reason="unpriced_oracle_components", json_mode=json_mode, verbose=verbose,
+                ),
+                None,
+            )
     return 0, manifest
 
 
@@ -376,6 +428,7 @@ def run_gate(
     json_mode: bool = False,
     verbose: bool = False,
     timeout_seconds: Optional[float] = None,
+    usd_budget_context: bool = False,
 ) -> int:
     """Invoke `<target>/oracle.sh`, parse its output, emit a structured summary."""
     if not target.exists():
@@ -390,7 +443,9 @@ def run_gate(
         )
 
     # Manifest precondition (002-03): refuse if not a servo-scaffolded install.
-    rc, _manifest = _check_manifest(target, json_mode=json_mode, verbose=verbose)
+    rc, _manifest = _check_manifest(
+        target, json_mode=json_mode, verbose=verbose, usd_budget_context=usd_budget_context,
+    )
     if rc != 0:
         return rc
 
@@ -623,6 +678,15 @@ def main(argv: list[str] | None = None) -> int:
         help="Re-emit the oracle's raw stdout/stderr beneath the summary.",
     )
     parser.add_argument(
+        "--usd-budget-context",
+        action="store_true",
+        help=(
+            "For USD-bounded orchestration only: refuse registered unpriced "
+            "oracle components before invocation. Standalone attended scoring "
+            "does not require this flag (ADR-0041)."
+        ),
+    )
+    parser.add_argument(
         "--timeout",
         type=float,
         default=None,
@@ -640,6 +704,7 @@ def main(argv: list[str] | None = None) -> int:
         json_mode=args.json_mode,
         verbose=args.verbose,
         timeout_seconds=timeout_seconds,
+        usd_budget_context=args.usd_budget_context,
     )
 
 

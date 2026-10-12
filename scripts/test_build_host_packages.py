@@ -229,8 +229,11 @@ class HostPackageTests(unittest.TestCase):
     def test_copilot_short_description_skill_renders_byte_for_byte(self):
         # AC3: a compliant skill (short description, bare name, no plugin-root
         # reference) is emitted byte-for-byte identical to its source.
-        packaged = (self.hosts / "copilot/.github/skills/design-eval/SKILL.md").read_bytes()
-        source = (REPO_ROOT / "skills/design-eval/SKILL.md").read_bytes()
+        source = (
+            b"---\nname: compliant\ndescription: A short native-safe description.\n---\n"
+            b"\n# Compliant skill\n\nNo plugin helper commands.\n"
+        )
+        packaged = build_host_packages._render_copilot_skill(source, "compliant")
         self.assertEqual(packaged, source)
 
     def test_copilot_rewrites_plugin_root_and_injects_root_note(self):

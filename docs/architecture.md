@@ -293,7 +293,7 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 }
 ```
 
-**Closed `reason` taxonomy** (all 11 codes; surfaced when `status="env_error"`):
+**Closed `reason` taxonomy** (surfaced when `status="env_error"`):
 
 | `reason` | When |
 |---|---|
@@ -302,6 +302,8 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 | `manifest_missing` | `<target>/.servo/install.json` absent |
 | `manifest_malformed` | Manifest exists but isn't valid JSON |
 | `manifest_invalid_key` | Manifest valid JSON but missing required key (`installed_tier` or `components`) |
+| `unpriced_oracle_components` | Explicit USD-budget context cannot consume registered unpriced components |
+| `unpriced_components_invalid` | Explicit USD-budget context has malformed/incompatible accounting metadata |
 | `oracle_missing` | `<target>/oracle.sh` absent (but manifest is present) |
 | `oracle_not_executable` | `oracle.sh` exists but lacks the executable bit |
 | `invocation_failed` | OS-level error invoking the oracle (rare) |
@@ -505,6 +507,47 @@ verified *statically* — the emitted-JSON shape + the adapter unit test
 (`skills/oracle-hook/test_copilot_hook_adapter.py`) — and live firing is recorded
 as a residual in [refinement-todo](refinement-todo.md).
 
+## Native evaluation and monetary compatibility (spec 033)
+
+Native authoring commands explicitly select `--backend copilot`; they preserve
+fresh expansion/review and human per-AC approval. Frozen scoring selects new
+`judge.transport: copilot` definitions with a commanded non-auto model, deliberate
+`decoding_mode: native-default` and exact `runtime_version`
+([ADR-0040](decisions/adr-0040-copilot-frozen-native-decoding.md)). The four-field
+native judge schema rejects numeric/unknown controls and native score/actual
+injection. Existing API/Claude-CLI hashes/meanings are not migrated. Exact CLI
+version is a compatibility bound, not a guarantee of stable server-side defaults.
+
+Generic native cases require `candidate_policy: component-file-utf8-v1` and
+component-contained `candidate_file`. The producer publishes real UTF-8 output
+there; path/policy are frozen, moving bytes are not. Scoring snapshots each case
+once for its sample batch and records path/policy/SHA256. Constraint actual-value
+extraction remains unsupported and refuses before judging
+([ADR-0042](decisions/adr-0042-native-generic-candidate-files.md)).
+Content/vision retain their existing acquisition/capture/reference/statistical
+policies; native invocation usage is preserved without a guessed USD conversion.
+
+Optional `.servo/install.json.unpriced_components` lists names also registered
+in `components`. Native install and already-installed native re-freeze mark
+before activation; reverse updates clear after successful non-native approval.
+Removal clears only its component and omits an empty marker. Native ledger
+`cost_usd` is null. USD-bounded loop/goal/background/Routine and heartbeat callers
+refuse known unpriced components before dispatch and at oracle gateways
+([ADR-0041](decisions/adr-0041-unpriced-oracles-refuse-usd-execution.md)).
+
+Actual Goal/Routine gate commands carry `--usd-budget-context`: the vendored
+self-contained gate checks its already-loaded manifest before invoking oracle.sh.
+Default standalone attended gate/scoring keeps the same 0/1/2 behavior. Heartbeat
+persists a real invoked child's outcome/known Claude spend before an accounting
+halt; a true pre-dispatch refusal leaves findings open without synthetic outcomes.
+The gate's narrow loaded-manifest validator remains inline for clone portability,
+rather than importing a third runtime dependency solely to satisfy extraction.
+This is project-owned accounting, not a security/exhaustive-cost boundary over
+arbitrary oracle code, and does not repair historical API-eval accounting.
+
+Executed source/package/installed native proofs and fixture consent are separated
+in [native evidence](specs/033-copilot-installed-runtime/native-evidence.md).
+
 ## Copilot host execution-primitive inventory (mapped-or-residual)
 
 Current support is governed by [ADR-0039](decisions/adr-0039-copilot-capability-boundaries.md)
@@ -520,7 +563,7 @@ has been adopted.
 | Native loop / goal / background / Routine / resume | Refused before dispatch/target writes (`native_capability_unavailable`). Soft credits cannot replace hard monetary/context safeguards. |
 | Refusal output | Schema 2, explicit backend, `env_error`, unavailable spend/context `null`; no fabricated zero-cost native run. |
 | Planner / heartbeat native execution | Incomplete, deferred with native autonomy; existing Claude clamps and whole-pass authority unchanged. |
-| Independent native authoring / frozen judging | Separately tracked in 033-04/05/06; package installation is not execution proof. ADR-0040 defines explicit new native-default decoding configurations, not numeric controls the CLI cannot command. |
+| Independent native authoring / frozen judging | Explicit native consumers in 033-04/05/06; actual installed/model/image proofs distinct from package discovery. New configurations freeze native defaults/runtime, not unsupported numeric controls. Generic file-v1 is constraint-free. |
 | Target-side `agentStop` | Advisory static adapter; actual per-turn continuation remains unproved (033-07). |
 
 Public `main()` and direct `run_loop(host="copilot")` both refuse unsupported

@@ -150,6 +150,7 @@
 | [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-05 - native-text-judges | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
 | [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-06 - native-visual-judge | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
 | [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-07 - native-stop-continuation | DEFERRED |  |
+| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-08 - unpriced-oracle-budget | IN_PROGRESS |  |
 
 ## Deferred slices
 

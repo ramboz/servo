@@ -1,7 +1,7 @@
 ---
-status: Proposed
-dependencies: []
-last_verified:
+status: Accepted
+dependencies: [adr-0005, adr-0024, adr-0040, adr-0041]
+last_verified: 2026-10-12
 frame_review: true
 ---
 
@@ -9,56 +9,101 @@ frame_review: true
 
 ## Status
 
-Proposed (2026-10-12)
+Accepted (2026-10-12)
 
 ## Context
 
-_TODO: describe the situation, forces, and constraints driving this decision._
+Generic native scoring needs real candidate output, not an injected score.
+
+An executed full installed generic proof revealed
+`skills/eval-authoring/score.py:405-419` always raises "candidate-gather not yet
+implemented" for a real non-fake candidate. Existing operational prose discloses
+that seam; native judge dispatch alone cannot fulfill 033-05's installed
+generic consumer. Content/design already have concrete acquisition surfaces.
+
+This is a tightly coupled native-only extension, not a general system-under-test
+runner or repair of older API acquisition/hashes. The scorer already receives
+`base_dir`, the directory containing config.json, and uses it for artifact/
+reference paths. Installed base is the emitted component directory; spec-local
+base is that eval's output directory.
 
 ## Decision Options Considered
 
-### Option A: _TODO_
-- **Pros:** _TODO_
-- **Cons:** _TODO_
+### Option A: Inject scores or treat case.input as generated output
+- **Pros:** Produces apparent success cheaply.
+- **Cons:** Not a real candidate or native proof. Rejected.
 
-### Option B: _TODO_
-- **Pros:** _TODO_
-- **Cons:** _TODO_
+### Option B: Add a general command/API system-under-test runner
+- **Pros:** Flexible production acquisition.
+- **Cons:** Broad execution/permission/budget framework outside this port. Rejected.
+
+### Option C: Native-only explicit component-relative UTF-8 candidate files
+- **Pros:** Real, project-owned moving output; read-only, clone-portable and
+  consistent with the existing artifact base.
+- **Cons:** The system/external driver must deliberately write/copy output into
+  the component directory. It is not automatic system execution.
+- **Disposition:** Chosen.
 
 ## Recommended Decision
 
-_TODO: state the chosen option and the reasoning._
+1. Each native generic case requires deliberate `candidate_file`, a relative
+   path inside the component directory containing config.json. The user/system
+   writes real output there. Never substitute input/reference/rubric for output.
+2. Freeze the native path and versioned acquisition policy
+   `component-file-utf8-v1` with the native definition/dataset. Do not hash the
+   moving output bytes into human approval. Existing API/Claude-CLI definition
+   hashes and their disclosed acquisition behavior remain unchanged.
+3. Resolve against the explicit existing `base_dir`, never accidental cwd or
+   inferred project-parent depth. Reject absolute/traversal/symlink escapes,
+   missing/non-file sources, invalid UTF-8 and NUL data with `env_error` before
+   native judging. Freeze validates the path/policy; output may arrive later.
+4. Read one coherent byte snapshot per case, decode once, and use the same text
+   for every sample in that batch. Record per-case path/policy/SHA256 in the
+   ledger as executed input provenance, not frozen moving-output identity.
+5. Preserve model/runtime/default-decoding consent, independent read-only native
+   calls, reference/rubric hashes, approval, sample/LCB/threshold policy and
+   unpriced installation/re-freeze ordering. Native fake-score injection is
+   rejected; test native protocols with fake executables, not passing injected
+   production scores.
+6. File-v1 supports constraint-free scored cases only. Existing generic
+   `expected_output.constraints` depends on an unbuilt actual-value extractor;
+   acquiring text does not supply those measurements. Reject nonempty/invalid
+   native constraints and native fake-actuals injection before model invocation.
+   Do not fabricate metrics from inputs or advertise constrained generic cases
+   as supported. Actual-value extraction remains separately scoped future work.
 
 ## Consequences
 
 **Becomes easier:**
-- _TODO_
+- A generic component can genuinely grade an externally produced native text
+  artifact through the existing emit/freeze/install/score workflow.
+- Candidate provenance is deterministic without freezing the changing result.
 
 **Becomes harder:**
-- _TODO_
+- Callers must supply real output files; native initialization alone does not
+  gather system output.
+- Unpriced native components still cannot run under USD-bounded orchestration.
+  No command runner or broader old-API repair is included.
+- Native file-v1 does not support constrained cases; it fails explicitly rather
+  than funding a judge and failing measurement afterward.
 
 ## Assumptions
 
-<!-- Spec 064-02 / ADR-0020 §1–§2 — grounding-by-probe (risk-gated). -->
-
-_Load-bearing factual claims about runnable surfaces (library/API capability,
-version/perf behavior, behavior of existing code) must be backed by an executed
-probe (run a command, read source/`node_modules`) or a citation — or listed
-here explicitly as an assumption. Never assert an unverified claim as fact._
-
-_Risk-gated: omit this section (or write "None") when the decision has no
-unverified load-bearing assumptions — do not pad with boilerplate._
-
-- _TODO_
+The producer owns the component output directory and deliberately publishes its
+candidate files there. Snapshot hashing attests the bytes read, not correctness
+or authenticity of the external producer.
 
 ## Kill criteria
 
-_What would make this decision wrong? List the conditions that, if observed,
-should reverse or shelve it. Risk-gated like Assumptions — write "None" or omit
-when there is no meaningful kill condition; do not invent ceremonial ones._
-
-- _TODO_
+If a use case requires active system invocation rather than existing output
+artifacts, author a separate acquisition/budget/permission contract. Do not
+silently execute commands or reinterpret approved path policy to fit it.
 
 ## Open questions
 
-_TODO: list any unresolved questions. If none, write "None."_
+None for this bounded native file policy.
+
+## Verification
+
+033-05 supplements cover path/policy freeze, moving output, snapshot consistency,
+negative file cases and actual emitted installed generic native scoring.
