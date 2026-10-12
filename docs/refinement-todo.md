@@ -57,12 +57,11 @@ refuses the native loop. An advisory agentStop adapter is not a replacement
 for real per-turn oracle-gated continuation. No claim of equivalent autonomous
 Copilot guardrails is made.
 
-**Resolution trigger:** Copilot gains a reliable way to observe repo-hook firing
-under Autopilot / `copilot -p` (see the sibling hook residual above), so the
-per-continuation `agentStop` gate can be validated end-to-end. If it fully
-reconstructs the per-turn gate, lift the refusal and map the goal driver to
-Autopilot caps + the `agentStop` gate; if it cannot, the refusal stands as the
-permanent honest posture (goal driver = Claude-only), per ADR-0038 kill criteria.
+**Resolution trigger:** Both live per-turn continuation/retry-guard proof
+(033-07) **and** 033-03's enforceable-budget/owner-policy, tool/context/resume/
+whole-pass prerequisites must hold, followed by normal readiness review.
+Hook evidence alone never lifts ADR-0039's autonomy refusal; Autopilot caps
+alone do not establish the requested hard USD contract.
 
 **Surfaced by:** slice 032-05 (ADR-0038); enumerated in `docs/architecture.md`
 "Copilot host execution-primitive inventory".

@@ -66,6 +66,10 @@ instead of unknowingly funding a run without the requested limits.
    Claude driver/default/budget/permission-wall behavior remains unchanged.
 4. Legacy unmarked v1 origin is genuinely unrecoverable in some prototype cases;
    compatibility is retained and that limitation is explicitly documented.
+5. Final reconciliation found the old goal-driver reactivation trigger still
+   allowed continuation proof alone to lift refusal. Corrected: both live
+   continuation and 033-03's enforceable budget/control/readiness prerequisites
+   are required. No hard monetary safeguard is weakened.
 
 ### Reconciliation sweep
 

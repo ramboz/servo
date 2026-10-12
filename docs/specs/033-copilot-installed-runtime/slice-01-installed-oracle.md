@@ -86,6 +86,9 @@ project without Claude, not merely installs new files.
    seeded tool symlinks. Architecture's stale two-package wording was corrected.
    Actual local native install/clean-consumer evidence is separated from
    copied-layout fixtures and static zip checks in delivery-evidence.md.
+4. Final reconciliation found README's live-status link still pointed to the
+   older roadmap. It now points to the regenerated status board; the historical
+   roadmap is not rewritten to fabricate completion.
 
 ### Reconciliation sweep
 
@@ -94,6 +97,7 @@ project without Claude, not merely installs new files.
 | Runtime roots / marker / templates / builder | updated | Executing native authority, parent metadata and tested locator/bootstrap. |
 | Generated Claude/Codex/Copilot packages | updated | Canonical regeneration; no Jig machinery or pre-rendered consumer tree. |
 | README / architecture / vision | updated | Supported deterministic delivery versus unavailable autonomy; portable README links. |
+| Roadmap | no-op | Historical horizon framing retained; live capability status links to derived board instead. |
 | Marketplace / manifests / release workflow | no-op | Reused spec032 mechanism; native CLI discovery and four-manifest/static zip checks pass. |
 | ADR index / status board | updated | Derived helper regeneration; old accepted records untouched. |
 | Primer / conventions / inbox | no-op | None exist at project root; no new convention or unrelated work. |

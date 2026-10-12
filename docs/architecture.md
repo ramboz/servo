@@ -485,8 +485,9 @@ so a future added hook forces a new row here rather than degrading silently:
 |---|---|---|---|
 | `Stop` (meta-judge) | `agentStop` | Canonical `{"decision":"block","reason":…}` body forwarded by adapter | **static payload mapping; advisory** |
 
-**Payload-mapping inventory:** No servo hook in this single-hook inventory is
-dropped. Only
+**Payload-mapping inventory — Residual set: empty** for the adapter's event map,
+not for live runtime capabilities. No servo hook in this single-hook inventory
+is dropped. Only
 the *input payload* differs (Copilot camelCase `sessionId`/`cwd`/`transcriptPath`
 plus snake_case `stop_hook_active`; Claude snake_case). The adapter reshapes it:
 it exports `CLAUDE_PROJECT_DIR` from the payload's `cwd` (Copilot exposes no such

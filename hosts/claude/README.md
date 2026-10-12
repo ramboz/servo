@@ -133,7 +133,7 @@ and release-please. See
 The project-owned evaluation workflow is available for Claude Code, Codex and
 GitHub Copilot CLI; native Copilot autonomy remains unavailable. Live capability status and
 sequencing are maintained in the
-[roadmap](https://github.com/ramboz/servo/blob/main/docs/specs/ROADMAP.md).
+[status board](https://github.com/ramboz/servo/blob/main/docs/specs/README.md).
 
 ## License
 
