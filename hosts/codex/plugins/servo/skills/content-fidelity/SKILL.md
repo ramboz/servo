@@ -128,6 +128,33 @@ window).
 
 ## Authoring tips
 
+### Native Copilot judging
+
+For a **new** definition, choose native default decoding deliberately:
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/content-fidelity/content_fidelity.py" init <target> \
+  --transport copilot --model <pinned-model> --decoding-mode native-default
+```
+
+The config records `judge.transport: "copilot"`, `decoding_mode:
+"native-default"`, the commanded model and exact CLI `runtime_version`.
+It contains no `temperature` or `max_tokens`; native freeze/scoring reject those
+requirements rather than silently ignoring them. Existing approved API/CLI
+configs are untouched. Model/transport/decoding/version changes require review
+and re-freeze. Exact CLI version bounds compatibility, not stable server-side
+decoding.
+
+Native calls are fresh, read-only and bounded by a timeout. Set
+`SERVO_CONTENT_FIDELITY_COPILOT_BIN` or `SERVO_COPILOT_BIN` for an executable
+override. Missing runtime, wrong model/version, malformed output and failed
+calls produce `env_error`. No API, Claude or fake-score fallback is used.
+
+Native spend is unknown in USD (`cost_usd: null`, not zero). Native installation
+requires a Servo manifest and records `content_fidelity` in its
+`unpriced_components` list. A caller promising a USD budget must refuse this
+unpriced oracle work before invoking it; standalone attended scoring is supported.
+
 - Keep `n` × `|cases|` bounded — it counts against the loop's cost ceiling.
 - Start the threshold below the first frozen composite, then raise it as the
   generated text improves; the loop optimises toward it.

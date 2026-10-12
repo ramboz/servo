@@ -836,5 +836,311 @@ class ResolveGatePyTests(unittest.TestCase):
             self.assertTrue(Path(ref).is_absolute())
 
 
+# --------------------------------------------------------------------------- #
+# Copilot host: agentStop install / uninstall / status (slice 032-04)
+# --------------------------------------------------------------------------- #
+REPO_ROOT = HOOK_DIR.parents[1]
+
+
+class CopilotInstallTests(unittest.TestCase):
+    """`install --host copilot` writes a Copilot `agentStop` hook into the
+    target's `.github/hooks/servo-oracle.json` and installs the ported adapter
+    + meta-judge into `.servo/hooks/` — mirroring the Claude-path contract
+    (idempotent merge, single backup, stable marker), never a Claude `Stop`
+    entry (AC2 / AC4)."""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self._tmp.name)
+        _make_scaffolded_target(self.target)
+        self.config_path = self.target / ".github" / "hooks" / "servo-oracle.json"
+        self.backup_path = self.config_path.parent / "servo-oracle.json.servo-bak"
+        self.adapter = self.target / ".servo" / "hooks" / "copilot_hook_adapter.py"
+        self.script = self.target / ".servo" / "hooks" / "meta-judge.sh"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _install(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = hook.main(["install", str(self.target), "--host", "copilot", *args])
+        return rc, out.getvalue(), err.getvalue()
+
+    def _config(self) -> dict:
+        return json.loads(self.config_path.read_text())
+
+    def _servo_entry_count(self) -> int:
+        entries = self._config().get("hooks", {}).get("agentStop", [])
+        return sum(1 for e in entries if hook._copilot_entry_is_servo(e))
+
+    def test_emits_agentstop_json_with_adapter_wrapped_bash(self):
+        """AC2: flat `{version:1,hooks:{agentStop:[{type,bash,timeoutSec}]}}` with
+        the adapter-wrapped bash pointing at the meta-judge, all repo-root
+        relative (where Copilot runs committed hooks)."""
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 0)
+        cfg = self._config()
+        self.assertEqual(cfg["version"], 1)
+        entries = cfg["hooks"]["agentStop"]
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        self.assertEqual(entry["type"], "command")
+        self.assertIsInstance(entry["timeoutSec"], int)
+        bash = entry["bash"]
+        self.assertIn(".servo/hooks/copilot_hook_adapter.py", bash)
+        self.assertIn(".servo/hooks/meta-judge.sh", bash)
+        # The Claude event name the adapter injects as hook_event_name.
+        self.assertRegex(bash, r"copilot_hook_adapter\.py Stop ")
+
+    def test_installs_adapter_and_meta_judge_into_dot_servo_hooks(self):
+        """AC1/AC2: the ported adapter (byte-identical to source) and the
+        rendered meta-judge (gate path substituted, executable) both land."""
+        self._install()
+        self.assertTrue(self.adapter.is_file())
+        self.assertTrue(os.access(self.adapter, os.X_OK), "adapter must be executable")
+        self.assertEqual(
+            self.adapter.read_bytes(),
+            (HOOK_DIR / "copilot_hook_adapter.py").read_bytes(),
+        )
+        self.assertTrue(self.script.is_file())
+        self.assertTrue(os.access(self.script, os.X_OK), "meta-judge must be executable")
+        self.assertNotIn("__GATE_PY__", self.script.read_text())
+
+    def test_second_install_yields_single_servo_entry(self):
+        """AC2: idempotent — re-install produces exactly one servo agentStop
+        entry, never a duplicate."""
+        rc1, _, _ = self._install()
+        rc2, _, _ = self._install()
+        self.assertEqual((rc1, rc2), (0, 0))
+        self.assertEqual(self._servo_entry_count(), 1)
+
+    def test_creates_github_hooks_dir_when_absent(self):
+        self.assertFalse((self.target / ".github").exists())
+        self._install()
+        self.assertTrue(self.config_path.is_file())
+        json.loads(self.config_path.read_text())  # parses
+
+    def test_backs_up_existing_config_before_mutating(self):
+        """Mirror the Claude single-backup contract: a pre-existing config is
+        copied byte-faithfully before servo's entry is merged in."""
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        original = '{\n  "version": 1,\n  "hooks": {"userPromptSubmitted": []}\n}\n'
+        self.config_path.write_text(original)
+        rc, _, _ = self._install()
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.backup_path.is_file())
+        self.assertEqual(self.backup_path.read_text(), original)
+        # servo's entry merged without clobbering the user's other event.
+        self.assertIn("userPromptSubmitted", self._config()["hooks"])
+        self.assertEqual(self._servo_entry_count(), 1)
+
+    def test_no_backup_when_creating_fresh_config(self):
+        self._install()
+        self.assertFalse(self.backup_path.exists())
+
+    def test_refuses_when_no_manifest(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as d:
+            bare = Path(d)
+            (bare / "oracle.sh").write_text("#!/bin/sh\nexit 0\n")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = hook.main(["install", str(bare), "--host", "copilot"])
+            self.assertEqual(rc, 2)
+            self.assertIn("manifest_missing", out.getvalue() + err.getvalue())
+            self.assertFalse((bare / ".github" / "hooks" / "servo-oracle.json").exists())
+
+    def test_does_not_write_claude_settings(self):
+        """AC4: the Copilot path never touches `.claude/settings.json`."""
+        self._install()
+        self.assertFalse((self.target / ".claude" / "settings.json").exists())
+
+
+class CopilotUninstallStatusTests(unittest.TestCase):
+    """`uninstall --host copilot` reverses the agentStop registration
+    (marker-matched, backup-first, scripts left on disk); `status --host
+    copilot` reports installed / not_installed / inconsistent (AC2 / AC4)."""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self._tmp.name)
+        _make_scaffolded_target(self.target)
+        self.config_path = self.target / ".github" / "hooks" / "servo-oracle.json"
+        self.backup_path = self.config_path.parent / "servo-oracle.json.servo-bak"
+        self.adapter = self.target / ".servo" / "hooks" / "copilot_hook_adapter.py"
+        self.script = self.target / ".servo" / "hooks" / "meta-judge.sh"
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _run(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = hook.main([*argv])
+        except SystemExit as e:
+            rc = e.code if isinstance(e.code, int) else 1
+        return rc, out.getvalue(), err.getvalue()
+
+    def _install(self):
+        return self._run("install", str(self.target), "--host", "copilot")
+
+    def _status_json(self) -> dict:
+        rc, out, _ = self._run("status", str(self.target), "--host", "copilot", "--json")
+        self.assertEqual(rc, 0)
+        return json.loads(out)
+
+    def test_uninstall_removes_servo_agentstop_registration(self):
+        self._install()
+        rc, _, _ = self._run("uninstall", str(self.target), "--host", "copilot")
+        self.assertEqual(rc, 0)
+        # servo owns the dedicated servo-oracle.json; with nothing left it is
+        # removed rather than left as `{version, hooks:{}}` detritus.
+        self.assertFalse(self.config_path.exists())
+
+    def test_uninstall_preserves_unrelated_events_in_shared_file(self):
+        """Defensive: if a user co-located another event in servo-oracle.json,
+        uninstall removes only servo's agentStop entry and keeps the file."""
+        self._install()
+        cfg = json.loads(self.config_path.read_text())
+        cfg["hooks"]["userPromptSubmitted"] = [{"type": "command", "bash": "echo hi"}]
+        self.config_path.write_text(json.dumps(cfg))
+        rc, _, _ = self._run("uninstall", str(self.target), "--host", "copilot")
+        self.assertEqual(rc, 0)
+        remaining = json.loads(self.config_path.read_text())
+        self.assertNotIn("agentStop", remaining["hooks"])
+        self.assertIn("userPromptSubmitted", remaining["hooks"])
+
+    def test_uninstall_leaves_scripts_on_disk(self):
+        """AC / contract mirror: uninstall never deletes the target-side
+        scripts (like the Claude path leaves meta-judge.sh)."""
+        self._install()
+        self.assertTrue(self.adapter.is_file())
+        self.assertTrue(self.script.is_file())
+        self._run("uninstall", str(self.target), "--host", "copilot")
+        self.assertTrue(self.adapter.is_file())
+        self.assertTrue(self.script.is_file())
+
+    def test_uninstall_backs_up_before_mutating(self):
+        self._install()
+        pre = self.config_path.read_text()
+        rc, _, _ = self._run("uninstall", str(self.target), "--host", "copilot")
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.backup_path.is_file())
+        self.assertEqual(self.backup_path.read_text(), pre)
+
+    def test_uninstall_idempotent_when_absent(self):
+        rc, _, _ = self._run("uninstall", str(self.target), "--host", "copilot")
+        self.assertEqual(rc, 0)
+        self.assertFalse(self.backup_path.exists())
+
+    def test_status_installed(self):
+        self._install()
+        j = self._status_json()
+        self.assertEqual(j["state"], "installed")
+        self.assertTrue(j["entry_present"])
+        self.assertTrue(j["script_present"])
+        self.assertEqual(j["host"], "copilot")
+
+    def test_status_not_installed(self):
+        j = self._status_json()
+        self.assertEqual(j["state"], "not_installed")
+
+    def test_status_inconsistent_entry_without_scripts(self):
+        self._install()
+        self.adapter.unlink()
+        self.script.unlink()
+        j = self._status_json()
+        self.assertEqual(j["state"], "inconsistent")
+        self.assertTrue(j["entry_present"])
+        self.assertFalse(j["script_present"])
+
+    def test_status_refuses_malformed_config(self):
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text("{ not json")
+        rc, out, err = self._run("status", str(self.target), "--host", "copilot")
+        self.assertEqual(rc, 2)
+        self.assertIn("settings_malformed", out + err)
+
+
+class ClaudePathUnchangedByHostFlagTests(unittest.TestCase):
+    """AC4: `--host` defaults to `claude`, so existing installs are byte-for-byte
+    unchanged — the default path writes a `.claude/settings.json` `Stop` entry
+    and never a Copilot artifact."""
+
+    def setUp(self):
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self._tmp.name)
+        _make_scaffolded_target(self.target)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _run(self, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = hook.main([*argv])
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_default_host_writes_claude_stop_entry_only(self):
+        rc, _, _ = self._run("install", str(self.target))
+        self.assertEqual(rc, 0)
+        settings = json.loads((self.target / ".claude" / "settings.json").read_text())
+        self.assertEqual(len(settings["hooks"]["Stop"]), 1)
+        # No Copilot artifacts on the default (Claude) path.
+        self.assertFalse((self.target / ".github" / "hooks" / "servo-oracle.json").exists())
+        self.assertFalse((self.target / ".servo" / "hooks" / "copilot_hook_adapter.py").exists())
+
+    def test_explicit_host_claude_matches_default(self):
+        rc, _, _ = self._run("install", str(self.target), "--host", "claude")
+        self.assertEqual(rc, 0)
+        self.assertTrue((self.target / ".claude" / "settings.json").is_file())
+        self.assertFalse((self.target / ".github" / "hooks" / "servo-oracle.json").exists())
+
+
+class HookInventoryTests(unittest.TestCase):
+    """AC3: the mapped-or-unmappable inventory over servo's hook set. Today a
+    single mapped entry `Stop→agentStop` (identical decision vocabulary), empty
+    residual — enumerated so a future added hook forces an inventory update
+    here AND in docs/architecture.md."""
+
+    def test_stop_maps_to_agentstop(self):
+        self.assertEqual(hook.CLAUDE_TO_COPILOT_HOOK_EVENTS["Stop"], "agentStop")
+
+    def test_copilot_install_uses_the_mapped_event(self):
+        # The Copilot install writes under exactly the mapped event key.
+        self.assertEqual(
+            hook.COPILOT_HOOK_EVENT,
+            hook.CLAUDE_TO_COPILOT_HOOK_EVENTS[hook.CLAUDE_HOOK_EVENT],
+        )
+
+    def test_residual_set_is_empty(self):
+        self.assertEqual(tuple(hook.COPILOT_HOOK_RESIDUAL), ())
+
+    def test_inventory_enumerates_the_full_source_hook_set(self):
+        """servo installs exactly one hook event (the oracle Stop). Adding a
+        second to the map (or a residual) trips this drift-pin, forcing the
+        inventory (and architecture.md) to be reconciled."""
+        mapped = set(hook.CLAUDE_TO_COPILOT_HOOK_EVENTS)
+        residual = set(hook.COPILOT_HOOK_RESIDUAL)
+        self.assertEqual(mapped | residual, {hook.CLAUDE_HOOK_EVENT})
+        self.assertEqual(mapped & residual, set())
+
+    def test_architecture_md_records_the_inventory(self):
+        text = (REPO_ROOT / "docs" / "architecture.md").read_text()
+        self.assertIn("agentStop", text)
+        self.assertIn("mapped-or-unmappable", text.lower())
+        # The empty-residual claim is recorded, not merely implied.
+        self.assertIn("Residual set: empty", text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,7 @@ import argparse
 import importlib.util
 import json
 import shutil
+import sys
 from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parent
@@ -69,7 +70,7 @@ def _eval_dir(target: Path) -> Path:
     return target / ".servo" / "content-fidelity"
 
 
-def init(target: Path) -> Path:
+def init(target: Path, *, transport=None, model=None, decoding_mode=None) -> Path:
     """Scaffold ``.servo/content-fidelity/`` with the runtime + a config skeleton.
 
     Copies ``fidelity_eval.py`` from ``skills/_common/`` alongside the
@@ -77,16 +78,36 @@ def init(target: Path) -> Path:
     (ADR-0024) resolves it from this same-directory copy once installed in an
     arbitrary target."""
     d = _eval_dir(target)
+    cfg = d / "config.json"
+    example = SKILL_DIR / "templates" / "config.example.json"
+    requested = any(value is not None for value in (transport, model, decoding_mode))
+    config = None
+    if requested:
+        if cfg.exists():
+            raise _fe.EnvError("Refusing to overwrite an existing eval definition")
+        config = json.loads(example.read_text())
+        if transport == "copilot":
+            config["judge"] = _fe.copilot_definition(
+                model, decoding_mode, "SERVO_CONTENT_FIDELITY_COPILOT_BIN",
+            )
+        else:
+            if decoding_mode is not None or transport not in (None, "api", "cli"):
+                raise _fe.EnvError("native-default decoding requires Copilot transport")
+            if transport is not None:
+                config["judge"]["transport"] = transport
+            if model is not None:
+                config["judge"]["model"] = model
     d.mkdir(parents=True, exist_ok=True)
     for runtime, src_dir in (
         ("score.py", SKILL_DIR), ("fidelity_eval.py", COMMON_DIR),
+        ("copilot_eval.py", COMMON_DIR),
     ):
         src = src_dir / runtime
         if src.is_file():
             shutil.copyfile(src, d / runtime)
-    cfg = d / "config.json"
-    example = SKILL_DIR / "templates" / "config.example.json"
-    if not cfg.is_file() and example.is_file():
+    if config is not None:
+        cfg.write_text(json.dumps(config, indent=2) + "\n")
+    elif not cfg.is_file() and example.is_file():
         shutil.copyfile(example, cfg)
     return d
 
@@ -99,6 +120,7 @@ def freeze(target: Path) -> dict:
     if not cfg_path.is_file():
         raise FileNotFoundError(f"no config to freeze: {cfg_path}")
     config = json.loads(cfg_path.read_text())
+    _fe.validate_copilot_definition(config, "SERVO_CONTENT_FIDELITY_COPILOT_BIN")
     for c in config.get("cases", []):
         rel = c.get("reference")
         # A reference may be inline text or a path to a file; only refuse
@@ -111,7 +133,12 @@ def freeze(target: Path) -> dict:
     config["approved_content_hash"] = _score.definition_hash(config)
     config["approval_status"] = "approved"
     config["approved_at"] = _fe.iso_now()
+    unpriced = config.get("judge", {}).get("transport") == "copilot"
+    if unpriced:
+        _fe.sync_installed_cost(target, COMPONENT, unpriced=True)
     cfg_path.write_text(json.dumps(config, indent=2) + "\n")
+    if not unpriced:
+        _fe.sync_installed_cost(target, COMPONENT, unpriced=False)
     return config
 
 
@@ -135,13 +162,20 @@ def install(target: Path, weight: float = DEFAULT_WEIGHT) -> None:
     oracle = target / "oracle.sh"
     if not oracle.is_file():
         raise FileNotFoundError(f"oracle.sh not found: {oracle} (scaffold the target first)")
+    cfg = _eval_dir(target) / "config.json"
+    config = json.loads(cfg.read_text()) if cfg.is_file() else {}
+    unpriced = config.get("judge", {}).get("transport") == "copilot"
+    if unpriced:
+        _fe.validate_unpriced_registration(target)
     init(target)  # ensure runtime is present (won't clobber an existing config.json)
+    if unpriced:
+        _fe.register_manifest(target, COMPONENT, unpriced=True)
 
     text = oracle.read_text()
     text = _fe.splice_component(text, COMPONENT, _FRAGMENT)
     text = _fe.splice_components_entry(text, COMPONENT, weight)
     oracle.write_text(text)
-    _fe.register_manifest(target, COMPONENT)
+    _fe.register_manifest(target, COMPONENT, unpriced=unpriced)
 
 
 def uninstall(target: Path) -> None:
@@ -165,19 +199,38 @@ def main(argv=None) -> int:
     for name in ("init", "freeze", "install", "uninstall"):
         sp = sub.add_parser(name)
         sp.add_argument("target", type=Path)
+        if name == "init":
+            sp.add_argument("--transport", choices=("api", "cli", "copilot"))
+            sp.add_argument("--model")
+            sp.add_argument("--decoding-mode", choices=("native-default",))
         if name == "install":
             sp.add_argument("--weight", type=float, default=DEFAULT_WEIGHT)
     args = parser.parse_args(argv)
     target = args.target.resolve()
 
     if args.cmd == "init":
-        init(target)
+        try:
+            init(
+                target, transport=args.transport, model=args.model,
+                decoding_mode=args.decoding_mode,
+            )
+        except _fe.EnvError as exc:
+            print(f"content-fidelity: init refused: {exc}", file=sys.stderr)
+            return 2
         print(f"scaffolded {_eval_dir(target)}")
     elif args.cmd == "freeze":
-        freeze(target)
+        try:
+            freeze(target)
+        except _fe.EnvError as exc:
+            print(f"content-fidelity: freeze refused: {exc}", file=sys.stderr)
+            return 2
         print("frozen (approval_status=approved)")
     elif args.cmd == "install":
-        install(target, args.weight)
+        try:
+            install(target, args.weight)
+        except _fe.EnvError as exc:
+            print(f"content-fidelity: install refused: {exc}", file=sys.stderr)
+            return 2
         print(f"installed {COMPONENT} (weight {args.weight})")
     elif args.cmd == "uninstall":
         uninstall(target)

@@ -65,6 +65,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -134,6 +135,14 @@ DEFAULT_PLATEAU_NOISE_FLOOR = 0.0
 AGENT_RUNNER = "runner"
 AGENT_JUDGE = "judge"
 
+# Slice 032-05 execution-primitive mapping (ADR-0038). The optional loop driver
+# runs under either Claude Code (`claude -p`) or GitHub Copilot CLI
+# (`copilot -p`), selected by `--host`. Default is `claude` — zero change for
+# Claude users. Only the loop driver ports to Copilot; the goal driver refuses
+# under `--host copilot` (Autopilot has no oracle-gated stop; see main()).
+HOST_CLAUDE = "claude"
+HOST_COPILOT = "copilot"
+
 # Slice 003-05 verdict-block schema version (ADR-0003). Mirrors gate.py's
 # `schema_version` mechanism: refuse loudly on mismatch rather than
 # silently mis-decoding. Spec 005's variant-race will reuse the judge
@@ -180,11 +189,19 @@ REASON_GATE_INVOCATION_FAILED = "gate_invocation_failed"
 REASON_TARGET_MISSING = "target_missing"
 REASON_TARGET_NOT_DIRECTORY = "target_not_directory"
 REASON_MANIFEST_MISSING = "manifest_missing"
+REASON_UNPRICED_COMPONENTS_INVALID = "unpriced_components_invalid"
+REASON_UNPRICED_ORACLE_COMPONENTS = "unpriced_oracle_components"
 REASON_ORACLE_MISSING = "oracle_missing"
 REASON_STATE_MISSING = "state_missing"
 REASON_STATE_SCHEMA_MISMATCH = "state_schema_mismatch"
 REASON_CLAUDE_VERSION_MISMATCH = "claude_version_mismatch"
 REASON_RUN_ID_COLLISION = "run_id_collision"
+# Slice 032-05 (ADR-0038): the /goal family (`--driver goal`, `--background`,
+# `--emit-routine-prompt`) refuses under `--host copilot` — Copilot Autopilot
+# has no oracle-gated stop and the target-side agentStop gate's live firing is
+# unverifiable headless (jig 113-08). The loop driver ports fully; the goal
+# driver is a documented residual. Refuse explicitly, never a silent un-gated run.
+REASON_GOAL_UNSUPPORTED_HOST = "goal_driver_unsupported_host"
 
 # Slice 003-07 preflight refusal shared by both drivers (ADR-0008 V4): a
 # scheduled / unattended run against a dirty working tree can score leftover
@@ -1038,6 +1055,7 @@ def _build_initial_state(
     now_iso = datetime.now(timezone.utc).isoformat()
     return {
         "state_schema_version": STATE_SCHEMA_VERSION,
+        "backend": HOST_CLAUDE,
         "run_id": run_id,
         "started_at": now_iso,
         "last_updated_at": now_iso,
@@ -1141,6 +1159,31 @@ def _refuse_preflight(
         "run_id": run_id,
     })
     return EXIT_ENV_ERROR
+
+
+def _refuse_copilot_capability(*, explain: bool = False) -> int:
+    message = (
+        "--host copilot autonomy is unavailable: the current CLI cannot uphold "
+        "Servo's hard USD ceiling and context guarantees. --max-ai-credits is "
+        "a soft post-response cap (minimum 30), not a USD budget. --driver loop, "
+        "goal, background and native resume remain unsupported (ADR-0043). "
+        "Use the project-owned quality gate with an independently controlled "
+        "host, or establish an owner-approved enforceable native contract."
+    )
+    sys.stderr.write(f"loop: {message}\n")
+    _emit_json({
+        "schema_version": 2,
+        "backend": HOST_COPILOT,
+        "supported": False,
+        "driver": None,
+        "terminal_reason": "native_capability_unavailable",
+        "terminal_breadcrumb": message,
+        "iterations_completed": 0,
+        "cumulative_cost_usd": None,
+        "context_fill_ratio": None,
+        "final_oracle_status": STATUS_ENV_ERROR,
+    })
+    return EXIT_OK if explain else EXIT_ENV_ERROR
 
 
 def _refuse_plan(*, reason: str, message: str) -> int:
@@ -1488,6 +1531,81 @@ def _target_preflight_error(target: Path) -> Optional[tuple[str, str]]:
     return None
 
 
+def _unpriced_oracle_error(target: Path) -> Optional[tuple[str, str]]:
+    """ADR-0041 accounting boundary, mirrored in heartbeat.py.
+
+    Only installation metadata classifies managed unpriced components; this
+    does not inspect arbitrary project configs or attest all oracle costs.
+    Absent manifests/markers retain the older preflight behavior.
+    """
+    if not target.is_dir():
+        return None  # Existing target preflight owns missing/non-directory errors.
+    manifest = target / ".servo" / "install.json"
+
+    def invalid(detail: str) -> tuple[str, str]:
+        return REASON_UNPRICED_COMPONENTS_INVALID, (
+            f"cannot establish USD accounting from unpriced_components in "
+            f".servo/install.json at {manifest}: {detail}; repair installation "
+            f"registration before bounded execution (ADR-0041)"
+        )
+
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return invalid(f"manifest unreadable or malformed: {exc}")
+    if not isinstance(data, dict):
+        return invalid("manifest must be a JSON object")
+    if "unpriced_components" not in data:
+        return None
+    marker = data["unpriced_components"]
+    if (
+        not isinstance(marker, list)
+        or any(not isinstance(name, str) or not name.strip() for name in marker)
+        or len(set(marker)) != len(marker)
+    ):
+        return invalid("marker must be a unique list of nonempty component names")
+    components = data.get("components")
+    if (
+        not isinstance(components, list)
+        or any(not isinstance(name, str) or not name.strip() for name in components)
+        or not set(marker).issubset(components)
+    ):
+        return invalid("marker names must belong to the registered components list")
+    if marker:
+        return REASON_UNPRICED_ORACLE_COMPONENTS, (
+            f"USD-bounded execution refused: unpriced_components in "
+            f".servo/install.json at {manifest}: {', '.join(marker)}. Native "
+            f"oracle USD spend is unknown. Use standalone attended quality-gate/"
+            f"scoring, or reinstall these components with a priced provider; "
+            f"zero budgets and resume overrides cannot bypass this guard "
+            f"(ADR-0041)."
+        )
+    return None
+
+
+def _unpriced_oracle_preflight(
+    target: Path, *, cost_ceiling: Optional[float] = None,
+    context_fill_threshold: Optional[float] = None,
+    run_id: Optional[str] = None,
+) -> Optional[int]:
+    """Render an accounting refusal without launching or writing any state."""
+    err = _unpriced_oracle_error(target)
+    if err is None:
+        return None
+    reason, message = err
+    return _refuse_preflight(
+        run_id=run_id if run_id is not None else _generate_preflight_run_id(),
+        reason=reason, message=message,
+        cost_ceiling=cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD,
+        context_fill_threshold=(
+            context_fill_threshold if context_fill_threshold is not None
+            else DEFAULT_CONTEXT_FILL_THRESHOLD
+        ),
+    )
+
+
 # Cap on how many dirty paths the refusal breadcrumb enumerates, so a wildly
 # dirty tree can't spam the log; the count is always reported in full.
 _DIRTY_PATHS_SHOWN = 20
@@ -1731,14 +1849,317 @@ def _settings_args(target: Path) -> list[str]:
     return []
 
 
+def _build_copilot_cmd(
+    prompt: str, *,
+    agent_name: Optional[str],
+    session_id: Optional[str],
+    usage_file: Path,
+    max_ai_credits: Optional[float],
+) -> list[str]:
+    """Assemble the Copilot loop-driver argv (slice 032-05 AC1, ADR-0038).
+
+    Mirrors the spike's live-verified form (`copilot` 1.0.86):
+    `copilot -p <prompt> -s --allow-all-tools --agent <name> --output-format
+    json --usage-output-file <f>`. `-p` takes the prompt as its VALUE (verified
+    against `copilot --help`), `-s` (silent) trims non-response chatter,
+    `--allow-all-tools` is the headless-edit enabler (Copilot's analog of the
+    ADR-0037 permission wall — AC4), `--output-format json` yields a JSONL event
+    stream, and `--usage-output-file` writes the cost + `codeChanges` edit-signal.
+
+    `--max-ai-credits` is forwarded only when a positive cap is set (AC2's honest
+    per-invocation brake; USD does not convert to Copilot's premium-request /
+    nano-AIU units — see `_normalize_copilot_result`). `--resume=<session>` is
+    added when a session id is carried forward (the `=` form is used because
+    Copilot's `-r/--resume` takes an OPTIONAL value, so a space-separated value
+    would be ambiguous). No `--max-budget-usd`: that is a Claude-only knob.
+    """
+    cmd: list[str] = ["copilot", "-p", prompt, "-s", "--allow-all-tools"]
+    if agent_name:
+        cmd.extend(["--agent", agent_name])
+    cmd.extend(["--output-format", "json", "--usage-output-file", str(usage_file)])
+    if max_ai_credits is not None and max_ai_credits > 0:
+        # Integer credits when whole (Copilot's flag reads a credit count);
+        # `g` drops a trailing `.0` so `5.0` renders as `5`.
+        cmd.extend(["--max-ai-credits", f"{max_ai_credits:g}"])
+    if session_id:
+        cmd.append(f"--resume={session_id}")
+    return cmd
+
+
+def _parse_copilot_usage(usage_path: Path) -> dict:
+    """Parse Copilot's `--usage-output-file` JSON (slice 032-05 AC2).
+
+    Returns native cost (`totalPremiumRequestCost` / `totalNanoAiu` — premium
+    requests / nano-AIU, NOT USD), the native edit-signal
+    (`codeChanges.filesModifiedCount`, where 0 ⇒ the runner made no edits —
+    ADR-0037's "did the runner edit?" check), and `tokenDetails`.
+
+    Tolerant by design: a missing or malformed file yields zeros rather than
+    raising. Cost accounting under Copilot is a documented USD-unit residual
+    (the USD `--cost-ceiling` does not gate Copilot), so a missing usage file
+    must degrade to "no cost signal", never crash the loop.
+    """
+    default = {
+        "premium_request_cost": 0,
+        "nano_aiu": 0,
+        "files_modified": 0,
+        "token_details": {},
+    }
+    try:
+        data = json.loads(usage_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return default
+    if not isinstance(data, dict):
+        return default
+
+    def _as_int(value) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    files_modified = 0
+    code_changes = data.get("codeChanges")
+    if isinstance(code_changes, dict):
+        files_modified = _as_int(code_changes.get("filesModifiedCount"))
+
+    token_details = data.get("tokenDetails")
+    if not isinstance(token_details, dict):
+        token_details = {}
+
+    return {
+        "premium_request_cost": _as_int(data.get("totalPremiumRequestCost")),
+        "nano_aiu": _as_int(data.get("totalNanoAiu")),
+        "files_modified": files_modified,
+        "token_details": token_details,
+    }
+
+
+def _extract_copilot_text(event: dict) -> str:
+    """Pull the response text out of a Copilot terminal `result` event.
+
+    Copilot's JSONL `data` field shape is not frozen across releases, so this
+    reads defensively: a bare string `data`, or a dict with a `content` / `text`
+    / `message` / `result` / `response` string, or a `content` list of
+    `{type,text}` parts. Anything else yields "" (the loop tolerates an empty
+    agent turn — the verdict parser simply finds no block).
+    """
+    data = event.get("data")
+    if isinstance(data, str):
+        return data
+    if isinstance(data, dict):
+        for key in ("content", "text", "message", "result", "response"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value
+        content = data.get("content")
+        if isinstance(content, list):
+            parts = [
+                part.get("text", "")
+                for part in content
+                if isinstance(part, dict) and isinstance(part.get("text"), str)
+            ]
+            if any(parts):
+                return "\n".join(parts)
+    return ""
+
+
+def _extract_copilot_session_id(event: Optional[dict]) -> str:
+    """Best-effort session id from a Copilot event (top-level or under `data`).
+
+    Copilot's JSONL is not documented to carry a session id; if none is present
+    this returns "" and the next iteration runs a fresh session (a documented
+    resume residual — servo re-assembles per-iteration context into the prompt
+    regardless, so continuity is not correctness-critical).
+    """
+    if not isinstance(event, dict):
+        return ""
+    containers = [event]
+    data = event.get("data")
+    if isinstance(data, dict):
+        containers.append(data)
+    for container in containers:
+        for key in ("session_id", "sessionId"):
+            value = container.get(key)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
+def _parse_copilot_jsonl(stdout: str) -> tuple[Optional[dict], str]:
+    """Parse Copilot's `--output-format json` JSONL stream (slice 032-05 AC1).
+
+    Filters `ephemeral: true` events (progress / tool chatter); the LAST
+    non-ephemeral event is the terminal result and carries the response text.
+    Returns `(terminal_event, result_text)`, or `(None, "")` when no
+    non-ephemeral event is present. Non-JSON noise lines are tolerated (skipped),
+    mirroring `_invoke_claude_goal`'s stream scan.
+    """
+    terminal: Optional[dict] = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("ephemeral") is True:
+            continue
+        terminal = event  # last non-ephemeral event wins
+    if terminal is None:
+        return None, ""
+    return terminal, _extract_copilot_text(terminal)
+
+
+def _normalize_copilot_result(
+    terminal_event: dict, result_text: str, session_id: str, usage: dict,
+) -> dict:
+    """Normalize Copilot's JSONL + usage into `_invoke_claude`'s result-dict shape.
+
+    The loop body (`run_loop`) consumes a fixed set of keys off the returned
+    dict — `session_id`, `total_cost_usd`, `terminal_reason`, `usage.*_tokens`,
+    `result` (verdict text), `is_error` / `subtype`. This maps Copilot onto
+    exactly those keys so the downstream is untouched (slice 032-05 AC1).
+
+    Cost-unit decision (AC2 — resolved honestly, ADR-0038): Copilot reports
+    premium-requests / nano-AIU, NOT USD, and there is no faithful conversion.
+    `total_cost_usd` is therefore **0.0** — never a fabricated USD number — so
+    the cumulative USD `--cost-ceiling` stays honest (it does not brake Copilot;
+    that is a documented residual — the loop is bounded by `--max-iterations`
+    plus an optional `--max-ai-credits` per-invocation cap). Copilot's native
+    cost + edit-signal are surfaced under `copilot_*` keys for observability;
+    they are additive and ignored by the Claude-shaped downstream.
+
+    No `modelUsage` is synthesized (Copilot's usage carries no `contextWindow`),
+    so the context-fill gate fails open under Copilot — its documented behavior
+    when the ratio is uncomputable (the iteration cap and any credit cap still
+    apply).
+    """
+    token_details = usage.get("token_details") or {}
+
+    def _as_int(value) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "session_id": session_id,
+        "total_cost_usd": 0.0,
+        "terminal_reason": "",
+        "result": result_text,
+        "usage": {
+            "input_tokens": _as_int(token_details.get("input")),
+            "cache_read_input_tokens": _as_int(token_details.get("cache_read")),
+            "cache_creation_input_tokens": _as_int(token_details.get("cache_write")),
+            "output_tokens": _as_int(token_details.get("output")),
+        },
+        # Copilot-native signals (AC2/AC4) — additive; the Claude-shaped loop
+        # body reads them only when present (host == copilot).
+        "copilot_premium_request_cost": _as_int(usage.get("premium_request_cost")),
+        "copilot_nano_aiu": _as_int(usage.get("nano_aiu")),
+        "copilot_files_modified": _as_int(usage.get("files_modified")),
+    }
+
+
+def _invoke_copilot(
+    prompt: str, target: Path, *,
+    timeout_seconds: Optional[float] = None,
+    session_id: Optional[str] = None,
+    agent_name: Optional[str] = None,
+    max_ai_credits: Optional[float] = None,
+) -> tuple[Optional[dict], Optional[str]]:
+    """Copilot loop-driver invocation (slice 032-05 AC1), the `_invoke_claude`
+    peer under `--host copilot`.
+
+    Runs `copilot -p <prompt> -s --allow-all-tools --agent <name>
+    --output-format json --usage-output-file <tmp>` via the SAME SIGINT-
+    forwarding `Popen`/`_active_subprocess` pattern as `_invoke_claude`, parses
+    the JSONL + usage file, and returns a dict in `_invoke_claude`'s shape
+    (success) or `(None, breadcrumb)` (failure), mirroring its AC9 split. A
+    parseable terminal event is the iteration's result regardless of exit code
+    (a cap halt can exit non-zero with a real, scoreable turn — same posture as
+    the Claude `--max-budget-usd` path).
+    """
+    global _active_subprocess
+    # The usage tempfile is created before the try/finally, so guard it: an
+    # OSError here (e.g. an unwritable temp dir) must return a breadcrumb like
+    # every other invocation-failure path, never raise into `run_loop`.
+    try:
+        usage_fd, usage_name = tempfile.mkstemp(prefix="servo-copilot-usage-", suffix=".json")
+        os.close(usage_fd)
+    except OSError as exc:
+        return None, f"OS error creating copilot usage tempfile: {exc}"
+    usage_path = Path(usage_name)
+    cmd = _build_copilot_cmd(
+        prompt, agent_name=agent_name, session_id=session_id,
+        usage_file=usage_path, max_ai_credits=max_ai_credits,
+    )
+    try:
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=str(target),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+        except FileNotFoundError:
+            return None, "copilot not on PATH"
+        except OSError as exc:
+            return None, f"OS error invoking copilot: {exc}"
+
+        _active_subprocess = proc
+        try:
+            try:
+                stdout, _stderr = proc.communicate(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                return None, f"copilot -p timed out after {timeout_seconds}s (killed)"
+        finally:
+            _active_subprocess = None
+
+        terminal_event, result_text = _parse_copilot_jsonl(stdout)
+        if terminal_event is None:
+            if proc.returncode != 0:
+                return None, (
+                    f"copilot -p exited {proc.returncode} without a parseable "
+                    "non-ephemeral event"
+                )
+            return None, "copilot -p emitted no parseable non-ephemeral event"
+
+        usage = _parse_copilot_usage(usage_path)
+        resolved_session = _extract_copilot_session_id(terminal_event) or (session_id or "")
+        return _normalize_copilot_result(
+            terminal_event, result_text, resolved_session, usage,
+        ), None
+    finally:
+        try:
+            usage_path.unlink()
+        except OSError:
+            pass
+
+
 def _invoke_claude(
     prompt: str, target: Path, *,
     max_budget_usd: float,
     timeout_seconds: Optional[float] = None,
     session_id: Optional[str] = None,
     agent_name: Optional[str] = None,
+    host: str = HOST_CLAUDE,
+    max_ai_credits: Optional[float] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
+
+    Slice 032-05: when `host == HOST_COPILOT`, delegates to `_invoke_copilot`
+    (which returns a dict in this function's shape so the loop body is
+    unchanged). The Claude path below is byte-for-byte unchanged for the default
+    `host == HOST_CLAUDE` — `--max-budget-usd` and every Claude flag are
+    untouched, and `max_ai_credits` is ignored (a Copilot-only knob).
 
     `session_id` (slice 003-04): when non-empty, the invocation includes
     `--resume <session_id>` so the conversation continues across iterations
@@ -1769,6 +2190,12 @@ def _invoke_claude(
     Behavior is otherwise identical to `subprocess.run`.
     """
     global _active_subprocess
+    if host == HOST_COPILOT:
+        return _invoke_copilot(
+            prompt, target,
+            timeout_seconds=timeout_seconds, session_id=session_id,
+            agent_name=agent_name, max_ai_credits=max_ai_credits,
+        )
     cmd: list[str] = ["claude", "-p", "--output-format", "json"]
     cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
     cmd.extend(_settings_args(target))
@@ -1899,7 +2326,18 @@ def _invoke_gate(target: Path, gate_path: Path = GATE_PATH) -> Optional[dict]:
     returns promptly under interrupt).
     """
     global _active_subprocess
-    cmd = [sys.executable, str(gate_path), str(target), "--json"]
+    # A supported install/re-freeze may activate an unpriced oracle mid-run.
+    err = _unpriced_oracle_error(target)
+    if err is not None:
+        reason, message = err
+        sys.stderr.write(f"loop: {message}\n")
+        return {
+            "schema_version": SCHEMA_VERSION, "exit_code": EXIT_ENV_ERROR,
+            "status": STATUS_ENV_ERROR, "reason": reason,
+            "composite": None, "threshold": None, "missing": [],
+            "terminal_breadcrumb": message,
+        }
+    cmd = [sys.executable, str(gate_path), str(target), "--json", "--usd-budget-context"]
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
@@ -2043,6 +2481,8 @@ def run_loop(
     resume_run_id: Optional[str] = None,
     resume_anyway: bool = False,
     allow_dirty: bool = False,
+    host: str = HOST_CLAUDE,
+    max_ai_credits: Optional[float] = None,
 ) -> int:
     """Drive the iteration loop with state persistence + resume + signal handling.
 
@@ -2063,6 +2503,16 @@ def run_loop(
     active subprocess and set a flag the loop polls at iteration
     boundaries.
     """
+    if host == HOST_COPILOT:
+        return _refuse_copilot_capability()
+
+    accounting_rc = _unpriced_oracle_preflight(
+        target, cost_ceiling=cost_ceiling,
+        context_fill_threshold=context_fill_threshold, run_id=resume_run_id,
+    )
+    if accounting_rc is not None:
+        return accounting_rc
+
     _install_signal_handlers()
 
     claude_timeout_seconds = _resolve_claude_timeout()
@@ -2104,6 +2554,23 @@ def run_loop(
                 message=(
                     f"state file at {state_path} is missing or malformed; "
                     f"--resume-anyway does not bypass parse errors"
+                ),
+                cost_ceiling=refusal_ceiling,
+                context_fill_threshold=refusal_threshold,
+            )
+
+        # Unmarked version-1 state retains its historical Claude interpretation.
+        # The September native prototype did not persist a backend discriminator.
+        if (
+            any(state.get(key, HOST_CLAUDE) != HOST_CLAUDE for key in ("backend", "host"))
+            or state.get("state_schema_version") == 2
+        ):
+            return _refuse_preflight(
+                run_id=resume_run_id,
+                reason="backend_mismatch",
+                message=(
+                    "native or non-Claude state cannot resume through Claude; "
+                    "--resume-anyway cannot convert backend identity (ADR-0043)"
                 ),
                 cost_ceiling=refusal_ceiling,
                 context_fill_threshold=refusal_threshold,
@@ -2310,6 +2777,16 @@ def run_loop(
             )
             return EXIT_INTERRUPTED
 
+        err = _unpriced_oracle_error(target)
+        if err is not None:
+            reason, message = err
+            sys.stderr.write(f"loop: {message}\n")
+            _finalize_state_and_summary(
+                state, state_path, terminal_reason=reason,
+                final_oracle_status=STATUS_ENV_ERROR, terminal_breadcrumb=message,
+            )
+            return EXIT_ENV_ERROR
+
         # Pre-iteration context-fill gate (slice 003-03 AC1/AC2/AC4/AC6).
         if (
             state["context_fill_threshold"] > 0
@@ -2361,6 +2838,8 @@ def run_loop(
             timeout_seconds=claude_timeout_seconds,
             session_id=session_id_arg,
             agent_name=agent_name,
+            host=host,
+            max_ai_credits=max_ai_credits,
         )
         # Snapshot immediately AFTER the invoke returns, BEFORE the gate runs —
         # so the delta brackets only the runner turn, excluding the later gate
@@ -2422,6 +2901,23 @@ def run_loop(
         if session_id:
             state["current_session_id"] = session_id
 
+        # Slice 032-05 (AC2/AC4): under `--host copilot` surface the native cost
+        # (premium-requests / nano-AIU — NOT USD; the USD `--cost-ceiling` does
+        # not brake Copilot, an ADR-0038 residual) and the edit-signal
+        # (`codeChanges.filesModifiedCount`; 0 ⇒ the runner made no edits). Keyed
+        # on a Copilot-only field so this is a no-op on the Claude path.
+        copilot_files_modified = claude_data.get("copilot_files_modified")
+        if copilot_files_modified is not None:
+            sys.stderr.write(
+                f"loop: copilot iteration {iteration}: "
+                f"files_modified={copilot_files_modified}, "
+                f"premium_request_cost="
+                f"{claude_data.get('copilot_premium_request_cost', 0)}, "
+                f"nano_aiu={claude_data.get('copilot_nano_aiu', 0)} "
+                "(native units; USD cost-ceiling does not apply under "
+                "--host copilot — ADR-0038 residual)\n"
+            )
+
         # Context-fill ratio (slice 003-03).
         context_fill_ratio, ratio_error = _extract_context_fill_ratio(claude_data)
         if context_fill_ratio is None and ratio_error is not None:
@@ -2470,6 +2966,18 @@ def run_loop(
                 state, state_path,
                 terminal_reason=REASON_GATE_INVOCATION_FAILED,
                 final_oracle_status=STATUS_ENV_ERROR,
+            )
+            return EXIT_ENV_ERROR
+
+        if gate_data.get("reason") in (
+            REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
+        ):
+            # The model completed, but the oracle was refused, not scored.
+            state["iteration_count"] = iteration
+            _finalize_state_and_summary(
+                state, state_path, terminal_reason=gate_data["reason"],
+                final_oracle_status=STATUS_ENV_ERROR,
+                terminal_breadcrumb=gate_data.get("terminal_breadcrumb"),
             )
             return EXIT_ENV_ERROR
 
@@ -2627,7 +3135,7 @@ def _compose_goal_prompt(
         f"On EVERY turn, after doing work toward the task above, surface the "
         f"servo quality gate's verdict so this loop can decide whether to "
         f"continue:\n"
-        f"1. Run exactly: {python} {gate_path} . --json\n"
+        f"1. Run exactly: {python} {gate_path} . --json --usd-budget-context\n"
         f"2. Read the JSON it prints (fields: exit_code, status, composite, "
         f"threshold).\n"
         f"3. Print EXACTLY this one line (no code fence), substituting the real "
@@ -2761,6 +3269,7 @@ def _build_goal_state(
     return {
         "state_schema_version": STATE_SCHEMA_VERSION,
         "driver": DRIVER_GOAL,
+        "backend": HOST_CLAUDE,
         "run_id": run_id,
         "started_at": now_iso,
         "last_updated_at": now_iso,
@@ -2850,15 +3359,23 @@ def run_goal_loop(
     fail-closed handling when the transcript and the oracle disagree (AC4), and
     a refuse-don't-degrade posture when `/goal` can't run at all (AC6).
     """
-    _install_signal_handlers()
-    claude_timeout_seconds = _resolve_claude_timeout()
-
     max_turns = (
         max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
     )
     ceiling = (
         cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
     )
+
+    err = _unpriced_oracle_error(target)
+    if err is not None:
+        reason, message = err
+        return _refuse_goal(
+            run_id=run_id or resume_run_id or _generate_preflight_run_id(),
+            reason=reason, message=message, cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
+    _install_signal_handlers()
+    claude_timeout_seconds = _resolve_claude_timeout()
 
     # AC7: resume of a goal-driven run is out of scope (detachment is 003-08).
     if resume_run_id is not None:
@@ -2980,6 +3497,14 @@ def run_goal_loop(
         return exit_code
 
     goal_prompt = _compose_goal_prompt(prompt, gate_path=vendored_gate)
+    err = _unpriced_oracle_error(target)
+    if err is not None:
+        reason, message = err
+        sys.stderr.write(f"loop: {message}\n")
+        return _finalize(
+            reason, cumulative_cost_usd=0.0, final_oracle_status=STATUS_ENV_ERROR,
+            terminal_breadcrumb=message, exit_code=EXIT_ENV_ERROR,
+        )
     # Slice 031-02 (ADR-0037): whole-run disk delta around the single goal
     # invoke. The goal driver has no per-iteration checkpoint, so the signal is
     # bracketed ONCE — snapshot immediately before `_invoke_claude_goal` and
@@ -3103,6 +3628,17 @@ def run_goal_loop(
             transcript_showed_pass=transcript_showed_pass,
             exit_code=EXIT_ENV_ERROR,
         )
+    if gate_data.get("reason") in (
+        REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
+    ):
+        return _finalize(
+            gate_data["reason"], cumulative_cost_usd=cost_usd,
+            final_oracle_status=STATUS_ENV_ERROR, subtype=subtype,
+            claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
+            transcript_showed_pass=transcript_showed_pass,
+            terminal_breadcrumb=gate_data.get("terminal_breadcrumb"),
+            exit_code=EXIT_ENV_ERROR,
+        )
     gate_exit = int(gate_data.get("exit_code", 2))
     gate_status = str(gate_data.get("status", STATUS_ENV_ERROR))
     composite = gate_data.get("composite")
@@ -3185,6 +3721,10 @@ def _emit_routine_prompt(target: Path, seed: str) -> int:
     gate on *this* host's `/goal` support — the Routine runs on a different host
     (the cloud), whose policy is captured at run time, not here.
     """
+    accounting_rc = _unpriced_oracle_preflight(target)
+    if accounting_rc is not None:
+        return accounting_rc
+
     err = _target_preflight_error(target)
     if err is not None:
         _reason, message = err
@@ -3324,6 +3864,14 @@ def run_goal_loop_background(
     ceiling = cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
     max_turns = max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
 
+    err = _unpriced_oracle_error(target)
+    if err is not None:
+        reason, message = err
+        return _refuse_goal(
+            run_id=_generate_preflight_run_id(), reason=reason, message=message,
+            cost_ceiling=ceiling, max_turns=max_turns,
+        )
+
     err = _target_preflight_error(target)
     if err is not None:
         reason, message = err
@@ -3441,6 +3989,28 @@ def main(argv: Optional[list[str]] = None) -> int:
             "outer call and a final `gate.py` run as the authority (ADR-0008); "
             "an explicit `--driver goal` on an unsupported host refuses (rc=2). "
             "See `--explain-routing` for the verdict without running."
+        ),
+    )
+    parser.add_argument(
+        "--host",
+        choices=[HOST_CLAUDE, HOST_COPILOT],
+        default=HOST_CLAUDE,
+        help=(
+            "Coding-agent backend; default claude is unchanged. copilot "
+            "refuses autonomous launches before dispatch because the native "
+            "CLI cannot uphold the requested hard USD/context contract "
+            "(ADR-0043). Installation and deterministic quality gates remain "
+            "supported; a soft AI-credit cap is not a replacement USD budget."
+        ),
+    )
+    parser.add_argument(
+        "--max-ai-credits",
+        type=float,
+        default=None,
+        help=(
+            "Legacy Copilot soft-credit limit. Does not enable unsupported "
+            "native autonomy or replace a USD ceiling (ADR-0043). Ignored "
+            "(with a warning) under --host claude."
         ),
     )
     parser.add_argument(
@@ -3629,6 +4199,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     # case back to DRIVER_AUTO here so the read-only explanation is byte-for-byte
     # today's (plan-driven routing is resolved on the actual-run path below).
     if args.explain_routing:
+        if args.host == HOST_COPILOT:
+            return _refuse_copilot_capability(explain=True)
         verdict = _decide_route(
             target, args.driver if args.driver is not None else DRIVER_AUTO
         )
@@ -3650,6 +4222,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("--max-iterations must be >= 1")
     if args.cost_ceiling is not None and args.cost_ceiling < 0:
         parser.error("--cost-ceiling must be >= 0")
+    if args.max_ai_credits is not None and args.max_ai_credits < 0:
+        parser.error("--max-ai-credits must be >= 0")
     if args.context_fill_threshold is not None and (
         args.context_fill_threshold < 0 or args.context_fill_threshold > 1
     ):
@@ -3672,6 +4246,23 @@ def main(argv: Optional[list[str]] = None) -> int:
                      "continuation to /goal); --driver loop runs in the "
                      "foreground — detach it with your shell's nohup/&, or use "
                      "--resume for unattended continuation")
+
+    if args.host == HOST_COPILOT:
+        return _refuse_copilot_capability()
+    elif args.max_ai_credits is not None:
+        sys.stderr.write(
+            "loop: --max-ai-credits is a Copilot-only per-invocation cap and is "
+            "ignored under --host claude (Claude uses --max-budget-usd / "
+            "--cost-ceiling).\n"
+        )
+
+    accounting_rc = _unpriced_oracle_preflight(
+        target, cost_ceiling=args.cost_ceiling,
+        context_fill_threshold=args.context_fill_threshold,
+        run_id=args.resume or args.detached_run_id,
+    )
+    if accounting_rc is not None:
+        return accounting_rc
 
     # ---- Readiness preflight (slice 023-02, ADR-0029) -----------------------
     # Gates ONLY the two unattended long-horizon launch surfaces pinned by
@@ -3949,6 +4540,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         resume_run_id=args.resume,
         resume_anyway=args.resume_anyway,
         allow_dirty=args.allow_dirty,
+        host=args.host,
+        max_ai_credits=args.max_ai_credits,
     )
 
 

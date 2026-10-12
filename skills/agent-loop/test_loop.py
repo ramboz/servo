@@ -897,8 +897,20 @@ class ClaudeInvocationFailedTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("loop: claude not on PATH", result.stderr)
+
+    def test_copilot_not_on_path(self):
+        # Native autonomy refuses even before executable discovery (ADR-0043).
+        self.bindir.mkdir()
+        result = _run_loop(
+            self.target,
+            "--prompt", "x",
+            "--host", "copilot",
+            path_override=f"{self.bindir}:{SYSTEM_PATH}",
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("autonomy is unavailable", result.stderr)
         summary = self._summary(result.stdout)
-        self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
+        self.assertEqual(summary["terminal_reason"], "native_capability_unavailable")
         self.assertEqual(summary["iterations_completed"], 0)
 
     def test_claude_exits_nonzero_with_empty_stdout(self):
@@ -7678,6 +7690,263 @@ class ReadinessGateBypassTests(unittest.TestCase):
 
 
 # ============================================================================
+# Slice 032-05 — execution-primitive-mapping (Copilot host mode, ADR-0038)
+#
+# The optional loop driver gains a `--host {claude,copilot}` mode. The loop's
+# own Python per-iteration oracle gate is unchanged; only the per-iteration
+# subprocess changes from `claude -p --output-format json` to
+# `copilot -p <prompt> -s --allow-all-tools --agent <name> --output-format json
+# --usage-output-file <f>`. Copilot's JSONL + usage-file are normalized into the
+# SAME result-dict shape so every downstream consumer is untouched.
+#
+# Pure parse/normalize/build helpers are exercised as unit tests via an
+# importlib load of loop.py (the hyphenated `agent-loop/` dir is not a package,
+# so it cannot be `import`ed by name); end-to-end behavior is exercised via the
+# subprocess harness with a mock `copilot` binary, matching the file's style.
+# ============================================================================
+
+import importlib.util as _ilu  # noqa: E402
+
+_copilot_spec = _ilu.spec_from_file_location("servo_loop_for_copilot_tests", LOOP)
+loop_mod = _ilu.module_from_spec(_copilot_spec)
+_copilot_spec.loader.exec_module(loop_mod)
+
+
+# Usage-file fixture built from the spike's recorded live shape (032-01):
+# cost in premium-requests / nano-AIU (NOT USD), a native edit-signal
+# (`codeChanges.filesModifiedCount`), and `tokenDetails`.
+_COPILOT_USAGE_FIXTURE = {
+    "totalPremiumRequestCost": 2,
+    "totalUserRequests": 1,
+    "totalNanoAiu": 123456,
+    "tokenDetails": {"input": 1200, "cache_read": 300, "cache_write": 50, "output": 240},
+    "totalApiDurationMs": 5432,
+    "codeChanges": {
+        "linesAdded": 12,
+        "linesRemoved": 3,
+        "filesModifiedCount": 2,
+        "filesModified": ["a.py", "b.py"],
+    },
+    "modelMetrics": {"claude-sonnet-4.5": {"requests": {"count": 1}}},
+}
+
+# A terminal result-event text carrying a valid ```verdict``` block, so a test
+# can prove the extracted result text still feeds the loop's verdict parser.
+_COPILOT_VERDICT_TEXT = (
+    "Made an edit to fix the bug.\n\n"
+    "```verdict\nschema_version: 1\nstatus: in_progress\n```\n"
+)
+
+
+def _copilot_jsonl_fixture(result_text="ok", *, session_id=None):
+    """JSONL event stream matching the spike shape: ephemeral events + a
+    terminal non-ephemeral `result` event carrying the response text."""
+    events = [
+        {"type": "assistant_message", "data": {"text": "thinking"}, "id": "e1",
+         "timestamp": "2026-09-18T00:00:00Z", "ephemeral": True},
+        {"type": "tool_call", "data": {"name": "edit"}, "id": "e2",
+         "timestamp": "2026-09-18T00:00:01Z", "parentId": "e1", "ephemeral": True},
+    ]
+    terminal = {"type": "result", "data": {"content": result_text}, "id": "e3",
+                "parentId": "e2", "timestamp": "2026-09-18T00:00:02Z",
+                "ephemeral": False}
+    if session_id:
+        terminal["data"]["session_id"] = session_id
+    return "\n".join(json.dumps(e) for e in [*events, terminal]) + "\n"
+
+
+def _mock_copilot(bindir, jsonl_payload, usage_payload, counter_file, args_log=None):
+    """Write an executable mock `copilot` into `bindir` (PATH-injected).
+
+    Emits `jsonl_payload` on stdout, copies `usage_payload` to whatever path
+    follows `--usage-output-file` in its argv, increments `counter_file`, and
+    (optionally) appends each invocation's argv to `args_log` using the same
+    U+001F/U+001E delimiters as `_mock_claude_with_args_log` so `_read_args_log`
+    parses it. A `--version` short-circuit keeps any version probe hermetic.
+    """
+    bindir.mkdir(parents=True, exist_ok=True)
+    jsonl_file = bindir / "copilot_jsonl.txt"
+    jsonl_file.write_text(jsonl_payload)
+    usage_src = bindir / "copilot_usage_src.json"
+    usage_src.write_text(usage_payload)
+    log_cmd = ""
+    if args_log is not None:
+        log_cmd = (
+            f'for a in "$@"; do printf "%s\\037" "$a" >> \'{args_log}\'; done\n'
+            f'printf "\\036" >> \'{args_log}\'\n'
+        )
+    body = (
+        "#!/usr/bin/env bash\n"
+        'if [ "$1" = "--version" ]; then echo "1.0.86-2"; exit 0; fi\n'
+        f"counter_file='{counter_file}'\n"
+        'if [ -f "$counter_file" ]; then n=$(cat "$counter_file"); else n=0; fi\n'
+        "n=$((n + 1))\n"
+        'echo "$n" > "$counter_file"\n'
+        f"{log_cmd}"
+        'usage_out=""\n'
+        'prev=""\n'
+        'for a in "$@"; do\n'
+        '  if [ "$prev" = "--usage-output-file" ]; then usage_out="$a"; fi\n'
+        '  prev="$a"\n'
+        "done\n"
+        f'if [ -n "$usage_out" ]; then cp \'{usage_src}\' "$usage_out"; fi\n'
+        f"cat '{jsonl_file}'\n"
+    )
+    copilot = bindir / "copilot"
+    copilot.write_text(body)
+    _make_executable(copilot)
+    return copilot
+
+
+class CopilotUsageParseTests(unittest.TestCase):
+    """AC2 — parse the `--usage-output-file` JSON for native cost + edit-signal."""
+
+    def _parse(self, payload):
+        d = tempfile.mkdtemp(prefix="servo-copilot-usage-")
+        try:
+            p = Path(d) / "usage.json"
+            p.write_text(json.dumps(payload))
+            return loop_mod._parse_copilot_usage(p)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_parses_cost_and_edit_signal(self):
+        out = self._parse(_COPILOT_USAGE_FIXTURE)
+        self.assertEqual(out["premium_request_cost"], 2)
+        self.assertEqual(out["nano_aiu"], 123456)
+        self.assertEqual(out["files_modified"], 2)
+        self.assertEqual(out["token_details"]["input"], 1200)
+        self.assertEqual(out["token_details"]["output"], 240)
+
+    def test_zero_files_modified_is_the_no_edit_signal(self):
+        payload = dict(_COPILOT_USAGE_FIXTURE)
+        payload["codeChanges"] = {"filesModifiedCount": 0}
+        out = self._parse(payload)
+        self.assertEqual(out["files_modified"], 0)
+
+    def test_missing_file_yields_zeros_not_crash(self):
+        out = loop_mod._parse_copilot_usage(Path("/nonexistent/servo/usage.json"))
+        self.assertEqual(out["premium_request_cost"], 0)
+        self.assertEqual(out["nano_aiu"], 0)
+        self.assertEqual(out["files_modified"], 0)
+
+
+class CopilotJsonlParseTests(unittest.TestCase):
+    """AC1 — parse the JSONL event stream: filter ephemeral, take terminal text."""
+
+    def test_filters_ephemeral_and_extracts_terminal_text(self):
+        terminal, text = loop_mod._parse_copilot_jsonl(
+            _copilot_jsonl_fixture("hello world"))
+        self.assertIsNotNone(terminal)
+        self.assertNotEqual(terminal.get("ephemeral"), True)
+        self.assertEqual(text, "hello world")
+
+    def test_no_nonephemeral_event_returns_none(self):
+        only_ephemeral = json.dumps(
+            {"type": "x", "data": {}, "ephemeral": True}) + "\n"
+        terminal, text = loop_mod._parse_copilot_jsonl(only_ephemeral)
+        self.assertIsNone(terminal)
+        self.assertEqual(text, "")
+
+    def test_tolerates_noise_lines(self):
+        noisy = "not json\n" + _copilot_jsonl_fixture("clean")
+        terminal, text = loop_mod._parse_copilot_jsonl(noisy)
+        self.assertEqual(text, "clean")
+
+    def test_session_id_extracted_when_present(self):
+        terminal, _ = loop_mod._parse_copilot_jsonl(
+            _copilot_jsonl_fixture("x", session_id="sess-9"))
+        self.assertEqual(loop_mod._extract_copilot_session_id(terminal), "sess-9")
+
+    def test_session_id_empty_when_absent(self):
+        terminal, _ = loop_mod._parse_copilot_jsonl(_copilot_jsonl_fixture("x"))
+        self.assertEqual(loop_mod._extract_copilot_session_id(terminal), "")
+
+
+class CopilotNormalizeTests(unittest.TestCase):
+    """AC1/AC2 — the normalized dict carries every field downstream consumes."""
+
+    def _normalized(self, result_text=_COPILOT_VERDICT_TEXT, session_id="sess-1"):
+        d = tempfile.mkdtemp(prefix="servo-copilot-norm-")
+        try:
+            p = Path(d) / "usage.json"
+            p.write_text(json.dumps(_COPILOT_USAGE_FIXTURE))
+            usage = loop_mod._parse_copilot_usage(p)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+        terminal, text = loop_mod._parse_copilot_jsonl(
+            _copilot_jsonl_fixture(result_text))
+        return loop_mod._normalize_copilot_result(terminal, text, session_id, usage)
+
+    def test_claude_shaped_fields_present(self):
+        norm = self._normalized()
+        # The exact keys the loop body reads off `claude_data`.
+        self.assertEqual(norm["session_id"], "sess-1")
+        self.assertFalse(norm["is_error"])
+        self.assertIn("result", norm)
+        self.assertEqual(norm["usage"]["input_tokens"], 1200)
+        self.assertEqual(norm["usage"]["cache_read_input_tokens"], 300)
+        self.assertEqual(norm["usage"]["cache_creation_input_tokens"], 50)
+        self.assertEqual(norm["usage"]["output_tokens"], 240)
+
+    def test_no_usd_fabrication(self):
+        # Cost-unit decision: copilot reports premium-requests / nano-AIU, not
+        # USD. `total_cost_usd` MUST be 0.0 so the USD ceiling stays honest.
+        norm = self._normalized()
+        self.assertEqual(norm["total_cost_usd"], 0.0)
+
+    def test_native_cost_and_edit_signal_surfaced(self):
+        norm = self._normalized()
+        self.assertEqual(norm["copilot_premium_request_cost"], 2)
+        self.assertEqual(norm["copilot_nano_aiu"], 123456)
+        self.assertEqual(norm["copilot_files_modified"], 2)
+
+    def test_result_text_feeds_verdict_parser(self):
+        # Proves the extracted result text is what downstream verdict parsing
+        # reads — the load-bearing "downstream is unchanged" guarantee.
+        norm = self._normalized()
+        fields, err = loop_mod._parse_verdict_block(norm["result"])
+        self.assertIsNone(err)
+        self.assertEqual(fields["schema_version"], 1)
+        self.assertEqual(fields["status"], "in_progress")
+
+
+class CopilotBuildCmdTests(unittest.TestCase):
+    """AC1 — the Copilot argv form; AC2 — `--max-ai-credits`; resume mapping."""
+
+    def _cmd(self, **kw):
+        base = dict(agent_name="runner", session_id=None,
+                    usage_file=Path("/tmp/u.json"), max_ai_credits=None)
+        base.update(kw)
+        return loop_mod._build_copilot_cmd("do the task", **base)
+
+    def test_argv_form(self):
+        cmd = self._cmd()
+        self.assertEqual(cmd[0], "copilot")
+        # `-p` takes the prompt as its value (verified against copilot --help).
+        self.assertIn("-p", cmd)
+        self.assertEqual(cmd[cmd.index("-p") + 1], "do the task")
+        self.assertIn("-s", cmd)
+        self.assertIn("--allow-all-tools", cmd)
+        self.assertEqual(cmd[cmd.index("--agent") + 1], "runner")
+        self.assertEqual(cmd[cmd.index("--output-format") + 1], "json")
+        self.assertEqual(cmd[cmd.index("--usage-output-file") + 1], "/tmp/u.json")
+        # Claude-only knobs must NOT leak into the copilot form.
+        self.assertNotIn("--max-budget-usd", cmd)
+        # Default: no per-invocation credit cap, no resume.
+        self.assertNotIn("--max-ai-credits", cmd)
+        self.assertFalse(any(t.startswith("--resume") for t in cmd))
+
+    def test_resume_mapping_when_session_carried(self):
+        cmd = self._cmd(agent_name="judge", session_id="abc123")
+        self.assertIn("--resume=abc123", cmd)
+
+    def test_max_ai_credits_forwarded_when_set(self):
+        cmd = self._cmd(max_ai_credits=5)
+        self.assertIn("--max-ai-credits", cmd)
+        self.assertEqual(cmd[cmd.index("--max-ai-credits") + 1], "5")
+
+
 # Slice 031-01 — edit-permission-wall diagnosis (ADR-0037)
 #
 # The loop driver relabels a nothing-landed halt (oracle_plateau /
@@ -7897,6 +8166,74 @@ class RelabelDecisionUnitTests(unittest.TestCase):
                 msg=reason)
 
 
+class CopilotLoopDriverIntegrationTests(unittest.TestCase):
+    """ADR-0043 gates the September native prototype before paid dispatch."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-loop-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+        _mock_copilot(
+            self.bindir,
+            _copilot_jsonl_fixture(_COPILOT_VERDICT_TEXT),
+            json.dumps(_COPILOT_USAGE_FIXTURE),
+            self.counter,
+            self.args_log,
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_copilot_launch_refused_before_argv_emitted(self):
+        result = _run_loop(
+            self.target, "--host", "copilot", "--prompt", "make it pass",
+            "--max-iterations", "2", mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        self.assertFalse(self.counter.exists())
+        self.assertFalse(self.args_log.exists())
+        self.assertFalse((self.target / ".servo/runs").exists())
+
+    def test_refusal_does_not_fabricate_usage_or_verdict(self):
+        result = _run_loop(
+            self.target, "--host", "copilot", "--prompt", "x",
+            "--max-iterations", "1", mock_bindir=self.bindir,
+        )
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        lines = _stdout_json_lines(result.stdout)
+        self.assertEqual(len(lines), 1)
+        self.assertNotIn("verdict", lines[0])
+        self.assertIsNone(lines[0]["cumulative_cost_usd"])
+        self.assertEqual(lines[0]["final_oracle_status"], "env_error")
+
+    def test_claude_argv_unchanged_for_default_host(self):
+        # Default host = claude: a mock claude is used and the claude argv form
+        # (with --max-budget-usd) is emitted; `copilot` is never invoked.
+        claude_bindir = Path(self.tmpdir) / "claude_bin"
+        claude_counter = Path(self.tmpdir) / "claude_counter.txt"
+        claude_args = Path(self.tmpdir) / "claude_args.log"
+        _mock_claude_with_args_log(
+            claude_bindir, _claude_json_payload(), claude_counter, claude_args)
+        result = _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", "1",
+            mock_bindir=claude_bindir,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        argv = _read_args_log(claude_args)[0]
+        # The Claude form is byte-unchanged: --max-budget-usd present, and none
+        # of the Copilot-only tokens leak in.
+        self.assertIn("--max-budget-usd", argv)
+        self.assertNotIn("--allow-all-tools", argv)
+        self.assertNotIn("-s", argv)
+        self.assertNotIn("--usage-output-file", argv)
+
+
 class EditPermissionRelabelLoopTests(unittest.TestCase):
     """AC1/AC5/AC8: a walled loop-driver run (git target, runner never edits,
     oracle below threshold) relabels to edit_permission_unavailable, rc=2, with
@@ -7952,6 +8289,52 @@ class EditPermissionRelabelLoopTests(unittest.TestCase):
         # On a real git target the signal WAS computable — the relabel is
         # gated on this, not on a fresh _is_git_work_tree probe.
         self.assertTrue(state["edit_signal_computed"])
+
+
+class CopilotGoalFamilyRefusalTests(unittest.TestCase):
+    """AC3 — the /goal family refuses (explicitly) under `--host copilot`.
+
+    Autopilot has no oracle-gated stop and the target-side agentStop gate's
+    live firing is unverifiable headless (jig 113-08 / ADR-0038), so the goal
+    driver is a documented residual under Copilot — never a silent un-gated run.
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-goal-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_driver_goal_refuses(self):
+        result = _run_raw(self.target, "--host", "copilot", "--driver", "goal",
+                          "--prompt", "x")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("copilot", result.stderr.lower())
+        self.assertIn("--driver loop", result.stderr)
+
+    def test_background_refuses(self):
+        result = _run_raw(self.target, "--host", "copilot", "--background",
+                          "--prompt", "x", extra_env={"SERVO_READINESS_GATE": "0"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("copilot", result.stderr.lower())
+
+    def test_emit_routine_prompt_refuses(self):
+        result = _run_raw(self.target, "--host", "copilot",
+                          "--emit-routine-prompt", "--prompt", "x",
+                          extra_env={"SERVO_READINESS_GATE": "0"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("copilot", result.stderr.lower())
+
+    def test_summary_reason_is_goal_unsupported_host(self):
+        result = _run_raw(self.target, "--host", "copilot", "--driver", "goal",
+                          "--prompt", "x")
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "native_capability_unavailable")
 
 
 class RunnerEverEditedArmTests(unittest.TestCase):
@@ -8096,6 +8479,63 @@ class BookkeepingNoFalseArmTests(unittest.TestCase):
         self.assertEqual(summary["terminal_reason"],
                          "edit_permission_unavailable")
         self.assertEqual(result.returncode, 2, msg=result.stderr)
+
+
+class CopilotHostSelectionTests(unittest.TestCase):
+    """Default remains Claude; native selection never falls back to Claude."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-host-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_bogus_host_rejected(self):
+        result = _run_raw(self.target, "--host", "banana", "--prompt", "x")
+        self.assertEqual(result.returncode, 2)
+
+    def test_default_host_uses_claude(self):
+        # No --host, no --driver: real default routing, mock claude only.
+        _mock_claude_with_args_log(
+            self.bindir, _claude_json_payload(), self.counter, self.args_log)
+        result = _run_raw(self.target, "--prompt", "x", "--max-iterations", "1",
+                          "--driver", "loop", "--plateau-window", "0",
+                          mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        argv = _read_args_log(self.args_log)[0]
+        self.assertIn("--max-budget-usd", argv)  # the Claude loop-driver form
+        self.assertNotIn("--allow-all-tools", argv)
+
+    def test_auto_copilot_refuses_without_claude_fallback(self):
+        claude_args = Path(self.tmpdir) / "claude_args.log"
+        _mock_claude_goal(
+            self.bindir,
+            _goal_stream_jsonl(assistant_text=GOAL_PASS_SENTINEL),
+            args_log=claude_args,
+        )
+        _mock_copilot(
+            self.bindir, _copilot_jsonl_fixture(_COPILOT_VERDICT_TEXT),
+            json.dumps(_COPILOT_USAGE_FIXTURE), self.counter, self.args_log)
+        result = _run_raw(self.target, "--host", "copilot", "--prompt", "x",
+                          "--max-iterations", "1", "--plateau-window", "0",
+                          mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        self.assertFalse(self.args_log.exists())
+        self.assertFalse(claude_args.exists())
+
+    def test_max_ai_credits_validation(self):
+        result = _run_raw(self.target, "--host", "copilot", "--prompt", "x",
+                          "--max-ai-credits", "-1")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("--max-ai-credits", result.stderr)
 
 
 class NonGitFallbackTests(unittest.TestCase):

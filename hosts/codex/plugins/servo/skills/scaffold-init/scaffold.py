@@ -3,15 +3,16 @@ servo scaffold-init — slices 001-01..001-03
 
 Probe a target project for tests / lint / CI / language signals and drop a
 tailored `oracle.sh` + `.servo/install.json` into the target. Components are
-composed from per-signal fragments under `${CLAUDE_PLUGIN_ROOT}/templates/
-components/`.
+composed from per-signal fragments under the runtime's `templates/components/`.
 
 Usage:
     python3 scaffold.py <target> [--force]      # install
     python3 scaffold.py detect <target>         # print detection JSON
 
-Reads CLAUDE_PLUGIN_ROOT to locate the plugin root. Falls back to walking
-parents of this script if the env var is absent (servo's own dogfood case).
+An executing Copilot helper owns its `.github` runtime regardless of unrelated
+host environment variables. Source/Claude/Codex helpers retain CLAUDE_PLUGIN_ROOT
+and the script-parent fallback. Native package metadata lives one parent above
+the runtime, in `.plugin/plugin.json`.
 
 Per ADR-0001, test-framework detection prefers jig's `tdd-loop/tdd.py` (via
 subprocess) when present at `${CLAUDE_PLUGIN_ROOT}/jig/skills/tdd-loop/tdd.py`,
@@ -57,10 +58,14 @@ LINT_COMPONENTS = {"eslint", "ruff"}
 
 
 def plugin_root() -> Path:
+    """Runtime authority (historical name); native package metadata is separate."""
+    executing_root = Path(__file__).resolve().parents[2]
+    if executing_root.name == ".github":
+        return executing_root
     env_root = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env_root:
         return Path(env_root).resolve()
-    return Path(__file__).resolve().parents[2]
+    return executing_root
 
 
 def _templates_root() -> Path:
@@ -72,8 +77,8 @@ def _templates_root() -> Path:
     `runtime_root/templates`). `parents[2]` is then `<target>/.claude`, so the
     vendored templates live at `parents[2]/servo/templates`.
 
-    Plugin/source mode: that vendored directory does not exist, so we fall back
-    to the historical `plugin_root()/templates` location. This keeps the
+    Plugin/source/native mode: that vendored directory does not exist, so we
+    fall back to the historical `plugin_root()/templates` location. This keeps the
     bare-positional oracle-install behavior byte-for-byte unchanged in the
     source checkout (where CLAUDE_PLUGIN_ROOT may be set or fall back to
     `parents[2]`, the repo root).
@@ -96,7 +101,13 @@ def _availability_marker_path() -> Path:
 
 
 def _plugin_manifest_version(root: Path) -> str | None:
-    manifest = root / ".claude-plugin" / "plugin.json"
+    # `root` is the runtime (where templates/helpers live), not necessarily
+    # the package (where its host manifest lives).
+    native = root.name == ".github"
+    manifest = (
+        root.parent / ".plugin" / "plugin.json"
+        if native else root / ".claude-plugin" / "plugin.json"
+    )
     if not manifest.is_file():
         return None
     try:
@@ -104,6 +115,12 @@ def _plugin_manifest_version(root: Path) -> str | None:
     except (OSError, json.JSONDecodeError) as exc:
         print(
             f"servo: could not read plugin version for availability marker: {exc}",
+            file=sys.stderr,
+        )
+        return None
+    if not isinstance(payload, dict) or (native and payload.get("name") != "servo"):
+        print(
+            "servo: plugin manifest does not identify servo; skipping availability marker",
             file=sys.stderr,
         )
         return None
@@ -125,7 +142,7 @@ def _write_json_atomic(path: Path, payload: dict) -> None:
 
 
 def _write_availability_marker(source_kind: str) -> None:
-    """Best-effort ADR-0013 marker for source/release plugin-root runs.
+    """Best-effort ADR-0013 marker for source/release/native runtime runs.
 
     Vendored project-local scaffold-init helpers deliberately skip this marker:
     they may only be usable inside one target project, while the global marker

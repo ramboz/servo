@@ -40,8 +40,8 @@ document records only implemented boundaries and contracts.
 
 ## Shape
 
-Servo is a dual Claude Code/Codex plugin with a canonical source tree and two
-generated host packages:
+Servo is a Claude Code / Codex / GitHub Copilot CLI plugin with a canonical
+source tree and three committed, generated host packages:
 
 ```
 servo/
@@ -52,9 +52,12 @@ servo/
 │   └── plugin.json
 ├── .agents/plugins/
 │   └── marketplace.json   (Codex remote-install pointer)
+├── .github/plugin/
+│   └── marketplace.json   (Copilot remote-install pointer → ./hosts/copilot)
 ├── hosts/                  (committed, generated; never hand-edited)
 │   ├── claude/             (flat Claude plugin)
-│   └── codex/              (Codex marketplace + nested plugin)
+│   ├── codex/              (Codex marketplace + nested plugin)
+│   └── copilot/            (Copilot .github/ plugin + legacy .plugin/ manifest)
 ├── skills/
 │   └── <skill-name>/
 │       ├── SKILL.md
@@ -79,14 +82,14 @@ Servo has two distinct layers:
 
 | Layer | What is installed | Destination | Owner |
 |---|---|---|---|
-| **Servo plugin install** | Skills, agents, templates, descriptors | Claude Code or Codex plugin store | Servo |
+| **Servo plugin install** | Skills, agents, templates, descriptors | Claude Code, Codex, or GitHub Copilot CLI plugin store | Servo |
 | **Project oracle install** | `oracle.sh`, `.servo/install.json`, refinement notes | Target project root | Project |
 
 The public path is deliberately sequential: install the Servo plugin from the
 remote marketplace, start a fresh session in the target project, then invoke
 `/servo:scaffold-init`. The latter is covered by
 [Install manifest](#install-manifest) below. Plugin delivery has one canonical
-source tree and two committed generated packages:
+source tree and three committed generated packages:
 
 - `hosts/claude/` is a flat runtime-only Claude plugin. The root
   `.claude-plugin/marketplace.json` points here, so remote installation does not
@@ -96,14 +99,29 @@ source tree and two committed generated packages:
   remote `codex plugin marketplace add ramboz/servo` flow. Codex skill docs rewrite only the plugin-root environment
   variable to `${PLUGIN_ROOT}`; real Claude-only behavior such as `claude -p`,
   `/goal`, and Claude `Stop` hooks remains named as such.
+- `hosts/copilot/` is the committed GitHub Copilot CLI plugin: a legacy
+  `.plugin/plugin.json` manifest plus Copilot's `.github/` config tree
+  (`skills/`, `agents/*.agent.md`, `scripts/servo_root.py`, and unrendered
+  `templates/`; **no `.github/hooks/`** — servo's Copilot package is hook-free,
+  [ADR-0038](decisions/adr-0038-copilot-third-host.md)). The repo-root
+  `.github/plugin/marketplace.json` (`source: ./hosts/copilot`) is the
+  marketplace entry point. Install either from the marketplace (`copilot plugin
+  marketplace add ramboz/servo` then `copilot plugin install servo@servo`) or
+  straight from the repo subdirectory (`copilot plugin install
+  ramboz/servo:hosts/copilot`). Copilot exposes **no plugin-root env var**, so
+  plugin-mode skill bodies name `$SERVO_ROOT` — resolved by the shipped
+  `.github/scripts/servo_root.py` fresh-shell locator — instead of
+  `${CLAUDE_PLUGIN_ROOT}` (bug 036).
 
-`scripts/build_host_packages.py` regenerates both packages and its `--check`
-mode is a read-only CI drift guard. Release archives and the legacy
+`scripts/build_host_packages.py` regenerates all three packages and its
+`--check` mode is a read-only CI drift guard. Release archives and the legacy
 project-local Claude runtime vendor remain supported maintainer/compatibility
 surfaces, but they are not alternate steps in the public install flow.
 `scripts/build_release_zip.py --host ...` archives the committed packages into:
-`servo-claude-v<version>.zip` (flat plugin) and
-`servo-codex-v<version>.zip` (extract-then-add marketplace; no Codex zip-drop).
+`servo-claude-v<version>.zip` (flat plugin),
+`servo-codex-v<version>.zip` (extract-then-add marketplace; no Codex zip-drop),
+and `servo-copilot-v<version>.zip` (flat, repo-subdirectory-shaped Copilot
+plugin), each smoke-tested by its host-specific validator.
 `scripts/scaffold_runtime.py` remains the explicit legacy Claude project-local
 vendor surface. `scripts/verify_install_surfaces.sh` runs focused install tests.
 `scripts/ci_check.py` is the canonical local CI entry point and mirrors the
@@ -277,7 +295,7 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 }
 ```
 
-**Closed `reason` taxonomy** (all 11 codes; surfaced when `status="env_error"`):
+**Closed `reason` taxonomy** (surfaced when `status="env_error"`):
 
 | `reason` | When |
 |---|---|
@@ -286,6 +304,8 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 | `manifest_missing` | `<target>/.servo/install.json` absent |
 | `manifest_malformed` | Manifest exists but isn't valid JSON |
 | `manifest_invalid_key` | Manifest valid JSON but missing required key (`installed_tier` or `components`) |
+| `unpriced_oracle_components` | Explicit USD-budget context cannot consume registered unpriced components |
+| `unpriced_components_invalid` | Explicit USD-budget context has malformed/incompatible accounting metadata |
 | `oracle_missing` | `<target>/oracle.sh` absent (but manifest is present) |
 | `oracle_not_executable` | `oracle.sh` exists but lacks the executable bit |
 | `invocation_failed` | OS-level error invoking the oracle (rare) |
@@ -309,7 +329,7 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 > prompt before/during a loop, but never these guardrails — see
 > [Host-native phase hints](#host-native-phase-hints-spec-013).
 
-Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own.
+Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own. The September Copilot prototype (032-05) is now refused at its public launch boundary under [ADR-0043](decisions/adr-0043-copilot-capability-boundaries.md), rather than dropping monetary/context safeguards; see the [current capability inventory](#copilot-host-execution-primitive-inventory-mapped-or-residual).
 
 | Guardrail | Mechanism | Default | Disable | Terminal reason |
 |---|---|---|---|---|
@@ -444,6 +464,130 @@ the vocabulary belongs to servo, hosts only render it.
 **See also:** [Agent-loop guardrails](#agent-loop-guardrails) (`run`),
 [heartbeat triage inbox](#runtime-artifacts) (`triage`), and
 [spec 012 design-eval](specs/012-design-eval/spec.md) (`evaluate`).
+
+## Copilot host hook inventory (mapped-or-unmappable)
+
+> Spec 032 (Copilot as a third committed host,
+> [ADR-0038](decisions/adr-0038-copilot-third-host.md)); the target-side hook
+> mapping is slice 032-04.
+
+servo's Copilot plugin package is **hook-free** — the committed `hosts/copilot/`
+ships no `.github/hooks/` (ADR-0038 invariant). servo's one hook, the oracle
+`Stop` (the meta-judge), is installed **target-side** by
+`/servo:oracle-hook install --host copilot`, which writes a Copilot `agentStop`
+hook into the *consuming repo's* `.github/hooks/servo-oracle.json` and installs a
+ported `copilot_hook_adapter.py` (jig's stdin-reshaping half only) plus the
+`meta-judge.sh` into the target's `.servo/hooks/`.
+
+Per the ADR-0038 honesty invariant, every servo hook is **mapped or recorded as
+an explicit residual — enumerated over the source set, never silently dropped or
+mechanically renamed**. This inventory is enumerated in `skills/oracle-hook/hook.py`
+(`CLAUDE_TO_COPILOT_HOOK_EVENTS` + `COPILOT_HOOK_RESIDUAL`) and pinned by a test,
+so a future added hook forces a new row here rather than degrading silently:
+
+| servo hook (Claude event) | Copilot event | Output vocabulary | Status |
+|---|---|---|---|
+| `Stop` (meta-judge) | `agentStop` | Canonical `{"decision":"block","reason":…}` body forwarded by adapter | **static payload mapping; advisory** |
+
+**Payload-mapping inventory — Residual set: empty** for the adapter's event map,
+not for live runtime capabilities. No servo hook in this single-hook inventory
+is dropped. Only
+the *input payload* differs (Copilot camelCase `sessionId`/`cwd`/`transcriptPath`
+plus snake_case `stop_hook_active`; Claude snake_case). The adapter reshapes it:
+it exports `CLAUDE_PROJECT_DIR` from the payload's `cwd` (Copilot exposes no such
+env var — the load-bearing bit for the meta-judge's oracle lookup) and forwards
+`stop_hook_active`, so the meta-judge's runaway guard and `gate.py` scoring work
+unchanged in deterministic adapter fixtures. This does **not** prove that the
+forwarded decision re-drives a native turn; that continuation contract remains
+unavailable. No permissions-floor `preToolUse` hook is installed by this adapter.
+The Claude loop's ADR-0037 post-hoc zero-edit diagnosis remains separate from
+hook payload mapping and from a native permission grant.
+
+**Live-firing residual.** A repo `agentStop` hook firing under headless
+`copilot -p` is not reliably observable (jig 113-08). The install is therefore
+verified *statically* — the emitted-JSON shape + the adapter unit test
+(`skills/oracle-hook/test_copilot_hook_adapter.py`) — and live firing is recorded
+as a residual in [refinement-todo](refinement-todo.md).
+
+## Native evaluation and monetary compatibility (spec 034)
+
+Native authoring commands explicitly select `--backend copilot`; they preserve
+fresh expansion/review and human per-AC approval. Frozen scoring selects new
+`judge.transport: copilot` definitions with a commanded non-auto model, deliberate
+`decoding_mode: native-default` and exact `runtime_version`
+([ADR-0040](decisions/adr-0040-copilot-frozen-native-decoding.md)). The four-field
+native judge schema rejects numeric/unknown controls and native score/actual
+injection. Existing API/Claude-CLI hashes/meanings are not migrated. Exact CLI
+version is a compatibility bound, not a guarantee of stable server-side defaults.
+
+Generic native cases require `candidate_policy: component-file-utf8-v1` and
+component-contained `candidate_file`. The producer publishes real UTF-8 output
+there; path/policy are frozen, moving bytes are not. Scoring snapshots each case
+once for its sample batch and records path/policy/SHA256. Constraint actual-value
+extraction remains unsupported and refuses before judging
+([ADR-0042](decisions/adr-0042-native-generic-candidate-files.md)).
+Content/vision retain their existing acquisition/capture/reference/statistical
+policies; native invocation usage is preserved without a guessed USD conversion.
+
+Optional `.servo/install.json.unpriced_components` lists names also registered
+in `components`. Native install and already-installed native re-freeze mark
+before activation; reverse updates clear after successful non-native approval.
+Removal clears only its component and omits an empty marker. Native ledger
+`cost_usd` is null. USD-bounded loop/goal/background/Routine and heartbeat callers
+refuse known unpriced components before dispatch and at oracle gateways
+([ADR-0041](decisions/adr-0041-unpriced-oracles-refuse-usd-execution.md)).
+
+Actual Goal/Routine gate commands carry `--usd-budget-context`: the vendored
+self-contained gate checks its already-loaded manifest before invoking oracle.sh.
+Default standalone attended gate/scoring keeps the same 0/1/2 behavior. Heartbeat
+persists a real invoked child's outcome/known Claude spend before an accounting
+halt; a true pre-dispatch refusal leaves findings open without synthetic outcomes.
+The gate's narrow loaded-manifest validator remains inline for clone portability,
+rather than importing a third runtime dependency solely to satisfy extraction.
+This is project-owned accounting, not a security/exhaustive-cost boundary over
+arbitrary oracle code, and does not repair historical API-eval accounting.
+
+Executed source/package/installed native proofs and fixture consent are separated
+in [native evidence](specs/034-copilot-installed-runtime/native-evidence.md).
+
+## Copilot host execution-primitive inventory (mapped-or-residual)
+
+Current support is governed by [ADR-0043](decisions/adr-0043-copilot-capability-boundaries.md)
+and spec 034, not the September invocation prototype. Executed
+[Copilot 1.0.96-2 help/limits](specs/034-copilot-installed-runtime/copilot-contract.txt)
+documents a minimum-30 AI-credit **soft** cap observed after a response.
+No conversion to USD or owner-authorized weakening of the monetary contract
+has been adopted.
+
+| Surface | Current Copilot support |
+|---------|-------------------------|
+| Installed scaffold / project-owned quality gate | Supported without Claude or Jig; oracle 0/1/2 authority unchanged. |
+| Native loop / goal / background / Routine / resume | Refused before dispatch/target writes (`native_capability_unavailable`). Soft credits cannot replace hard monetary/context safeguards. |
+| Refusal output | Schema 2, explicit backend, `env_error`, unavailable spend/context `null`; no fabricated zero-cost native run. |
+| Planner / heartbeat native execution | Incomplete, deferred with native autonomy; existing Claude clamps and whole-pass authority unchanged. |
+| Independent native authoring / frozen judging | Explicit native consumers in 034-04/05/06; actual installed/model/image proofs distinct from package discovery. New configurations freeze native defaults/runtime, not unsupported numeric controls. Generic file-v1 is constraint-free. |
+| Target-side `agentStop` | Advisory static adapter; actual per-turn continuation remains unproved (034-07). |
+
+Public `main()` and direct `run_loop(host="copilot")` both refuse unsupported
+autonomy (`skills/agent-loop/loop.py:1164`, `_refuse_copilot_capability`;
+`skills/agent-loop/loop.py:2473`, `run_loop`).
+No blanket permission grant or fallback Claude call occurs through those launch
+paths. September adapter parsing fixtures remain historical prototype coverage,
+not proof of a supported native loop.
+
+New Claude version-1 state records additive backend identity. Explicit
+non-Claude metadata/native version-2 state refuses through Claude even with
+`--resume-anyway`. Unmarked legacy version-1 state retains the historical Claude
+interpretation for compatibility: the September prototype did not persist host
+identity, so its origin cannot always be recovered. Known native prototype state
+must not be blindly resumed or converted.
+
+The native scaffold uses the executing runtime rather than an unrelated Claude
+environment root (`skills/scaffold-init/scaffold.py:60`, `plugin_root`) and reads
+the package's parent `.plugin/plugin.json` for availability metadata
+(`skills/scaffold-init/scaffold.py:103`, `_plugin_manifest_version`). Actual
+local marketplace install/clean-consumer execution and static zip checks are
+distinguished in [delivery evidence](specs/034-copilot-installed-runtime/delivery-evidence.md).
 
 ## Decision records
 

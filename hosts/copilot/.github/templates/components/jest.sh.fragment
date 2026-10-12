@@ -1,0 +1,17 @@
+# SEED:start jest
+score_jest() {
+  if command -v jest >/dev/null 2>&1; then
+    runner=("jest" "--silent")
+  elif command -v npx >/dev/null 2>&1; then
+    runner=("npx" "--no-install" "jest" "--silent")
+  else
+    echo "missing: jest (install jest or npx)" >&2
+    return 2
+  fi
+  if "${runner[@]}" >/dev/null 2>&1; then
+    echo "1.0"
+  else
+    echo "0.0"
+  fi
+}
+# SEED:end jest

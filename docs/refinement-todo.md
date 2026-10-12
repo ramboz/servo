@@ -6,6 +6,99 @@ Each entry: heading, Deferred reason, Resolution trigger.
 
 ---
 
+## Native generic constraint actual-value extraction is unsupported
+
+**Deferred:** ADR-0042's native file-v1 supports real constraint-free scored
+outputs only. Acquiring candidate text does not produce the generic engine's
+unbuilt actual-value measurements. Nonempty/invalid native constraints and native
+fake-actuals refuse before judging; no input/reference substitution or SUT
+command runner is hidden behind the transport.
+
+**Resolution trigger:** A separately reviewed acquisition/measurement contract
+with real actual-value extraction, frozen evidence and positive/negative
+consumer proof. Do not amend the closed generic records or reinterpret file-v1.
+
+---
+
+## Copilot `agentStop` oracle hook is verified statically, not by live firing
+
+**Deferred:** slice 032-04 installs servo's oracle `Stop` hook target-side as a
+Copilot `agentStop` hook (`.github/hooks/servo-oracle.json` + a ported
+`copilot_hook_adapter.py` in `.servo/hooks/`). A repo hook actually *firing*
+under headless `copilot -p` is **not reliably observable** (inherited from jig's
+113-08 finding), so the install is verified only *statically*: the emitted-JSON
+shape (`skills/oracle-hook/test_hook.py::CopilotInstallTests`), the adapter
+payload-reshaping + exit-forwarding unit test
+(`skills/oracle-hook/test_copilot_hook_adapter.py`), and the mapped-or-unmappable
+inventory (`docs/architecture.md`). We have **not** observed an installed
+`agentStop` hook block a real premature stop and re-drive the next turn under a
+live Copilot session.
+
+**Resolution trigger:** Live evidence proves actual per-turn continuation
+decisions and a bounded retry guard; then re-open 034-07 through normal readiness.
+Session-end notification or preToolUse denial is insufficient. The existing
+static adapter stays advisory, not a completed enforcing continuation gate.
+
+**Surfaced by:** slice 032-04 (ADR-0038); the residual is enumerated in
+`docs/architecture.md` "Copilot host hook inventory".
+
+---
+
+## Copilot native autonomy cannot uphold the requested monetary/context contract
+
+**Deferred:** The September prototype normalized unknown spend to zero and left
+the USD/context brakes inert. Current public `--host copilot` launch/resume paths
+instead refuse before dispatch/target writes (034-02, ADR-0043); unknown spend is
+null, not zero. Executed CLI 1.0.96-2 limits describe minimum-30 AI credits as a
+soft post-response cap, not an enforceable USD ceiling. No owner relaxation has
+been authorized. Native loop/checkpoints/planned/heartbeat execution is 034-03
+DEFERRED, not completed by the refusal.
+
+**Resolution trigger:** Executed native hard-budget capability, or a new explicit
+owner-approved replacement monetary/credit policy, plus effective tool/context/
+resume/whole-pass evidence and normal readiness review. Do not convert credits
+to dollars by guesswork or count a limit flag as proof.
+
+**Surfaced by:** Current [CLI contract](specs/034-copilot-installed-runtime/copilot-contract.txt)
+and [ADR-0043](decisions/adr-0043-copilot-capability-boundaries.md).
+
+---
+
+## Copilot goal-driver fidelity under Autopilot is unverified (driver refuses)
+
+**Deferred:** The native goal family remains unavailable, and 034-02 now also
+refuses the native loop. An advisory agentStop adapter is not a replacement
+for real per-turn oracle-gated continuation. No claim of equivalent autonomous
+Copilot guardrails is made.
+
+**Resolution trigger:** Both live per-turn continuation/retry-guard proof
+(034-07) **and** 034-03's enforceable-budget/owner-policy, tool/context/resume/
+whole-pass prerequisites must hold, followed by normal readiness review.
+Hook evidence alone never lifts ADR-0043's autonomy refusal; Autopilot caps
+alone do not establish the requested hard USD contract.
+
+**Surfaced by:** slice 032-05 (ADR-0038); enumerated in `docs/architecture.md`
+"Copilot host execution-primitive inventory".
+
+---
+
+## Copilot loop driver has no hard-error-envelope guard (soft failure scored, not env-erroring)
+
+**Deferred:** The September loop adapter's result normalization lacks reliable
+native error-envelope classification. Current public native autonomy refuses
+before reaching that adapter; its fixture coverage is not current runtime proof.
+Native authoring/frozen scoring use their separately verified invocation boundary,
+not this historical success-shaped normalization.
+
+**Resolution trigger:** Re-opening 034-03 requires real native success/error
+classification alongside its hard-budget/tool/context contract; read-only
+transport success does not complete native-loop support.
+
+**Surfaced by:** slice 032-05 independent review (`jig:reviewer`, PASS with
+low-severity findings, 2026-09-18); finding logged rather than papered over.
+
+---
+
 ## ~~Shellcheck verification falls back to skip on dev machines~~ — RESOLVED 2026-05-15
 
 **Resolution:** `scripts/shellcheck.sh` wraps both the local binary (preferred) and the `koalaman/shellcheck:stable` Docker image (fallback), exiting 127 only when neither is available. `ShellcheckTests.test_rendered_oracle_shellcheck_clean` now invokes the wrapper and skips only on exit 127, so on any dev box with Docker the assertion actually runs. Verified: 34/34 tests green with zero skips on this branch even though the local `shellcheck` binary is absent.

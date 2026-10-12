@@ -250,6 +250,7 @@ silent `0.0`; a changed policy/dataset/model refuses as stale.
 | `config.json` | the frozen policy (screens, dimensions + ignore, model, n/k/δ, threshold, hashes) |
 | `score.py` | runtime: freeze-validate → capture → judge → aggregate → composite |
 | `fidelity_eval.py` | shared frozen-eval harness (hash/aggregate/ledger/splice), imported by `score.py` (ADR-0024) |
+| `copilot_eval.py` | lazy, read-only native Copilot invocation and frozen default-decoding validation |
 | `capture.mjs` | Playwright: render references / screenshot the seeded app |
 | `capture_lib.mjs` | pure helpers imported by `capture.mjs`: clip geometry, flag/screen resolution, and the engine-attestation channel |
 | `pngcrop.py` | dependency-free stdlib PNG cropper, imported by `score.py` for the native providers' chrome-frame normalization (027-04) |
@@ -301,6 +302,37 @@ hashed. (`shots/` grows without bound today; a retention cap is a tracked
 follow-up in `docs/refinement-todo.md`.)
 
 ## Authoring tips
+
+### Native Copilot judging
+
+Create a **new** definition with an explicitly chosen native decoding policy:
+
+```bash
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/design-eval/design_eval.py" init <target> \
+  --transport copilot --model <pinned-model> --decoding-mode native-default
+```
+
+This commands the model, captures the exact CLI `runtime_version`, and omits
+API-only `temperature` and `max_tokens`. Existing configs are never converted
+by `init`. Native freeze/scoring reject those numeric controls, absent consent,
+an auto model, or a changed CLI version. Review and re-freeze deliberately after
+changing the definition. `native-default` accepts the provider's default
+decoding; pinning the CLI is a compatibility bound, not a guarantee that server
+defaults are stable.
+
+The native judge supplies the app and reference as actual image attachments.
+It uses a nonempty read-only tool whitelist, explicit write/shell denials,
+fresh calls and no permission escalation. `SERVO_DESIGN_EVAL_COPILOT_BIN` or
+`SERVO_COPILOT_BIN` can select an executable. Missing prerequisites and native
+failures are `env_error`, never fallback providers or fabricated scores.
+The `subagent` path remains attended and advisory; native selection does not
+promote it into the oracle. Sampling, lower-bound scoring, capture and approval
+policy stay unchanged.
+
+Native spend is unknown in USD (`cost_usd: null`, not zero). Native installation
+records `design_fidelity` in `.servo/install.json`'s `unpriced_components`.
+Guarded USD-budget callers must reject incompatible unpriced oracle work
+before invoking it; standalone attended scoring remains supported.
 
 - Keep `n` × `|screens|` bounded — it counts against the loop's cost ceiling.
 - Start the threshold below the first frozen composite, then raise it as the UI

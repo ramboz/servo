@@ -1,0 +1,17 @@
+# SEED:start eslint
+score_eslint() {
+  if command -v eslint >/dev/null 2>&1; then
+    runner=("eslint" ".")
+  elif command -v npx >/dev/null 2>&1; then
+    runner=("npx" "--no-install" "eslint" ".")
+  else
+    echo "missing: eslint (install eslint or npx)" >&2
+    return 2
+  fi
+  if "${runner[@]}" >/dev/null 2>&1; then
+    echo "1.0"
+  else
+    echo "0.0"
+  fi
+}
+# SEED:end eslint

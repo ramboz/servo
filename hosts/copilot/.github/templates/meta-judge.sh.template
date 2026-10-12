@@ -1,0 +1,94 @@
+#!/bin/sh
+# servo meta-judge — Claude Code `Stop` hook (spec 004).
+#
+# Marker (do not remove — uninstall matches on it): .servo/hooks/meta-judge.sh
+#
+# On every turn-stop, score this project with servo's quality gate and, when the
+# oracle is BELOW THRESHOLD, block the stop with a structured retry hint so the
+# agent keeps working instead of declaring victory early.
+#
+# Safety posture (the inverse of agent-loop's fail-closed brakes):
+#   * Fails OPEN — a missing / misconfigured / slow oracle never blocks, so the
+#     hook can never trap a live session. (Richer env-error reporting: 004-02.)
+#   * Respects `stop_hook_active` — nudges at most once per stop sequence, well
+#     inside Claude Code's consecutive-block cap.
+#
+# Contract: reads the Stop-event JSON on stdin; emits hook JSON on stdout; a
+# block is expressed as {"decision":"block","reason":...}. The project owns this
+# script after install and may customise the hint phrasing or switch modes.
+set -u
+
+INPUT=$(cat)
+
+# Quality gate: SERVO_GATE_PY override wins (tests / power users), else the path
+# baked in at install time.
+GATE="${SERVO_GATE_PY:-__GATE_PY__}"
+
+# --- Runaway guard -------------------------------------------------------- #
+# Suppress the nudge (let the stop proceed) when `stop_hook_active` is set OR
+# cannot be determined. An *indeterminate* guard biases toward never trapping
+# the session: only a definitively-parsed `stop_hook_active: false` proceeds to
+# score. (An absent key means "first stop" and proceeds; unparseable stdin
+# suppresses.)
+SUPPRESS=$(printf '%s' "$INPUT" | python3 -c '
+import json, sys
+try:
+    print("0" if not json.load(sys.stdin).get("stop_hook_active") else "1")
+except Exception:
+    print("1")   # unparseable stdin → suppress; never block on garbage
+' 2>/dev/null) || SUPPRESS="1"   # python3 missing → suppress (cannot score anyway)
+[ "$SUPPRESS" = "1" ] && exit 0
+
+# --- Target --------------------------------------------------------------- #
+TARGET="${CLAUDE_PROJECT_DIR:-}"
+[ -z "$TARGET" ] && exit 0   # nothing to score → fail open
+
+# --- Score ---------------------------------------------------------------- #
+# Bound the oracle so a hung component can't hang the turn-stop: gate.py's own
+# --timeout (spec 002-04) fires before Claude Code's hook timeout, yielding a
+# clean env-error we can fail open on. Override with SERVO_META_JUDGE_GATE_TIMEOUT.
+GATE_TIMEOUT="${SERVO_META_JUDGE_GATE_TIMEOUT:-45}"
+GATE_OUT=$(python3 "$GATE" "$TARGET" --json --timeout "$GATE_TIMEOUT" 2>/dev/null)
+RC=$?
+
+# --- Decide --------------------------------------------------------------- #
+# rc=0 (pass)            → silent; let the stop proceed.
+# rc=1 (below threshold) → BLOCK with an evidence-backed hint.
+# rc=2 / other / failure → FAIL OPEN with a user-facing warning (never block).
+if [ "$RC" = "0" ]; then
+    exit 0
+elif [ "$RC" = "1" ]; then
+    printf '%s' "$GATE_OUT" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)   # unparseable gate output → fail open (emit nothing)
+comp = d.get("composite")
+thr = d.get("threshold")
+missing = d.get("missing") or []
+reason = "servo oracle below threshold: composite=%s threshold=%s." % (comp, thr)
+if missing:
+    reason += " Weak or missing components: %s." % ", ".join(map(str, missing))
+reason += " Keep working to raise the oracle score before stopping."
+print(json.dumps({"decision": "block", "reason": reason}))
+'
+    exit 0
+fi
+
+# Env-error (or an uninvocable / unparseable gate): warn the USER and let the
+# stop proceed. The warning is a `systemMessage` (shown to the user, not fed to
+# Claude as a block) — a misconfigured oracle must never trap a live session.
+printf '%s' "$GATE_OUT" | python3 -c '
+import json, sys
+reason = "unknown"
+try:
+    reason = (json.load(sys.stdin).get("reason")
+              or "unknown")
+except Exception:
+    pass
+msg = ("servo meta-judge: oracle env_error (reason=%s); not gating this turn — "
+       "run `/servo:quality-gate` to diagnose." % reason)
+print(json.dumps({"systemMessage": msg}))
+' 2>/dev/null
+exit 0

@@ -5,8 +5,8 @@ name: Release
 #   - release-please: reads main's conventional-commit history → version bump
 #     (plugin.json via extra-files) + CHANGELOG.md + tag vX.Y.Z + GitHub release,
 #     all via a release PR.
-#   - package: on a created release, build + smoke-test the Claude and Codex
-#     host packages and upload one host-explicit archive per install shape.
+#   - package: on a created release, build + smoke-test the Claude, Codex, and
+#     Copilot host packages and upload one host-explicit archive per install shape.
 # Both rely on main's commit subjects being release-please-readable, which the
 # pr-title.yml gate + squash-merge guarantee. `on:` is quoted (servo house
 # style, see ci.yml).
@@ -61,6 +61,12 @@ jobs:
             --host codex \
             --version "${{ needs.release-please.outputs.version }}"
 
+      - name: Build Copilot release zip
+        run: |
+          python3 scripts/build_release_zip.py \
+            --host copilot \
+            --version "${{ needs.release-please.outputs.version }}"
+
       - name: Smoke-test Claude zip
         run: |
           python3 scripts/build_release_zip.py \
@@ -72,6 +78,12 @@ jobs:
           python3 scripts/build_release_zip.py \
             --host codex \
             --smoke-test "dist/servo-codex-v${{ needs.release-please.outputs.version }}.zip"
+
+      - name: Smoke-test Copilot zip
+        run: |
+          python3 scripts/build_release_zip.py \
+            --host copilot \
+            --smoke-test "dist/servo-copilot-v${{ needs.release-please.outputs.version }}.zip"
 
       - name: Create legacy Claude alias (deprecated)
         run: |
@@ -87,6 +99,7 @@ jobs:
             "${{ needs.release-please.outputs.tag_name }}" \
             "dist/servo-claude-v${{ needs.release-please.outputs.version }}.zip" \
             "dist/servo-codex-v${{ needs.release-please.outputs.version }}.zip" \
+            "dist/servo-copilot-v${{ needs.release-please.outputs.version }}.zip" \
             "dist/servo-v${{ needs.release-please.outputs.version }}.zip"
 
       - name: Append install-artifacts note to release body
@@ -107,6 +120,13 @@ jobs:
             marketplace bundle. Extract it, then run
             \`codex plugin marketplace add <absolute-extracted-dir>\` followed by
             \`codex plugin add servo@servo\`. Codex has no zip-drop install.
+          - \`servo-copilot-v${VERSION}.zip\` — committed GitHub Copilot CLI
+            plugin (\`.plugin/plugin.json\` + a \`.github/\` skills/agents/scripts
+            tree). Install straight from the repo with
+            \`copilot plugin install <owner/repo>:hosts/copilot\`, or add the
+            marketplace with \`copilot plugin marketplace add <owner/repo>\` then
+            \`copilot plugin install servo@servo\`. This archive is the released,
+            drift-guarded snapshot of that package.
           - \`servo-v${VERSION}.zip\` — deprecated, byte-identical Claude
             alias retained for one compatibility release. Prefer the
             host-explicit artifact.

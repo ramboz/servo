@@ -137,7 +137,21 @@
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-01 — loop-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-02 — goal-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-03 — goal-driver-advisory-preflight | DEFERRED |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 🔬 032-01 — copilot-contract-spike | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-02 — renderer-and-skeleton | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-03 — agents | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-04 — hooks | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-05 — execution-primitive-mapping | **DONE** |  |
+| [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-06 — committed-package-and-release | **DONE** | tri-host parity (ADR-0038); residuals: goal-driver Copilot-unsupported &#124; live hook-firing unobservable headless |
 | [033-heartbeat-handoff-recovery](033-heartbeat-handoff-recovery/spec.md) | 033-01 — diagnostic-handoff | **DONE** | Retrospective recovery; optional diagnostics only; preserve loop-history/direct-goal score authority; no control-policy change; real review/mutation evidence in spec 033. |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-01 - installed-oracle | **DONE** |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-02 - capability-refusal | **DONE** |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-03 - native-loop-and-consumers | DEFERRED |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-04 - native-authoring | **DONE** |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-05 - native-text-judges | **DONE** |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-06 - native-visual-judge | **DONE** |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | DEFERRED |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | **DONE** |  |
 
 ## Deferred slices
 
@@ -151,6 +165,8 @@
 | [016-execution-planner](016-execution-planner/spec.md) | 016-05 — prompt-render |  |
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-02 — transport-selection | Resume when the **A1 probe can be run on a |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-03 — goal-driver-advisory-preflight | Field data shows walled **goal-driver** runs waste |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-03 - native-loop-and-consumers | An executed native hard-budget contract, or an explicit |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | Live CLI evidence proves per-turn continuation decisions |
 
 ## Abandoned slices
 
@@ -164,7 +180,13 @@
 
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
-- **0** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
+- **4** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
 - **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **1** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+- **7** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
+  - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
+  - `034-copilot-installed-runtime/slice-04-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
+  - `034-copilot-installed-runtime/slice-05-craft.md` — applied `pr-review`; declined: scout-pr-review
+  - `034-copilot-installed-runtime/slice-06-arch.md` — applied `unknown`; declined: arch-review
+  - `034-copilot-installed-runtime/slice-06-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
+  - `034-copilot-installed-runtime/slice-08-craft.md` — applied `pr-review`; declined: scout-pr-review

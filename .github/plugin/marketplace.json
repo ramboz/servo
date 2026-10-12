@@ -1,0 +1,13 @@
+{
+  "name": "servo",
+  "owner": {
+    "name": "ramboz"
+  },
+  "plugins": [
+    {
+      "name": "servo",
+      "source": "./hosts/copilot",
+      "description": "Closed-loop scaffolder for unattended agent operations: oracle scoring, headless agent loops, hooks, and worktree races — tailored to each project's signals."
+    }
+  ]
+}

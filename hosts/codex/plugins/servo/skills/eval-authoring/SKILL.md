@@ -233,7 +233,25 @@ Nothing here freezes or runs on its own:
   definition all raise a clean `env_error`/`StaleError` (exit 2) — **never a
   silent `0.0`** (ADR-0005).
 
-## Known limitation: candidate-gather is not yet built
+## Candidate acquisition: native file snapshots; legacy gather remains unbuilt
+
+Explicit Copilot generic scoring supports **constraint-free** cases with
+`candidate_policy: "component-file-utf8-v1"` and a deliberate `candidate_file`
+for each scored case. The path is relative to the directory containing that
+component's `config.json`, not the current working directory. Installed
+components use `<project>/.servo/<component>/`. The external driver writes its
+actual output there; input text is never substituted for output.
+
+The native definition freezes the path and policy, not changing output bytes.
+Absolute/traversing/symlink-escaping paths, missing/non-text files and unsupported
+deterministic constraints fail before judging. Each case is read once into a
+coherent UTF-8 snapshot for its entire sample batch; the ledger records its
+SHA-256/path/policy. No SUT command runner is introduced.
+
+Use `params ... --candidate-policy component-file-utf8-v1` and deliberately
+fill dataset `candidate_file` values before normal emit/review/freeze.
+Native fake-score/actual-value injection is refused. Legacy API/Claude CLI
+candidate acquisition still has the unbuilt seam described below.
 
 **This is a named limitation, not a soft tip.** design-eval/content-fidelity
 both ship a real "gather the candidate under test" step; this skill's
@@ -242,7 +260,7 @@ documented, deliberately-unbuilt placeholder — running the system under test
 on a case's `input` to produce the text the judge scores is out of scope for
 every slice shipped so far (spec 008's non-goal: "this skill authors; it does
 not run"). Concretely: a **live** (no-fake-scores) `score()` call on an
-installed component always raises `env_error` today, never a placeholder
+legacy API/Claude CLI installed component raises `env_error` at that seam, never a placeholder
 score. Offline testing/dry-runs use the `SERVO_EVAL_AUTHORING_FAKE_SCORES`
 (`{case_id: [sample, ...]}`) and `SERVO_EVAL_AUTHORING_FAKE_ACTUALS`
 (`{case_id: {field: value}}`, for constraint-DSL cases) environment hooks to
@@ -250,6 +268,48 @@ exercise the composite without a real candidate. A real candidate-gather is
 tracked as future work, not silently assumed.
 
 ## Authoring tips
+
+### Native Copilot authoring and frozen text judging
+
+Assisted authoring can explicitly use Copilot:
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/eval-authoring/eval_authoring.py" \
+  from-goal "<goal>" --backend copilot [--model <model>] --spec-dir <spec-dir>
+```
+
+Expansion and review use separate fresh sessions with read-only tool
+restrictions. Native model/version/session provenance is recorded; criteria
+remain candidates until normal human curation and approval. This choice does
+not select a frozen judge or change the default Claude authoring path.
+
+For a **new, unapproved** rubric, explicitly choose frozen native judging:
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/eval-authoring/eval_authoring.py" \
+  params <plan> --ac <AC-id> --transport copilot --model <pinned-model> \
+  --decoding-mode native-default
+```
+
+The definition captures the exact CLI `runtime_version` and contains no
+API-only `temperature`/`max_tokens`. Native controls reject unsupported numeric
+requirements, absent default-decoding consent, auto models and runtime drift.
+Approved configs are not rewritten by this switch: use the normal review and
+re-freeze workflow. `native-default` accepts transport defaults explicitly;
+an exact CLI pin does not claim stable server-side decoding.
+
+The installed runtime also carries `copilot_eval.py` beside `score.py` and
+`fidelity_eval.py`. `SERVO_EVAL_AUTHORING_COPILOT_BIN` or `SERVO_COPILOT_BIN`
+selects an executable. Native errors never fall back to Claude/API or produce
+fabricated criteria/scores. Existing API and Claude `cli` meanings, sampling,
+lower-bound scoring and approval policy remain unchanged.
+
+Native judged components have **unknown USD spend**, recorded as `cost_usd:
+null`, never zero. Installation records their component names in
+`.servo/install.json`'s `unpriced_components` list. An outer loop/heartbeat
+promising a USD ceiling must refuse incompatible unpriced oracle work before
+running it. Standalone attended scoring remains available; the marker is removed
+when a component is uninstalled or deliberately reinstalled as non-native.
 
 - The shipped rubric defaults sample at `temperature: 0.0` (lower than
   content-fidelity's `0.6`) — the n-sample lower bound already absorbs the
