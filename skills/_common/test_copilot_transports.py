@@ -38,6 +38,34 @@ def fake_result():
 
 
 class NativeTransportTests(unittest.TestCase):
+    def test_native_score_injection_is_refused_in_every_consumer(self):
+        for skill in ("eval-authoring", "content-fidelity", "design-eval"):
+            module = load("native_fake_" + skill.replace("-", "_"), SKILLS / skill / "score.py")
+            with self.subTest(skill=skill), tempfile.TemporaryDirectory() as temporary:
+                directory = Path(temporary)
+                config = {
+                    "schema_version": 2, "judge": judge_config(), "rubric": "fixture",
+                    "samples": {"n": 1}, "threshold": 0.8,
+                    "cases": [{
+                        "id": "fixture", "input": "public",
+                        "expected_output": {"constraints": []},
+                        "source": {"type": "file", "path": "generated.txt"},
+                        "reference": "public",
+                    }],
+                    "screens": [{"id": "fixture", "reference": "ref.png", "weight": 1.0}],
+                    "dimensions": [{"id": "color", "description": "fixture", "weight": 1.0}],
+                    "ignore": [], "approval_status": "approved",
+                }
+                if skill == "design-eval":
+                    config.pop("rubric")
+                config["hashes"] = module.artifact_hashes(config, directory)
+                config["approved_content_hash"] = module.definition_hash(config)
+                (directory / "config.json").write_text(json.dumps(config))
+                with mock.patch.dict(os.environ, {
+                    module._FAKE_SCORES_ENV: '{"fixture":[1.0]}',
+                }, clear=True), self.assertRaisesRegex(module.EnvError, "inject|fake"):
+                    module.score(directory)
+
     def test_installed_presets_sync_pricing_on_refreeze_not_only_reinstall(self):
         for skill, filename in (
             ("content-fidelity", "content_fidelity.py"), ("design-eval", "design_eval.py"),

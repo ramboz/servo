@@ -81,9 +81,11 @@ def validate_copilot_definition(config: dict, bin_env=None, *, check_runtime=Tru
 def copilot_judge(prompt, config, *, attachments=(), cwd=None, bin_env=None) -> dict:
     native = copilot_runtime()
     try:
-        return native.judge(
+        result = native.judge(
             prompt, config.get("judge") or {}, attachments=attachments, cwd=cwd, bin_env=bin_env,
         )
+        config.setdefault("_native_invocations", []).append(result.pop("native_invocation"))
+        return result
     except native.CopilotError as exc:
         raise EnvError(str(exc)) from exc
 

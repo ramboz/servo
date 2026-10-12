@@ -93,11 +93,11 @@ def _validate_choice(model, decoding_mode) -> None:
 def validate_judge(judge: dict) -> None:
     if not isinstance(judge, dict) or judge.get("transport") != "copilot":
         raise CopilotError("copilot_invalid_config", "Expected a Copilot judge definition")
-    controls = [name for name in ("temperature", "max_tokens") if name in judge]
+    controls = sorted(set(judge) - {"transport", "model", "decoding_mode", "runtime_version"})
     if controls:
         raise CopilotError(
             "copilot_unsupported_controls",
-            "Copilot cannot enforce numeric decoding controls: " + ", ".join(controls),
+            "Copilot cannot enforce unsupported judge controls: " + ", ".join(controls),
         )
     _validate_choice(judge.get("model"), judge.get("decoding_mode"))
     version = judge.get("runtime_version")
@@ -172,7 +172,12 @@ def judge(
         prompt, model=definition["model"], frozen_version=definition["runtime_version"],
         attachments=attachments, cwd=cwd, bin_env=bin_env,
     )
-    return parse_score(reply["text"])
+    result = parse_score(reply["text"])
+    result["native_invocation"] = {
+        "model": reply["model"], "runtime_version": reply["runtime_version"],
+        "session_id": reply["session_id"], "usage": reply["usage"], "cost_usd": None,
+    }
+    return result
 
 
 def parse_response(stdout: str, expected_model: Optional[str] = None) -> dict:
@@ -226,4 +231,7 @@ def parse_response(stdout: str, expected_model: Optional[str] = None) -> dict:
         raise CopilotError(
             "copilot_model_mismatch", "Copilot used a different model than the commanded model"
         )
-    return dict(message, session_id=session)
+    usage = terminal.get("usage")
+    if usage is not None and not isinstance(usage, dict):
+        raise CopilotError("copilot_malformed_usage", "Copilot usage is not an object")
+    return dict(message, session_id=session, usage=usage)

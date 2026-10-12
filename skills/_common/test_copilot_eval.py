@@ -39,7 +39,8 @@ class CopilotReplyTests(unittest.TestCase):
         )
         self.assertEqual(
             reply,
-            {"text": '{"score":0.8}', "model": "pinned-model", "session_id": "fresh-session"},
+            {"text": '{"score":0.8}', "model": "pinned-model",
+             "session_id": "fresh-session", "usage": None},
         )
 
     def test_malformed_failed_or_unpinned_responses_refuse(self):
@@ -74,7 +75,7 @@ class CopilotReplyTests(unittest.TestCase):
             "runtime_version": "1.0.96-2",
         }
         runtime.validate_judge(valid)
-        for field in ("temperature", "max_tokens"):
+        for field in ("temperature", "max_tokens", "seed", "top_p", "unknown_control"):
             with self.subTest(field=field), self.assertRaises(runtime.CopilotError):
                 runtime.validate_judge(dict(valid, **{field: None}))
         for field in ("model", "decoding_mode", "runtime_version"):
@@ -84,6 +85,19 @@ class CopilotReplyTests(unittest.TestCase):
                 runtime.validate_judge(missing)
         with self.assertRaises(runtime.CopilotError):
             runtime.validate_judge(dict(valid, model="auto"))
+
+    def test_native_usage_is_preserved_without_dollar_conversion(self):
+        runtime = self.runtime()
+        usage = {"premiumRequests": 0.25, "durations": {"apiMs": 120}}
+        events = [
+            {"type": "assistant.message", "data": {
+                "content": "public", "model": "pinned", "phase": "final_answer",
+            }},
+            {"type": "result", "exitCode": 0, "sessionId": "fresh", "usage": usage},
+        ]
+        reply = runtime.parse_response("\n".join(map(json.dumps, events)), expected_model="pinned")
+        self.assertEqual(reply["usage"], usage)
+        self.assertNotIn("cost_usd", reply)
 
     def test_invocation_is_fresh_readonly_pinned_and_image_bearing(self):
         runtime = self.runtime()

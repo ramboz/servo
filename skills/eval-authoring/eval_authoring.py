@@ -2356,6 +2356,8 @@ def from_goal_target(
             "review_model": review["model"],
             "expansion_runtime": expansion["runtime_version"],
             "review_runtime": review["runtime_version"],
+            "expansion_usage": expansion.get("usage"),
+            "review_usage": review.get("usage"),
         }
 
     out_dir.mkdir(parents=True, exist_ok=True)

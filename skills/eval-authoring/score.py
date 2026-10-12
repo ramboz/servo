@@ -501,6 +501,12 @@ def score(base_dir: Path) -> float:
     `EnvError`/`StaleError` — never a silent `0.0`.
     """
     config = json.loads((base_dir / "config.json").read_text())
+    if config.get("judge", {}).get("transport") == "copilot":
+        if os.environ.get(_FAKE_SCORES_ENV) or os.environ.get(_FAKE_ACTUALS_ENV):
+            raise EnvError(
+                "Injected fake scores/actuals are not permitted for native Copilot transport",
+            )
+        config["_native_invocations"] = []
     validate_freeze(config, base_dir)  # StaleError -> exit 2 (AC5)
     _fe.validate_copilot_definition(config, check_runtime=False)
     n = int(config["samples"]["n"])
@@ -540,7 +546,8 @@ def _ledger(base_dir: Path, config: dict, per_case, composite: float) -> None:
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
         **(
-            {"cost_usd": None, "runtime_version": config["judge"]["runtime_version"],
+            {"cost_usd": None, "native_invocations": config.get("_native_invocations", []),
+             "runtime_version": config["judge"]["runtime_version"],
              "decoding_mode": config["judge"]["decoding_mode"]}
             if config.get("judge", {}).get("transport") == "copilot" else {}
         ),

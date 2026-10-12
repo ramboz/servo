@@ -899,6 +899,10 @@ def _fake_scores():
 def score(base_dir: Path) -> float:
     """Composite design-fidelity score for the frozen eval in ``base_dir``."""
     config = json.loads((base_dir / "config.json").read_text())
+    if config.get("judge", {}).get("transport") == "copilot":
+        if os.environ.get(_FAKE_SCORES_ENV):
+            raise EnvError("Injected fake scores are not permitted for native Copilot transport")
+        config["_native_invocations"] = []
     _require_schema_v2(config)         # 028-01: clear force-re-author before staleness
     validate_freeze(config, base_dir)  # StaleError → exit 2
     _fe.validate_copilot_definition(config, check_runtime=False)
@@ -1236,7 +1240,8 @@ def _ledger(base_dir: Path, config: dict, per_screen, composite: float,
         "model": config["judge"]["model"],
         "transport": (config.get("judge") or {}).get("transport", "api"),
         **(
-            {"cost_usd": None, "runtime_version": config["judge"]["runtime_version"],
+            {"cost_usd": None, "native_invocations": config.get("_native_invocations", []),
+             "runtime_version": config["judge"]["runtime_version"],
              "decoding_mode": config["judge"]["decoding_mode"]}
             if config.get("judge", {}).get("transport") == "copilot" else {}
         ),
