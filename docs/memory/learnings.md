@@ -120,3 +120,9 @@ an accepted, logged trade-off. See
 
 ## Jig DONE dependency tokens require slice fragments
 When transitioning a slice to DONE with this jig workflow version, dependencies frontmatter is validated by token shape. Whole-spec tokens such as 003 are reported as unknown dependency token shape; use the concrete DONE slice token that owns the dependency, e.g. 003-05 for the runner/judge prompt and verdict-parser contract, plus ADR tokens like adr-0003.
+
+## Copilot installation is not native autonomy
+Generated Copilot packaging supports independent scaffold/gate consumers. Native runtime is the executing .github directory; native manifest metadata is one parent higher in .plugin. A local directory marketplace loads LIVE and does not prove copied-store discovery. CLI 1.0.96-2 credits are a minimum-30 soft post-response cap, not hard USD enforcement. Native autonomous launch remains refused under ADR-0039; explicit native-default frozen judges use ADR-0040 and do not claim numeric decoding or stable server defaults.
+
+## Review test-class boundaries after parallel merges
+PR37 merge placed new Copilot methods in unrelated main-branch permission-wall fixtures, producing ten CI failures despite both branches passing individually. Restore per-class setup/method boundaries, preserve every assertion and production permission-wall guard, and compare collected test counts. Test-only repair restored all397 historical loop tests before the deliberately new native refusal behavior was added.

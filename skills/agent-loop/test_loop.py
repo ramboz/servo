@@ -899,10 +899,7 @@ class ClaudeInvocationFailedTests(unittest.TestCase):
         self.assertIn("loop: claude not on PATH", result.stderr)
 
     def test_copilot_not_on_path(self):
-        # Slice 032-05: the Copilot loop-driver invocation-failure path mirrors
-        # the Claude one — an empty bindir means `copilot` is not found, and
-        # `_invoke_copilot` returns the `copilot not on PATH` breadcrumb rather
-        # than raising into the loop (fail-closed env error, rc=2).
+        # Native autonomy refuses even before executable discovery (ADR-0039).
         self.bindir.mkdir()
         result = _run_loop(
             self.target,
@@ -911,9 +908,9 @@ class ClaudeInvocationFailedTests(unittest.TestCase):
             path_override=f"{self.bindir}:{SYSTEM_PATH}",
         )
         self.assertEqual(result.returncode, 2)
-        self.assertIn("copilot not on PATH", result.stderr)
+        self.assertIn("autonomy is unavailable", result.stderr)
         summary = self._summary(result.stdout)
-        self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
+        self.assertEqual(summary["terminal_reason"], "native_capability_unavailable")
         self.assertEqual(summary["iterations_completed"], 0)
 
     def test_claude_exits_nonzero_with_empty_stdout(self):
@@ -7950,26 +7947,6 @@ class CopilotBuildCmdTests(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("--max-ai-credits") + 1], "5")
 
 
-class CopilotLoopDriverIntegrationTests(unittest.TestCase):
-    """AC1/AC2/AC4 — the loop driver runs end-to-end under `--host copilot`."""
-
-    def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-loop-")
-        tmp = Path(self.tmpdir)
-        self.target = tmp / "demo"
-        self.target.mkdir()
-        _make_manifest(self.target)
-        _make_oracle(self.target, _below_threshold_oracle())
-        self.bindir = tmp / "bin"
-        self.counter = tmp / "counter.txt"
-        self.args_log = tmp / "args.log"
-        _mock_copilot(
-            self.bindir,
-            _copilot_jsonl_fixture(_COPILOT_VERDICT_TEXT),
-            json.dumps(_COPILOT_USAGE_FIXTURE),
-            self.counter,
-            self.args_log,
-        )
 # Slice 031-01 — edit-permission-wall diagnosis (ADR-0037)
 #
 # The loop driver relabels a nothing-landed halt (oracle_plateau /
@@ -8189,55 +8166,51 @@ class RelabelDecisionUnitTests(unittest.TestCase):
                 msg=reason)
 
 
-class EditPermissionRelabelLoopTests(unittest.TestCase):
-    """AC1/AC5/AC8: a walled loop-driver run (git target, runner never edits,
-    oracle below threshold) relabels to edit_permission_unavailable, rc=2, with
-    a fix breadcrumb — for both max-iterations and plateau halts."""
+class CopilotLoopDriverIntegrationTests(unittest.TestCase):
+    """ADR-0039 gates the September native prototype before paid dispatch."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="servo-editperm-")
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-loop-")
         tmp = Path(self.tmpdir)
-        self.target = _edit_perm_git_target(tmp, _below_threshold_oracle())
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
         self.bindir = tmp / "bin"
         self.counter = tmp / "counter.txt"
-        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+        self.args_log = tmp / "args.log"
+        _mock_copilot(
+            self.bindir,
+            _copilot_jsonl_fixture(_COPILOT_VERDICT_TEXT),
+            json.dumps(_COPILOT_USAGE_FIXTURE),
+            self.counter,
+            self.args_log,
+        )
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_copilot_argv_form_emitted(self):
+    def test_copilot_launch_refused_before_argv_emitted(self):
         result = _run_loop(
             self.target, "--host", "copilot", "--prompt", "make it pass",
             "--max-iterations", "2", mock_bindir=self.bindir,
         )
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertEqual(int(self.counter.read_text().strip()), 2)
-        invocations = _read_args_log(self.args_log)
-        self.assertEqual(len(invocations), 2)
-        # The mock logs the args AFTER the binary name, so argv starts at `-p`.
-        argv = invocations[0]
-        self.assertIn("-s", argv)
-        self.assertIn("--allow-all-tools", argv)
-        self.assertEqual(_find_flag_value(argv, "--agent"), "runner")
-        self.assertEqual(_find_flag_value(argv, "--output-format"), "json")
-        self.assertIsNotNone(_find_flag_value(argv, "--usage-output-file"))
-        self.assertIsNotNone(_find_flag_value(argv, "-p"))
-        # Claude-only knob must NOT leak into the Copilot form.
-        self.assertNotIn("--max-budget-usd", argv)
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        self.assertFalse(self.counter.exists())
+        self.assertFalse(self.args_log.exists())
+        self.assertFalse((self.target / ".servo/runs").exists())
 
-    def test_downstream_verdict_and_edit_signal(self):
+    def test_refusal_does_not_fabricate_usage_or_verdict(self):
         result = _run_loop(
             self.target, "--host", "copilot", "--prompt", "x",
             "--max-iterations", "1", mock_bindir=self.bindir,
         )
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        per_iter = [ln for ln in _stdout_json_lines(result.stdout)
-                    if "verdict" in ln]
-        self.assertEqual(len(per_iter), 1)
-        # Verdict parsed from the normalized result text ⇒ downstream unchanged.
-        self.assertEqual(per_iter[0]["verdict"]["status"], "in_progress")
-        # AC4: the native edit-signal is surfaced (files_modified from usage).
-        self.assertIn("files_modified=2", result.stderr)
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        lines = _stdout_json_lines(result.stdout)
+        self.assertEqual(len(lines), 1)
+        self.assertNotIn("verdict", lines[0])
+        self.assertIsNone(lines[0]["cumulative_cost_usd"])
+        self.assertEqual(lines[0]["final_oracle_status"], "env_error")
 
     def test_claude_argv_unchanged_for_default_host(self):
         # Default host = claude: a mock claude is used and the claude argv form
@@ -8261,21 +8234,22 @@ class EditPermissionRelabelLoopTests(unittest.TestCase):
         self.assertNotIn("--usage-output-file", argv)
 
 
-class CopilotGoalFamilyRefusalTests(unittest.TestCase):
-    """AC3 — the /goal family refuses (explicitly) under `--host copilot`.
-
-    Autopilot has no oracle-gated stop and the target-side agentStop gate's
-    live firing is unverifiable headless (jig 113-08 / ADR-0038), so the goal
-    driver is a documented residual under Copilot — never a silent un-gated run.
-    """
+class EditPermissionRelabelLoopTests(unittest.TestCase):
+    """AC1/AC5/AC8: a walled loop-driver run (git target, runner never edits,
+    oracle below threshold) relabels to edit_permission_unavailable, rc=2, with
+    a fix breadcrumb — for both max-iterations and plateau halts."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-goal-")
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-editperm-")
         tmp = Path(self.tmpdir)
-        self.target = tmp / "demo"
-        self.target.mkdir()
-        _make_manifest(self.target)
-        _make_oracle(self.target, _passing_oracle())
+        self.target = _edit_perm_git_target(tmp, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
     def _summary(self, result):
         return _stdout_json_lines(result.stdout)[-1]
 
@@ -8317,17 +8291,21 @@ class CopilotGoalFamilyRefusalTests(unittest.TestCase):
         self.assertTrue(state["edit_signal_computed"])
 
 
-class RunnerEverEditedArmTests(unittest.TestCase):
-    """AC2/AC3: the untracked-inclusive delta arms runner_ever_edited on the
-    first runner edit, treats a pre-existing dirty tree as not-this-iteration's
-    change, and persists the flag across --resume."""
+class CopilotGoalFamilyRefusalTests(unittest.TestCase):
+    """AC3 — the /goal family refuses (explicitly) under `--host copilot`.
+
+    Autopilot has no oracle-gated stop and the target-side agentStop gate's
+    live firing is unverifiable headless (jig 113-08 / ADR-0038), so the goal
+    driver is a documented residual under Copilot — never a silent un-gated run.
+    """
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="servo-arm-")
-        self.tmp = Path(self.tmpdir)
-        self.target = _edit_perm_git_target(self.tmp, _below_threshold_oracle())
-        self.bindir = self.tmp / "bin"
-        self.counter = self.tmp / "counter.txt"
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-goal-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -8356,14 +8334,24 @@ class RunnerEverEditedArmTests(unittest.TestCase):
         result = _run_raw(self.target, "--host", "copilot", "--driver", "goal",
                           "--prompt", "x")
         summary = _stdout_json_lines(result.stdout)[-1]
-        self.assertEqual(summary["terminal_reason"], "goal_driver_unsupported_host")
+        self.assertEqual(summary["terminal_reason"], "native_capability_unavailable")
 
 
-class CopilotHostSelectionTests(unittest.TestCase):
-    """AC1 — host selection: default is claude; auto routes to loop under copilot."""
+class RunnerEverEditedArmTests(unittest.TestCase):
+    """AC2/AC3: the untracked-inclusive delta arms runner_ever_edited on the
+    first runner edit, treats a pre-existing dirty tree as not-this-iteration's
+    change, and persists the flag across --resume."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-host-")
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-arm-")
+        self.tmp = Path(self.tmpdir)
+        self.target = _edit_perm_git_target(self.tmp, _below_threshold_oracle())
+        self.bindir = self.tmp / "bin"
+        self.counter = self.tmp / "counter.txt"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
     def test_created_untracked_file_arms_flag(self):
         # AC2: a runner whose only change is CREATING a new untracked file arms.
         _mock_claude_editing(self.bindir, self.counter,
@@ -8493,12 +8481,11 @@ class BookkeepingNoFalseArmTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, msg=result.stderr)
 
 
-class NonGitFallbackTests(unittest.TestCase):
-    """AC9: on a non-git target the delta cannot be computed; the loop keeps
-    today's terminal reason and never crashes or false-relabels."""
+class CopilotHostSelectionTests(unittest.TestCase):
+    """Default remains Claude; native selection never falls back to Claude."""
 
     def setUp(self):
-        self.tmpdir = tempfile.mkdtemp(prefix="servo-nongit-")
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-host-")
         tmp = Path(self.tmpdir)
         self.target = tmp / "demo"
         self.target.mkdir()
@@ -8507,7 +8494,6 @@ class NonGitFallbackTests(unittest.TestCase):
         self.bindir = tmp / "bin"
         self.counter = tmp / "counter.txt"
         self.args_log = tmp / "args.log"
-        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
@@ -8528,12 +8514,7 @@ class NonGitFallbackTests(unittest.TestCase):
         self.assertIn("--max-budget-usd", argv)  # the Claude loop-driver form
         self.assertNotIn("--allow-all-tools", argv)
 
-    def test_auto_routes_to_loop_under_copilot(self):
-        # --host copilot with NO --driver (auto): must run the LOOP driver via
-        # `copilot`, NOT the claude goal driver — even when a goal-capable
-        # `claude` is present (which auto would otherwise route to). This pins
-        # the Copilot routing override: without it, auto → goal → claude, which
-        # would silently ignore --host copilot.
+    def test_auto_copilot_refuses_without_claude_fallback(self):
         claude_args = Path(self.tmpdir) / "claude_args.log"
         _mock_claude_goal(
             self.bindir,
@@ -8546,21 +8527,35 @@ class NonGitFallbackTests(unittest.TestCase):
         result = _run_raw(self.target, "--host", "copilot", "--prompt", "x",
                           "--max-iterations", "1", "--plateau-window", "0",
                           mock_bindir=self.bindir)
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        # The Copilot loop-driver form ran.
-        copilot_argv = _read_args_log(self.args_log)[0]
-        self.assertIn("--allow-all-tools", copilot_argv)
-        self.assertNotIn("--max-budget-usd", copilot_argv)
-        # The claude GOAL driver did NOT run (no stream-json invocation): a
-        # goal-capable claude present must not be routed to under --host copilot.
-        for argv in _read_args_log(claude_args):
-            self.assertNotIn("stream-json", argv)
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        self.assertFalse(self.args_log.exists())
+        self.assertFalse(claude_args.exists())
 
     def test_max_ai_credits_validation(self):
         result = _run_raw(self.target, "--host", "copilot", "--prompt", "x",
                           "--max-ai-credits", "-1")
         self.assertEqual(result.returncode, 2)
         self.assertIn("--max-ai-credits", result.stderr)
+
+
+class NonGitFallbackTests(unittest.TestCase):
+    """AC9: on a non-git target the delta cannot be computed; the loop keeps
+    today's terminal reason and never crashes or false-relabels."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-nongit-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        _mock_claude_constant(self.bindir, _claude_json_payload(), self.counter)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
     def test_non_git_keeps_max_iterations_reason(self):
         result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
                            mock_bindir=self.bindir)

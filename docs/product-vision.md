@@ -9,7 +9,7 @@ last_verified: 2026-07-12
 
 ## Vision
 
-A Claude Code and Codex plugin that **compiles engineering intent into executable
+A Claude Code, Codex and GitHub Copilot CLI plugin that **compiles engineering intent into executable
 evaluation** — and then executes against it. Servo is an **Evaluation-Driven
 Development (EDD) engine**. Its input may be a goal, curated acceptance
 criteria, an existing engineering spec, or the quality signals already present
@@ -112,6 +112,12 @@ controls. That gate is now **enforced at the launch surfaces**, not merely consu
 emit a scheduled Routine prompt unless an `approved` readiness artifact exists for the
 goal (spec 023-02) — while the synchronous heartbeat dispatch stays exempt by
 construction ([ADR-0018](decisions/adr-0018-suitability-gates-compile-not-heartbeat.md)).
+
+Host installation does not prove execution parity. Copilot's installed
+deterministic Compile/gate workflow is supported; native unattended loop and
+whole-pass dispatch remain refused until the requested hard budget/context
+contract is established ([ADR-0039](decisions/adr-0039-copilot-capability-boundaries.md)).
+The soft native credit cap is not a substitute for that monetary policy.
 
 Continuous evaluation extends that audience to teams that want scheduled,
 read-only discovery with explicitly opted-in, oracle-gated follow-up. Servo

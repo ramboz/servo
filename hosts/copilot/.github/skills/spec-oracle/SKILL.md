@@ -8,7 +8,11 @@ description: >-
 > Copilot exposes no plugin-root environment variable, and servo's Copilot
 > package ships no hook to publish one. In a fresh shell, resolve it with
 > the locator:
-> `SERVO_ROOT="$(for f in "${COPILOT_HOME:-$HOME/.copilot}"/installed-plugins/*/*/.github/scripts/servo_root.py; do [ -f "$f" ] && python3 "$f" && break; done)"`
+> `SERVO_ROOT="$(p="$PWD"; while :; do f="$p/.github/scripts/servo_root.py"; if [ -f "$f" ]; then python3 "$f"; exit $?; fi; [ "$p" = / ] && break; p="$(dirname "$p")"; done; for f in "${COPILOT_HOME:-$HOME/.copilot}"/installed-plugins/*/*/.github/scripts/servo_root.py; do [ -f "$f" ] && python3 "$f" && exit 0; done; printf '%s\n' 'servo_root: no servo runtime found. Install the plugin or invoke its .github/scripts/servo_root.py directly.' >&2; exit 1)"`
+> The result is the runtime `.github` directory; the package's `.plugin/plugin.json`
+> is one parent higher. For a live local-marketplace or `--plugin-dir` package,
+> invoke `python3 "/absolute/package/.github/scripts/servo_root.py"` directly.
+> That fallback uses the known package path, not live-install config discovery.
 
 > **Full description** (Copilot's skill loader caps a frontmatter `description` at 1024 characters; the summary above is shortened — this is the complete original text, preserved so no routing/trigger guidance is lost):
 >

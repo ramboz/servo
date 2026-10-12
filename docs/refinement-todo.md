@@ -20,56 +20,42 @@ inventory (`docs/architecture.md`). We have **not** observed an installed
 `agentStop` hook block a real premature stop and re-drive the next turn under a
 live Copilot session.
 
-**Resolution trigger:** Copilot gains a reliable way to observe repo-hook firing
-under `copilot -p` (or a supported interactive equivalent), OR spec 032-05
-validates the goal-driver-under-Autopilot path and needs the same live-firing
-evidence. Until then the static contract stands, matching how jig ships its
-Copilot hooks.
+**Resolution trigger:** Live evidence proves actual per-turn continuation
+decisions and a bounded retry guard; then re-open 033-07 through normal readiness.
+Session-end notification or preToolUse denial is insufficient. The existing
+static adapter stays advisory, not a completed enforcing continuation gate.
 
 **Surfaced by:** slice 032-04 (ADR-0038); the residual is enumerated in
 `docs/architecture.md` "Copilot host hook inventory".
 
 ---
 
-## Copilot loop cost is tracked in native units, not against a USD ceiling
+## Copilot native autonomy cannot uphold the requested monetary/context contract
 
-**Deferred:** slice 032-05 runs the optional loop driver under `--host copilot`
-(`copilot -p`). Copilot reports cost as **premium-requests / nano-AIU**
-(`--usage-output-file`), not USD, and there is no faithful conversion. So servo
-does **not** fabricate a USD number: under Copilot the normalized
-`total_cost_usd` is `0.0` and the cumulative USD `--cost-ceiling` **does not
-brake the loop** — it is bounded by `--max-iterations` (host-neutral) plus the
-optional per-invocation `--max-ai-credits`. Copilot's native cost + the
-`codeChanges.filesModifiedCount` edit-signal are parsed and surfaced per
-iteration on stderr, but there is no *cumulative Copilot-native ceiling*
-guardrail (the USD one is inert under Copilot). `--max-ai-credits`' live effect
-on a single non-Autopilot `copilot -p` is also not live-verified (fixture-tested
-only, per the no-live-run rule).
+**Deferred:** The September prototype normalized unknown spend to zero and left
+the USD/context brakes inert. Current public `--host copilot` launch/resume paths
+instead refuse before dispatch/target writes (033-02, ADR-0039); unknown spend is
+null, not zero. Executed CLI 1.0.96-2 limits describe minimum-30 AI credits as a
+soft post-response cap, not an enforceable USD ceiling. No owner relaxation has
+been authorized. Native loop/checkpoints/planned/heartbeat execution is 033-03
+DEFERRED, not completed by the refusal.
 
-**Resolution trigger:** a Copilot user needs a cumulative cost brake under the
-loop driver (repeated runs burn credits) → add a `--copilot-credit-ceiling`
-(cumulative nano-AIU / premium-request) guardrail that halts on
-`sum(totalNanoAiu)` the way `--cost-ceiling` halts on `sum(total_cost_usd)`, and
-live-verify `--max-ai-credits` against a real `copilot -p` session.
+**Resolution trigger:** Executed native hard-budget capability, or a new explicit
+owner-approved replacement monetary/credit policy, plus effective tool/context/
+resume/whole-pass evidence and normal readiness review. Do not convert credits
+to dollars by guesswork or count a limit flag as proof.
 
-**Surfaced by:** slice 032-05 (ADR-0038); enumerated in `docs/architecture.md`
-"Copilot host execution-primitive inventory".
+**Surfaced by:** Current [CLI contract](specs/033-copilot-installed-runtime/copilot-contract.txt)
+and [ADR-0039](decisions/adr-0039-copilot-capability-boundaries.md).
 
 ---
 
 ## Copilot goal-driver fidelity under Autopilot is unverified (driver refuses)
 
-**Deferred:** the goal driver (`/goal` + per-turn oracle-gated stop, ADR-0008)
-does **not** port to Copilot: Autopilot has no oracle-gated stop (only
-`--max-autopilot-continues` / `--max-ai-credits`, verified live in 032-01), and
-whether a per-continuation `agentStop` hook reconstructs the per-turn gate under
-Autopilot is **not headlessly verifiable** (jig 113-08). Per ADR-0038's honesty
-invariant (never a silent un-gated run), slice 032-05 makes the `/goal` family
-(`--driver goal`, `--background`, `--emit-routine-prompt`) **refuse under
-`--host copilot`** (`goal_driver_unsupported_host`) and points the user to
-`--driver loop` — the loop driver ports fully and delivers equivalent
-oracle-gated autonomy under Copilot. So Copilot users are not *blocked* from
-oracle-gated autonomy; they use the loop driver.
+**Deferred:** The native goal family remains unavailable, and 033-02 now also
+refuses the native loop. An advisory agentStop adapter is not a replacement
+for real per-turn oracle-gated continuation. No claim of equivalent autonomous
+Copilot guardrails is made.
 
 **Resolution trigger:** Copilot gains a reliable way to observe repo-hook firing
 under Autopilot / `copilot -p` (see the sibling hook residual above), so the
@@ -85,26 +71,15 @@ permanent honest posture (goal driver = Claude-only), per ADR-0038 kill criteria
 
 ## Copilot loop driver has no hard-error-envelope guard (soft failure scored, not env-erroring)
 
-**Deferred:** the Claude loop path has a "Bug 001"-style guard: a hard
-auth/API-error envelope halts with `EXIT_ENV_ERROR` rather than being scored as a
-real iteration. `_invoke_copilot`/`_normalize_copilot_result` (slice 032-05) have
-no analog — a **soft** Copilot failure (auth/rate-limit) that still emits a
-parseable non-ephemeral JSONL event is normalized as `is_error: False` and scored
-as a real (likely empty) iteration instead of env-erroring. **Bounded and safe
-today:** the oracle scores target state independently (no false pass), and
-`--max-iterations` + plateau detection self-limit the run; the common
-binary-absent / timeout / no-parseable-event cases already return
-`(None, breadcrumb)` → `EXIT_ENV_ERROR` correctly (pinned by
-`test_copilot_not_on_path`). The gap is only the *soft* error-envelope case,
-which depends on Copilot's error-envelope JSON shape — **not capturable
-headlessly** (same no-live-error-data constraint as the hook-firing residual).
+**Deferred:** The September loop adapter's result normalization lacks reliable
+native error-envelope classification. Current public native autonomy refuses
+before reaching that adapter; its fixture coverage is not current runtime proof.
+Native authoring/frozen scoring use their separately verified invocation boundary,
+not this historical success-shaped normalization.
 
-**Resolution trigger:** a live Copilot error envelope (auth/rate-limit) shape is
-captured → teach `_normalize_copilot_result` to detect it and return
-`(None, breadcrumb)` like the Claude path's Bug-001 guard, with a regression test
-mirroring `ClaudeErrorEnvelopeTests`. Pairs with the hook-firing + `--max-ai-credits`
-live-validation residuals above (one live-Copilot-session validation pass closes
-all three).
+**Resolution trigger:** Re-opening 033-03 requires real native success/error
+classification alongside its hard-budget/tool/context contract; read-only
+transport success does not complete native-loop support.
 
 **Surfaced by:** slice 032-05 independent review (`jig:reviewer`, PASS with
 low-severity findings, 2026-09-18); finding logged rather than papered over.

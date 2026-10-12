@@ -79,10 +79,11 @@ Or install the committed package straight from the repository subdirectory:
 copilot plugin install ramboz/servo:hosts/copilot
 ```
 
-The optional `/goal`-driven autonomy family (`--driver goal`, `--background`,
-Routines) and Claude `Stop` hooks remain Claude-specific. Under Copilot, use the
-portable loop driver (`--driver loop`), which keeps the same oracle-gated
-guardrails.
+Copilot scaffolding and quality gates work without Claude or Jig. Native autonomy
+is **unavailable**: `--host copilot` refuses before dispatch; the minimum-30 soft
+AI-credit cap cannot replace hard USD/context safeguards ([ADR-0039](https://github.com/ramboz/servo/blob/main/docs/decisions/adr-0039-copilot-capability-boundaries.md)).
+Claude goal/background/Routine behavior is unchanged. Copilot's `agentStop` is
+advisory; per-turn continuation is unproved.
 
 ## Extension points
 
@@ -129,8 +130,8 @@ and release-please. See
 
 ## Status
 
-The core evaluation-compilation and guarded-execution paths are available for
-Claude Code, Codex, and GitHub Copilot CLI. Live capability status and
+The project-owned evaluation workflow is available for Claude Code, Codex and
+GitHub Copilot CLI; native Copilot autonomy remains unavailable. Live capability status and
 sequencing are maintained in the
 [roadmap](https://github.com/ramboz/servo/blob/main/docs/specs/ROADMAP.md).
 

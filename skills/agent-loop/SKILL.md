@@ -48,6 +48,24 @@ Headless iteration driver. Subprocesses `claude -p --agent <runner|judge> --outp
 
 The helper is at `${CLAUDE_PLUGIN_ROOT}/skills/agent-loop/loop.py`.
 
+## Copilot capability boundary
+
+Installing this skill does not select a native execution backend. The helper's
+default remains Claude; do not silently run Claude for a requested Copilot task.
+Explicit `--host copilot` launch/resume requests fail with exit 2 and
+`native_capability_unavailable` before dispatch or target mutation (ADR-0039).
+Copilot's soft AI-credit cap cannot uphold the hard USD/context contract.
+Zero-valued limits and `--resume-anyway` do not enable an unsupported native run.
+`--explain-routing --host copilot` reports the same support boundary read-only.
+
+Use the project-owned `quality-gate` independently of a host driver. Native loop,
+checkpoint resume, planned/heartbeat execution and enforcing stop continuation
+are incomplete; a package install is not proof of those capabilities.
+Identified non-Claude/native version-2 state cannot resume through Claude.
+Unmarked legacy version-1 state retains the historical Claude interpretation;
+the September prototype did not record a backend, so its origin cannot always
+be recovered. Do not convert or blindly resume known prototype native state.
+
 ## When to use this skill
 
 Use when the user wants to **iterate** an already-scaffolded target. Scaffolding is a different skill (`/servo:scaffold-init`); scoring without iteration is `/servo:quality-gate`. This one closes the loop — measure (gate.py), compare (against threshold), adjust (claude -p), brake (caps & ceilings), repeat.

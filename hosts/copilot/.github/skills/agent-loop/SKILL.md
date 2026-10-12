@@ -8,7 +8,11 @@ description: >-
 > Copilot exposes no plugin-root environment variable, and servo's Copilot
 > package ships no hook to publish one. In a fresh shell, resolve it with
 > the locator:
-> `SERVO_ROOT="$(for f in "${COPILOT_HOME:-$HOME/.copilot}"/installed-plugins/*/*/.github/scripts/servo_root.py; do [ -f "$f" ] && python3 "$f" && break; done)"`
+> `SERVO_ROOT="$(p="$PWD"; while :; do f="$p/.github/scripts/servo_root.py"; if [ -f "$f" ]; then python3 "$f"; exit $?; fi; [ "$p" = / ] && break; p="$(dirname "$p")"; done; for f in "${COPILOT_HOME:-$HOME/.copilot}"/installed-plugins/*/*/.github/scripts/servo_root.py; do [ -f "$f" ] && python3 "$f" && exit 0; done; printf '%s\n' 'servo_root: no servo runtime found. Install the plugin or invoke its .github/scripts/servo_root.py directly.' >&2; exit 1)"`
+> The result is the runtime `.github` directory; the package's `.plugin/plugin.json`
+> is one parent higher. For a live local-marketplace or `--plugin-dir` package,
+> invoke `python3 "/absolute/package/.github/scripts/servo_root.py"` directly.
+> That fallback uses the known package path, not live-install config discovery.
 
 > **Full description** (Copilot's skill loader caps a frontmatter `description` at 1024 characters; the summary above is shortened — this is the complete original text, preserved so no routing/trigger guidance is lost):
 >
@@ -20,6 +24,24 @@ description: >-
 Headless iteration driver. Subprocesses `claude -p --agent <runner|judge> --output-format json` against a target N times under hard guardrails, scores via `gate.py --json` after each iteration, and decides whether to iterate again. The first servo skill that crosses the line from "scored scaffolding" into actual unattended operation — and the first one that **costs real money per invocation**.
 
 The helper is at `$SERVO_ROOT/skills/agent-loop/loop.py`.
+
+## Copilot capability boundary
+
+Installing this skill does not select a native execution backend. The helper's
+default remains Claude; do not silently run Claude for a requested Copilot task.
+Explicit `--host copilot` launch/resume requests fail with exit 2 and
+`native_capability_unavailable` before dispatch or target mutation (ADR-0039).
+Copilot's soft AI-credit cap cannot uphold the hard USD/context contract.
+Zero-valued limits and `--resume-anyway` do not enable an unsupported native run.
+`--explain-routing --host copilot` reports the same support boundary read-only.
+
+Use the project-owned `quality-gate` independently of a host driver. Native loop,
+checkpoint resume, planned/heartbeat execution and enforcing stop continuation
+are incomplete; a package install is not proof of those capabilities.
+Identified non-Claude/native version-2 state cannot resume through Claude.
+Unmarked legacy version-1 state retains the historical Claude interpretation;
+the September prototype did not record a backend, so its origin cannot always
+be recovered. Do not convert or blindly resume known prototype native state.
 
 ## When to use this skill
 

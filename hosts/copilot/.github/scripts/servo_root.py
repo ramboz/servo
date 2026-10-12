@@ -21,6 +21,10 @@ Resolution order:
    segment is user-controlled, so the manifest is the only stable identifier.
    When several installs match, the highest `version` wins, ties broken by
    mtime, so the answer is deterministic rather than filesystem-order dependent.
+3. **Executing package fallback** — when no store install exists, a locator
+   invoked at `<package>/.github/scripts/servo_root.py` can resolve that package
+   directly (live local-marketplace / `--plugin-dir` use). Its parent native
+   manifest must identify Servo. This does not discover live-install configs.
 
 Prints the resolved root to stdout and exits 0; exits 1 with a diagnostic on
 stderr when no servo runtime can be found. Pure stdlib.
@@ -93,7 +97,20 @@ def resolve(start: Path | None = None) -> Path | None:
     if in_repo is not None:
         return in_repo
     roots = _install_roots()
-    return roots[-1] if roots else None
+    if roots:
+        return roots[-1]
+    # Do not put this before store ordering: the documented shell bootstrap
+    # may execute an older install's script to locate the highest version.
+    root = Path(__file__).resolve().parents[1]
+    if root.name != ".github" or not _is_runtime(root):
+        return None
+    try:
+        manifest = json.loads(
+            (root.parent / ".plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return None
+    return root if isinstance(manifest, dict) and manifest.get("name") == PLUGIN_NAME else None
 
 
 def main(argv: list[str]) -> int:

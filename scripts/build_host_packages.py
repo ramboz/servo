@@ -47,14 +47,20 @@ _SERVO_ROOT_VAR = "SERVO_ROOT"
 _SERVO_ROOT_TOKEN = "$" + _SERVO_ROOT_VAR
 # The fresh-shell locator one-liner injected into every plugin-mode skill that
 # references `$SERVO_ROOT`. It honours `COPILOT_HOME` (the same override the
-# locator itself reads) and iterates a quoted glob so install paths with spaces
-# still work. Unlike jig, there is NO SessionStart carrier — this locator is the
-# sole resolution path (servo's Copilot package is hook-free, ADR-0038).
+# locator itself reads), first bootstraps a project-owned script, then iterates
+# a quoted glob so install paths with spaces still work. A missing bootstrap is
+# an explicit error, not an empty root. Unlike jig, there is NO SessionStart
+# carrier (servo's Copilot package is hook-free, ADR-0038).
 _SERVO_ROOT_LOCATOR = (
     _SERVO_ROOT_VAR
-    + '="$(for f in "${COPILOT_HOME:-$HOME/.copilot}"/installed-plugins/*/*/'
+    + '="$(p="$PWD"; while :; do f="$p/.github/scripts/servo_root.py"; '
+    + 'if [ -f "$f" ]; then python3 "$f"; exit $?; fi; '
+    + '[ "$p" = / ] && break; p="$(dirname "$p")"; done; '
+    + 'for f in "${COPILOT_HOME:-$HOME/.copilot}"/installed-plugins/*/*/'
     + ".github/scripts/servo_root.py"
-    + '; do [ -f "$f" ] && python3 "$f" && break; done)"'
+    + '; do [ -f "$f" ] && python3 "$f" && exit 0; done; '
+    + "printf '%s\\n' 'servo_root: no servo runtime found. Install the plugin "
+    + "or invoke its .github/scripts/servo_root.py directly.' >&2; exit 1)\""
 )
 _SERVO_ROOT_NOTE_MARKER = "servo's runtime root (this plugin's own directory)"
 
@@ -323,6 +329,14 @@ def _ensure_servo_root_note(text: str) -> str:
         "with\n"
         "> the locator:\n"
         "> `" + _SERVO_ROOT_LOCATOR + "`\n"
+        "> The result is the runtime `.github` directory; the package's "
+        "`.plugin/plugin.json`\n"
+        "> is one parent higher. For a live local-marketplace or `--plugin-dir` "
+        "package,\n"
+        "> invoke `python3 \"/absolute/package/.github/scripts/servo_root.py\"` "
+        "directly.\n"
+        "> That fallback uses the known package path, not live-install config "
+        "discovery.\n"
     )
     if text.startswith("---\n"):
         end = text.find("\n---\n", 4)

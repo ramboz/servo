@@ -1053,6 +1053,7 @@ def _build_initial_state(
     now_iso = datetime.now(timezone.utc).isoformat()
     return {
         "state_schema_version": STATE_SCHEMA_VERSION,
+        "backend": HOST_CLAUDE,
         "run_id": run_id,
         "started_at": now_iso,
         "last_updated_at": now_iso,
@@ -1156,6 +1157,31 @@ def _refuse_preflight(
         "run_id": run_id,
     })
     return EXIT_ENV_ERROR
+
+
+def _refuse_copilot_capability(*, explain: bool = False) -> int:
+    message = (
+        "--host copilot autonomy is unavailable: the current CLI cannot uphold "
+        "Servo's hard USD ceiling and context guarantees. --max-ai-credits is "
+        "a soft post-response cap (minimum 30), not a USD budget. --driver loop, "
+        "goal, background and native resume remain unsupported (ADR-0039). "
+        "Use the project-owned quality gate with an independently controlled "
+        "host, or establish an owner-approved enforceable native contract."
+    )
+    sys.stderr.write(f"loop: {message}\n")
+    _emit_json({
+        "schema_version": 2,
+        "backend": HOST_COPILOT,
+        "supported": False,
+        "driver": None,
+        "terminal_reason": "native_capability_unavailable",
+        "terminal_breadcrumb": message,
+        "iterations_completed": 0,
+        "cumulative_cost_usd": None,
+        "context_fill_ratio": None,
+        "final_oracle_status": STATUS_ENV_ERROR,
+    })
+    return EXIT_OK if explain else EXIT_ENV_ERROR
 
 
 def _refuse_plan(*, reason: str, message: str) -> int:
@@ -2389,6 +2415,9 @@ def run_loop(
     active subprocess and set a flag the loop polls at iteration
     boundaries.
     """
+    if host == HOST_COPILOT:
+        return _refuse_copilot_capability()
+
     _install_signal_handlers()
 
     claude_timeout_seconds = _resolve_claude_timeout()
@@ -2430,6 +2459,23 @@ def run_loop(
                 message=(
                     f"state file at {state_path} is missing or malformed; "
                     f"--resume-anyway does not bypass parse errors"
+                ),
+                cost_ceiling=refusal_ceiling,
+                context_fill_threshold=refusal_threshold,
+            )
+
+        # Unmarked version-1 state retains its historical Claude interpretation.
+        # The September native prototype did not persist a backend discriminator.
+        if (
+            any(state.get(key, HOST_CLAUDE) != HOST_CLAUDE for key in ("backend", "host"))
+            or state.get("state_schema_version") == 2
+        ):
+            return _refuse_preflight(
+                run_id=resume_run_id,
+                reason="backend_mismatch",
+                message=(
+                    "native or non-Claude state cannot resume through Claude; "
+                    "--resume-anyway cannot convert backend identity (ADR-0039)"
                 ),
                 cost_ceiling=refusal_ceiling,
                 context_fill_threshold=refusal_threshold,
@@ -3106,6 +3152,7 @@ def _build_goal_state(
     return {
         "state_schema_version": STATE_SCHEMA_VERSION,
         "driver": DRIVER_GOAL,
+        "backend": HOST_CLAUDE,
         "run_id": run_id,
         "started_at": now_iso,
         "last_updated_at": now_iso,
@@ -3793,19 +3840,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         choices=[HOST_CLAUDE, HOST_COPILOT],
         default=HOST_CLAUDE,
         help=(
-            "Coding-agent host the loop driver subprocesses per iteration "
-            "(slice 032-05, ADR-0038). `claude` (default) runs "
-            "`claude -p --output-format json` — zero change for Claude users. "
-            "`copilot` runs `copilot -p <prompt> -s --allow-all-tools --agent "
-            "<name> --output-format json --usage-output-file <f>` and "
-            "normalizes Copilot's JSONL + usage file into the same result "
-            "shape, so the loop's own Python per-iteration oracle gate is "
-            "unchanged (it does NOT use Copilot Autopilot). Only the loop "
-            "driver ports to Copilot; the goal driver (`--driver goal` / "
-            "`--background` / `--emit-routine-prompt`) refuses under "
-            "`--host copilot` (a documented residual — Autopilot has no "
-            "oracle-gated stop). The USD `--cost-ceiling` does not apply under "
-            "Copilot (premium-request / nano-AIU units); use `--max-ai-credits`."
+            "Coding-agent backend; default claude is unchanged. copilot "
+            "refuses autonomous launches before dispatch because the native "
+            "CLI cannot uphold the requested hard USD/context contract "
+            "(ADR-0039). Installation and deterministic quality gates remain "
+            "supported; a soft AI-credit cap is not a replacement USD budget."
         ),
     )
     parser.add_argument(
@@ -3813,11 +3852,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         type=float,
         default=None,
         help=(
-            "Copilot-only (slice 032-05): forward `--max-ai-credits <n>` as the "
-            "per-invocation credit cap for each `copilot -p` call — the honest "
-            "per-invocation brake under `--host copilot`, where the USD "
-            "`--cost-ceiling` cannot convert to Copilot's premium-request / "
-            "nano-AIU units. Ignored (with a warning) under `--host claude`."
+            "Legacy Copilot soft-credit limit. Does not enable unsupported "
+            "native autonomy or replace a USD ceiling (ADR-0039). Ignored "
+            "(with a warning) under --host claude."
         ),
     )
     parser.add_argument(
@@ -4006,6 +4043,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     # case back to DRIVER_AUTO here so the read-only explanation is byte-for-byte
     # today's (plan-driven routing is resolved on the actual-run path below).
     if args.explain_routing:
+        if args.host == HOST_COPILOT:
+            return _refuse_copilot_capability(explain=True)
         verdict = _decide_route(
             target, args.driver if args.driver is not None else DRIVER_AUTO
         )
@@ -4052,58 +4091,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                      "foreground — detach it with your shell's nohup/&, or use "
                      "--resume for unattended continuation")
 
-    # ---- Host selection: Copilot goal-family refusal (slice 032-05 AC3) -----
-    # The loop driver ports fully under Copilot (per-iteration `copilot -p`), but
-    # the /goal family does NOT: Copilot Autopilot has no oracle-gated stop, and
-    # the target-side agentStop gate's live firing is unverifiable headless (jig
-    # 113-08 / ADR-0038). So `--driver goal`, `--background` (a detached goal
-    # run), and `--emit-routine-prompt` (a /goal Routine prompt) refuse under
-    # `--host copilot` — EXPLICITLY, never a silent un-gated run. This runs
-    # before the readiness preflight / --emit-routine-prompt handler / routing
-    # so the refusal is the single, first thing a Copilot goal-family invocation
-    # hits. `--max-ai-credits` under Claude is a no-op knob; warn rather than
-    # error so a host-agnostic wrapper script can pass it unconditionally.
     if args.host == HOST_COPILOT:
-        goal_family = None
-        if args.background:
-            goal_family = "--background (a detached goal run)"
-        elif args.emit_routine_prompt:
-            goal_family = "--emit-routine-prompt (a /goal Routine prompt)"
-        elif args.driver == DRIVER_GOAL:
-            goal_family = "--driver goal"
-        if goal_family is not None:
-            sys.stderr.write(
-                f"loop: {goal_family} is unsupported under --host copilot. The "
-                "goal driver is a documented residual under Copilot (Autopilot "
-                "has no oracle-gated stop; ADR-0038). Use --driver loop — the "
-                "loop driver ports fully under --host copilot, gating on servo's "
-                "own Python per-iteration oracle check.\n"
-            )
-            return _refuse_goal(
-                run_id=_generate_preflight_run_id(),
-                reason=REASON_GOAL_UNSUPPORTED_HOST,
-                message=(
-                    f"{goal_family} unsupported under --host copilot "
-                    "(ADR-0038 residual); use --driver loop"
-                ),
-                cost_ceiling=(args.cost_ceiling if args.cost_ceiling is not None
-                              else DEFAULT_COST_CEILING_USD),
-                max_turns=(args.max_iterations if args.max_iterations is not None
-                           else DEFAULT_MAX_ITERATIONS),
-            )
-        else:
-            # Loop driver under Copilot: warn ONCE at launch that the USD
-            # `--cost-ceiling` is inert (Copilot bills in premium-requests /
-            # nano-AIU, not USD — ADR-0038 residual), symmetric with the
-            # `--max-ai-credits`-under-claude warning below. The per-iteration
-            # native-cost advisory reinforces it as the loop runs; this makes
-            # the cost model clear up front, before the first paid iteration.
-            sys.stderr.write(
-                "loop: --host copilot — the loop is bounded by --max-iterations "
-                "and any --max-ai-credits; the USD --cost-ceiling does NOT apply "
-                "(Copilot bills in premium-requests / nano-AIU; ADR-0038 "
-                "residual). Native per-iteration cost is surfaced as it runs.\n"
-            )
+        return _refuse_copilot_capability()
     elif args.max_ai_credits is not None:
         sys.stderr.write(
             "loop: --max-ai-credits is a Copilot-only per-invocation cap and is "
@@ -4268,13 +4257,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # `--driver goal` was requested — an unsupported host refuses rather than
     # silently downgrading to a non-detachable loop run.
     routing_driver = DRIVER_GOAL if args.background else effective_arg_driver
-    if args.host == HOST_COPILOT:
-        # Slice 032-05: under Copilot the goal family already refused above, so
-        # only the loop driver remains. `auto` resolves to `loop` WITHOUT the
-        # claude `/goal` host-support probe (`_decide_route` reads `claude
-        # --version` + Claude settings — Claude-specific, irrelevant to Copilot).
-        effective_driver = DRIVER_LOOP
-    elif routing_driver == DRIVER_LOOP:
+    if routing_driver == DRIVER_LOOP:
         effective_driver = DRIVER_LOOP
     else:
         verdict = _decide_route(target, routing_driver)

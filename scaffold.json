@@ -1,0 +1,48 @@
+{
+  "jig_version": "2.16.2",
+  "timestamp": "2026-10-12T16:10:29Z",
+  "project_name": "claude-adr-0034-specs-028-jig-fe54d4",
+  "installed_tiers": [
+    "tier-0",
+    "tier-1"
+  ],
+  "installed_skills": [
+    "tier-0/scaffold-init",
+    "tier-0/memory-sync",
+    "tier-0/spec-workflow",
+    "tier-0/independent-review",
+    "tier-0/migrate",
+    "tier-0/vision-elicitation",
+    "tier-0/contracts",
+    "tier-1/adr-workflow",
+    "tier-1/tdd-loop",
+    "tier-1/slice-land",
+    "tier-1/pr-review",
+    "tier-1/arch-review",
+    "tier-1/clarify",
+    "tier-1/analyze",
+    "tier-1/security-review",
+    "tier-1/code-health",
+    "tier-1/explain",
+    "tier-1/bug-fix",
+    "tier-1/reframe",
+    "tier-1/orient"
+  ],
+  "scaffold_signals": {
+    "has_llm_agent_files": false,
+    "has_ci": true,
+    "has_tests": true,
+    "is_team": true
+  },
+  "hook_profile": "strict",
+  "protected_paths": [
+    "docs/conventions.md",
+    "docs/decisions/**",
+    "oracle.sh",
+    ".servo/**/config.json",
+    ".github/workflows/**",
+    "CODEOWNERS"
+  ],
+  "scaffold_mode": "plugin-only",
+  "host_renderer": "copilot"
+}
