@@ -116,7 +116,7 @@ construction ([ADR-0018](decisions/adr-0018-suitability-gates-compile-not-heartb
 Host installation does not prove execution parity. Copilot's installed
 deterministic Compile/gate workflow is supported; native unattended loop and
 whole-pass dispatch remain refused until the requested hard budget/context
-contract is established ([ADR-0039](decisions/adr-0039-copilot-capability-boundaries.md)).
+contract is established ([ADR-0043](decisions/adr-0043-copilot-capability-boundaries.md)).
 The soft native credit cap is not a substitute for that monetary policy.
 
 Continuous evaluation extends that audience to teams that want scheduled,

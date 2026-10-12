@@ -143,14 +143,14 @@
 | [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-04 — hooks | **DONE** |  |
 | [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-05 — execution-primitive-mapping | **DONE** |  |
 | [032-copilot-third-host](032-copilot-third-host/spec.md) | 032-06 — committed-package-and-release | **DONE** | tri-host parity (ADR-0038); residuals: goal-driver Copilot-unsupported &#124; live hook-firing unobservable headless |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-01 - installed-oracle | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-02 - capability-refusal | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-03 - native-loop-and-consumers | DEFERRED |  |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-04 - native-authoring | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-05 - native-text-judges | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-06 - native-visual-judge | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-07 - native-stop-continuation | DEFERRED |  |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-08 - unpriced-oracle-budget | IN_PROGRESS |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-01 - installed-oracle | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-02 - capability-refusal | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-03 - native-loop-and-consumers | DEFERRED |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-04 - native-authoring | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-05 - native-text-judges | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-06 - native-visual-judge | IN_PROGRESS (claude/adr-0034-specs-028-j…) |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | DEFERRED |  |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | IN_PROGRESS |  |
 
 ## Deferred slices
 
@@ -164,8 +164,8 @@
 | [016-execution-planner](016-execution-planner/spec.md) | 016-05 — prompt-render |  |
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-02 — transport-selection | Resume when the **A1 probe can be run on a |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-03 — goal-driver-advisory-preflight | Field data shows walled **goal-driver** runs waste |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-03 - native-loop-and-consumers | An executed native hard-budget contract, or an explicit |
-| [033-copilot-installed-runtime](033-copilot-installed-runtime/spec.md) | 033-07 - native-stop-continuation | Live CLI evidence proves per-turn continuation decisions |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-03 - native-loop-and-consumers | An executed native hard-budget contract, or an explicit |
+| [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | Live CLI evidence proves per-turn continuation decisions |
 
 ## Abandoned slices
 
@@ -181,4 +181,10 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
 
 - **4** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
 - **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **0** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+- **6** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+  - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
+  - `034-copilot-installed-runtime/slice-04-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
+  - `034-copilot-installed-runtime/slice-05-craft.md` — applied `pr-review`; declined: scout-pr-review
+  - `034-copilot-installed-runtime/slice-06-arch.md` — applied `unknown`; declined: arch-review
+  - `034-copilot-installed-runtime/slice-06-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
+  - `034-copilot-installed-runtime/slice-08-craft.md` — applied `pr-review`; declined: scout-pr-review

@@ -16,7 +16,7 @@ The helper is at `${PLUGIN_ROOT}/skills/agent-loop/loop.py`.
 Installing this skill does not select a native execution backend. The helper's
 default remains Claude; do not silently run Claude for a requested Copilot task.
 Explicit `--host copilot` launch/resume requests fail with exit 2 and
-`native_capability_unavailable` before dispatch or target mutation (ADR-0039).
+`native_capability_unavailable` before dispatch or target mutation (ADR-0043).
 Copilot's soft AI-credit cap cannot uphold the hard USD/context contract.
 Zero-valued limits and `--resume-anyway` do not enable an unsupported native run.
 `--explain-routing --host copilot` reports the same support boundary read-only.

@@ -1,6 +1,6 @@
 ---
 status: Accepted
-dependencies: [adr-0005, adr-0012, adr-0039, adr-0040]
+dependencies: [adr-0005, adr-0012, adr-0043, adr-0040]
 last_verified: 2026-10-12
 frame_review: true
 ---
@@ -114,5 +114,5 @@ this port neither silently weakens its policy nor amends its closed records.
 
 ## Verification
 
-Spec 033-08 tests marker validation/removal and pre-dispatch refusals. Native
-scoring slices 033-05/06 own actual registration and null native ledger spend.
+Spec 034-08 tests marker validation/removal and pre-dispatch refusals. Native
+scoring slices 034-05/06 own actual registration and null native ledger spend.

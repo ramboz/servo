@@ -35,7 +35,7 @@ inventory (`docs/architecture.md`). We have **not** observed an installed
 live Copilot session.
 
 **Resolution trigger:** Live evidence proves actual per-turn continuation
-decisions and a bounded retry guard; then re-open 033-07 through normal readiness.
+decisions and a bounded retry guard; then re-open 034-07 through normal readiness.
 Session-end notification or preToolUse denial is insufficient. The existing
 static adapter stays advisory, not a completed enforcing continuation gate.
 
@@ -48,10 +48,10 @@ static adapter stays advisory, not a completed enforcing continuation gate.
 
 **Deferred:** The September prototype normalized unknown spend to zero and left
 the USD/context brakes inert. Current public `--host copilot` launch/resume paths
-instead refuse before dispatch/target writes (033-02, ADR-0039); unknown spend is
+instead refuse before dispatch/target writes (034-02, ADR-0043); unknown spend is
 null, not zero. Executed CLI 1.0.96-2 limits describe minimum-30 AI credits as a
 soft post-response cap, not an enforceable USD ceiling. No owner relaxation has
-been authorized. Native loop/checkpoints/planned/heartbeat execution is 033-03
+been authorized. Native loop/checkpoints/planned/heartbeat execution is 034-03
 DEFERRED, not completed by the refusal.
 
 **Resolution trigger:** Executed native hard-budget capability, or a new explicit
@@ -59,22 +59,22 @@ owner-approved replacement monetary/credit policy, plus effective tool/context/
 resume/whole-pass evidence and normal readiness review. Do not convert credits
 to dollars by guesswork or count a limit flag as proof.
 
-**Surfaced by:** Current [CLI contract](specs/033-copilot-installed-runtime/copilot-contract.txt)
-and [ADR-0039](decisions/adr-0039-copilot-capability-boundaries.md).
+**Surfaced by:** Current [CLI contract](specs/034-copilot-installed-runtime/copilot-contract.txt)
+and [ADR-0043](decisions/adr-0043-copilot-capability-boundaries.md).
 
 ---
 
 ## Copilot goal-driver fidelity under Autopilot is unverified (driver refuses)
 
-**Deferred:** The native goal family remains unavailable, and 033-02 now also
+**Deferred:** The native goal family remains unavailable, and 034-02 now also
 refuses the native loop. An advisory agentStop adapter is not a replacement
 for real per-turn oracle-gated continuation. No claim of equivalent autonomous
 Copilot guardrails is made.
 
 **Resolution trigger:** Both live per-turn continuation/retry-guard proof
-(033-07) **and** 033-03's enforceable-budget/owner-policy, tool/context/resume/
+(034-07) **and** 034-03's enforceable-budget/owner-policy, tool/context/resume/
 whole-pass prerequisites must hold, followed by normal readiness review.
-Hook evidence alone never lifts ADR-0039's autonomy refusal; Autopilot caps
+Hook evidence alone never lifts ADR-0043's autonomy refusal; Autopilot caps
 alone do not establish the requested hard USD contract.
 
 **Surfaced by:** slice 032-05 (ADR-0038); enumerated in `docs/architecture.md`
@@ -90,7 +90,7 @@ before reaching that adapter; its fixture coverage is not current runtime proof.
 Native authoring/frozen scoring use their separately verified invocation boundary,
 not this historical success-shaped normalization.
 
-**Resolution trigger:** Re-opening 033-03 requires real native success/error
+**Resolution trigger:** Re-opening 034-03 requires real native success/error
 classification alongside its hard-budget/tool/context contract; read-only
 transport success does not complete native-loop support.
 

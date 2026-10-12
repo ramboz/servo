@@ -81,7 +81,7 @@ copilot plugin install ramboz/servo:hosts/copilot
 
 Copilot scaffolding and quality gates work without Claude or Jig. Native autonomy
 is **unavailable**: `--host copilot` refuses before dispatch; the minimum-30 soft
-AI-credit cap cannot replace hard USD/context safeguards ([ADR-0039](https://github.com/ramboz/servo/blob/main/docs/decisions/adr-0039-copilot-capability-boundaries.md)).
+AI-credit cap cannot replace hard USD/context safeguards ([ADR-0043](https://github.com/ramboz/servo/blob/main/docs/decisions/adr-0043-copilot-capability-boundaries.md)).
 Claude goal/background/Routine behavior is unchanged. Copilot's `agentStop` is
 advisory; per-turn continuation is unproved.
 

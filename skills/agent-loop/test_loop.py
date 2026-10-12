@@ -899,7 +899,7 @@ class ClaudeInvocationFailedTests(unittest.TestCase):
         self.assertIn("loop: claude not on PATH", result.stderr)
 
     def test_copilot_not_on_path(self):
-        # Native autonomy refuses even before executable discovery (ADR-0039).
+        # Native autonomy refuses even before executable discovery (ADR-0043).
         self.bindir.mkdir()
         result = _run_loop(
             self.target,
@@ -8167,7 +8167,7 @@ class RelabelDecisionUnitTests(unittest.TestCase):
 
 
 class CopilotLoopDriverIntegrationTests(unittest.TestCase):
-    """ADR-0039 gates the September native prototype before paid dispatch."""
+    """ADR-0043 gates the September native prototype before paid dispatch."""
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-loop-")

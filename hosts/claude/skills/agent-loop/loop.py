@@ -1166,7 +1166,7 @@ def _refuse_copilot_capability(*, explain: bool = False) -> int:
         "--host copilot autonomy is unavailable: the current CLI cannot uphold "
         "Servo's hard USD ceiling and context guarantees. --max-ai-credits is "
         "a soft post-response cap (minimum 30), not a USD budget. --driver loop, "
-        "goal, background and native resume remain unsupported (ADR-0039). "
+        "goal, background and native resume remain unsupported (ADR-0043). "
         "Use the project-owned quality gate with an independently controlled "
         "host, or establish an owner-approved enforceable native contract."
     )
@@ -2570,7 +2570,7 @@ def run_loop(
                 reason="backend_mismatch",
                 message=(
                     "native or non-Claude state cannot resume through Claude; "
-                    "--resume-anyway cannot convert backend identity (ADR-0039)"
+                    "--resume-anyway cannot convert backend identity (ADR-0043)"
                 ),
                 cost_ceiling=refusal_ceiling,
                 context_fill_threshold=refusal_threshold,
@@ -3999,7 +3999,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             "Coding-agent backend; default claude is unchanged. copilot "
             "refuses autonomous launches before dispatch because the native "
             "CLI cannot uphold the requested hard USD/context contract "
-            "(ADR-0039). Installation and deterministic quality gates remain "
+            "(ADR-0043). Installation and deterministic quality gates remain "
             "supported; a soft AI-credit cap is not a replacement USD budget."
         ),
     )
@@ -4009,7 +4009,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=None,
         help=(
             "Legacy Copilot soft-credit limit. Does not enable unsupported "
-            "native autonomy or replace a USD ceiling (ADR-0039). Ignored "
+            "native autonomy or replace a USD ceiling (ADR-0043). Ignored "
             "(with a warning) under --host claude."
         ),
     )

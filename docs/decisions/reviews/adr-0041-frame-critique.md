@@ -20,5 +20,5 @@ scope. This is not implementation certification.
 RECONCILIATION NOTES:
 None against the revised frame. Runtime enforcement/synchronization remain work.
 
-Source: independent jig:reviewer unpriced-frame-correction actual ADR0041 and033-08
+Source: independent jig:reviewer unpriced-frame-correction actual ADR0041 and034-08
 pass envelopes.

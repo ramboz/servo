@@ -1,4 +1,4 @@
-"""033-08 safety closure: only explicitly bounded gates enforce the marker."""
+"""034-08 safety closure: only explicitly bounded gates enforce the marker."""
 
 import importlib.util
 import json

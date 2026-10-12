@@ -18,7 +18,7 @@ Generic native scoring needs real candidate output, not an injected score.
 An executed full installed generic proof revealed
 `skills/eval-authoring/score.py:405-419` always raises "candidate-gather not yet
 implemented" for a real non-fake candidate. Existing operational prose discloses
-that seam; native judge dispatch alone cannot fulfill 033-05's installed
+that seam; native judge dispatch alone cannot fulfill 034-05's installed
 generic consumer. Content/design already have concrete acquisition surfaces.
 
 This is a tightly coupled native-only extension, not a general system-under-test
@@ -105,5 +105,5 @@ None for this bounded native file policy.
 
 ## Verification
 
-033-05 supplements cover path/policy freeze, moving output, snapshot consistency,
+034-05 supplements cover path/policy freeze, moving output, snapshot consistency,
 negative file cases and actual emitted installed generic native scoring.

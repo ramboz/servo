@@ -327,7 +327,7 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 > prompt before/during a loop, but never these guardrails — see
 > [Host-native phase hints](#host-native-phase-hints-spec-013).
 
-Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own. The September Copilot prototype (032-05) is now refused at its public launch boundary under [ADR-0039](decisions/adr-0039-copilot-capability-boundaries.md), rather than dropping monetary/context safeguards; see the [current capability inventory](#copilot-host-execution-primitive-inventory-mapped-or-residual).
+Spec 003 ships `/servo:agent-loop` — the headless iteration driver that subprocesses `claude -p --output-format json` against a target under hard guardrails. Each guardrail fails-closed (halt) rather than fails-open (keep burning budget); a user can fire-and-forget a loop and trust it will stop on its own. The September Copilot prototype (032-05) is now refused at its public launch boundary under [ADR-0043](decisions/adr-0043-copilot-capability-boundaries.md), rather than dropping monetary/context safeguards; see the [current capability inventory](#copilot-host-execution-primitive-inventory-mapped-or-residual).
 
 | Guardrail | Mechanism | Default | Disable | Terminal reason |
 |---|---|---|---|---|
@@ -546,13 +546,13 @@ This is project-owned accounting, not a security/exhaustive-cost boundary over
 arbitrary oracle code, and does not repair historical API-eval accounting.
 
 Executed source/package/installed native proofs and fixture consent are separated
-in [native evidence](specs/033-copilot-installed-runtime/native-evidence.md).
+in [native evidence](specs/034-copilot-installed-runtime/native-evidence.md).
 
 ## Copilot host execution-primitive inventory (mapped-or-residual)
 
-Current support is governed by [ADR-0039](decisions/adr-0039-copilot-capability-boundaries.md)
+Current support is governed by [ADR-0043](decisions/adr-0043-copilot-capability-boundaries.md)
 and spec 033, not the September invocation prototype. Executed
-[Copilot 1.0.96-2 help/limits](specs/033-copilot-installed-runtime/copilot-contract.txt)
+[Copilot 1.0.96-2 help/limits](specs/034-copilot-installed-runtime/copilot-contract.txt)
 documents a minimum-30 AI-credit **soft** cap observed after a response.
 No conversion to USD or owner-authorized weakening of the monetary contract
 has been adopted.
@@ -563,8 +563,8 @@ has been adopted.
 | Native loop / goal / background / Routine / resume | Refused before dispatch/target writes (`native_capability_unavailable`). Soft credits cannot replace hard monetary/context safeguards. |
 | Refusal output | Schema 2, explicit backend, `env_error`, unavailable spend/context `null`; no fabricated zero-cost native run. |
 | Planner / heartbeat native execution | Incomplete, deferred with native autonomy; existing Claude clamps and whole-pass authority unchanged. |
-| Independent native authoring / frozen judging | Explicit native consumers in 033-04/05/06; actual installed/model/image proofs distinct from package discovery. New configurations freeze native defaults/runtime, not unsupported numeric controls. Generic file-v1 is constraint-free. |
-| Target-side `agentStop` | Advisory static adapter; actual per-turn continuation remains unproved (033-07). |
+| Independent native authoring / frozen judging | Explicit native consumers in 034-04/05/06; actual installed/model/image proofs distinct from package discovery. New configurations freeze native defaults/runtime, not unsupported numeric controls. Generic file-v1 is constraint-free. |
+| Target-side `agentStop` | Advisory static adapter; actual per-turn continuation remains unproved (034-07). |
 
 Public `main()` and direct `run_loop(host="copilot")` both refuse unsupported
 autonomy (`skills/agent-loop/loop.py:1162`, `_refuse_copilot_capability`;
@@ -585,7 +585,7 @@ environment root (`skills/scaffold-init/scaffold.py:60`, `plugin_root`) and read
 the package's parent `.plugin/plugin.json` for availability metadata
 (`skills/scaffold-init/scaffold.py:103`, `_plugin_manifest_version`). Actual
 local marketplace install/clean-consumer execution and static zip checks are
-distinguished in [delivery evidence](specs/033-copilot-installed-runtime/delivery-evidence.md).
+distinguished in [delivery evidence](specs/034-copilot-installed-runtime/delivery-evidence.md).
 
 ## Decision records
 
