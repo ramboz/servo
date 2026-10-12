@@ -79,7 +79,9 @@ The 011-02 mock `gh` additionally answers `repo view --json defaultBranchRef`
 fallback); both default to a clean resolution so the 011-01 tests are unaffected.
 """
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -91,6 +93,7 @@ import textwrap
 import unittest
 from pathlib import Path
 from typing import Optional
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HEARTBEAT = REPO_ROOT / "skills" / "heartbeat" / "heartbeat.py"
@@ -1527,6 +1530,31 @@ class MergeDedupeTests(unittest.TestCase):
         self.assertTrue(rec["actionable"])  # CI on main, event push → actionable
         self.assertEqual(rec["actionable_reason"], "ci_default_branch")
 
+    def test_actual_rediscovery_preserves_diagnostic_outcome(self):
+        """033-01 AC4 — refresh a matching ID, not just an unseen sticky record."""
+        first = _run_discover(self.target, self.bindir)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        path = _triage_dir(self.target) / "inbox.jsonl"
+        records = _read_jsonl(path)
+        seeded = next(r for r in records if r["source"] == "ci" and r["actionable"])
+        seeded.update(status="tried", attempts=3, title="stale title", outcome={
+            "run_id": "sticky", "oracle_status": "below_threshold",
+            "oracle_composite": 0.0, "cost_usd": 0.2,
+            "dispatched_at": "fixed-time",
+            "terminal_reason": "iteration_cap_reached",
+            "terminal_breadcrumb": "Grant Edit/Write.",
+        })
+        _write_inbox(self.target, records)
+        rediscovered = _run_discover(self.target, self.bindir)
+        self.assertEqual(rediscovered.returncode, 0, rediscovered.stderr)
+        observed = _finding_by_id(self.target, seeded["finding_id"])
+        self.assertNotEqual(observed["title"], "stale title")
+        for key in ("outcome", "status", "attempts", "discovered_at"):
+            self.assertEqual(observed[key], seeded[key], key)
+        markdown = (_triage_dir(self.target) / "inbox.md").read_text()
+        for text in ("iteration_cap_reached", "Grant Edit/Write.", "composite=0.0"):
+            self.assertIn(text, markdown)
+
 
 # ===========================================================================
 # 011-02 AC4 — Resume (sticky lifecycle survives re-discovery)
@@ -2102,6 +2130,64 @@ class StatusSubcommandTests(unittest.TestCase):
         res = _run_status(self.target, empty_bin)
         self.assertEqual(res.returncode, 0, res.stderr)
 
+    def test_status_guards_json_and_legacy_absence(self):
+        """033-01 AC3/AC5 — hard no-execution guards, legacy reads, exact JSON."""
+        old = {
+            "run_id": "old", "oracle_status": "pass",
+            "oracle_composite": None, "cost_usd": 0.1,
+            "dispatched_at": "fixed-time",
+        }
+        diagnostic = {
+            **old, "oracle_status": "below_threshold", "oracle_composite": 0.0,
+            "terminal_reason": "iteration_cap_reached",
+            "terminal_breadcrumb": "Grant Edit/Write.",
+        }
+        records = [
+            _open_ci("legacy", status="passed", outcome=old),
+            _open_ci("diagnostic", status="tried", outcome=diagnostic),
+            _open_ci("absent"),
+            _open_ci("null", outcome=None, actionable=False),
+        ]
+        del records[2]["outcome"]
+        _write_inbox(self.target, records)
+        view = _triage_dir(self.target) / "inbox.md"
+        view.write_text("not refreshed")
+        before = _snapshot_tree(self.target, exclude_rel="__none__")
+        with (
+            mock.patch.object(_hb.subprocess, "run", side_effect=AssertionError("shell")),
+            mock.patch.object(_hb, "run_discover", side_effect=AssertionError("discovery")),
+            mock.patch.object(_hb, "run_dispatch", side_effect=AssertionError("dispatch")),
+            mock.patch.object(_hb, "_run_loop", side_effect=AssertionError("loop")),
+        ):
+            human = io.StringIO()
+            with contextlib.redirect_stdout(human):
+                self.assertEqual(_hb.run_status(self.target), 0)
+            machine = io.StringIO()
+            with contextlib.redirect_stdout(machine):
+                self.assertEqual(_hb.run_status(self.target, as_json=True), 0)
+        self.assertIn("oracle: pass", human.getvalue())
+        self.assertIn("oracle: below_threshold, composite=0.0", human.getvalue())
+        self.assertIn("stopped: iteration_cap_reached", human.getvalue())
+        self.assertIn("hint: Grant Edit/Write.", human.getvalue())
+        self.assertNotIn("composite=None", human.getvalue())
+        expected = {
+            "schema_version": 3, "total": 4,
+            "counts": {
+                "by_status": {"passed": 1, "tried": 1, "open": 2},
+                "by_source": {"ci": 4}, "actionable": 3, "open_actionable": 1,
+            },
+            "open_actionable_candidates": [{
+                "finding_id": "absent", "source": "ci",
+                "title": records[2]["title"],
+                "last_seen_at": records[2]["last_seen_at"],
+                "actionable_reason": records[2]["actionable_reason"],
+            }],
+        }
+        payload = json.loads(machine.getvalue())
+        self.assertEqual(payload, expected)
+        self.assertEqual(list(payload), list(expected))
+        self.assertEqual(before, _snapshot_tree(self.target, exclude_rel="__none__"))
+
 
 # ===========================================================================
 # 011-02 AC10 — Schema migration (two rules: discover discards <2, status warns/refuses)
@@ -2319,8 +2405,8 @@ def _write_mock_loop(
     lines per a behaviour spec. Behaviour is keyed by finding_id (`by_fid`) with a
     `default`. Behaviour knobs: `status` (final_oracle_status), `composite`,
     `cost`, `run_id`, `emit_summary` (False → no summary line), `garbage` (emit a
-    non-JSON line), `empty_history` (env-error shape), `exit_code`. Never invokes
-    a real `claude`.
+    non-JSON line), `empty_history` (env-error shape), `exit_code`, `driver`,
+    `terminal_reason`, and `terminal_breadcrumb`. Never invokes a real `claude`.
     """
     cfg = {
         "log_path": str(log_path),
@@ -2348,14 +2434,33 @@ def _write_mock_loop(
                 else:
                     hist = [{"iteration": 1, "composite": beh.get("composite", 0.9),
                              "threshold": 0.5, "status": status}]
-                print(json.dumps({
-                    "terminal_reason": beh.get("terminal_reason", "oracle_passed"),
+                if status == "env_error":
+                    default_reason = "claude_invocation_failed"
+                elif beh.get("driver") == "goal":
+                    default_reason = (
+                        "oracle_pass" if status == "pass" else "oracle_below_threshold"
+                    )
+                else:
+                    default_reason = (
+                        "oracle_passed" if status == "pass" else "max_iterations_reached"
+                    )
+                summary = {
+                    "terminal_reason": beh.get("terminal_reason", default_reason),
                     "iterations_completed": 1,
                     "cumulative_cost_usd": beh.get("cost", 0.5),
                     "oracle_score_history": hist,
                     "final_oracle_status": status,
                     "run_id": beh.get("run_id", "run-" + fid),
-                }))
+                }
+                if "terminal_breadcrumb" in beh:
+                    summary["terminal_breadcrumb"] = beh["terminal_breadcrumb"]
+                if beh.get("driver") == "goal":
+                    summary["driver"] = "goal"
+                    summary["oracle_composite"] = beh.get("composite")
+                    summary.pop("oracle_score_history")
+                    summary.pop("iterations_completed")
+                    summary["num_turns"] = 1
+                print(json.dumps(summary))
             elif beh.get("garbage"):
                 print("this is not valid json {{{")
             sys.exit(beh.get("exit_code", 0))
@@ -2935,6 +3040,7 @@ class LoopDispatchOutcomeTests(unittest.TestCase):
         self.assertEqual(outcome["oracle_status"], "env_error")
         self.assertIsNone(outcome["oracle_composite"])
         self.assertEqual(outcome["run_id"], "20260615T130000-eeee")
+        self.assertEqual(outcome["terminal_reason"], "claude_invocation_failed")
 
     def test_below_threshold_is_recorded_outcome_not_error(self):
         fid = "disp000000000005"
@@ -2946,6 +3052,97 @@ class LoopDispatchOutcomeTests(unittest.TestCase):
         self.assertEqual(rec["status"], "tried")
         self.assertEqual(rec["outcome"]["oracle_status"], "below_threshold")
         self.assertEqual(rec["outcome"]["oracle_composite"], 0.30)
+        self.assertEqual(rec["outcome"]["terminal_reason"], "max_iterations_reached")
+
+    def test_permission_wall_handoff_reaches_both_human_views(self):
+        fid = "handoff000000001"
+        hint = "Grant Edit/Write in the retained worktree."
+        _write_inbox(self.target, [_open_ci(fid)])
+        loop_py = self._loop(default={
+            "status": "below_threshold", "composite": 0.3,
+            "terminal_reason": "edit_permission_unavailable",
+            "terminal_breadcrumb": hint, "exit_code": 2,
+        })
+        res = _run_dispatch(self.target, loop_py=loop_py)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rec = _finding_by_id(self.target, fid)
+        self.assertEqual(rec["status"], "tried")
+        self.assertEqual(rec["attempts"], 1)
+        self.assertEqual(rec["outcome"]["terminal_reason"], "edit_permission_unavailable")
+        self.assertEqual(rec["outcome"]["terminal_breadcrumb"], hint)
+        self.assertFalse((self.target / ".servo" / "quarantine" / f"{fid}.json").exists())
+
+        before = _snapshot_tree(self.target, exclude_rel="__none__")
+        status = _run_status(self.target)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertIn("edit_permission_unavailable", status.stdout)
+        self.assertIn(hint, status.stdout)
+        self.assertIn("composite=0.3", status.stdout)
+        json_status = _run_status(self.target, as_json=True)
+        self.assertEqual(json_status.returncode, 0, json_status.stderr)
+        self.assertEqual(
+            list(json.loads(json_status.stdout)),
+            ["schema_version", "total", "counts", "open_actionable_candidates"],
+        )
+        self.assertEqual(before, _snapshot_tree(self.target, exclude_rel="__none__"))
+
+        bindir = self.root / "discovery-bin"
+        _make_mock_gh(bindir)
+        _make_mock_git(bindir)
+        discovered = _run_discover(self.target, bindir)
+        self.assertEqual(discovered.returncode, 0, discovered.stderr)
+        retained = _finding_by_id(self.target, fid)
+        self.assertEqual(retained["outcome"], rec["outcome"])
+        self.assertEqual(retained["status"], "tried")
+        view = (_triage_dir(self.target) / "inbox.md").read_text()
+        self.assertIn("edit_permission_unavailable", view)
+        self.assertIn(hint, view)
+        self.assertIn("composite=0.3", view)
+
+    def test_goal_summary_retains_score_without_creating_a_plateau(self):
+        cases = (
+            ("cap", "below_threshold", 0.0, "iteration_cap_reached", "tried"),
+            ("budget", "below_threshold", 0.4, "cost_ceiling_reached", "tried"),
+            ("pass", "pass", 0.9, "oracle_pass", "passed"),
+        )
+        for name, oracle_status, score, reason, expected_status in cases:
+            with self.subTest(reason=reason):
+                fid = f"handoff-goal-{name}"
+                _write_inbox(self.target, [_open_ci(fid)])
+                loop_py = self._loop(default={
+                    "driver": "goal", "status": oracle_status, "composite": score,
+                    "terminal_reason": reason,
+                })
+                res = _run_dispatch(self.target, loop_py=loop_py)
+                self.assertEqual(res.returncode, 0, res.stderr)
+                rec = _finding_by_id(self.target, fid)
+                self.assertEqual(rec["status"], expected_status)
+                self.assertEqual(rec["outcome"]["oracle_composite"], score)
+                self.assertEqual(rec["outcome"]["terminal_reason"], reason)
+                self.assertNotIn("terminal_breadcrumb", rec["outcome"])
+                quarantine = self.target / ".servo" / "quarantine" / f"{fid}.json"
+                self.assertFalse(quarantine.exists())
+
+    def test_dispatch_persists_without_refreshing_markdown(self):
+        """033-01 AC4 — dispatch updates JSONL/status, not discovery's markdown."""
+        fid = "timing0330000001"
+        _write_inbox(self.target, [_open_ci(fid)])
+        view = _triage_dir(self.target) / "inbox.md"
+        view.write_text("discovery-owned sentinel\n")
+        loop_py = self._loop(default={
+            "driver": "goal", "status": "below_threshold", "composite": 0.0,
+            "terminal_reason": "iteration_cap_reached",
+        })
+        result = _run_dispatch(self.target, loop_py=loop_py)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(view.read_text(), "discovery-owned sentinel\n")
+        record = _finding_by_id(self.target, fid)
+        self.assertEqual(record["attempts"], 1)
+        self.assertEqual(record["status"], "tried")
+        self.assertEqual(record["outcome"]["oracle_composite"], 0.0)
+        status = _run_status(self.target)
+        self.assertEqual(status.returncode, 0, status.stderr)
+        self.assertIn("iteration_cap_reached", status.stdout)
 
 
 # ===========================================================================
@@ -2993,9 +3190,12 @@ class OutcomeRecordingTests(unittest.TestCase):
         _run_dispatch(self.target, loop_py=self._loop(default={
             "status": "pass", "composite": 0.8, "cost": 0.1, "run_id": "rid-1"}))
         outcome = _finding_by_id(self.target, fid)["outcome"]
+        # The reserved fields retain their order; emitted diagnostics are additive.
         self.assertEqual(list(outcome.keys()),
                          ["run_id", "oracle_status", "oracle_composite",
-                          "cost_usd", "dispatched_at"])
+                          "cost_usd", "dispatched_at", "terminal_reason"])
+        self.assertEqual(outcome["terminal_reason"], "oracle_passed")
+        self.assertNotIn("terminal_breadcrumb", outcome)
         # dispatched_at is an ISO-8601 stamp.
         self.assertRegex(outcome["dispatched_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 
@@ -3380,12 +3580,15 @@ class HeartbeatDogfoodTests(unittest.TestCase):
         self.assertEqual(rec["source"], "ci")
         self.assertEqual(rec["status"], "passed")
         self.assertEqual(rec["attempts"], 1)
+        # Keep the reserved prefix and include the real loop's emitted stop reason.
         self.assertEqual(
             list(rec["outcome"].keys()),
-            ["run_id", "oracle_status", "oracle_composite", "cost_usd", "dispatched_at"],
+            ["run_id", "oracle_status", "oracle_composite", "cost_usd",
+             "dispatched_at", "terminal_reason"],
         )
         self.assertEqual(rec["outcome"]["run_id"], "dogfood-pass")
         self.assertEqual(rec["outcome"]["oracle_status"], "pass")
+        self.assertEqual(rec["outcome"]["terminal_reason"], "oracle_passed")
 
     def test_run_budget_halt_leaves_remaining_findings_open(self):
         self._mock_gh_for_ci_findings(3)
@@ -3553,6 +3756,114 @@ import importlib.util as _importlib_util  # noqa: E402
 _hb_spec = _importlib_util.spec_from_file_location("heartbeat_mod", HEARTBEAT)
 _hb = _importlib_util.module_from_spec(_hb_spec)
 _hb_spec.loader.exec_module(_hb)
+
+
+class OutcomeSummaryHandoffTests(unittest.TestCase):
+    def test_optional_diagnostics_and_base_metadata(self):
+        """033-01 AC1/AC5 — optional strings never change the five base fields."""
+        base = {
+            "run_id": "fixed-run", "final_oracle_status": "below_threshold",
+            "oracle_score_history": [{"composite": 0.0}],
+            "cumulative_cost_usd": 0.42,
+        }
+        base_keys = [
+            "run_id", "oracle_status", "oracle_composite", "cost_usd", "dispatched_at",
+        ]
+        with mock.patch.object(_hb, "_now_iso", return_value="fixed-time"):
+            original = _hb._outcome_from_summary(base)
+            self.assertEqual(original, {
+                "run_id": "fixed-run", "oracle_status": "below_threshold",
+                "oracle_composite": 0.0, "cost_usd": 0.42,
+                "dispatched_at": "fixed-time",
+            })
+            self.assertEqual(list(original), base_keys)
+            for value in (None, "", 0, [], {}):
+                with self.subTest(value=value):
+                    outcome = _hb._outcome_from_summary({
+                        **base, "terminal_reason": value, "terminal_breadcrumb": value,
+                    })
+                    self.assertEqual(outcome, original)
+                    self.assertEqual(list(outcome), base_keys)
+            for diagnostics in (
+                {"terminal_reason": "iteration_cap_reached"},
+                {"terminal_breadcrumb": "Grant Edit/Write."},
+                {"terminal_reason": "edit_permission_unavailable",
+                 "terminal_breadcrumb": "Grant Edit/Write."},
+            ):
+                with self.subTest(diagnostics=diagnostics):
+                    outcome = _hb._outcome_from_summary({**base, **diagnostics})
+                    self.assertEqual({k: outcome[k] for k in base_keys}, original)
+                    self.assertEqual({k: outcome.get(k) for k in diagnostics}, diagnostics)
+                    self.assertEqual(list(outcome)[:5], base_keys)
+
+    def test_last_history_entry_and_missing_goal_score(self):
+        """033-01 AC2 — final history zero/null wins; missing goal score is null."""
+        for final in (0.0, 0.3, None):
+            with self.subTest(final=final):
+                outcome = _hb._outcome_from_summary({
+                    "oracle_composite": 0.99,
+                    "oracle_score_history": [{"composite": 0.9}, {"composite": final}],
+                })
+                self.assertEqual(outcome["oracle_composite"], final)
+        for history in (None, []):
+            for score in (0.0, None):
+                with self.subTest(history=history, score=score):
+                    outcome = _hb._outcome_from_summary({
+                        "driver": "goal", "oracle_score_history": history,
+                        "oracle_composite": score,
+                    })
+                    self.assertEqual(outcome["oracle_composite"], score)
+        self.assertIsNone(_hb._outcome_from_summary({"driver": "goal"})["oracle_composite"])
+
+    def test_preserves_goal_driver_score(self):
+        for score in (0.0, 0.8, None):
+            with self.subTest(score=score):
+                outcome = _hb._outcome_from_summary({
+                    "driver": "goal",
+                    "run_id": "goal-run",
+                    "final_oracle_status": "below_threshold",
+                    "oracle_composite": score,
+                    "cumulative_cost_usd": 0.2,
+                    "terminal_reason": "iteration_cap_reached",
+                })
+                self.assertEqual(outcome["oracle_composite"], score)
+                self.assertEqual(outcome["terminal_reason"], "iteration_cap_reached")
+
+    def test_loop_history_remains_authoritative(self):
+        outcome = _hb._outcome_from_summary({
+            "oracle_score_history": [{"composite": 0.3}],
+            "oracle_composite": 0.9,
+        })
+        self.assertEqual(outcome["oracle_composite"], 0.3)
+
+    def test_absent_diagnostics_keep_original_outcome_shape(self):
+        outcome = _hb._outcome_from_summary({
+            "run_id": "legacy",
+            "final_oracle_status": "pass",
+            "oracle_score_history": [{"composite": 0.9}],
+            "cumulative_cost_usd": 0.1,
+        })
+        self.assertEqual(
+            list(outcome),
+            ["run_id", "oracle_status", "oracle_composite", "cost_usd", "dispatched_at"],
+        )
+
+    def test_preserves_stop_reason_and_fix_hint(self):
+        summary = {
+            "run_id": "permission-wall",
+            "final_oracle_status": "below_threshold",
+            "oracle_score_history": [{"composite": 0.3}],
+            "cumulative_cost_usd": 0.2,
+            "terminal_reason": "edit_permission_unavailable",
+            "terminal_breadcrumb": "Grant Edit/Write in the retained worktree.",
+        }
+        outcome = _hb._outcome_from_summary(summary)
+        self.assertEqual(outcome.get("terminal_reason"), summary["terminal_reason"])
+        self.assertEqual(
+            outcome.get("terminal_breadcrumb"), summary["terminal_breadcrumb"],
+        )
+        self.assertEqual(outcome["oracle_status"], "below_threshold")
+        self.assertEqual(outcome["oracle_composite"], 0.3)
 
 
 def _quarantine_path(target: Path, fid: str) -> Path:

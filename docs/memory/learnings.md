@@ -120,3 +120,6 @@ an accepted, logged trade-off. See
 
 ## Jig DONE dependency tokens require slice fragments
 When transitioning a slice to DONE with this jig workflow version, dependencies frontmatter is validated by token shape. Whole-spec tokens such as 003 are reported as unknown dependency token shape; use the concrete DONE slice token that owns the dependency, e.g. 003-05 for the runner/judge prompt and verdict-parser contract, plus ADR tokens like adr-0003.
+
+## Retrospective ceremony must preserve chronology and check sibling identifiers
+Small implementation size does not waive servo's expected jig ceremony; do not substitute a lightweight TDD-only path for its spec, independent-review, and reconciliation workflow. Recover implementation-first work with present-time spec/decision gates, genuine independent verdicts, mutation evidence, and reconciliation; never backdate those artifacts. A clean servo clone can lack the ignored local workflow metadata: use migrate.py adopt-layout to restore only its scaffold sentinel rather than bypassing gates or vendoring unrelated machinery. Check fetched sibling refs before publishing provisional identifiers: this recovery retired colliding 032/0038 reservations and uses spec 033 / ADR-0039 instead. See docs/specs/033-heartbeat-handoff-recovery/spec.md for the honest recovery history.

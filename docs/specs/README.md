@@ -137,6 +137,7 @@
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-01 — loop-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-02 — goal-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-03 — goal-driver-advisory-preflight | DEFERRED |  |
+| [033-heartbeat-handoff-recovery](033-heartbeat-handoff-recovery/spec.md) | 033-01 — diagnostic-handoff | **DONE** | Retrospective recovery; optional diagnostics only; preserve loop-history/direct-goal score authority; no control-policy change; real review/mutation evidence in spec 033. |
 
 ## Deferred slices
 
@@ -165,4 +166,5 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
 
 - **0** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
 - **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **0** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+- **1** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+  - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
