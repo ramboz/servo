@@ -1,8 +1,8 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 kind: feature
 dependencies: [034-01, adr-0043, adr-0040, adr-0042, adr-0005, adr-0024]
-last_verified:
+last_verified: 2026-10-12
 arch_review: true
 frame_review: true
 claimed_by: claude/adr-0034-specs-028-jig-fe54d4
@@ -38,9 +38,9 @@ gating scores without changing existing transport meanings or scoring policy.
    old transports remain compatible.
 
 **DoD:**
-- [ ] Native freeze/install/score positive and negative tests show red-to-green.
-- [ ] Frame, compliance, craft, architecture and reconciliation reviews pass.
-- [ ] Installed live proof and existing statistical/freeze tests clear.
+- [x] Native freeze/install/score positive and negative tests show red-to-green.
+- [x] Frame, compliance, craft, architecture and reconciliation reviews pass.
+- [x] Installed live proof and existing statistical/freeze tests clear.
 
 ## Assumptions
 
@@ -98,4 +98,4 @@ component, not a new transport enum without end-to-end behavior.
 | Native registry / re-freeze ordering | updated | Mark before native activation, reverse after approval; bounded caller enforcement is034-08. |
 | Proof / skills / README / architecture | updated | Actual consumers, constraint-free limitation and no SUTcommand/measurement claim. |
 | Old closed records | no-op | Preserved; no amendments authorized. |
-| Full CI / reconciliation | deferred | Final integrated gates and independent reconciliation required before DONE. |
+| Full CI / final reconciliation | updated | Independent verdicts clear; synchronized exact CI passes2255 tests plus all150 install tests/manifests/Ruff/drift gates. |

@@ -1,8 +1,8 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 kind: feature
 dependencies: [034-05, adr-0043, adr-0040, adr-0034]
-last_verified:
+last_verified: 2026-10-12
 arch_review: true
 frame_review: true
 claimed_by: claude/adr-0034-specs-028-jig-fe54d4
@@ -30,8 +30,8 @@ the actual candidate/reference image inputs, preserving capture/statistical poli
    demonstrate actual image-sensitive judging and frozen model behavior.
 
 **DoD:**
-- [ ] Frame, compliance, craft, architecture and reconciliation reviews pass.
-- [ ] Actual native image/model proof and existing design-eval tests pass.
+- [x] Frame, compliance, craft, architecture and reconciliation reviews pass.
+- [x] Actual native image/model proof and existing design-eval tests pass.
 
 ## Assumptions
 
@@ -66,4 +66,4 @@ fidelity through the approved frozen component.
 | Freeze / install / ledger / marker | updated | Explicit new native definitions, actual usage/null money and ordered unpriced registration. |
 | Executed evidence | updated | Raw image capability versus full installed consumer/fixture consent clearly separated. |
 | Skill / generated hosts / live docs | updated | Native opt-in without false per-turn/monetary guarantees. |
-| Full CI / reconciliation | deferred | Final integrated gates and independent reconciliation required before DONE. |
+| Full CI / final reconciliation | updated | Independent verdicts clear; synchronized exact CI passes2255 tests plus all150 install tests/manifests/Ruff/drift gates. |

@@ -131,9 +131,9 @@ at the following bounded granularity:
 | Class | Read and disposition |
 |-------|----------------------|
 | Decisions | ADR-0002/0004/0012/0021/0027/0037/0038: preserve records; this ADR adds the current capability boundary. |
-| Specs | Closed 032 and all its slice goals/criteria: preserve. Draft commit `230baa74` delivery, guarded-execution and evaluation slices: translate remaining scope into 033's incomplete/deferred entries. Other specs are excused: no host-contract change is proposed for their historical behavior. |
+| Specs | Closed 032 and all its slice goals/criteria: preserve. Draft commit `230baa74` delivery, guarded-execution and evaluation slices: translate remaining scope into 034's incomplete/deferred entries. Other specs are excused: no host-contract change is proposed for their historical behavior. |
 | Live docs | README, architecture and product vision: rewrite current Copilot support claims; preserve monetary/evidence principles. Workflow and conventions: no changed lifecycle/convention. |
-| Skills | Agent-loop and scaffold-init: retrofit in spec 033. Oracle-hook, eval-authoring, content/design fidelity: retain current transport meanings, make unsupported native scope visible. Other skill bodies remain generated without host-name substitution. |
+| Skills | Agent-loop and scaffold-init: retrofit in spec 034. Oracle-hook, eval-authoring, content/design fidelity: retain current transport meanings, make unsupported native scope visible. Other skill bodies remain generated without host-name substitution. |
 | Primers | No root CLAUDE.md or AGENTS.md exists; no primer mutation. |
 | Generated packages/releases | Regenerate all three hosts, run existing manifest/install/drift and zip gates; runtime-only packages remain free of Jig machinery. |
 
@@ -143,6 +143,6 @@ No closed record is amended, re-verified or superseded by setup.
 
 ## Verification
 
-[Spec 033](../specs/034-copilot-installed-runtime/spec.md) owns the supported
+[Spec 034](../specs/034-copilot-installed-runtime/spec.md) owns the supported
 installed workflow and the fail-closed launch boundary. Its native follow-up
 entries preserve incomplete requirements rather than disguising them as DONE.

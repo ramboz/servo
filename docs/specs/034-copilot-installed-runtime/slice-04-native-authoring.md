@@ -1,8 +1,8 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 kind: feature
 dependencies: [034-01, adr-0043, adr-0027]
-last_verified:
+last_verified: 2026-10-12
 arch_review: true
 frame_review: true
 claimed_by: claude/adr-0034-specs-028-jig-fe54d4
@@ -33,9 +33,9 @@ without changing human ownership of success or existing Claude authoring.
    authoring/independent-review probe separately from fake CLI fixtures.
 
 **DoD:**
-- [ ] Native fresh-call, permission, failure and approval fixtures are green.
-- [ ] Frame, compliance, craft, architecture and reconciliation reviews pass.
-- [ ] Installed live proof and existing Claude authoring tests clear.
+- [x] Native fresh-call, permission, failure and approval fixtures are green.
+- [x] Frame, compliance, craft, architecture and reconciliation reviews pass.
+- [x] Installed live proof and existing Claude authoring tests clear.
 
 ## Assumptions
 
@@ -67,4 +67,4 @@ candidates and can curate them through the existing workflow.
 | Native proof | updated | Source and packaged actual calls distinct from fake CLI fixtures. |
 | README / architecture / decisions / board | updated | Native opt-in, unknown-USD and unchanged old defaults documented; derived records. |
 | Primer / inbox / conventions | no-op | Absent; no unrelated bootstrap. |
-| Full CI / reconciliation | deferred | Final integrated gates and independent reconciliation required before DONE. |
+| Full CI / final reconciliation | updated | Independent verdicts clear; synchronized exact CI passes2255 tests plus all150 install tests/manifests/Ruff/drift gates. |

@@ -70,5 +70,6 @@ labelled live CLI install-store observations.
   all archives built and their existing host-specific smoke checks passed.
   These smoke checks are **static**, not live model/hook proofs.
 
-Full final CI evidence is recorded after native transport integration; these
-focused results are not a claim that unfinished native slices are complete.
+Final synchronized CI passed2255 tests and all established gates; see
+ci-evidence.md. These focused delivery results do not imply that deferred native
+autonomy or enforcing continuation is complete.

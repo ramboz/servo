@@ -1,8 +1,8 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 kind: feature
 dependencies: [adr-0043]
-last_verified:
+last_verified: 2026-10-12
 arch_review: true
 claimed_by: claude/adr-0034-specs-028-jig-fe54d4
 ---
@@ -39,10 +39,10 @@ and scores it from a clean directory without Claude or Jig.
    publisher is represented as delivered.
 
 **DoD:**
-- [ ] Focused root/scaffold/gate regression tests show witnessed red-to-green.
-- [ ] Required compliance, craft and architecture passes clear.
-- [ ] Installed/zip checks, all-host drift and established full CI gates pass.
-- [ ] Deviation log, documentation sweep and final reconciliation review clear.
+- [x] Focused root/scaffold/gate regression tests show witnessed red-to-green.
+- [x] Required compliance, craft and architecture passes clear.
+- [x] Installed/zip checks, all-host drift and established full CI gates pass.
+- [x] Deviation log, documentation sweep and final reconciliation review clear.
 
 ## Assumptions
 
@@ -103,7 +103,7 @@ project without Claude, not merely installs new files.
 | Primer / conventions / inbox | no-op | None exist at project root; no new convention or unrelated work. |
 | Memory | updated | Runtime/package separation and merge-fixture gotchas recorded by memory.py. |
 | Team advisory | deferred | people.md bootstrap is unrelated to this port; no user-owned people data invented. |
-| Full CI / final reconciliation | deferred | Must finish after native transport integration before DONE. |
+| Full CI / final reconciliation | updated | Independent verdicts clear; synchronized exact CI passes2255 tests plus all150 install tests/manifests/Ruff/drift gates. |
 
 ### Close-out (post-DONE)
 

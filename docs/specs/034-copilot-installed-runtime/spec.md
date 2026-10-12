@@ -4,7 +4,7 @@ skill:
 use_cases: []
 ---
 
-# Spec 033: Copilot installed runtime and capability boundaries
+# Spec 034: Copilot installed runtime and capability boundaries
 
 ## Overview
 

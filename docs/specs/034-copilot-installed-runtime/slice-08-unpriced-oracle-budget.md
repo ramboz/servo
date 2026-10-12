@@ -1,10 +1,11 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 kind: feature
 dependencies: [034-02, 034-05, 034-06, adr-0041]
-last_verified:
+last_verified: 2026-10-12
 arch_review: true
 frame_review: true
+claimed_by: claude/adr-0034-specs-028-jig-fe54d4
 ---
 
 ## Slice 034-08 - unpriced-oracle-budget
@@ -37,9 +38,9 @@ budgets through an otherwise supported Claude loop/heartbeat.
    exhaustive-financial boundary over arbitrary project-owned oracle code.
 
 **DoD:**
-- [ ] Witnessed red-to-green marker/entrypoint/registration tests pass.
-- [ ] Frame, compliance, craft, architecture and reconciliation reviews pass.
-- [ ] Existing loop/heartbeat/scoring suites and final full CI clear.
+- [x] Witnessed red-to-green marker/entrypoint/registration tests pass.
+- [x] Frame, compliance, craft, architecture and reconciliation reviews pass.
+- [x] Existing loop/heartbeat/scoring suites and final full CI clear.
 
 ## Assumptions
 
@@ -80,4 +81,4 @@ than funding unpriced native oracle calls inside an apparently USD-bounded run.
 | Gate contract / standalone scoring | updated | Two accounting reasons/opt-in context; default attended0/1/2 remains compatible. |
 | Generated hosts / docs / board / index | updated | Source-owned propagation and precise current accounting bounds. |
 | Closed API-accounting records / opaque oracle code | no-op | Not rewritten or falsely financially attested. |
-| Full CI / reconciliation | deferred | Final integrated gates and independent reconciliation required before DONE. |
+| Full CI / final reconciliation | updated | Independent verdicts clear; synchronized exact CI passes2255 tests plus all150 install tests/manifests/Ruff/drift gates. |

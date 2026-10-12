@@ -509,7 +509,7 @@ verified *statically* — the emitted-JSON shape + the adapter unit test
 (`skills/oracle-hook/test_copilot_hook_adapter.py`) — and live firing is recorded
 as a residual in [refinement-todo](refinement-todo.md).
 
-## Native evaluation and monetary compatibility (spec 033)
+## Native evaluation and monetary compatibility (spec 034)
 
 Native authoring commands explicitly select `--backend copilot`; they preserve
 fresh expansion/review and human per-AC approval. Frozen scoring selects new
@@ -569,8 +569,8 @@ has been adopted.
 | Target-side `agentStop` | Advisory static adapter; actual per-turn continuation remains unproved (034-07). |
 
 Public `main()` and direct `run_loop(host="copilot")` both refuse unsupported
-autonomy (`skills/agent-loop/loop.py:1162`, `_refuse_copilot_capability`;
-`skills/agent-loop/loop.py:2385`, `run_loop`).
+autonomy (`skills/agent-loop/loop.py:1164`, `_refuse_copilot_capability`;
+`skills/agent-loop/loop.py:2473`, `run_loop`).
 No blanket permission grant or fallback Claude call occurs through those launch
 paths. September adapter parsing fixtures remain historical prototype coverage,
 not proof of a supported native loop.

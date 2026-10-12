@@ -1,8 +1,8 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 kind: feature
 dependencies: [adr-0043]
-last_verified:
+last_verified: 2026-10-12
 arch_review: true
 claimed_by: claude/adr-0034-specs-028-jig-fe54d4
 ---
@@ -40,10 +40,10 @@ context, permission or state-identity safeguards.
    Internal September adapter fixtures are not evidence of a supported launch.
 
 **DoD:**
-- [ ] Launch/refusal/resume fixtures show witnessed red-to-green.
-- [ ] Required compliance, craft and architecture reviews pass.
-- [ ] Existing loop/planner/heartbeat tests and generated-host drift clear.
-- [ ] Final reconciliation review confirms live claims and incomplete scope.
+- [x] Launch/refusal/resume fixtures show witnessed red-to-green.
+- [x] Required compliance, craft and architecture reviews pass.
+- [x] Existing loop/planner/heartbeat tests and generated-host drift clear.
+- [x] Final reconciliation review confirms live claims and incomplete scope.
 
 ## Assumptions
 
@@ -83,7 +83,7 @@ instead of unknowingly funding a run without the requested limits.
 | Generated hosts | updated | Source-owned regeneration, no implicit provider switch. |
 | Memory / board / ADR index | updated | Honest capability knowledge and derived lifecycle metadata. |
 | Primer/conventions/inbox | no-op | Absent; no unrelated bootstrap. |
-| Full CI / final reconciliation | deferred | Required after remaining native evaluation integration, before DONE. |
+| Full CI / final reconciliation | updated | Independent verdicts clear; synchronized exact CI passes2255 tests plus all150 install tests/manifests/Ruff/drift gates. |
 
 ### Close-out (post-DONE)
 

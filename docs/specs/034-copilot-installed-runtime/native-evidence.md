@@ -70,7 +70,8 @@ Independent native compliance identified discarded usage, native injection-hook
 bypasses and missing generic/packaged proofs. Those corrections and re-review
 are implemented and cleared independent compliance, craft and architecture
 correction reviews. Actual consumer evidence
-does not by itself make slices DONE: required reconciliation and final integrated
-CI remain. Source/test fixtures stay distinct from actual
+does not by itself make slices DONE: required independent reconciliation and final
+synchronized CI now also passed (2255 tests and all established gates).
+Source/test fixtures stay distinct from actual
 CLI consumers. New native judge fields are closed to the deliberate policy;
 native score/actual injection is rejected before runtime/model/capture selection.
