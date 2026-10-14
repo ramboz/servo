@@ -1,6 +1,6 @@
 {
   "name": "servo",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Closed-loop scaffolder for unattended agent operations: oracle scoring, headless agent loops, hooks, and worktree races — tailored to each project's signals.",
   "skills": ".github/skills",
   "agents": ".github/agents"
