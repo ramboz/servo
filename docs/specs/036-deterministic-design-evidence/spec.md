@@ -13,6 +13,9 @@ targets and receives exact/tolerant per-constraint evidence through an installed
 Servo gate. A wrong value or observed absent required element vetoes success;
 missing, stale or unbound observations refuse. Raw implementation observations
 remain separate from policy-interpreted results and any optional model score.
+The component's `pass` is component success only. Completion authority is the
+preserved **overall installed gate-payload policy verdict**, with component
+records bound beneath it by run identity and content digest.
 
 This implements proposed
 [ADR-0044](../../decisions/adr-0044-required-constraints-cannot-be-averaged-away.md)
@@ -32,11 +35,13 @@ Every slice ends with a real installed gate and a usable correction report.
 
 The upstream draft owners are Vellum ADR-0011
 `docs/decisions/adr-0011-approved-design-contract-as-oracle-input.md` and
-spec 013 `docs/specs/013-design-to-oracle-handoff/`, on
-`vellum-oracle-contract` (publication pending when authored). The
-[spec 013 link](https://github.com/PinkException/vellum/blob/vellum-oracle-contract/docs/specs/013-design-to-oracle-handoff/spec.md)
-is a proposed dependency, not an accepted contract. Parent must pin its
-published input-contract path/revision and Jig consumer artifact before
+spec 013 `docs/specs/013-design-to-oracle-handoff/`, published in draft
+[PinkException/vellum#50](https://github.com/PinkException/vellum/pull/50).
+The [spec 013 proposal](https://github.com/PinkException/vellum/blob/7f4c06077318859c0aabec33d00c2eebd6cba74f/docs/specs/013-design-to-oracle-handoff/spec.md)
+and [Proposed ADR-0011](https://github.com/PinkException/vellum/blob/7f4c06077318859c0aabec33d00c2eebd6cba74f/docs/decisions/adr-0011-approved-design-contract-as-oracle-input.md)
+are pinned at `7f4c06077318859c0aabec33d00c2eebd6cba74f`, not an approved
+executable input-contract revision. Parent must pin the later agreed
+input-contract path/revision and Jig consumer artifact before
 readiness. Servo does not invent JSON fields for that input or infer bindings
 from design prose. Unsupported input versions/required types refuse.
 
@@ -53,6 +58,42 @@ Claude Design is the first source; Figma is deferred and not a prerequisite.
 Later a source export alone can establish source-side grounding. It cannot
 establish build identity, app observations, matching implementation or Jig DONE.
 
+## Proposed ordering and preparation checkpoint
+
+The coordinator proposes this order to avoid circular readiness. It is not
+user/owner approval or a lifecycle shortcut:
+
+1. **C0 (shared contract checkpoint):** parent/owners accept and align the
+   Proposed decisions separately, pin input/output versions, serialization/
+   digest domains and reviewed test vectors, required comparison inventory and
+   served/current-delivery closure predicates. This is agreement/preparation,
+   not runnable-all-consumers proof. Servo035-01 then implements its installed required gate using standalone
+   existing-check fixtures; no Vellum/Jig DONE or design observer is needed.
+2. **C1**, Vellum013-01's **approved-input preparation checkpoint**, owned by that
+   slice's author and independent source approver, supplies real normal/open
+   source artifacts, typed targets, crop/state bindings and content-bound
+   approval while 013-01 can remain IN_PROGRESS. Source-only capture prep
+   does not require Servo's future app observer, complete integration or
+   Vellum013-02's state-handoff completion. Parent/owners must approve this
+   checkpoint boundary in Vellum's open draft before relying on it.
+   C1 preparation and standalone 035-01 can proceed independently after C0;
+   neither needs the other's implementation completion.
+3. With that approved input checkpoint and agreed identity/closure contract,
+   Servo036-01 creates the matching app, observer and local-bundle transport,
+   then proves actual served-bundle/current-delivery linkage and the installed
+   overall gate. Those proofs are implementation deliverables, not readiness
+   prerequisites. Missing required input approval still blocks this start;
+   upstream slice DONE does not substitute for or gate the checkpoint.
+4. Jig119 consumes preserved overall gate runs and their run/digest-bound
+   component records without re-running or re-scoring, then Vellum013-01
+   integration closes. Its 013-02 state handoff closes on its own criteria;
+   fresh open input preparation here does not claim that handoff complete.
+
+Servo035-02 follows 035-01 independently; Servo036-02 additionally needs
+035-02. No integration completion is a prerequisite for drafting/agreeing the
+shared input/output contract. No upstream slice dependency is inserted into
+Servo's lifecycle frontmatter merely to stand in for an approved checkpoint.
+
 ## Bounded first pilot
 
 The first app is a self-contained matching web fixture based on Vellum's card,
@@ -65,7 +106,13 @@ not an existing production app. These are confirmed fixture target values,
 | Content band | Height 44 CSS px, background `#1e2329` | Bound band's rectangle and resolved background color. |
 | Title | 20 CSS px, weight 600, color `#eef1f4` | Visible bound title, resolved font size/weight/color. |
 | Subtitle | 12 CSS px, weight 400, color `#8a929c` | Visible bound subtitle, resolved font size/weight/color. |
+| Normal text | Title `Trailhead`, subtitle `hiking route planner` | Exact visible bound normal-state text, not source text substituted as an app observation. |
+| CSS family declaration | Vellum's approved normalized computed CSS-family declaration | Normalized app `getComputedStyle(...).fontFamily`; no claim about the font face actually used to render glyphs. |
 | Open state | Activating open changes subtitle text to `opened` | Actual app action and bound subtitle text after the approved settle condition. |
+
+Parent verified the three source text literals; that verifies fixture content,
+not owner acceptance of targets or tolerance policy. Approved C1 input must
+carry them and the declared CSS-family target explicitly.
 
 Confirmed source anchors are `#card`, `#title`, `#subtitle`, with sibling
 `#open` **outside** the card reference crop. App bindings must be explicitly
@@ -80,14 +127,76 @@ valid visual target. The mentioned `card-open.render.png` is absent.
 **Preserve those old fixtures**; require new Vellum-approved closed/open
 captures scoped to `#card`, excluding `#open`, with measured crop/frame
 dimensions and source typography. Do not infer font family, complete card
-height or state references from the old redline/PNG.
+height or state references from the old redline/PNG. Computed CSS-family
+declaration equality is supported by the proposal; actual font-face/glyph
+metrics are not inferred from it.
 
-Initially comparisons use normalized CSS pixels, resolved sRGB colors, numeric
-font weight and exact approved state text. Proposed pilot tolerance is zero
-for the named scalar properties after documented normalization; any practical
-nonzero tolerance must be reviewed, justified and frozen, not silently added
-to make a failure pass. Font-family metrics, hidden text presence, source
-images and model estimates cannot substitute for the named app observations.
+**Coordinator-proposed tolerance, not owner-approved:** compare derived
+`getBoundingClientRect()` geometry in CSS pixels with inclusive absolute
+error <=1 CSS px for card width/band height. Keep zero tolerance for declared
+font size/weight, exact visible text and normalized color/CSS-family strings.
+Record raw geometry without rounding away failures; test exact +/-1px
+boundaries and immediately outside them. Owner review/approval must pin
+normalization and these tolerances in policy before scoring; a different
+approved choice needs updated controls, not a runtime fallback.
+
+Normalize resolved colors to exact sRGB RGBA including alpha, declared sizes
+to CSS px and weights to numeric values without inferring a rendered font
+face. CSS-family normalization must preserve family order and token semantics;
+normal text uses the approved text rule, not an ad hoc fuzzy match. Required
+unsupported properties or omitted comparison/tolerance policy remain
+`unknown`/refusal, never dropped. In particular, omitted geometry tolerance
+does not default to zero and override Vellum's approved +/-1px policy. Exact
+comparisons must also be explicit, not a catch-all for absent policy. Hidden text,
+source images or model estimates cannot replace named app observations.
+
+## Identity, approval and build-input closure
+
+Agree this bounded identity contract **before readiness**, then build and prove
+the acquisition/transport in 036-01. These are coordinator-proposed definitions
+pending owner/cross-project acceptance, not existing runtime capabilities:
+
+| Identity/closure | Proposed first-pilot definition |
+|------------------|---------------------------------|
+| Approved source | SHA-256 of the exact Vellum input artifact bytes and each declared source/export/normal/open reference artifact; version, state/crop/binding metadata and approval record must bind that complete declared source set. Vellum owns its schema and canonicalization; Servo does not reinterpret its JSON into a competing input format. |
+| Servo policy/config | SHA-256 of schema/version-named canonical JSON (UTF-8, sorted keys, compact separators, finite numeric values only) and separate byte hashes of collector/comparator/install artifacts. Include every required ID, binding, state action/settle rule, normalization, tolerance/exclusion, viewport/device scale and closure/transport rule; approval names the digest set, author and distinct reviewer/owner, not just a status flag. |
+| Candidate input closure | Explicit normalized relative POSIX paths and byte hashes for every transitive local build input: HTML/CSS/JS, local font/image/data assets, build script/config and relevant lockfile. A sorted canonical manifest binds the complete declared set; missing/extra reachable inputs, path escapes or unlisted inputs refuse. Checkout/commit labels are diagnostic only. |
+| Evaluated/current delivery | The immutable output bundle manifest lists every served HTML/CSS/JS/font/image/data resource by normalized relative path and byte hash. Hash its canonical manifest and verify actual resource bytes; independently identify the current delivery's bundle and compare content closure/digest rather than accepting an echoed build ID. |
+| Preserved evidence | Each immutable observation/capture/component record has a content digest and current gate run ID. The overall gate record binds approved source/policy, input/output closure and component digests for that invocation; Jig consumes that preserved record plus independent current-delivery identity. |
+
+Proposed Servo digest domains are version-specific labels followed by a newline
+and the defined content bytes: `servo-policy-v1`, `servo-input-closure-v1`,
+`servo-output-closure-v1`, `servo-design-evidence-v1` and `servo-gate-policy-v2`.
+Use SHA-256 over those exact preimages; raw capture/file hashes are byte hashes.
+Vellum defines its own input/source digest domain. Self-digest fields and
+approval metadata are excluded from a content preimage and represented in
+separate binding records; semantic policy/evidence fields are not excluded.
+Canonical manifests sort entries by normalized path; semantic arrays, including
+CSS-family order, preserve their order. C0 must approve exact serialization/
+numeric/string rules, digest exclusions and positive/negative test vectors
+before treating these proposed domain names as an interoperable contract.
+Test vectors must cover changed artifact/required membership, reordered keys,
+semantic array order, non-finite values and missing tolerance. Unsupported
+or unknown semantic fields refuse rather than being omitted from a digest.
+
+**Narrow proposed transport:** a static immutable local fixture bundle served
+only by the bounded collector's controlled read-only loopback server. Resolve
+all resources from the declared bundle, exclude symlink/path escapes,
+external network resources, mutable API/backend output and dynamic build-at-
+serve behavior. An empty set for an absent input category must be explicit.
+The collector verifies browser-loaded response bytes against the output
+manifest (including redirects/caches or refusing unsupported paths), links
+them to that capture's state/run, and independently hashes the selected current
+delivery files. A manifest endpoint that merely echoes the expected ID or
+matching local HEAD is insufficient. No arbitrary HTTP app provenance is
+claimed; unsupported transport/resource closure refuses.
+
+The input/output closure may change for a new candidate without reapproving
+design targets; every build/evaluation/delivery binding must be refreshed.
+Policy/source changes require explicit reviewed reapproval. No deterministic
+observation record is mutated to fit later policy; a new evaluation produces
+new bound records. A local fixture's complete declared closure and controlled
+transport are a bounded trust model, not adversary-proof remote attestation.
 
 ## Reuse and grounded seams
 
@@ -121,22 +230,27 @@ Exact field spellings/version are proposed until parent/owners reconcile.
 |----------------------|------------------|
 | Source identity | Vellum-approved input-contract version, source/export/capture hashes and approved target identity; never regenerated silently. |
 | Policy/config identity | Frozen required IDs, source-to-app bindings, state actions/settle rule, normalization, units, tolerances, exclusions and collector/comparator artifact hashes. |
-| Evaluated-build identity | Actual served immutable build artifact identity, verified against captured app runtime/build manifest. Git HEAD/URL alone is insufficient. |
+| Evaluated-build identity | Verified immutable input/output bundle closure and actually loaded resource-byte identity, linked to independently identified current delivery. Git HEAD, URL or self-echoed manifest ID alone is insufficient. |
 | Invocation identity | Current gate/evaluation run ID, capture IDs and evaluator version; duplicate/partial/foreign-run artifacts refuse. |
 | Raw observations | Per-bound-element presence/visibility, measured values/units, state/action observations, viewport/device scale/browser identity and relevant capture/artifact references with hashes. |
 | Interpreted constraints | Stable source constraint ID, required flag, expected target, actual observation reference, comparator/tolerance, `pass|fail|unknown`, reason and correction-localization context. |
-| Summary | `status: pass|fail|env_error`, `required_status: pass|fail|unknown`, counts/IDs, optional diagnostic metrics and evidence references. |
+| Summary | Component-only `status: pass|fail|env_error`, `required_status: pass|fail|unknown`, counts/IDs, optional diagnostic metrics and evidence references; not the overall completion verdict. |
 
 Here `pass` means complete required-constraint success for this component;
-the overall gate still applies diagnostic quality policy. Observed absence of
+the overall gate still applies diagnostic quality policy. Jig must attest the
+**overall gate-payload policy verdict** with every required condition conclusive-
+pass, validated record digests/run links and current-delivery binding, not this
+component summary alone. Integration control: component `pass` plus quality
+below threshold is overall `fail`/exit1, and Jig119 cannot attest. Observed absence of
 the title after successful acquisition is `fail`; failed acquisition or an
 unconfirmed title binding is `unknown` with `env_error`. Numeric anomalies
 (non-finite values, invalid units, invalid color normalization), incomplete
 state acquisition and unsupported comparisons cannot pass. Emit available raw
 observations and specific reasons even when the summary refuses.
 
-Gate validation checks source approval and hashes, frozen policy, evaluated
-build manifest, exact required-ID coverage and current invocation before
+Gate validation checks content-bound source/policy approval, immutable bundle
+closure/served-byte/current-delivery linkage, component record digests,
+exact required-ID coverage and current invocation before
 accepting pass. Changing source, comparator, bindings, tolerance or exclusions
 invalidates approval; changing build identity needs a fresh evaluation, not
 reapproval of the design policy. App observations must come from the candidate
@@ -181,11 +295,17 @@ Spec 030's suitability-signal work remains separate.
 ## Assumptions
 
 - Vellum's approved draft will supply complete typed targets, source identities,
-  fresh closed/open captures and explicit source/state/crop bindings. Parent
-  must resolve this before 036-01 readiness; current fixtures are insufficient.
-- A controlled pilot can verify the actually served build and acquire repeatable
-  CSS/state observations. Demonstrate the build mismatch control and repeated
-  runs, rather than treating a passed unit fixture as live capture proof.
+  fresh normal/open source captures and explicit source/state/crop bindings at
+  the proposed 013-01 approved-input checkpoint while IN_PROGRESS. Approve the
+  checkpoint and real artifact input before 036-01 readiness, not upstream DONE.
+- Owners approve the proposed +/-1 CSS px geometry/zero declared-size-weight/
+  exact normalized string/color policy, missing-tolerance refusal, digest
+  definitions/test vectors and immutable local-bundle closure.
+  Those are recommended choices, not user-approved facts.
+- A controlled local fixture can verify actually served/current-delivery bytes
+  and acquire repeatable CSS/state observations. The observer/transport and
+  live mismatch/replay controls are 036-01 implementation work, not prebuilt
+  readiness artifacts or a claim of arbitrary HTTP provenance.
 - Candidate raster engines may be portable and their regional metrics may be
   meaningful on these inputs. 036-02 must independently validate portability
   and false-pass/false-block behavior before any required threshold adoption.

@@ -2,18 +2,18 @@
 slice: 035-02 - required-verdict-consumers
 pass: frame-critique
 verdict: pass
-reviewer: jig:reviewer / servo-proposal-frame (fresh context)
-reviewed_at: 2026-10-14T23:59:07Z
+reviewer: jig:reviewer / servo-alignment-frame (fresh context)
+reviewed_at: 2026-10-15T00:26:20Z
 prompt_source: review.py frame-critique docs/specs/035-required-evidence-alongside-quality-scores/spec.md 035-02 docs/specs/035-required-evidence-alongside-quality-scores/spec.md docs/specs/035-required-evidence-alongside-quality-scores/plan.md docs/specs/035-required-evidence-alongside-quality-scores/tasks.md
 ---
 
 VERDICT: pass
 
 REASONING:
-The highest-risk assumption is that every authority-bearing consumer can preserve the required verdict rather than reconstruct success from a diagnostic score. The proposal does not assume existing readers already support this: it requires a bounded inventory and covers loop/goal authority, resume, plateau, hooks, planner references, heartbeat, triage and generated/vendored surfaces. Hook fail-open behavior is distinguished from completion, and Copilot advisory hooks are not promoted to autonomous execution proof.
+The highest-risk assumption is that supported execution and reporting consumers can preserve the overall policy verdict without reconstructing success from scalar scores or component envelopes. The proposed bounded reader inventory, version-aware refusal and preserved run/digest references directly address that failure mode. Hook fail-open continuation is correctly distinguished from completion, and Copilot autonomy remains outside the supported claim.
 
 SPECIFIC ISSUES:
-None identified by the fresh-context frame reviewer.
+No specific framing issues reported.
 
 RECONCILIATION NOTES:
-No deviation identified. Consumer enumeration remains a readiness requirement; actual version/reference validation must not be inferred from permissive JSON parsing (docs/specs/035-required-evidence-alongside-quality-scores/slice-02-required-verdict-consumers.md:18-22,72-74).
+No framing deviations observed. External-consumer compatibility remains an explicit limitation, not an implied migration guarantee.

@@ -30,7 +30,9 @@ correction artifacts, not only a favorable whole-image average.
    feed pinned local regional metrics through the existing ordinary evidence
    component; its raw metrics, comparisons and identity-bound results reach
    the real quality gate and supported reporting consumers. Matching regions
-   pass, with all exact/state assertions from 036-01 still enforced.
+   yield component pass, with all exact/tolerant/state assertions from 036-01
+   still enforced. Overall pass additionally requires quality policy; the
+   preserved gate run binds component/region-record digests and current delivery.
 2. **Local veto.** A named required title/band region contradicted while the
    whole-image diagnostic score is at least 0.99 yields exit 1 and a blocker
    naming the region/constraint and failing metric/threshold. Missing region,

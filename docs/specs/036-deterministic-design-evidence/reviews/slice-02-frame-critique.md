@@ -2,18 +2,18 @@
 slice: 036-02 - regional-image-evidence
 pass: frame-critique
 verdict: pass
-reviewer: jig:reviewer / servo-proposal-frame (fresh context)
-reviewed_at: 2026-10-14T23:59:08Z
+reviewer: jig:reviewer / servo-alignment-frame (fresh context)
+reviewed_at: 2026-10-15T00:26:20Z
 prompt_source: review.py frame-critique docs/specs/036-deterministic-design-evidence/spec.md 036-02 docs/specs/036-deterministic-design-evidence/spec.md docs/specs/036-deterministic-design-evidence/plan.md docs/specs/036-deterministic-design-evidence/tasks.md
 ---
 
 VERDICT: pass
 
 REASONING:
-The highest-risk assumption is that a portable raster engine and calibrated regional thresholds can discriminate required contradictions from harmless variations. The draft survives that attack by withholding engine adoption and threshold approval until source/license review, platform probes and bounded false-pass/false-block evaluation; golden parity is expressly insufficient. Required regional failures remain independent vetoes, unavailable identity/acquisition refuses, and correction artifacts must reach the same installed gate and reporting consumers.
+The highest-risk assumption is that a portable raster engine and approved regional thresholds can discriminate meaningful local failures from harmless variation. The proposal does not assert that this is established: engine/license review, platform probes and independently reviewed bounded calibration precede adoption, and parity alone is explicitly insufficient. Regional success remains subordinate to the existing exact/state constraints and overall quality-gate verdict, without introducing a registry or DSL.
 
 SPECIFIC ISSUES:
-None identified by the fresh-context frame reviewer.
+No specific framing issues reported.
 
 RECONCILIATION NOTES:
-No deviation identified. Impeccable selection, portability and calibration remain unresolved assumptions, not adopted facts or production-accuracy evidence (docs/specs/036-deterministic-design-evidence/slice-02-regional-image-evidence.md:18-25,44-50).
+No framing deviations observed. Impeccable remains an unselected candidate, and neither general accuracy nor production readiness is claimed.

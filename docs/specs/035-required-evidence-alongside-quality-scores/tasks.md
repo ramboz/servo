@@ -3,6 +3,8 @@
 ## Authoring and readiness
 
 - [ ] Parent reconciles exact v2 envelope and cross-project owner links.
+- [ ] Agree canonical identity/approval closure; start 035-01 standalone
+      without Vellum/Jig completion or future observer prerequisites.
 - [ ] Owner accepts ADR-0044 separately after frame critique.
 - [ ] Each slice clears normal Jig readiness; drafts do not authorize execution.
 
@@ -13,6 +15,8 @@
 - [ ] Implement minimal approved policy/result extension using existing seams.
 - [ ] Wire template/scaffold/overlay/gate and generated/vendored installations.
 - [ ] Prove no duplicate evaluation, atomic run matching and policy tripwires.
+- [ ] Preserve overall gate authority over run/digest-bound component records;
+      prove component pass plus quality failure is overall fail.
 - [ ] Run required independent reviews and reconcile live documentation.
 
 ## 035-02

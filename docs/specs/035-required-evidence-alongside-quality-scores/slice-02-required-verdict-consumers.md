@@ -25,7 +25,8 @@ high score falsely completing the work.
 
 1. **Loop authority and recovery.** For supported loop and goal drivers,
    initial/final gate, iteration history, checkpoint/resume and final summary
-   preserve v2 verdict/reason and required evidence references. Quality 0.99
+   preserve the overall v2 policy verdict/reason, gate run/digest and
+   run/digest-bound component references, not a component's standalone verdict. Quality 0.99
    plus required fail cannot halt as success or produce a pass sentinel.
    Unknown/stale evidence halts as evaluation refusal, not convergence;
    budget, context and iteration brakes remain unchanged.
@@ -45,6 +46,9 @@ high score falsely completing the work.
    dispatched required-fail run is not `passed`; unknown evidence remains
    unavailable. Existing terminal reasons and quarantine/budget behavior
    remain compatible, with structured oracle cause carried separately.
+   A passing deterministic component plus failed quality threshold is overall
+   `fail`, not a dispatched `passed` outcome or completion evidence; preserve
+   this run for Jig119's no-rerun/no-rescore attestation refusal control.
 5. **Version compatibility.** Old v1 checkpoints/results continue working.
    Enabled v2 readers refuse unknown versions or unavailable mandatory
    references. Generated host packages and supported project-vendored

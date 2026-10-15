@@ -33,7 +33,7 @@ grounding corrections and draft owner IDs; this session did not inspect or
 edit sibling checkouts. Those upstream artifacts require published revision
 pins and approval before implementation readiness.
 
-## Fresh frame critique
+## Initial fresh frame critique
 
 Installed `workflow.py frame-review-needed` returned `true` for ADR-0044 and
 each of 035-01, 035-02, 036-01 and 036-02, matching their declared flags.
@@ -101,8 +101,60 @@ these authoring-interface differences.
 
 Parent reconciles Vellum's published approved input-contract revision and
 Jig's attestation owner, plus exact Servo output field names and distinct
-version namespaces. Vellum must supply fresh approved closed/open card captures
-and complete bindings; the pilot must prove live observations/served-build
-identity. Regional engine/license/portability/calibration are later 036-02
+version namespaces at proposed C0; a published proposal is not executable input
+approval. C0 also pins serialization/digest domains/test vectors, required
+comparison inventory and served/current-delivery closure predicates, without
+runnable-all-consumers proof. Vellum013-01 must supply C1 approved normal/open
+source artifacts and bindings while it can remain IN_PROGRESS; upstream DONE
+and the future observer are not readiness prerequisites. The observer and actual
+served/current-delivery byte linkage are 036-01 implementation obligations.
+Owners must approve the proposed per-property tolerance/normalization, missing-
+tolerance refusal and controlled immutable local-bundle boundary. Regional engine/license/portability/calibration are later 036-02
 readiness work, not a blocker for publishing this draft or a selected dependency.
 Native Copilot unattended Servo execution remains explicitly unsupported.
+
+## Alignment revision (2026-10-14)
+
+The coordinating parent supplied a new bounded authoring assignment after
+cross-repository review found circular readiness, incomplete pilot comparisons
+and ambiguity over component-versus-overall completion authority. The earlier
+frame passes describe the initial frame only; this revision receives new
+evidence. No implementation, owner approval or lifecycle advancement occurred.
+
+- Proposed order is now C0 contract/identity agreement, then independent
+  standalone 035-01 and Vellum013-01 C1 input preparation, then 036-01 observer/
+  local-bundle/overall-gate proof, Jig119 preserved-run attestation and Vellum
+  integration close-out. Preparing open references does not complete 013-02.
+- Parent verified source literals `Trailhead`, `hiking route planner`, `opened`.
+  Exact normal/open text and normalized computed CSS-family declaration are
+  required, without rendered-font-face inference. Derived DOM geometry proposes
+  inclusive +/-1 CSS px; declared size/weight remain zero tolerance; normalized
+  strings/colors are exact. Missing required tolerance/comparator refuses.
+  All policy choices remain proposed pending owner review.
+- Component `pass` is component-only. The installed overall gate-payload policy
+  verdict binds immutable component records by run/digest and controls completion.
+  Component-pass/quality-fail produces overall failure and Jig cannot attest it.
+- Canonical source/policy approval and complete input/output closure are
+  agreement prerequisites; actual browser-served bytes/current-delivery proof
+  is implementation work under a proposed controlled immutable local-bundle
+  transport. Checkout hashes or echoed manifest IDs do not prove that linkage.
+- Live proposal reads confirmed Vellum draft
+  [PinkException/vellum#50](https://github.com/PinkException/vellum/pull/50) at
+  `7f4c06077318859c0aabec33d00c2eebd6cba74f` and Jig draft
+  [ramboz/jig#242](https://github.com/ramboz/jig/pull/242) at
+  `c118595ca122351f4f213d29ff5f06302321c2b0`. Neither pin is owner acceptance;
+  pending sibling alignment amendments still require later reconciliation.
+
+One new fresh-context read-only `jig:reviewer` (`servo-alignment-frame`) applied
+five newly generated installed-helper frame-critique prompts. ADR0044 and all
+four slices returned **pass**, with no specific framing issues reported.
+The new verdicts replace the same standard evidence paths through
+`record-review`; git preserves the earlier verdict history. Review confirms
+the frame, not C0/C1 approval or live runtime success.
+
+Post-revision validation reran both strict spec lints (all four slices clear),
+all four `check-reviews --stage READY_FOR_REVIEW` checks (clear, no transitions),
+board/index audits (clean, same pre-existing ADR0024/0026 warnings), existing
+spec-oracle local-link checks (17 files pass), whitespace and 17-path artifact-
+only scope checks. ADR remains Proposed; both specs/four slices remain DRAFT.
+No unrelated source suite or plugin installation was performed.

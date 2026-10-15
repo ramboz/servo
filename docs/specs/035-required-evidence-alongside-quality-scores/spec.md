@@ -62,6 +62,17 @@ successful ledger row. Bind run identity, component identity, approved required
 set/config hash and evaluator artifact identity; consumers validate completeness
 and exact invocation correspondence.
 
+The installed **overall gate-payload policy verdict**, not an individual
+component's `pass`, is completion authority. Its preserved run record binds
+every referenced component result by that gate run ID and content digest.
+Component success plus failed quality threshold is overall failure; Jig must
+not attest it by inspecting the component envelope in isolation. This keeps
+quality policy and required policy both authoritative, without re-scoring.
+The gate record includes effective quality threshold/weights and permitted
+runtime override provenance, approved required policy identity and all
+run/digest-bound component references; a consumer cannot reconstitute a
+different overall verdict by ignoring the policy or changing those values.
+
 | Policy outcome | Oracle/gate exit | Enabled gate v2 status / reason |
 |----------------|------------------|--------------------------------|
 | All required pass, quality passes | 0 | `pass`, no failure reason |
@@ -96,6 +107,29 @@ Policy changes (required membership, component bindings, comparisons,
 tolerances or exclusions) invalidate approval and require explicit reapproval.
 Freeze protects honest drift, not malicious co-rewriting of policy and hashes.
 A reference/model ignore-list cannot waive a required assertion.
+
+## Readiness and cross-project order
+
+035-01 is independently implementable with existing deterministic check
+fixtures after its own decision/readiness review. It does not require Vellum
+captures, Vellum013-01 DONE, a new observer or completed Jig attestation.
+Agree component/gate identity serialization, approval records and closed
+required-ID/config/artifact sets before readiness; actual race-safe publication
+and installed linkage are implementation proof, not prerequisites.
+The proposed shared **C0** checkpoint pins accepted/aligned decisions plus
+input/output versions, serialization/digest domains and reviewed test vectors,
+required comparison inventory and served/current-delivery closure predicates.
+No runnable-all-consumers or upstream integration completion is required at C0.
+
+For the design pilot, the coordinator proposes: Vellum013-01 provides **C1**, an
+owner-approved normal/open source-artifact checkpoint while IN_PROGRESS;
+036-01 builds/proves the observer and served/current-bundle binding; Jig119
+attests preserved overall gate runs; then Vellum integration closes. 035-02
+can follow 035-01 without waiting on Vellum/Jig completion. Cross-project
+contract decisions need alignment, not completed integrations. Exact checkpoint
+and transport approval remain owner choices in spec036.
+Input preparation C1 and standalone gate implementation can proceed
+independently after C0; neither requires the other's runtime completion.
 
 ## Scope and non-goals
 

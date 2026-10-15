@@ -2,18 +2,18 @@
 slice: 035-01 - installed-required-gate
 pass: frame-critique
 verdict: pass
-reviewer: jig:reviewer / servo-proposal-frame (fresh context)
-reviewed_at: 2026-10-14T23:59:07Z
+reviewer: jig:reviewer / servo-alignment-frame (fresh context)
+reviewed_at: 2026-10-15T00:26:20Z
 prompt_source: review.py frame-critique docs/specs/035-required-evidence-alongside-quality-scores/spec.md 035-01 docs/specs/035-required-evidence-alongside-quality-scores/spec.md docs/specs/035-required-evidence-alongside-quality-scores/plan.md docs/specs/035-required-evidence-alongside-quality-scores/tasks.md
 ---
 
 VERDICT: pass
 
 REASONING:
-The load-bearing assumption is that existing component seams can produce a score and complete required evidence from the same invocation without concurrent-run aliasing. Existing checks already produce structured outcomes; invocation binding and atomic publication are correctly treated as additional work requiring installed controls. The proposed policy prevents high quality, zero weight or THRESHOLD=0 from waiving a failure, while missing, stale or incomplete evidence refuses.
+The highest-risk assumption is that existing component artifact seams can carry race-safe structured evidence alongside the diagnostic score from one invocation. The slice treats this as implementation work, with concurrency, partial-write, stale-result and complete-set controls, rather than assuming ledger timestamps establish identity. It can build standalone after C0, and explicitly preserves overall failure when required evidence passes but quality fails.
 
 SPECIFIC ISSUES:
-None identified by the fresh-context frame reviewer.
+No specific framing issues reported.
 
 RECONCILIATION NOTES:
-No deviation identified. Single-invocation/concurrency proof and explicit migration remain pending implementation obligations, not evidence obtained here (docs/specs/035-required-evidence-alongside-quality-scores/slice-01-installed-required-gate.md:40-46,53-62).
+No framing deviations observed. Canonical serialization, approval closure and migration decisions must still clear the named readiness review; installed linkage is a subsequent implementation obligation.

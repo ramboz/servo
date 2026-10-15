@@ -8,6 +8,10 @@ or decision acceptance has started.
 Accept ADR-0044 only after parent aligns the Vellum input owner, Servo output
 version/names and Jig attestation consumer. Run the normal Jig framing and
 readiness ceremony rather than treating this draft PR as approval.
+Agree identity serialization, approval closure and component/gate run bindings
+before readiness. 035-01 starts standalone with existing check fixtures; it
+does not wait for Vellum/Jig DONE or a new observation runtime. Proof of the
+new installed gate/result behavior belongs to implementation.
 
 ## 035-01: installed required gate
 
@@ -16,6 +20,9 @@ the approved content hash to all new policy fields. Reuse scalar functions,
 component directories, SEED splicing and ledger primitives. Select a minimal
 run-bound result carrier with atomic publication and validation; no new
 registry/DSL, no command reruns, no latest-row lookup.
+Bind immutable component records by digest/current gate run beneath the overall
+gate-payload verdict. Include passing-component/failed-quality controls; no
+component-only completion authority.
 
 Cover template/scaffold and spec-oracle installers, shared/vendored engines,
 gate summary/version selection and all generated installed packages. Preserve

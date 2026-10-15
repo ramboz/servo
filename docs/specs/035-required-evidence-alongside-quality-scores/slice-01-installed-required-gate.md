@@ -16,9 +16,11 @@ project quality gate.
 **DoR:**
 - ADR-0044 accepted only after parent alignment and fresh frame critique.
 - Required-field/result-channel/version-2 proposal independently reviewed;
-  unavailable evidence and migration behavior pinned.
-- Reuse of existing check, freeze and SEED seams confirmed by executable
-  installed fixtures; no alteration of existing frozen policy to make them pass.
+  unavailable evidence, identity serialization/approval closure and migration
+  behavior pinned. Existing command-check fixtures are available.
+- No completed Vellum/Jig slice, design capture or not-yet-written observer is
+  required. New installed-result/race proof is delivered by this slice, not
+  required before starting it; existing frozen policy is not altered to pass.
 
 **Acceptance Criteria:**
 
@@ -44,12 +46,16 @@ project quality gate.
    evidence share that invocation. Two concurrent gates cannot consume each
    other's result; partial writes and mismatched run IDs refuse. The complete
    approved required set, score, raw check evidence, interpreted verdict and
-   hashes are recoverable from the existing component artifacts/ledger.
+   hashes are recoverable from the existing component artifacts/ledger. The
+   overall gate record binds each immutable component result by its content
+   digest and that exact gate run, not a component-owned success label.
 5. **Decision table.** Required pass plus high quality returns 0; required
    pass plus low quality returns 1/`quality_below_threshold`; required fail
    plus low quality returns 1/`required_and_quality_failed`. Required-state
    counts and IDs match evidence; composite/threshold remain available but
-   are not used as a proxy for a required verdict.
+   are not used as a proxy for a required verdict. A passing deterministic
+   component plus failed quality threshold yields a preserved overall `fail`;
+   the component's passing envelope cannot be used as completion authority.
 6. **Compatibility and installation.** With no required policy, old scalar
    checks, `--score-only`, default scaffold, custom SEED functions, v1 gate
    payload and 0/1/2 behavior remain unchanged. Enabling policy upgrades the

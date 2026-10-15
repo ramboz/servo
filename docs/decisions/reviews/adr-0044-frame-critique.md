@@ -2,18 +2,18 @@
 adr: 0044
 pass: frame-critique
 verdict: pass
-reviewer: jig:reviewer / servo-proposal-frame (fresh context)
-reviewed_at: 2026-10-14T23:59:06Z
+reviewer: jig:reviewer / servo-alignment-frame (fresh context)
+reviewed_at: 2026-10-15T00:26:19Z
 prompt_source: review.py frame-critique docs/decisions/adr-0044-required-constraints-cannot-be-averaged-away.md
 ---
 
 VERDICT: pass
 
 REASONING:
-The highest-risk assumption is that an independent required verdict can coexist with scalar scoring without consumers silently discarding its authority. The frame survives: it explicitly requires version-aware adoption, preserves default v1 behavior and closed 0/1/2 exits, and makes unavailable evidence override evaluated failure. Cross-project agreement and running-build verification remain prerequisites, not claimed capabilities.
+The highest-risk assumption is that independently approved constraints and trustworthy implementation evidence can reach completion authority without collapsing back into a score or component-only pass. The frame addresses this through the overall installed gate verdict, immutable run/digest-bound records and explicit identity/refusal rules. C0 requires contract agreement, not runnable integrations, and the proposed C1 -> Servo observer/linkage proof -> Jig consumption -> Vellum integration order is noncircular.
 
 SPECIFIC ISSUES:
-None identified by the fresh-context frame reviewer.
+No specific framing issues reported.
 
 RECONCILIATION NOTES:
-No artifact-level deviation identified. Keep output adoption and Vellum/Jig contract pins unresolved until owner reconciliation (docs/decisions/adr-0044-required-constraints-cannot-be-averaged-away.md:144-151,169-173).
+No framing deviations observed. Cross-project acceptance, checkpoint approval and final contract choices remain explicitly outstanding; this verdict does not approve them.

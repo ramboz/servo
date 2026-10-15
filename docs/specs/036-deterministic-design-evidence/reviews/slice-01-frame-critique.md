@@ -2,18 +2,18 @@
 slice: 036-01 - bound-card-evidence
 pass: frame-critique
 verdict: pass
-reviewer: jig:reviewer / servo-proposal-frame (fresh context)
-reviewed_at: 2026-10-14T23:59:08Z
+reviewer: jig:reviewer / servo-alignment-frame (fresh context)
+reviewed_at: 2026-10-15T00:26:20Z
 prompt_source: review.py frame-critique docs/specs/036-deterministic-design-evidence/spec.md 036-01 docs/specs/036-deterministic-design-evidence/spec.md docs/specs/036-deterministic-design-evidence/plan.md docs/specs/036-deterministic-design-evidence/tasks.md
 ---
 
 VERDICT: pass
 
 REASONING:
-The load-bearing assumption is that the controlled card can yield repeatable, independently acquired observations tied to the actually served build. The draft honestly identifies DOM/state extraction and build verification as new work, separates raw observations from comparison policy, and requires replay/substitution refusal through the installed gate. It does not infer a matching-card prerequisite from the old solid-color PNG or unmeasured redline facts: fresh approved references, explicit bindings and the upstream Vellum contract are readiness dependencies, with no competing input schema proposed.
+The highest-risk assumption is that observed app state can be linked to the actual evaluated and current delivered bytes; the narrow immutable local-bundle transport makes this a credible, falsifiable implementation obligation without claiming arbitrary HTTP provenance. Readiness requires approved identity/closure definitions and C1 source inputs, not a pre-existing observer, upstream DONE or completed Jig runtime. The pilot explicitly covers normal/opened text, computed CSS-family declaration rather than rendered face, declared size/weight, exact normalized colors, proposed inclusive +/-1 CSSpx geometry, zero declared-value tolerance and missing-policy refusal.
 
 SPECIFIC ISSUES:
-None identified by the fresh-context frame reviewer.
+No specific framing issues reported.
 
 RECONCILIATION NOTES:
-No deviation identified. Fresh captures, accepted upstream targets and served-build proof remain unresolved; this review establishes none of them (docs/specs/036-deterministic-design-evidence/slice-01-bound-card-evidence.md:18-25,59-65).
+No framing deviations observed. C1, tolerance/normalization policy, canonical vectors and transport boundaries remain owner-approved readiness decisions; live linkage and preserved overall-gate controls remain implementation proof.
