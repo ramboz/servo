@@ -55,10 +55,13 @@ the named assumptions. Durable per-target verdicts are recorded by
 `review.py record-review --pass frame-critique` in the standard review paths;
 no acceptance or implementation lifecycle transitions were performed.
 
-After the critique, parent supplied Jig's provisional ADR-0065/spec119 IDs.
-Only the pending-owner references were filled in; output semantics, scope,
-assumptions and acceptance criteria were unchanged. Those IDs remain unpublished
-`--no-push` reservations and must be reconciled before owner acceptance.
+After the critique, parent supplied Jig's provisional ADR-0065/spec119 IDs,
+then their publication in draft
+[ramboz/jig#242](https://github.com/ramboz/jig/pull/242) at
+`c118595ca122351f4f213d29ff5f06302321c2b0`. Pending-owner references were updated
+to that published PR/pinned snapshot; output semantics, scope, assumptions and
+acceptance criteria were unchanged. The consumer remains Proposed/DRAFT and
+must be reconciled before owner acceptance.
 
 ## Authoring validation
 

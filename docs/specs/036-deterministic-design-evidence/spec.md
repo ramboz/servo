@@ -42,10 +42,11 @@ from design prose. Unsupported input versions/required types refuse.
 
 The Jig consumer owner is proposed ADR-0065
 `docs/decisions/adr-0065-attest-external-policy-verdict-delivered-revision.md`
-and [spec 119 - mixed design-evidence attestation](https://github.com/ramboz/jig/blob/jig-mixed-evidence-attestation/docs/specs/119-mixed-design-evidence-attestation/spec.md),
-with rich-policy, stale-delivery and legacy-opt-in slices. These are provisional
-`--no-push` IDs on unpublished `jig-mixed-evidence-attestation`, not accepted
-dependencies. Cross-project acceptance must reconcile these new owners,
+and [spec 119 - mixed design-evidence attestation](https://github.com/ramboz/jig/blob/c118595ca122351f4f213d29ff5f06302321c2b0/docs/specs/119-mixed-design-evidence-attestation/spec.md),
+with rich-policy, stale-delivery and legacy-opt-in slices. They are published
+in draft [ramboz/jig#242](https://github.com/ramboz/jig/pull/242), pinned at
+`c118595ca122351f4f213d29ff5f06302321c2b0`. ADR-0065 remains Proposed and
+spec119 DRAFT, not accepted dependencies. Cross-project acceptance must reconcile these new owners,
 not reinterpret or amend closed Jig spec 071.
 
 Claude Design is the first source; Figma is deferred and not a prerequisite.

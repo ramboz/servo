@@ -6,8 +6,11 @@ source capture, application creation or dependency adoption has started.
 ## Readiness and upstream authority
 
 Parent pins published/approved Vellum ADR-0011/spec013 input-contract artifacts
-and Jig's provisional ADR-0065/spec119 attestation owner, and reconciles Servo output names/versions before
-readiness. Require fresh approved source closed/open captures; existing solid
+and reconciles Servo output names/versions before readiness. Jig's Proposed
+ADR-0065/DRAFT spec119 consumer is published in
+[ramboz/jig#242](https://github.com/ramboz/jig/pull/242) at
+`c118595ca122351f4f213d29ff5f06302321c2b0`; publication does not clear acceptance
+or cross-project alignment. Require fresh approved source closed/open captures; existing solid
 240x140 PNG and absent open-state PNG are not target substitutes. Preserve
 old Vellum fixtures. Figma is deferred; Claude Design is first.
 

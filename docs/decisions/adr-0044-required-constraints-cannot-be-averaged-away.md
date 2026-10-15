@@ -169,9 +169,10 @@ coordination and runnable project oracles are sufficient for the pilot.
 
 - Parent reconciliation must pin Vellum ADR-0011/spec013's input-contract
   artifact/revision and Jig's proposed ADR-0065/spec119 attestation consumer
-  before owners accept the decision. Jig IDs are provisional `--no-push`
-  reservations on unpublished `jig-mixed-evidence-attestation`; closed Jig
-  spec 071 is not the new consumer owner.
+  before owners accept the decision. Jig's Proposed ADR-0065/DRAFT spec119
+  are published in [ramboz/jig#242](https://github.com/ramboz/jig/pull/242),
+  pinned at `c118595ca122351f4f213d29ff5f06302321c2b0`; publication is not
+  acceptance, and closed Jig spec 071 is not the new consumer owner.
 - Confirm the version-2 output proposal with cross-project consumers. A
   material change to versioning or authority requires fresh frame review.
 - Regional metric engine, bounded calibration set and permitted licensing /
