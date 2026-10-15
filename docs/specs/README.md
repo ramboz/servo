@@ -153,7 +153,7 @@
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | DEFERRED |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | **DONE** |  |
 | [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-01 - installed-required-gate | **DONE** | Explicit v2 opt-in; scalar v1 unchanged; overall gate owns completion. |
-| [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-02 - required-verdict-consumers | RECONCILED (servo-required-verdict-cons…) |  |
+| [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-02 - required-verdict-consumers | **DONE** |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 - bound-card-evidence | DRAFT |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-02 - regional-image-evidence | DRAFT |  |
 
