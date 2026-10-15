@@ -29,7 +29,9 @@
 
 ## 035-02
 
-- [ ] Enumerate actual gate/oracle/result consumers before implementation.
+- [x] Enumerate actual gate/oracle/result consumers before implementation.
+- [x] 035-02 clears fresh framing/readiness review and helper readiness/start
+      transitions at the pinned 035-01 parent.
 - [ ] Add failing consumer fixtures and wire verdict, cause and evidence refs.
 - [ ] Preserve old checkpoint/report reads, existing brakes and hook limitations.
 - [ ] Demonstrate correction evidence through real supported final reporting.

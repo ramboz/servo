@@ -1,10 +1,11 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 kind: feature
 dependencies: [035-01, adr-0044]
 last_verified:
 frame_review: true
 arch_review: true
+claimed_by: servo-required-verdict-consumers
 ---
 
 ## Slice 035-02 - required-verdict-consumers
