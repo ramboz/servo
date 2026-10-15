@@ -1,11 +1,10 @@
 ---
-status: RECONCILED
+status: DONE
 kind: feature
 dependencies: [adr-0044]
 last_verified: 2026-10-14
 frame_review: true
 arch_review: true
-claimed_by: servo-installed-required-gate
 review_reopened_at: 2026-10-15T03:44:29Z
 ---
 
@@ -145,5 +144,5 @@ generated host paths are accounted by their explicit roots/files there.
 
 ### Close-out (post-DONE)
 
-- [ ] Regenerate board and record opt-in/default compatibility invariants.
+- [x] Regenerate board and record opt-in/default compatibility invariants.
 - [x] Reconcile live gate/skill/install documentation; preserve closed records.
