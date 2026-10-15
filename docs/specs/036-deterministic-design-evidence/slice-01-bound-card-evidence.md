@@ -182,6 +182,43 @@ compliance/craft/architecture/reconciliation reviews remain open.
 This is not REVIEWED, RECONCILED, DONE or Jig attestation.
 No 036-02 implementation or closed-record amendment occurred.
 
+### Execution-closure recovery checkpoint (2026-10-15)
+
+The exact 74,424-byte dirty patch from base
+`5440b63458bf862d4fe0b19e274db18c38c170aa` is preserved in `b73306c`.
+All eleven applied/staged source hashes matched the race-checked snapshot.
+Patch SHA-256:
+`7ed90f2096e60cd8815e28274ebacaf89c7976dcee00871d522f267eda14fdc6`.
+Subsequent focused red-to-green controls close unimported Python-extension
+native linkage, native CLI launcher symlinks, unrelated credential forwarding,
+cross-state sealed-image mutation, original PNG/observation mutation during
+quality, and Playwright Node startup overrides. Public schemas and the pure
+output-reference API are unchanged; official host packages were regenerated.
+
+Independent bounded source/definition and staged-driver reviews passed for
+`closure-preflight-v3`. Its ordinary no-judge install/reinstall preserved full
+oracle hash `37a3d5e5e6c442fdf49526416afded0e6ee4ee77d9a8e1a767e64f1dccc3e108`.
+Installed controls observed all28requiredpass/qualityunavailable/exit2,
+real-quality-wrapper drift refusal2, Node-startup refusal2, and font24
+26pass/2fail/exit1 at `THRESHOLD=0`; current-delivery readback passed.
+Its complete 3,887-file runtime inventory, approvals and frozen-context/control
+receipts remain in recovery session artifacts, not the runtime package.
+
+Final lint-only import/string-formatting/test-binding cleanup passed scoped
+lint, 261 focused pytest cases and all47 card unittests including all10 actual
+browser tests. Changed helper bytes are not relabelled as v3 proof.
+Fresh `closure-preflight-v4` policy identity is
+`sha256:db6b7fa969f51f540577f45aa0b0cd1c6a268ac01e3bf8ecdab36e2966c6268d`.
+Its exact-byte review/reseal/preflight remains open: independent refresh
+attempts encountered model HTTP408/connection timeout and unavailable artifact
+access approval, not code or judge failures. This source checkpoint does not
+claim that final v4 definition is approved.
+
+This recovery made zero live judge calls; inherited actual calls remain25.
+Historical samples and prior control epochs are unchanged. Trusted-local
+closure only: no hostile-writer/full-host attestation, whole-slice compliance,
+REVIEWED, RECONCILED, DONE or renewed live-call allowance is claimed.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and record exact pilot scope and upstream contract pin.

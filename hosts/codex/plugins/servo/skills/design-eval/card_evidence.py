@@ -7,6 +7,7 @@ import os
 import platform
 import secrets
 import shutil
+import site
 import sys
 import uuid
 from decimal import Decimal, InvalidOperation
@@ -146,6 +147,51 @@ def policy_hash(policy):
     return bundle.identity("servo-policy-v1", {k: v for k, v in policy.items() if k != "approval"})
 
 
+def check_startup_environment(prefix, roots):
+    prefix = Path(prefix).resolve()
+    require(
+        (prefix / "pyvenv.cfg").is_file() and site.ENABLE_USER_SITE is False,
+        "closed virtualenv startup configuration required",
+    )
+    customization = sys.modules.get("sitecustomize")
+    origin = getattr(customization, "__file__", None)
+    require(
+        (
+            customization is None
+            or (
+                origin is not None
+                and Path(origin).resolve().is_relative_to(Path(sys.base_prefix).resolve())
+            )
+        )
+        and "usercustomize" not in sys.modules,
+        "unsupported executable Python startup customization",
+    )
+    for directory in roots:
+        root = Path(directory).resolve()
+        require(root.is_relative_to(prefix), "unapproved startup package root")
+        require(
+            not list(root.glob("*.pth"))
+            and not (root / "sitecustomize.py").exists()
+            and not (root / "usercustomize.py").exists(),
+            "unsupported executable startup files",
+        )
+    require(
+        not any(
+            value
+            for key, value in os.environ.items()
+            if key.startswith("DYLD_") or key in ("LD_PRELOAD", "LD_LIBRARY_PATH")
+        ),
+        "unsupported native loader environment",
+    )
+    require(
+        not any(
+            os.environ.get(name)
+            for name in ("PLAYWRIGHT_NODEJS_PATH", "NODE_OPTIONS", "NODE_PATH")
+        ),
+        "unsupported Playwright Node startup override",
+    )
+
+
 def validated_policy(path):
     policy = bundle.load(path)
     require(
@@ -196,11 +242,99 @@ def validated_policy(path):
     require(
         policy["runtime"]["python"] == platform.python_version()
         and policy["runtime"]["executable"] == str(Path(sys.executable).resolve())
+        and policy["runtime"].get("prefix") == str(Path(sys.prefix).resolve())
         and policy["runtime"]["os"] == platform.platform()
         and os.environ.get("PLAYWRIGHT_BROWSERS_PATH") == policy["runtime"]["browser_root"],
         "runtime environment changed",
     )
+    require(
+        not any(
+            os.environ.get(name)
+            for name in (
+                "PYTHONPATH",
+                "PYTHONHOME",
+                "PYTHONSTARTUP",
+                "PYTHONINSPECT",
+                "BASH_ENV",
+                "ENV",
+            )
+        ),
+        "unsupported Python or shell startup environment",
+    )
+    bash = shutil.which("bash")
+    require(
+        bash is not None and str(Path(bash).resolve()) == policy["runtime"].get("bash"),
+        "runtime bash resolution changed",
+    )
+    origins = policy["runtime"].get("module_origins")
+    require(
+        type(origins) is dict and set(origins) == set(policy["runtime"]["dependencies"]),
+        "runtime module origins missing or incomplete",
+    )
+    for name, expected in origins.items():
+        spec = importlib.util.find_spec(name)
+        require(
+            spec is not None
+            and spec.origin is not None
+            and str(Path(spec.origin).resolve()) == expected,
+            "runtime module origin changed: " + name,
+        )
+        try:
+            version = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise ValueError("runtime dependency unavailable: " + name) from exc
+        require(
+            version == policy["runtime"]["dependencies"][name],
+            "runtime dependency version changed: " + name,
+        )
+    roots = sorted(str(Path(root).resolve()) for root in site.getsitepackages())
+    require(roots == policy["runtime"].get("site_roots"), "runtime startup roots changed")
+    check_startup_environment(sys.prefix, roots)
+    native = policy["runtime"].get("native_resolutions")
+    require(type(native) is list, "native dependency resolution closure missing")
+    for row in native:
+        require(
+            str(Path(row["path"]).resolve()) == row["resolved"],
+            "native dependency resolution changed: " + row["path"],
+        )
+        require(
+            bundle.file_hash(row["resolved"]) == row["hash"],
+            "native dependency content changed: " + row["path"],
+        )
     return policy
+
+
+def assert_driver_seal(target, expected_ids=None):
+    target = Path(target)
+    try:
+        plan = bundle.load(target / "spec/oracle/card/checks.json")
+    except OSError as exc:
+        raise ValueError("oracle.sh driver seal unavailable") from exc
+    require(
+        type(plan) is dict and plan.get("approval_status") == "approved",
+        "oracle.sh seal requires final approval",
+    )
+    binding = plan.get("approved_required_binding", {})
+    require(type(binding) is dict, "oracle.sh driver binding missing")
+    pins = binding.get("evaluator_artifacts", [])
+    require(
+        type(pins) is list and all(type(pin) is dict for pin in pins),
+        "oracle.sh driver seal missing",
+    )
+    matches = [pin for pin in pins if pin.get("path") == "oracle.sh"]
+    require(
+        len(matches) == 1 and matches[0].get("hash") == bundle.file_hash(target / "oracle.sh"),
+        "oracle.sh driver seal missing or changed; stage, review and reapprove final bytes",
+    )
+    if expected_ids is not None:
+        checks = plan.get("checks", [])
+        require(
+            plan.get("required_policy", {}).get("enabled") is True
+            and sorted(check["id"] for check in checks) == expected_ids
+            and all(check.get("required") is True for check in checks)
+            and binding.get("required_ids") == expected_ids,
+            "approved source required inventory was omitted or optionalized",
+        )
 
 
 def current_binding(policy):
@@ -338,11 +472,33 @@ def _verify_existing(envelope, root, policy, binding, run_id):
 
 
 def evaluate(policy_path):
+    from card_quality import input_identity
+
     policy = validated_policy(policy_path)
     target = Path(policy["target"])
     run_id = _run_id(target)
+    assert_driver_seal(target)
+    cache = target / ".servo/gate-runs" / run_id / "python-source-only"
+    require(
+        sys.dont_write_bytecode
+        and sys.pycache_prefix is not None
+        and Path(sys.pycache_prefix).resolve() == cache.resolve()
+        and not cache.exists(),
+        "owned source-only Python cache context required; invoke the installed gate",
+    )
     producer = producer_at(policy["producer"])
     packages = packages_at(policy["references"], producer)
+    expected_ids = sorted(
+        identity
+        for package in packages.values()
+        for identity in package["required_inventory"]["required_ids"]
+    )
+    assert_driver_seal(target, expected_ids)
+    python = shutil.which("python3")
+    require(
+        python is not None and str(Path(python).resolve()) == policy["runtime"]["executable"],
+        "framework Python resolution differs from declared interpreter",
+    )
     binding = current_binding(policy)
     root = bundle.safe(target, policy["output_root"].replace("{run_id}", run_id))
     if root.exists():
@@ -380,6 +536,7 @@ def evaluate(policy_path):
         },
     )
     observations, rows, acquisition_error = {}, [], None
+    capture_hashes, acquired_inputs = {}, {}
     try:
         from playwright.sync_api import Error as BrowserError
         from playwright.sync_api import sync_playwright
@@ -405,19 +562,42 @@ def evaluate(policy_path):
                     package["application_binding_intent"],
                     state,
                     root / f"{state}.png",
+                    expected_hash=next(
+                        row["hash"]
+                        for row in binding["build"]["outputs"]
+                        if row["path"] == "index.html"
+                    ),
                 )
                 observed = _normalize(package, observed, producer)
                 observed.update(
                     run_id=run_id, capture_id=str(uuid.uuid4()), acquisition_nonce=claim["nonce"]
                 )
                 bundle.publish(root / f"{state}.observations.json", observed)
+                observation_path = root / f"{state}.observations.json"
+                acquired_inputs[observation_path] = input_identity(observation_path)
                 observations[state] = {
                     "path": f"{state}.observations.json",
-                    "hash": bundle.file_hash(root / f"{state}.observations.json"),
+                    "hash": acquired_inputs[observation_path][0],
                 }
                 rows.extend(compare(package, observed))
+                if observed.get("capture_hash") is not None:
+                    capture_hashes[state] = observed["capture_hash"]
+                    capture_path = root / f"{state}.png"
+                    acquired_inputs[capture_path] = input_identity(capture_path)
+                    require(
+                        acquired_inputs[capture_path][0] == capture_hashes[state],
+                        "browser acquisition artifact changed after capture",
+                    )
             environment = {
                 "python": platform.python_version(),
+                "python_executable": str(Path(sys.executable).resolve()),
+                "python_prefix": str(Path(sys.prefix).resolve()),
+                "pycache_prefix": sys.pycache_prefix,
+                "dont_write_bytecode": sys.dont_write_bytecode,
+                "module_origins": {
+                    name: str(Path(importlib.util.find_spec(name).origin).resolve())
+                    for name in ("playwright", "greenlet", "pyee", "typing_extensions")
+                },
                 "browser": browser.version,
                 "browser_hash": bundle.file_hash(executable),
                 "os": platform.platform(),
@@ -429,9 +609,16 @@ def evaluate(policy_path):
                 "settling": "fonts.ready then four identical animation-frame scoped snapshots",
             }
         finally:
-            browser.close()
+            try:
+                browser.close()
+            except BrowserError as exc:
+                acquisition_error = "browser cleanup unavailable: " + str(exc)
     rows.sort(key=lambda row: row["id"])
     try:
+        require(
+            all(input_identity(path) == snapshot for path, snapshot in acquired_inputs.items()),
+            "browser acquisition artifact changed before publication",
+        )
         require(
             canonical(current_binding(policy)) == canonical(binding),
             "source/build/current delivery changed during capture",
@@ -449,11 +636,19 @@ def evaluate(policy_path):
             from card_quality import run
 
             try:
+                quality_root = Path(policy["quality"]["config"]).parent
+                for state, package in packages.items():
+                    require(
+                        bundle.file_hash(quality_root / f"refs/{state}.png")
+                        == "sha256:" + package["reference"]["sha256"],
+                        "quality reference differs from approved source capture",
+                    )
                 quality = run(
                     policy["quality"]["config"],
                     {state: root / f"{state}.png" for state in packages},
                     root,
                     target / ".servo/design-eval/calibration-invocations",
+                    capture_hashes=capture_hashes,
                 )
             except (OSError, ValueError, RuntimeError) as exc:
                 quality = {"mode": "unavailable", "reason": "quality unavailable: " + str(exc)}
@@ -471,6 +666,10 @@ def evaluate(policy_path):
         else:
             quality = {"mode": "unavailable", "reason": "live quality not selected"}
     try:
+        require(
+            all(input_identity(path) == snapshot for path, snapshot in acquired_inputs.items()),
+            "browser acquisition artifact changed before publication",
+        )
         require(
             canonical(current_binding(policy)) == canonical(binding),
             "source/build/current delivery changed before result publication",
@@ -531,6 +730,7 @@ def evaluate(policy_path):
 
 def validate_current(policy_path, envelope_path):
     policy = validated_policy(policy_path)
+    assert_driver_seal(policy["target"])
     envelope_path = Path(envelope_path)
     envelope = bundle.load(envelope_path)
     run_id = envelope["run_id"]
@@ -543,7 +743,15 @@ def validate_current(policy_path, envelope_path):
         "preserved envelope destination mismatch",
     )
     producer = producer_at(policy["producer"])
-    packages_at(policy["references"], producer)
+    packages = packages_at(policy["references"], producer)
+    assert_driver_seal(
+        policy["target"],
+        sorted(
+            identity
+            for package in packages.values()
+            for identity in package["required_inventory"]["required_ids"]
+        ),
+    )
     _verify_existing(envelope, expected, policy, current_binding(policy), run_id)
     return envelope
 
@@ -555,6 +763,11 @@ def main(argv=None):
     parser.add_argument("--constraint")
     parser.add_argument("--envelope", type=Path)
     args = parser.parse_args(argv)
+    try:
+        from playwright.sync_api import Error as BrowserError
+    except ImportError as exc:
+        print("REFUSE declared browser runtime unavailable: " + str(exc), file=sys.stderr)
+        return 2
     try:
         if args.operation == "verify-current":
             require(args.envelope is not None, "preserved envelope required")
@@ -578,7 +791,7 @@ def main(argv=None):
         if row["status"] != "pass":
             print(row["id"] + ": " + row["reason"], file=sys.stderr)
         return {"pass": 0, "fail": 1, "unknown": 2}[row["status"]]
-    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, BrowserError) as exc:
         print("REFUSE card evidence: " + str(exc), file=sys.stderr)
         return 2
 
