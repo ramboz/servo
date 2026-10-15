@@ -78,6 +78,38 @@ servo/
 
 ## Install surfaces
 
+**Opt-in required gate (035-01):** ordinary scalar installations remain v1.
+The existing overlay flow now accepts explicitly reviewed boolean required
+entries and `required_policy` schema1, freezes a complete
+`approved_required_binding`, and installs only through `--enable-required`.
+Canonical scaffold drivers upgrade without changing COMPONENTS/SEED functions;
+unsupported driver/array shapes and forced re-scaffold refuse without writes.
+The install contract and gate vendors include the stdlib
+`skills/quality-gate/required_runtime.py` carrier.
+
+Installed `.servo/required-policy.json` closes the complete binding set; its
+canonical digest/version is pinned in `.servo/install.json.required_policy`.
+An explicitly disabled/reapproved install removes that component's membership,
+not project opt-in; empty enabled policy is still a v2 quality gate. Uninstall
+cannot remove still-required membership. Shared/vendored engines and all three
+generated hosts use the same carrier; no runtime producer name is special.
+
+One component invocation supplies its diagnostic scalar and immutable
+`<component-artifact-dir>/runs/<UUID>/result.json` (schema1 /
+`required_component_result`). The oracle publishes
+`.servo/gate-runs/<UUID>/oracle-result.json`; the gate validates identities,
+closed evidence/required sets, counts, scores, effective quality policy and
+exact component digests before preserving `gate.json` (schema2 / `gate_result`).
+UUID-exclusive context, atomic no-replace publication and exact destinations
+prevent concurrent/latest-ledger aliasing. The **overall gate** is completion
+authority. Unknown evidence refuses, retaining contradictions; a component pass
+cannot override quality failure. These versions are unrelated to design policy
+or input/envelope namespaces. Source provenance remains approved planner
+identity, not current living-document bytes or evaluated-build attestation.
+Full CLI, identity domains and carrier examples:
+[required policy](../skills/spec-oracle/examples/required-policy.md).
+Consumer propagation and actual design/build observation remain 035-02 / 036.
+
 Servo has two distinct layers:
 
 | Layer | What is installed | Destination | Owner |
@@ -317,7 +349,13 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 
 **Timeout machinery** — default 300s (5 min), overridable via `--timeout <seconds>` flag or `SERVO_GATE_TIMEOUT` env var. Flag wins on conflict. `--timeout 0` disables the bound. Kill sequence: `SIGTERM` → 5s grace → `SIGKILL`, applied to the oracle's process group (`os.killpg`) so any backgrounded subprocesses are killed too.
 
-**Stateless** — the gate writes nothing to disk. Per-iteration / per-variant persistence is the caller's responsibility (specs 003 / 005).
+**Default v1 is stateless** — scalar-only gate invocations write nothing to
+disk; per-iteration / per-variant persistence remains the caller's
+responsibility (specs 003 / 005). Explicit required-policy v2 invocations
+preserve their overall gate record and run/digest-bound component evidence as
+described under [Install surfaces](#install-surfaces), implemented by
+`skills/quality-gate/required_runtime.py:591` (`run_gate`). Pre-invocation
+missing-carrier refusal is not a preserved successful invocation.
 
 ## Agent-loop guardrails
 

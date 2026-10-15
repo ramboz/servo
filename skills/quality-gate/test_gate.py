@@ -229,7 +229,7 @@ class DependencyFreeTests(unittest.TestCase):
             "shutil", "pathlib", "dataclasses", "datetime", "typing",
             "collections", "itertools", "functools", "tempfile", "io",
             "contextlib", "errno", "enum", "uuid", "textwrap", "string",
-            "platform", "signal",
+            "platform", "signal", "importlib",
         }
         for line in text.splitlines():
             stripped = line.strip()

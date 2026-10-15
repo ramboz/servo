@@ -130,6 +130,19 @@ have unknown USD cost: standalone attended scoring works, but registered
 unpriced components refuse USD-bounded loops/heartbeats. See the
 [current decisions](https://github.com/ramboz/servo/blob/main/docs/decisions/README.md).
 
+## Required assertions beside quality (explicit opt-in)
+
+Existing scalar projects keep gate JSON v1 and their current threshold behavior.
+Projects can now generate, review, approve and explicitly install required
+`command` / `generated_artifact_command` checks with
+`oracle_overlay.py install … --enable-required`. A required contradiction vetoes
+even a perfect composite, zero component weight, or `THRESHOLD=0`; unavailable
+or invalid evidence refuses with exit 2. Enabled JSON v2 preserves the overall
+gate and run/digest-bound component evidence. A component's pass alone is never
+completion authority. See the
+[installed walkthrough and carrier](https://github.com/ramboz/servo/blob/main/skills/spec-oracle/examples/required-policy.md).
+This is the attended gate/install surface, not yet consumer/autonomy propagation.
+
 ## Repository structure (for contributors)
 
 Canonical source at the repository root generates committed, drift-guarded

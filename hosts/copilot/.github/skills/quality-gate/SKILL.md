@@ -1,7 +1,7 @@
 ---
 name: quality-gate
 description: >-
-  Run the scaffolded `oracle.sh` against a target project and surface a closed-contract result (0 = pass / 1 = below threshold / 2 = env error). Also exposes an `audit` subcommand that prints the servo install manifest without invoking the oracle. Fire this skill when the user wants to: - "score this code" / "score this project" / "run quality gate" - "run the oracle" / "what's the oracle score?" - "check the oracle" / "did the oracle pass?" - "show me the gate result" / "is the gate passing?" - "what does this servo install include?" (→ audit subcommand) Do NOT fire on: - "set up servo" / "scaffold oracle" / "install servo" — those are `/servo:scaffold-init`'s territory (a sibling skill, not this one). - "fix the failing test" / "make tests pass" / "debug this test" — out of scope. The gate reports; it does not modify code or tests. - "run my tests" / "lint this" — call the underlying tool directly; the gate is the composite scorer, not a single-tool runner. - "review my (full description in skill body)
+  Run the scaffolded `oracle.sh` against a target project and surface a closed-contract result (0 = pass / 1 = evaluated failure / 2 = env error). Also exposes an `audit` subcommand that prints the servo install manifest without invoking the oracle. Fire this skill when the user wants to: - "score this code" / "score this project" / "run quality gate" - "run the oracle" / "what's the oracle score?" - "check the oracle" / "did the oracle pass?" - "show me the gate result" / "is the gate passing?" - "what does this servo install include?" (→ audit subcommand) Do NOT fire on: - "set up servo" / "scaffold oracle" / "install servo" — those are `/servo:scaffold-init`'s territory (a sibling skill, not this one). - "fix the failing test" / "make tests pass" / "debug this test" — out of scope. The gate reports; it does not modify code or tests. - "run my tests" / "lint this" — call the underlying tool directly; the gate is the composite scorer, not a single-tool runner. - "review my (full description in skill body)
 ---
 
 > **`$SERVO_ROOT`** — servo's runtime root (this plugin's own directory).
@@ -16,7 +16,7 @@ description: >-
 
 > **Full description** (Copilot's skill loader caps a frontmatter `description` at 1024 characters; the summary above is shortened — this is the complete original text, preserved so no routing/trigger guidance is lost):
 >
-> Run the scaffolded `oracle.sh` against a target project and surface a closed-contract result (0 = pass / 1 = below threshold / 2 = env error). Also exposes an `audit` subcommand that prints the servo install manifest without invoking the oracle. Fire this skill when the user wants to: - "score this code" / "score this project" / "run quality gate" - "run the oracle" / "what's the oracle score?" - "check the oracle" / "did the oracle pass?" - "show me the gate result" / "is the gate passing?" - "what does this servo install include?" (→ audit subcommand) Do NOT fire on: - "set up servo" / "scaffold oracle" / "install servo" — those are `/servo:scaffold-init`'s territory (a sibling skill, not this one). - "fix the failing test" / "make tests pass" / "debug this test" — out of scope. The gate reports; it does not modify code or tests. - "run my tests" / "lint this" — call the underlying tool directly; the gate is the composite scorer, not a single-tool runner. - "review my code" / "code review" — that's a separate workflow. When in doubt, ask which servo skill the user means rather than invent a trigger match.
+> Run the scaffolded `oracle.sh` against a target project and surface a closed-contract result (0 = pass / 1 = evaluated failure / 2 = env error). Also exposes an `audit` subcommand that prints the servo install manifest without invoking the oracle. Fire this skill when the user wants to: - "score this code" / "score this project" / "run quality gate" - "run the oracle" / "what's the oracle score?" - "check the oracle" / "did the oracle pass?" - "show me the gate result" / "is the gate passing?" - "what does this servo install include?" (→ audit subcommand) Do NOT fire on: - "set up servo" / "scaffold oracle" / "install servo" — those are `/servo:scaffold-init`'s territory (a sibling skill, not this one). - "fix the failing test" / "make tests pass" / "debug this test" — out of scope. The gate reports; it does not modify code or tests. - "run my tests" / "lint this" — call the underlying tool directly; the gate is the composite scorer, not a single-tool runner. - "review my code" / "code review" — that's a separate workflow. When in doubt, ask which servo skill the user means rather than invent a trigger match.
 
 
 # /servo:quality-gate
@@ -27,7 +27,22 @@ Run the scaffolded `<target>/oracle.sh` and surface a normalized result. The gat
 
 Use when the user asks to **run** an already-scaffolded oracle. Scaffolding the oracle is a different skill (`/servo:scaffold-init`); this one only invokes it. The helper is at `$SERVO_ROOT/skills/quality-gate/gate.py`.
 
-The skill is **stateless**: each call is one subprocess. Persistence (per-iteration logs, race winners) is the caller's job (specs 003 / 005).
+Default scalar calls remain stateless. Explicit approved required policy uses
+schema 2 and preserves `.servo/gate-runs/<UUID>/gate.json`, binding immutable
+component records from the same single invocation. See
+[required policy and carrier](../spec-oracle/examples/required-policy.md).
+Generation/installation alone never approve policy.
+
+In enabled projects `0 = pass`, `1 = evaluated failure`, `2 = unavailable
+evidence/environment refusal`. Status is `pass|fail|env_error`, with
+`required_constraints_failed`, `quality_below_threshold`,
+`required_and_quality_failed`, or `required_evidence_unavailable` as appropriate.
+Quality weights/threshold and override provenance remain diagnostic. A
+contradiction veto cannot be averaged away or cleared by THRESHOLD=0.
+Unknown takes precedence while retaining known failures. **Only the overall
+gate record is completion authority**, not a component's passing envelope.
+Default projects retain the v1 contract below; consumer propagation is not
+implied by this opt-in.
 
 ## Two subcommands
 
@@ -68,8 +83,8 @@ servo install at /path/to/repo
 
 | Flag | Applies to | What it does |
 |---|---|---|
-| `--json` | both subcommands | Emit one-line JSON (with `schema_version=1` per ADR-0002) instead of the human-readable text summary. |
-| `--verbose` | `gate.py <target>` only | Re-emit the oracle's raw stdout/stderr beneath the gate's summary (or under a `raw` JSON key). Without this, oracle output is captured and suppressed. |
+| `--json` | both subcommands | Emit one-line JSON (default schema 1; explicitly enabled required policy schema 2) instead of the human-readable text summary. |
+| `--verbose` | `gate.py <target>` only | Default/v1: re-emit oracle stdout/stderr (or a `raw` JSON key). Enabled/v2: inspect the immutable bound evidence artifacts instead; unbound console output is not added to the preserved payload. |
 | `--timeout <seconds>` | `gate.py <target>` only | Bound the oracle's runtime in seconds. `0` disables the timeout. Defaults to `SERVO_GATE_TIMEOUT` env var, else 300s (5 min). |
 
 Example invocations:
@@ -90,6 +105,12 @@ python3 gate.py audit /path/to/repo --json
 ```
 
 ## Refusal handling
+
+For required-policy installations, do not suggest `--force` or deletion as
+recovery: re-scaffold refuses without writing. Review the per-item causes,
+repair the environment, or explicitly revise/reapprove/install the overlay.
+Enabled-empty projects stay v2 and still enforce quality. Unsupported customized
+drivers and dynamic COMPONENTS arrays refuse upgrade without partial writes.
 
 The gate uses a closed 0/1/2 exit contract (ADR-0002). When it exits 2, the `reason` field on the structured summary tells you why. **Do NOT silently retry** — surface the message verbatim to the user and offer the appropriate recovery.
 
@@ -157,7 +178,12 @@ assistant: [surfaces the timeout; offers to re-run with --timeout 300 or --timeo
 
 ## After invocation
 
-The gate is stateless — nothing is written to disk by this skill. If a caller wants per-call logs, that's its job (specs 003 / 005 will own per-iteration / per-variant logging at `<target>/.servo/runs/` and `<target>/.servo/races/`).
+The default scalar-only v1 gate is stateless: caller-owned per-call logs remain
+separate (specs 003 / 005 own per-iteration / per-variant logging at
+`<target>/.servo/runs/` and `<target>/.servo/races/`). Explicit required-policy
+v2 invocations preserve their validated overall gate record at
+`<target>/.servo/gate-runs/<run_id>/gate.json`, binding exact component evidence.
+Pre-invocation missing-carrier refusal is not an attestable successful run.
 
 ## External-driver / bring-your-own-implementer contract
 
@@ -165,8 +191,15 @@ The gate is stateless — nothing is written to disk by this skill. If a caller 
 
 This already works today with **no new code** — it falls directly out of properties this skill already has:
 
-- **Stateless** (see "After invocation" above) — every call is one self-contained subprocess with no session, no history, and no assumption about who or what made the prior edit. A CI job calling `gate.py` on commit N+1 is indistinguishable from this skill calling it on iteration N+1.
+- **Invocation-scoped** (see "After invocation" above) — every call evaluates
+  current inputs without assuming who made the prior edit. Default v1 keeps
+  no gate history; enabled v2 preserves that exact run, never borrowing an old
+  successful result.
 - **`--json`** — a structured, versioned (`schema_version`) one-line result any external caller can parse without depending on Claude Code's tool-call machinery.
-- **A closed `{0, 1, 2}` exit-code contract** (ADR-0002) — `0` = pass, `1` = below threshold, `2` = environment error — is a plain process exit code, the universal integration point for a CI pipeline (`if`/`&&` on the shell, a CI step's pass/fail), a human's terminal, or another agent's own tool-call result, with no servo-specific client required.
+- **A closed `{0, 1, 2}` exit-code contract** (ADR-0002) — `0` = pass,
+  `1` = evaluated failure (below threshold in v1; quality and/or required
+  failure in v2), `2` = environment/evidence refusal. External drivers must
+  understand the opt-in schema before consuming its reasons/artifacts; the
+  numeric exit remains a plain CI/human/agent integration point.
 
 So the recipe for an external driver is: scaffold + freeze with `/servo:scaffold-init`, make your edits with whatever you have, then run `python3 gate.py <target> --json` (or the plain-text form) and branch on the exit code — exactly the invocation shown under "Score a project" / "JSON for a programmatic caller" above, just called by something other than `/servo:agent-loop`.

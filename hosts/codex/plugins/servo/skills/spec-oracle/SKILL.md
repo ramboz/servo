@@ -172,6 +172,22 @@ stay visible as residual judgment instead of being auto-passed.
 
 ## Freeze & approval semantics
 
+### Opt-in required evidence
+
+An approved deterministic command may veto the gate independently of its
+diagnostic score. Add `required_policy: {"schema_version": 1, "enabled": true}`
+and boolean `required: true` entries with explicit `evaluator_artifacts`.
+Then **generate → review → approve → install --enable-required**. Neither
+generation nor installation approves. Ordinary installs keep scalar semantics.
+
+See [the installed command/generated-artifact walkthrough](examples/required-policy.md)
+for exact CLI operations, closed assertion dependencies, policy revision,
+carrier schemas, immutable run paths and refusal controls. With enabled policy,
+missing/invalid evidence is exit 2, contradictions are exit 1 even at
+`THRESHOLD=0` or weight zero. Read the preserved **overall gate** verdict,
+never component pass alone. A disabled/reapproved overlay must be explicitly
+installed before its still-required membership can be removed.
+
 The installed component runs `checks.py --enforce-freeze` and refuses (`rc=2`)
 unless the overlay is approved and unmodified. The distinct refusal `reason`s:
 

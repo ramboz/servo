@@ -2297,6 +2297,14 @@ def _ensure_vendored_gate(target: Path) -> tuple[Optional[Path], Optional[str]]:
     except OSError as exc:
         return None, f"cannot read servo's gate.py at {src}: {exc}"
     try:
+        # The required carrier is a stdlib sibling dependency of the gate,
+        # including on clone-portable goal/Routine installs.
+        runtime_src = src.with_name("required_runtime.py")
+        runtime_dest = dest.with_name("required_runtime.py")
+        if (not runtime_dest.is_file()
+                or runtime_dest.read_bytes() != runtime_src.read_bytes()):
+            runtime_dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(runtime_src, runtime_dest)
         if dest.is_file() and dest.read_bytes() == src_bytes:
             return dest, None  # present and current → no rewrite
         dest.parent.mkdir(parents=True, exist_ok=True)
