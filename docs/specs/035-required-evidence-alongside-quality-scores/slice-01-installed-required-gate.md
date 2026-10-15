@@ -1,10 +1,11 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 kind: feature
 dependencies: [adr-0044]
 last_verified:
 frame_review: true
 arch_review: true
+claimed_by: servo-installed-required-gate
 ---
 
 ## Slice 035-01 - installed-required-gate

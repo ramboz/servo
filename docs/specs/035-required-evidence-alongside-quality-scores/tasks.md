@@ -2,11 +2,13 @@
 
 ## Authoring and readiness
 
-- [ ] Parent reconciles exact v2 envelope and cross-project owner links.
-- [ ] Agree canonical identity/approval closure; start 035-01 standalone
+- [x] Parent reconciles v2 overall authority and cross-project owner links.
+- [x] Pin concrete carrier/identity/approval closure in plan.md for review;
+      start 035-01 standalone
       without Vellum/Jig completion or future observer prerequisites.
-- [ ] Owner accepts ADR-0044 separately after frame critique.
-- [ ] Each slice clears normal Jig readiness; drafts do not authorize execution.
+- [x] Owner accepts ADR-0044 separately after frame critique (parent snapshot).
+- [x] 035-01 clears fresh independent spec-readiness review and normal helper
+      transitions; 035-02 stays DRAFT.
 
 ## 035-01
 
