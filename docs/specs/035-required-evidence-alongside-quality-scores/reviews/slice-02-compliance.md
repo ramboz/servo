@@ -1,31 +1,35 @@
 ---
 slice: 035-02 - required-verdict-consumers
 pass: compliance
-verdict: needs-changes
-reviewer: jig:reviewer / 03502-compliance-recovery (fresh context)
-reviewed_at: 2026-10-15T06:39:50Z
-prompt_source: review.py implementation; 035-02-compliance-prompt.txt; recovery rereview
+verdict: pass
+reviewer: jig:reviewer / 03502-final-compliance (fresh context)
+reviewed_at: 2026-10-15T06:50:29Z
+prompt_source: review.py implementation; 035-02-compliance-prompt.txt; final availability source epoch
 ---
 
-VERDICT: needs-changes
+VERDICT: pass
 
 REASONING:
-AC1/4 remain partial because other failure/resume paths restore earlier
-evaluated availability. AC2/3/5/6 have meaningful current controls and artifacts.
-The reviewer inspected supplied evidence, did not rerun tests, and could not
-independently enumerate the complete Git delta with available read-only tools.
+AC1-2 pass: overall authority, persisted unavailability, zero-work resume,
+fresh-gate recovery and honest plateau are implemented at loop.py:2432,2670,
+2792,2920,2990,3088,3145 with installed negative controls.
+AC3-4 pass: hook quoting/non-object warnings retain fail-open handling
+(hook.py:97, meta-judge template:62); planner references and heartbeat
+reporting retain overall failure, unavailable evidence and accounting
+(execution_plan.py:212,273; heartbeat.py:1448,2149).
+AC5-6 pass: explicit version/binding validation and bounded legacy compatibility
+(gate_consumer.py:152-238), generated/install closure and immutable final smoke
+show actionable high-score veto reporting without completion claims.
+
+Final-epoch evidence inspected: 129 tests/41 subtests; Python 3.9 33/20;
+runtime/install 148/73; clean source checks. No concrete blocker or design
+principle violation. The reviewer ran no tests.
 
 SPECIFIC ISSUES:
-- loop.py:2432-2435,2790-2797: finalization does not persist final availability;
-  zero-new-iteration resume reconstructs fail from earlier history after a
-  gate interruption. Persist/restore unavailable state separately from evidence
-  and cover resume through heartbeat reporting.
-- loop.py:2912-2919,2981-2989: model invocation failure/malformed verdict after
-  a prior evaluated iteration emits its old status, even when the agent
-  already modified subject files. Keep terminal reasons but mark current
-  evaluation unavailable, retaining earlier evidence only diagnostically.
+None.
 
 RECONCILIATION NOTES:
-Record failure/resume corrections, regenerate hosts and keep DoD open until
-fresh review evidence clears. Minimal legacy gateways and absolute-sidecar
-isolation refusal are explicit bounded deviations.
+No undocumented deviation found. Retain the minimal no-policy adapter
+compatibility exception and absolute-sidecar isolation refusal, external
+compatibility and native-Copilot limitations. This verdict does not certify
+remaining craft/architecture/reconciliation or lifecycle close-out.

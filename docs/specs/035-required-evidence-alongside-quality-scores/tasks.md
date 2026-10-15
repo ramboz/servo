@@ -29,10 +29,19 @@
 
 ## 035-02
 
+The authoring/readiness statements above describe the accepted parent and
+035-01 pickup. Current 035-02 lifecycle state is maintained by the helper in
+its own slice record; those historical DRAFT statements are not current status.
+
 - [x] Enumerate actual gate/oracle/result consumers before implementation.
 - [x] 035-02 clears fresh framing/readiness review and helper readiness/start
       transitions at the pinned 035-01 parent.
-- [ ] Add failing consumer fixtures and wire verdict, cause and evidence refs.
-- [ ] Preserve old checkpoint/report reads, existing brakes and hook limitations.
-- [ ] Demonstrate correction evidence through real supported final reporting.
-- [ ] Review, reconcile, regenerate packages/board and close only with evidence.
+- [x] Add failing consumer fixtures and wire verdict, cause and evidence refs.
+- [x] Preserve old checkpoint/report reads, existing brakes and hook limitations.
+- [x] Demonstrate correction evidence through real supported final reporting.
+- Evidence: [consumer implementation receipt](consumer-implementation-receipt.md),
+      with witnessed red/green commands, bounded inventory and exact preserved
+      gate/component paths and honest review-recovery source epochs.
+      Compliance/craft/architecture clear; final reconciliation and lifecycle
+      close-out use actual helper gates.
+- [x] Review, reconcile, regenerate packages/board and clear close-out evidence.
