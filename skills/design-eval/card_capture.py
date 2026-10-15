@@ -5,12 +5,12 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 
-from card_bundle import file_hash, raw, require
+from card_bundle import file_hash, raw, read_bytes, require
 
 
 @contextmanager
 def serve(entry):
-    body = Path(entry).read_bytes()
+    body = read_bytes(entry)
 
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
@@ -39,7 +39,7 @@ def serve(entry):
         require(not thread.is_alive(), "loopback server did not close")
 
 
-_SNAPSHOT = """el => {
+_SNAPSHOT = """(el,frame) => {
  const r=el.getBoundingClientRect(), c=getComputedStyle(el);
  function alpha(value){
    const colour=value.trim().toLowerCase();
@@ -55,13 +55,25 @@ _SNAPSHOT = """el => {
    return token.endsWith('%')?number/100:number;
  }
  const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
- let textVisible=true,seen=false,n;
+ let textVisible=true,seen=false,n,textBounds=[];
  while((n=walker.nextNode())){
    if(!n.textContent.length)continue;
    seen=true;
    const p=n.parentElement,range=document.createRange(),s=getComputedStyle(p);
    range.selectNodeContents(n);
-   const hasInk=[...range.getClientRects()].some(b=>b.width>0&&b.height>0);
+   const rectangles=[...range.getClientRects()].filter(b=>b.width>0&&b.height>0);
+   textBounds.push(...rectangles.map(b=>Object.fromEntries(
+      ['x','y','width','height'].map(k=>[k,String(b[k])]))));
+   const hasInk=rectangles.length>0&&rectangles.every(b=>!frame||
+      (b.left>=Number(frame.x)&&b.top>=Number(frame.y)&&
+       b.right<=Number(frame.x)+Number(frame.width)&&
+       b.bottom<=Number(frame.y)+Number(frame.height)));
+   for(let a=p;a;a=a.parentElement){
+      const style=getComputedStyle(a);
+      if(style.clipPath!=='none'||style.clip!=='auto'||style.filter!=='none'||
+         (style.maskImage&&style.maskImage!=='none')||style.textShadow!=='none')
+         throw Error('unsupported text visibility paint effect');
+   }
    const transparent=alpha(s.color)===0||alpha(s.webkitTextFillColor||s.color)===0;
    let box=p;
    while(box&&getComputedStyle(box).display==='contents')box=box.parentElement;
@@ -72,7 +84,7 @@ _SNAPSHOT = """el => {
  return {bounds:Object.fromEntries(['x','y','width','height'].map(k=>[k,String(r[k])])),
  text:el.textContent, width:String(r.width), height:String(r.height),
  backgroundColor:c.backgroundColor, color:c.color, fontFamily:c.fontFamily,
- fontSize:c.fontSize,fontWeight:c.fontWeight,textVisible:seen&&textVisible,
+ fontSize:c.fontSize,fontWeight:c.fontWeight,textVisible:seen&&textVisible,textBounds,
  visible:el.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}) &&
          r.width>0 && r.height>0};
 }"""
@@ -100,7 +112,7 @@ def _settle(page, root):
     raise ValueError("unstable layout after 60 animation frames")
 
 
-def acquire(browser, entry, mapping, state, png):
+def acquire(browser, entry, mapping, state, png, *, expected_hash):
     from playwright.sync_api import Error as BrowserError
 
     require(state in ("normal", "open"), "unsupported state")
@@ -115,6 +127,9 @@ def acquire(browser, entry, mapping, state, png):
     }
     errors = []
     with serve(entry) as (url, sealed_bytes):
+        if raw(sealed_bytes) != expected_hash:
+            result["acquisition_error"] = "served document differs from declared build output"
+            return result
         context = browser.new_context(
             viewport={"width": 800, "height": 600}, device_scale_factor=1, service_workers="block"
         )
@@ -175,6 +190,18 @@ def acquire(browser, entry, mapping, state, png):
             _settle(page, root)
             root_raw = root.evaluate(_SNAPSHOT)
             result["root"] = {"selector": mapping["root"], "bounds": root_raw["bounds"]}
+            driver_geometry = driver.evaluate(
+                """(el,frame)=>{
+                const b=el.getBoundingClientRect(),x=Number(frame.x),y=Number(frame.y);
+                return {bounds:Object.fromEntries(['x','y','width','height'].map(
+                    k=>[k,String(b[k])])),outside:b.right<=x||b.bottom<=y||
+                    b.left>=x+Number(frame.width)||b.top>=y+Number(frame.height)};
+            }""",
+                root_raw["bounds"],
+            )
+            outside = outside and driver_geometry["outside"]
+            if not outside:
+                errors.append("state driver overlaps approved capture crop")
             result["driver"] = {
                 "scope": mapping["driver"]["scope"],
                 "selector": mapping["driver"]["selector"],
@@ -182,13 +209,14 @@ def acquire(browser, entry, mapping, state, png):
                 "completed": True,
                 "initial_subtitle": initial_text,
                 "outside_crop": outside,
+                "bounds": driver_geometry["bounds"],
             }
             for name, selector in mapping["elements"].items():
                 locator = root.locator(selector)
                 count = locator.count()
                 element = {"selector": selector, "count": count, "visible": False}
                 if count == 1:
-                    values = locator.evaluate(_SNAPSHOT)
+                    values = locator.evaluate(_SNAPSHOT, root_raw["bounds"])
                     visible = values.pop("visible") and (name == "band" or values["textVisible"])
                     element.update(visible=visible, raw=values)
                 result["elements"][name] = element
@@ -203,7 +231,9 @@ def acquire(browser, entry, mapping, state, png):
                 "unexpected viewport",
             )
             result["viewport"] = viewport
-            root.screenshot(path=str(png), animations="disabled", timeout=5000)
+            screenshot = root.screenshot(path=str(png), animations="disabled", timeout=5000)
+            require(file_hash(png) == raw(screenshot), "capture bytes changed after browser output")
+            result["capture_hash"] = raw(screenshot)
             require(
                 file_hash(entry) == raw(sealed_bytes), "sealed output changed during acquisition"
             )
@@ -223,7 +253,10 @@ def acquire(browser, entry, mapping, state, png):
         except (BrowserError, OSError, ValueError) as exc:
             errors.append(str(exc))
         finally:
-            context.close()
+            try:
+                context.close()
+            except BrowserError as exc:
+                errors.append("browser context cleanup unavailable: " + str(exc))
     if errors:
         result["acquisition_error"] = "; ".join(errors)
     return result

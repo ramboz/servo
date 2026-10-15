@@ -2,12 +2,101 @@
 
 import json
 import math
+import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
 import score as scoring
-from card_bundle import file_hash, inventory, load, publish, require, safe
+from card_bundle import file_hash, inventory, load, publish, raw, require, safe
+
+
+def assert_native_cli(path):
+    with Path(path).open("rb") as stream:
+        header = stream.read(4)
+    require(
+        header
+        in (
+            b"\xcf\xfa\xed\xfe",
+            b"\xfe\xed\xfa\xcf",
+            b"\xca\xfe\xba\xbe",
+            b"\xbe\xba\xfe\xca",
+            b"\xca\xfe\xba\xbf",
+            b"\xbf\xba\xfe\xca",
+            b"\x7fELF",
+        )
+        or header.startswith(b"MZ"),
+        "native Claude entrypoint required; script/PATH interpreter wrappers unsupported",
+    )
+
+
+def judge_environment():
+    env = dict(os.environ)
+    require(
+        not any(env.get(key) for key in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")),
+        "unselected auth mode; pilot requires the approved Claude subscription",
+    )
+    for key in (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_SIMPLE",
+    ):
+        require(
+            env.get(key, "").lower() in ("", "0", "false", "no", "off"),
+            "unselected provider or subscription-incompatible mode: " + key,
+        )
+    require(
+        env.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
+        == "https://api.anthropic.com",
+        "unselected provider endpoint",
+    )
+    for key in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"):
+        env.pop(key, None)
+    return env
+
+
+def judge_command(binary, prompt, model):
+    return [
+        str(binary),
+        "--safe-mode",
+        "--restricted",
+        "--strict-mcp-config",
+        "--tools",
+        "Read",
+        "--allowedTools",
+        "Read",
+        "--permission-mode",
+        "dontAsk",
+        "-p",
+        prompt,
+        "--model",
+        model,
+        "--output-format",
+        "json",
+        "--no-session-persistence",
+    ]
+
+
+def input_identity(path):
+    before = Path(path).lstat()
+    require(stat.S_ISREG(before.st_mode), "judge input must be a regular sealed file")
+    digest = file_hash(path)
+    after = Path(path).lstat()
+
+    def fields(value):
+        return (
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_size,
+            value.st_mtime_ns,
+            value.st_ctime_ns,
+        )
+
+    require(fields(before) == fields(after), "judge input changed while hashing")
+    return digest, fields(after)
 
 
 def parse_reply(envelope, requested):
@@ -80,7 +169,7 @@ def inherit_attempts(source, destination, limit):
     return rows
 
 
-def run(config_path, shots, destination, allowance):
+def run(config_path, shots, destination, allowance, *, capture_hashes):
     config_path, destination = Path(config_path), Path(destination)
     config_bytes_hash = file_hash(config_path)
     config = load(config_path)
@@ -92,6 +181,12 @@ def run(config_path, shots, destination, allowance):
         "card quality requires independent reviewed freeze",
     )
     judge = config["judge"]
+    require(
+        judge.get("execution_mode") == "safe-restricted-read-only"
+        and judge.get("auth_mode") == "claude-subscription",
+        "approved safe/read-only subscription execution mode required",
+    )
+    env = judge_environment()
     require(
         type(judge.get("batch_purpose")) is str and judge["batch_purpose"].strip(),
         "approved batch purpose required",
@@ -131,16 +226,24 @@ def run(config_path, shots, destination, allowance):
         or (type(judge.get("model")) is str and judge["model"].startswith("claude-opus-")),
         "unselected pilot judge model",
     )
-    require(not scoring._fake_scores(), "fake quality is not live fidelity")
+    require(
+        not os.environ.get("SERVO_DESIGN_EVAL_FAKE_SCORES"), "fake quality is not live fidelity"
+    )
     runtime = judge.get("runtime")
     require(
         type(runtime) is dict and set(runtime) == {"binary", "hash", "version"},
         "missing reviewed Claude runtime identity",
     )
     binary = Path(runtime["binary"])
+    assert_native_cli(binary)
     require(file_hash(binary) == runtime["hash"], "Claude executable changed")
     version = subprocess.run(
-        [str(binary), "--version"], capture_output=True, text=True, timeout=30, check=False
+        [str(binary), "--version"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env=env,
     )
     require(
         version.returncode == 0 and version.stdout.strip() == runtime["version"],
@@ -151,9 +254,24 @@ def run(config_path, shots, destination, allowance):
         "unapproved first-calibration sampling",
     )
     require(
+        type(config["samples"]["n"]) is int
+        and type(config["samples"]["k"]) in (int, float)
+        and type(config["samples"]["delta"]) in (int, float),
+        "sampling quantities must be numbers, not aliases",
+    )
+    require(
         {s["id"] for s in config["screens"]} == {"normal", "open"} and len(config["screens"]) == 2,
         "quality screen inventory mismatch",
     )
+    require(
+        config["threshold"] == 0.8
+        and config["viewport"] == {"width": 800, "height": 600, "deviceScaleFactor": 1}
+        and type(config["viewport"]["deviceScaleFactor"]) in (int, float),
+        "unapproved threshold or viewport",
+    )
+    require(set(capture_hashes) == {"normal", "open"}, "complete browser capture hashes required")
+    input_root = safe(destination, "judge-inputs")
+    input_root.mkdir()
     samples, invocations = {}, []
     for screen in config["screens"]:
         state = screen["id"]
@@ -161,6 +279,28 @@ def run(config_path, shots, destination, allowance):
         require(
             actual.is_file() and reference.is_file(), "missing actual/reference quality capture"
         )
+        require(
+            screen["reference"] == f"refs/{state}.png"
+            and type(screen["weight"]) in (int, float)
+            and screen["weight"] == 1,
+            "unsupported reference mapping or screen weight",
+        )
+        actual_bytes, reference_bytes = actual.read_bytes(), reference.read_bytes()
+        require(
+            raw(actual_bytes) == capture_hashes[state], "browser capture changed before judging"
+        )
+        require(
+            raw(reference_bytes) == config["hashes"][screen["reference"]],
+            "approved reference changed before judging",
+        )
+        actual, reference = (
+            input_root / f"{state}-actual.png",
+            input_root / f"{state}-reference.png",
+        )
+        for path, data in ((actual, actual_bytes), (reference, reference_bytes)):
+            with path.open("xb") as stream:
+                stream.write(data)
+        input_hashes = {path: input_identity(path) for path in (actual, reference)}
         prompt = (
             scoring._scoring_prompt(config) + "\nRead these two images with the Read tool:\n"
             f"- FIRST implemented app: {actual.resolve()}\n"
@@ -176,18 +316,11 @@ def run(config_path, shots, destination, allowance):
                 )
             number = reserve(allowance, judge.get("calibration_limit"))
             stem = f"quality-{state}-{sample}"
-            command = [
-                str(binary),
-                "-p",
-                prompt,
-                "--model",
-                judge["model"],
-                "--allowedTools",
-                "Read",
-                "--output-format",
-                "json",
-                "--no-session-persistence",
-            ]
+            require(
+                all(input_identity(path) == snapshot for path, snapshot in input_hashes.items()),
+                "sealed judge input changed before invocation",
+            )
+            command = judge_command(binary, prompt, judge["model"])
             publish(
                 destination / (stem + ".request.json"),
                 {
@@ -203,7 +336,7 @@ def run(config_path, shots, destination, allowance):
             )
             try:
                 result = subprocess.run(
-                    command, capture_output=True, timeout=300, cwd=destination, check=False
+                    command, capture_output=True, timeout=300, cwd=destination, check=False, env=env
                 )
             except subprocess.TimeoutExpired as exc:
                 (destination / (stem + ".stdout")).write_bytes(exc.stdout or b"")
@@ -213,6 +346,10 @@ def run(config_path, shots, destination, allowance):
                 ) from exc
             (destination / (stem + ".stdout")).write_bytes(result.stdout)
             (destination / (stem + ".stderr")).write_bytes(result.stderr)
+            require(
+                all(input_identity(path) == snapshot for path, snapshot in input_hashes.items()),
+                "sealed judge input changed during invocation",
+            )
             require(
                 result.returncode == 0,
                 f"Claude judge failed rc{result.returncode}; retained output",

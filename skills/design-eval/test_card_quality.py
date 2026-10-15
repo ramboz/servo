@@ -4,12 +4,70 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import card_quality
 
 
 class QualityControls(unittest.TestCase):
+    def test_native_judge_command_is_context_isolated_read_only_and_subscription_compatible(self):
+        command = card_quality.judge_command(
+            Path("/native/claude"), "approved rubric only", "claude-opus-5"
+        )
+        for flag in (
+            "--safe-mode",
+            "--restricted",
+            "--strict-mcp-config",
+            "--tools",
+            "--allowedTools",
+            "--permission-mode",
+        ):
+            self.assertIn(flag, command)
+        for forbidden in ("--bare", "--fallback-model", "--dangerously-skip-permissions"):
+            self.assertNotIn(forbidden, command)
+        self.assertIn("dontAsk", command)
+        self.assertEqual(command[command.index("--model") + 1], "claude-opus-5")
+
+    def test_unrelated_tokens_are_not_forwarded_and_unselected_provider_refuses(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "HOME": "/unit-home",
+                "GH_TOKEN": "unit-not-secret",
+                "GITHUB_TOKEN": "unit-not-secret",
+            },
+            clear=True,
+        ):
+            env = card_quality.judge_environment()
+            self.assertNotIn("GH_TOKEN", env)
+            self.assertNotIn("GITHUB_TOKEN", env)
+            self.assertEqual(env["HOME"], "/unit-home")
+        for key, value in (
+            ("CLAUDE_CODE_USE_BEDROCK", "1"),
+            ("ANTHROPIC_BASE_URL", "https://unselected.invalid"),
+            ("ANTHROPIC_API_KEY", "unit-not-secret"),
+        ):
+            with patch.dict("os.environ", {key: value}, clear=True):
+                with self.assertRaisesRegex(ValueError, "provider|subscription|auth"):
+                    card_quality.judge_environment()
+
+    def test_script_cli_entrypoint_is_not_silently_treated_as_native_closure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "claude"
+            path.write_text("#!/bin/sh\nprintf 'unapproved wrapper'\n")
+            with self.assertRaisesRegex(ValueError, "native|script|entrypoint"):
+                card_quality.assert_native_cli(path)
+
+    def test_rewritten_sealed_image_is_detected_even_if_bytes_are_restored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.png"
+            path.write_bytes(b"original-image")
+            original = card_quality.input_identity(path)
+            path.write_bytes(b"changed-image")
+            path.write_bytes(b"original-image")
+            self.assertNotEqual(card_quality.input_identity(path), original)
+
     def test_requested_alias_is_not_reported_as_observed_concrete_identity(self):
         result = card_quality.parse_reply(
             {

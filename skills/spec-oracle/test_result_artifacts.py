@@ -566,3 +566,44 @@ def test_omitted_threshold_approval_pin_cannot_refreeze_changed_default(harness,
     assert refused.returncode == 2
     assert "threshold" in refused.stderr
     assert before == {p: p.read_bytes() for p in harness.target.rglob("*") if p.is_file()}
+
+
+def test_executed_oracle_snapshot_matches_its_declared_input_pin(harness, monkeypatch):
+    harness.install_required()
+    plan = json.loads((harness.out / "checks.json").read_bytes())
+    plan["checks"][0]["evaluator_artifacts"].append("oracle.sh")
+    harness.plan = plan
+    harness.write_plan()
+    assert harness.overlay("generate").returncode == 0
+    assert harness.overlay("approve").returncode == 0
+    assert harness.overlay("install", "--enable-required", "--weight", "0").returncode == 0
+    (harness.target / "subject").touch()
+    oracle = harness.target / "oracle.sh"
+    original_text, original_bytes = Path.read_text, Path.read_bytes
+    read_once = []
+    def read_text(path, *args, **kwargs):
+        value = original_text(path, *args, **kwargs)
+        if path == oracle and not read_once:
+            read_once.append(True)
+            return value.replace("print(1.0)", "print(0.7)")
+        return value
+    def read_bytes(path, *args, **kwargs):
+        value = original_bytes(path, *args, **kwargs)
+        if path == oracle and not read_once:
+            read_once.append(True)
+            return value.replace(b"print(1.0)", b"print(0.7)")
+        return value
+    monkeypatch.setattr(Path, "read_text", read_text)
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.delenv("SERVO_GATE_RUN_ID", raising=False)
+    monkeypatch.delenv("SERVO_GATE_RESULT_DIR", raising=False)
+    monkeypatch.chdir(harness.target)
+    stream = io.StringIO()
+    with redirect_stdout(stream):
+        code = rt.oracle(harness.target)
+    results = list((harness.target / ".servo/gate-runs").glob("*/oracle-result.json"))
+    assert len(results) == 1
+    payload = json.loads(results[0].read_bytes())
+    assert read_once
+    assert code == 2, payload
+    assert "oracle" in str(payload).lower()

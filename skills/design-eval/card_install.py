@@ -2,10 +2,14 @@
 
 import argparse
 import importlib.metadata
+import importlib.util
+import json
+import os
 import platform
 import re
 import shlex
 import shutil
+import site
 import subprocess
 import sys
 from pathlib import Path
@@ -14,6 +18,8 @@ import card_bundle as bundle
 from card_evidence import (
     PACKAGE_PINS,
     PRODUCER_PINS,
+    assert_driver_seal,
+    check_startup_environment,
     packages_at,
     policy_hash,
     producer_at,
@@ -23,14 +29,90 @@ from card_evidence import (
 HERE = Path(__file__).resolve().parent
 
 
+def _native_dependencies(files, programs):
+    """Close non-OS absolute linkage; browser assets are separately inventoried."""
+    bundle.require(
+        platform.system() == "Darwin" and Path("/usr/bin/otool").is_file(),
+        "this bounded native-linkage preparation requires the pinned macOS runtime",
+    )
+    pending = {Path(path).resolve() for path in programs}
+    pending.update(
+        Path(module.__file__).resolve()
+        for module in list(sys.modules.values())
+        if getattr(module, "__file__", None) and Path(module.__file__).suffix in (".so", ".dylib")
+    )
+    pending.update(path for path in files if path.name == "node")
+    seen, resolutions = set(), {}
+    while pending:
+        path = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        bundle.require(path in files, "unlisted native module: " + str(path))
+        process = subprocess.run(
+            ["/usr/bin/otool", "-L", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        bundle.require(process.returncode == 0, "native linkage unavailable: " + str(path))
+        for line in process.stdout.splitlines()[1:]:
+            if not line.strip() or (line.startswith(str(path)) and line.rstrip().endswith(":")):
+                continue
+            name = line.strip().split(" (compatibility", 1)[0]
+            if name.startswith(("/usr/lib/", "/System/Library/")):
+                continue
+            if name.startswith("@loader_path/"):
+                name = os.path.normpath(str(path.parent / name.removeprefix("@loader_path/")))
+            bundle.require(name.startswith("/"), "unsupported relative native linkage: " + name)
+            dependency = Path(name).resolve()
+            bundle.require(
+                dependency in files or name.startswith(("/opt/homebrew/", "/usr/local/")),
+                "unapproved native dependency location: " + name,
+            )
+            bundle.require(dependency.is_file(), "native dependency unavailable: " + name)
+            files.add(dependency)
+            resolutions[name] = {
+                "path": name,
+                "resolved": str(dependency),
+                "hash": bundle.file_hash(dependency),
+            }
+            if dependency not in seen:
+                pending.add(dependency)
+    return [resolutions[name] for name in sorted(resolutions)]
+
+
 def _runtime(python, browser_root, claude):
     bundle.require(
         str(Path(python).resolve()) == str(Path(sys.executable).resolve()),
         "run preparation with the selected Python runtime",
     )
+    probe = subprocess.run(
+        [str(python), "-I", "-B", "-c", "import json,sys; print(json.dumps(sys.prefix))"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    bundle.require(
+        probe.returncode == 0
+        and Path(json.loads(probe.stdout)).resolve() == Path(sys.prefix).resolve(),
+        "preparation prefix differs from selected Python environment",
+    )
+    site_roots = sorted(str(Path(root).resolve()) for root in site.getsitepackages())
+    check_startup_environment(sys.prefix, site_roots)
+    importlib.import_module("card_capture")
+    from card_quality import assert_native_cli, judge_environment
     from playwright.sync_api import sync_playwright
 
-    files = {Path(sys.executable).resolve(), Path(claude).resolve()}
+    assert_native_cli(claude)
+    judge_environment()
+
+    bash = shutil.which("bash")
+    bundle.require(bash is not None, "declared bash runtime unavailable")
+    files = {Path(sys.executable).resolve(), Path(claude).resolve(), Path(bash).resolve()}
+    files.add(Path(sys.prefix).resolve() / "pyvenv.cfg")
     for path in Path(sys.base_prefix).rglob("*"):
         if (
             "site-packages" not in path.parts
@@ -51,24 +133,23 @@ def _runtime(python, browser_root, claude):
     for path in browser_root.rglob("*"):
         if path.is_file():
             files.add(path.resolve())
-    binary = Path(claude).resolve()
-    if binary.suffix in (".js", ".mjs"):
-        node = shutil.which("node")
-        bundle.require(node is not None, "Claude JavaScript CLI needs declared Node")
-        files.add(Path(node).resolve())
-        package = binary.parent
-        for path in package.rglob("*"):
-            if path.is_file():
-                files.add(path.resolve())
     with sync_playwright() as runtime:
         executable = Path(runtime.chromium.executable_path)
         bundle.require(executable.is_relative_to(browser_root), "browser outside declared closure")
         browser_hash = bundle.file_hash(executable)
+    native_resolutions = _native_dependencies(files, [sys.executable, bash, claude])
     return {
         "python": platform.python_version(),
         "executable": str(Path(sys.executable).resolve()),
+        "prefix": str(Path(sys.prefix).resolve()),
         "os": platform.platform(),
         "dependencies": versions,
+        "bash": str(Path(bash).resolve()),
+        "module_origins": {
+            name: str(Path(importlib.util.find_spec(name).origin).resolve()) for name in versions
+        },
+        "site_roots": site_roots,
+        "native_resolutions": native_resolutions,
         "browser_root": str(browser_root),
         "browser_hash": browser_hash,
         "files": [{"path": str(path), "hash": bundle.file_hash(path)} for path in sorted(files)],
@@ -112,10 +193,9 @@ def prepare(
         "card_evidence.py",
         "card_quality.py",
         "score.py",
-        "pngcrop.py",
     ):
         shutil.copyfile(HERE / name, helper / name)
-    for name in ("fidelity_eval.py", "copilot_eval.py"):
+    for name in ("fidelity_eval.py",):
         shutil.copyfile(HERE.parent / "_common" / name, helper / name)
     runtime_files = runtime.pop("files")
     runtime_manifest = helper / "runtime-files.json"
@@ -179,13 +259,8 @@ def prepare(
             prior_attempts, quality / "calibration-invocations", calibration_limit
         )
     (quality / "refs").mkdir()
-    (quality / "setups").mkdir()
     for state in packages:
         shutil.copyfile(approved / f"{state}.png", quality / f"refs/{state}.png")
-        (quality / f"setups/{state}.mjs").write_text(
-            "// Capture comes from the verified current gate run, not this setup.\n",
-            encoding="utf-8",
-        )
     version = subprocess.run(
         [str(claude), "--version"], capture_output=True, text=True, timeout=30, check=False
     )
@@ -215,6 +290,8 @@ def prepare(
             "model": model,
             "transport": "cli",
             "decoding_mode": "native-default",
+            "execution_mode": "safe-restricted-read-only",
+            "auth_mode": "claude-subscription",
             "calibration_limit": calibration_limit,
             "prior_attempts": prior_rows,
             "batch_purpose": purpose,
@@ -236,7 +313,6 @@ def prepare(
             {
                 "id": state,
                 "reference": f"refs/{state}.png",
-                "setup": f"setups/{state}.mjs",
                 "weight": 1.0,
             }
             for state in packages
@@ -293,7 +369,6 @@ def prepare(
             if path.is_file()
         ]
         + [f".servo/design-eval/refs/{state}.png" for state in packages]
-        + [f".servo/design-eval/setups/{state}.mjs" for state in packages]
     )
     plan = {
         "schema_version": 1,
@@ -391,6 +466,14 @@ def generate(target, vendor=False):
         config.get("approval_provenance") == "reviewed",
         "independent reviewed quality freeze required",
     )
+    checks_path = target / "spec/oracle/card/checks.json"
+    plan = bundle.load(checks_path)
+    for check in plan["checks"]:
+        check["evaluator_artifacts"] = [
+            path for path in check["evaluator_artifacts"] if path != "oracle.sh"
+        ]
+    plan["approval_status"] = "draft"
+    checks_path.write_bytes(bundle.canonical(plan) + b"\n")
     python = shlex.quote(sys.executable)
     command = " ".join(
         (
@@ -402,7 +485,14 @@ def generate(target, vendor=False):
         )
     )
     fragment = (
-        "# SEED:start design_fidelity\nscore_design_fidelity() {\n  "
+        "# SEED:start design_fidelity\nPATH="
+        + shlex.quote(str(Path(sys.executable).parent))
+        + ':"$PATH"\nexport PATH\n'
+        + 'if [ -z "${SERVO_GATE_RUN_ID:-}" ]; then\n'
+        + '  echo "bound card requires gate.py owned run context" >&2\n  exit 2\nfi\n'
+        + "export PYTHONDONTWRITEBYTECODE=1\n"
+        + 'export PYTHONPYCACHEPREFIX="$PWD/.servo/gate-runs/$SERVO_GATE_RUN_ID/python-source-only"\n'
+        + "score_design_fidelity() {\n  "
         + command
         + "\n}\n# SEED:end design_fidelity\n"
     )
@@ -426,7 +516,7 @@ def generate(target, vendor=False):
     bundle.require(result.returncode == 0, "ordinary generation failed: " + result.stderr)
 
 
-def install(target, vendor=False):
+def _install_approved(target, vendor=False):
     import design_eval
 
     target = Path(target).resolve()
@@ -460,6 +550,42 @@ def install(target, vendor=False):
     bundle.require(result.returncode == 0, "ordinary installation failed: " + result.stderr)
 
 
+def seal_driver(target, vendor=False):
+    target = Path(target).resolve()
+    checks_path = target / "spec/oracle/card/checks.json"
+    plan = bundle.load(checks_path)
+    bundle.require(
+        not any("oracle.sh" in check["evaluator_artifacts"] for check in plan["checks"]),
+        "driver already declared; review/reapprove current final bytes instead",
+    )
+    _install_approved(target, vendor)
+    for check in plan["checks"]:
+        check["evaluator_artifacts"].append("oracle.sh")
+    plan["approval_status"] = "draft"
+    checks_path.write_bytes(bundle.canonical(plan) + b"\n")
+    args = [
+        sys.executable,
+        str(HERE.parent / "spec-oracle/oracle_overlay.py"),
+        "generate",
+        str(target),
+        str(target / "spec"),
+        "card",
+    ]
+    if vendor:
+        args.append("--vendor-engine")
+    result = subprocess.run(args, capture_output=True, text=True, timeout=180, check=False)
+    bundle.require(
+        result.returncode == 0, "final sealed-driver generation failed: " + result.stderr
+    )
+
+
+def install(target, vendor=False):
+    target = Path(target).resolve()
+    assert_driver_seal(target)
+    _install_approved(target, vendor)
+    assert_driver_seal(target)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="operation", required=True)
@@ -484,7 +610,7 @@ def main(argv=None):
     approve_parser = commands.add_parser("approve-policy")
     approve_parser.add_argument("--target", type=Path, required=True)
     approve_parser.add_argument("--review-record", type=Path, required=True)
-    for operation in ("generate", "install"):
+    for operation in ("generate", "seal-driver", "install"):
         operation_parser = commands.add_parser(operation)
         operation_parser.add_argument("--target", type=Path, required=True)
         operation_parser.add_argument("--vendor-engine", action="store_true")
@@ -512,12 +638,18 @@ def main(argv=None):
         elif args.operation == "generate":
             generate(args.target, args.vendor_engine)
             print("Generated ordinary card overlay; review and approve before installation")
+        elif args.operation == "seal-driver":
+            seal_driver(args.target, args.vendor_engine)
+            print(
+                "Staged final driver as a required evaluator input; review/reapprove before install. "
+                "Unsealed/draft evaluation refuses."
+            )
         else:
             install(args.target, args.vendor_engine)
             print("Installed ordinary required card component and same-run quality adapter")
         return 0
-    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
-        print("REFUSE card preparation: " + str(exc), file=sys.stderr)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError, ImportError) as exc:
+        print("REFUSE card workflow: " + str(exc), file=sys.stderr)
         return 2
 
 
