@@ -6,6 +6,12 @@ design evaluation, delivered-build attestation, or Jig DONE. 036-01 remains
 IN_PROGRESS under `servo-live-card-evidence`; primary036 owns final producer
 proof and reviews, and the parent owns final integrated source-epoch acceptance.
 
+**Current supporting source:** the final-source sync below imports exact
+recovery `6cc759e807cab5411363b44c19c58e7a457b3715`. Earlier sections retain
+the original c197421/pre-seal source chronology and hashes; their former
+"current-helper" run b6e14da1 is not the current sealed-driver epoch.
+No historical run has been rebound to satisfy a later guard.
+
 ## Bases and ownership
 
 | Item | Exact identity |
@@ -186,3 +192,148 @@ as proof that this new guard already exists.
 - No new module boundary or design decision: this calls the already accepted
   producer-owned pure API and preserves consumer authority. No ADR or
   convention change is needed for this supporting seam.
+
+## Final-source v4 sync (2026-10-15)
+
+### Exact merge and preserved ownership
+
+The parent authorized one same-worktree/same-[PR44](https://github.com/ramboz/servo/pull/44)
+sync of recovery `servo-execution-seal-recovery` at
+`6cc759e807cab5411363b44c19c58e7a457b3715`
+([PR45](https://github.com/ramboz/servo/pull/45), based on5440).
+The existing integration head `c1974210a707ffdd3cfbd0a829398b5357f600a7`
+merged that exact commit without conflicts as
+`298a38a962bfafb1bffbfe730ba3290cf971c3c2`.
+The official builder and board helper ran afterward; the board was already
+current. No upstream checkout or branch was modified, no PR was merged, and
+no recovery-owned symbol was manually changed. Whole036 remains IN_PROGRESS.
+
+The recovery's producer code and tests match its exact source commit.
+`gate_consumer.py` and its45-case integration test file remain byte-identical
+to c197421. The only `required_runtime.py` delta from5440 is the
+producer-owned check against the bytes actually read into `oracle_bytes`,
+including any full `oracle.sh` evaluator pin, before its decoded snapshot
+is interpreted. The existing pure output validator and its caller are not
+duplicated or changed.
+
+| Canonical source | Merged raw SHA-256 |
+|------------------|-------------------|
+| `skills/quality-gate/gate_consumer.py` | `ecb98a8c630463ac69c687590dbcc8b40cbda1eca82f9fe85b0b1b0e46075507` |
+| `skills/quality-gate/required_runtime.py` | `f0f9d90cf7c0f25c5f7163966ae9cfd8010261522f9842438da67622aa858bfe` |
+| `skills/spec-oracle/checks.py` | `1dc07210e5977bca2f08f2d0620b99aa1d51240035b2c02108238b4c09e3eb27` |
+| `skills/spec-oracle/oracle_overlay.py` | `e5ada618c06d7dc3131b33f712bc0161fb41aa7c3089181cd2b1e3e93d2549d0` |
+| `skills/design-eval/card_bundle.py` | `8e39ae545c8acc726d4310ece587bebc847bbb247a1eafeaf70e9f412a46a5ff` |
+| `skills/design-eval/card_capture.py` | `00176691125c53a584696c4f9da18885ef36dec75136f2eb30fd7610385b1a9d` |
+| `skills/design-eval/card_evidence.py` | `210f86ab64ff67b00de5da04fc731ec689d2c5de1c1373948d08b882cadafc82` |
+| `skills/design-eval/card_install.py` | `c553b2138a7f813120ae1cd9558c9c387c82cd1a0d98ca54071df0beb3968efe` |
+| `skills/design-eval/card_quality.py` | `2ac7fe51addce4c5c9199155aaf7b77d1b86574878747e1e510c69ad3e79787f` |
+
+These source hashes are verified by `v4-source-checks.txt`, including exact
+Git comparisons against recovery6cc759e and consumerc197421. Generated
+Claude/Codex/Copilot bytes and the goal vendor use the normal mechanisms.
+
+### Independently pinned v4 context
+
+Parent records are under
+`/Users/ramboz/.copilot/session-state/61f2e313-f28a-403a-9433-724268681e33/files/`.
+They describe diagnostic/no-judge preflight, not final live-quality proof.
+
+| Parent artifact | Exact raw SHA-256 |
+|-----------------|-------------------|
+| `036-v4-definition-review.json` | `01cb81caad1f440a493287d04e6c811bd6c483b45fc496e2a12b5aea53d0e9ed` |
+| `036-v4-final-driver-review.json` | `a623255c50e694f3c73a45a804ce2b3035a0ab77916d3d63708cbf99f868a7ad` |
+| `036-v4-nojudge-controls.json` | `a466faa8d1391c10997d19c1f31865275e85a36f7d937c2e5d111aa19650ab6d` |
+| `036-v4-frozen-context.json` | `8f9a1b2d29572bc9f8d1cd5bb1e067ef5c08906cd73eebc9ed832ebe91c23a54` |
+
+The original target is
+`/Users/ramboz/.copilot/session-state/b4480ab8-e29f-4eae-acf0-c7e65d2c0d31/files/closure-preflight-v4`.
+The proof independently checks each supplied root pin, complete approved
+binding, copied helper bytes versus merged source, all3887 declared runtime
+file hashes, and that all28 checks declare the final `oracle.sh` exactly once.
+Its exact raw driver pin is
+`7c3e521312730ba615ea7979cbc06d709c887e17f262e887e65c23b9bbe5c741`;
+current approved `checks.json` is
+`9463b4ed14ff63b25100531e2ca0ccf8062cdb95478a8001937efff29fd4c533`.
+The staged-driver review's earlier draft-checks hash is intentionally different:
+ordinary approval/install added the approved binding, as pinned separately by
+the parent's frozen context. This is not an approval rewrite.
+
+The independently selected current `delivery/index.html` raw hash is
+`5a201b048d73b1097e88f3bd29fc5b6e2274b6bf8122e21d64135e4d9af9b4f5`.
+Re-enumeration equals the pinned output inventory, not just a self-echoed ID.
+The baseline envelope's build equals the independently pinned selected build;
+the input identity includes both complete input files and the recipe, and
+the output identity binds the complete output list. Input/output domain
+hashes are respectively
+`4df8efca843324076adb70ec0384060c55aa7184842ba08bbc983a22b3e31f81` and
+`741a360ceccb349803716cc1c0800754861487055440396da42effe5c8c34639`.
+This is a bounded hash-only context check, not a new browser acquisition,
+execution or Jig attestation.
+
+### Actual preserved no-judge readback and copied-only controls
+
+`v4-pure-readback.py` blocks subprocess execution, grading and publication,
+disables bytecode writes, and uses `consumer.read` twice per exact record.
+It writes only its own session receipt. Every read retains original overall
+payload, exact `gate_ref`, reason and component refs, with no `consumer_error`:
+
+| Original control / run | Readback authority preserved | Exact gate raw SHA-256 |
+|------------------------|------------------------------|-----------------------|
+| Matching required, quality unavailable / `a8201dd8-03c3-4a75-9eaa-b34b32dec695` | 28requiredpass, overall refusal2; diagnostic quality cannot establish a positive run | `f42ad71badd5394382ae866adadc149915243d6111bfecb22389a6802b00da1b` |
+| Changed real wrapper / `317ddd80-e6b3-41d4-a455-201386c517fb` | Refusal2, no component refs; unknown remains honest | `1f8bc700eb806c24beaa45b30d33bc13a12cfbfd0b83e4950c2b6a4cb1f8ac6a` |
+| Unpinned Node startup / `c83db5a6-11f4-4f01-a80d-bc0f73c5c1ed` | Refusal2, all28unknown | `de3e28bf87f8e5135438dea953822d6c1c08aefce8c724268f3e22d4075e5d0c` |
+| Font24 / `2ddb484e-477e-4c68-af0e-ac8810471c1e` | Required veto1 despite synthetic0.99/THRESHOLD0; both title-font-size IDs fail | `3f4778aa711dde0ee8dbe55e284830745a1a394ca3a01eaa36a5ad7e82bf7292` |
+
+The entire107-file original target inventory, claims and all four parent
+receipts remain unchanged. No live-acceptance marker is written. A complete
+disposable target copy retains the original frozen definitions/references;
+the pure validator accepts its untouched output. Separate copied `normal.png`
+and `evidence.json` byte edits then refuse. Copied `oracle.sh` mutation refuses
+against the entire frozen evaluator-input pin list, not a fabricated subset.
+These are copy-based pure-helper/pin controls, not new producer runs or claims
+that a modified original was executed. The disposable copy is removed.
+
+The exact script/receipt raw hashes are respectively
+`1a1999b12dbb2a241295b7e4fc2c66c9c58cea7242084917a5c63b9da336ca2a`
+and `a8222161557a33e5ce0ca8ed9257e189005a89ceb8bd2d29fa1f9833b04a095c`,
+stored as `v4-pure-readback.py` / `v4-pure-readback.json` in this integration
+session's files directory. `v4-pure-readback.txt` records the successful
+command. Scratch proof initially omitted the recipe from its input-identity
+assertion; it was corrected to the existing `card_bundle.py` contract
+`{"files": inputs, "recipe": recipe}`. No production source or original
+record was changed to satisfy that probe.
+
+### Targeted validation and scoped review
+
+| Receipt in integration session files | Merged-source result |
+|--------------------------------------|----------------------|
+| `v4-targeted-tests.txt` | `uvx --with pytest-subtests pytest -q` over both consumer files, `test_result_artifacts.py`, `test_required_gate.py`, and `test_card_{evidence,install,quality,capture}.py`:291pass/68subtests,10 explicit live-browser opt-in skips. No live judge commands; quality tests use mocked native replies. |
+| `v4-runtime-tests.txt` | Same five targeted package/install/runtime files as the original checkpoint:148pass/73subtests. |
+| `v4-python39.txt` | Python3.9 over both consumer files plus `test_result_artifacts.py`:215pass/26subtests. |
+| `v4-source-checks.txt` | Scoped Ruff0.15.17, official host drift, board, whitespace, exact recovery/consumer source comparisons and raw hashes pass. |
+
+Commands explicitly prepend `/opt/homebrew/bin` to PATH after the resumed
+app environment omitted `uvx`; no dependency manifests or installed packages
+were changed. Counts overlap and are not summed with previous epochs.
+This is a source merge, not new hand-authored runtime behavior, so existing
+regressions and the original witnessed red/green remain distinct from the
+new v4 readback controls.
+
+Fresh [source-sync scoped review](reviews/integration-v4-source-sync.md)
+passes, covering the exact merge, unchanged consumer, preserved snapshot seal
+and truthful v4 control/receipt reconciliation. It is recorded separately
+from both prior integration verdicts and primary036 whole-slice verdicts.
+
+### Remaining boundary after source/readback closure
+
+The formerly pending exact-source seal sync is now imported and checked.
+There is no new consumer/core API gap or schema change at this checkpoint.
+All v4 actual outcomes remain refusal/veto, never an invented overall pass;
+historical25 judge calls are unchanged. Old545a, b6e14da1 and01ec are not
+relabelled as proof of the final sealed-driver guard.
+
+Final live-quality runs are a separate parent-controlled lane. Full036
+acceptance criteria, compliance/craft/architecture/reconciliation and lifecycle
+closure, plus Jig119 delivered-revision interop, remain primary/parent-owned.
+Neither source synchronization nor these no-judge records claim full
+compliance, final live proof, production acceptance or DONE.

@@ -42,6 +42,29 @@ This supporting checkpoint may publish at its selected base, but parent must
 sync that forthcoming source and freshly approved installed proof before final
 epoch acceptance; no old b6e14da1/01ec record is rebound to claim the new guard.
 
+### Final-source supporting sync (2026-10-15)
+
+The authorized recovery source
+`servo-execution-seal-recovery@6cc759e807cab5411363b44c19c58e7a457b3715`
+is merged into the existing integration head
+`c1974210a707ffdd3cfbd0a829398b5357f600a7` as
+`298a38a962bfafb1bffbfe730ba3290cf971c3c2`. No merge conflicts or manual
+producer-core edits were needed. Official host regeneration preserves both
+the original pure consumer patch and the recovery's actually-read driver
+snapshot/full-oracle evaluator input seal. The pure API/result schemas remain
+unchanged; 036-01's claim/status and primary review files are not advanced.
+
+Bounded verification uses the parent's separately pinned v4 definition,
+staged-driver review, frozen context and no-judge records. Readback preserves
+the matching28requiredpass/qualityunavailable refusal2, changed-wrapper
+refusal2, Node-startup refusal2 and font24 required veto1 at THRESHOLD0.
+Original v4 target/claims/receipts are read-only; capture/envelope/driver
+mutations occur only in disposable copies. No producer evaluation or judge
+call is permitted. Scoped tests, package/runtime closure and a fresh
+source-sync review are recorded in `consumer-integration-receipt.md`.
+This closes the supporting source/readback epoch only; final actual live runs,
+full036 review/lifecycle and Jig119 acceptance remain separate parent lanes.
+
 ## 036-01 accepted readiness checkpoint (2026-10-15)
 
 **Implementation checkpoint:** the initial OAuth refusal is preserved. After
