@@ -264,7 +264,43 @@ def _stderr_tail(text: str, limit: int = 200) -> str:
 # The dispatcher frames it with schema_version/check_id/ac_id/family/kind.
 # ---------------------------------------------------------------------------
 
+def _command_option_error(check):
+    """Validate opt-ins before either the build or the assertion can run."""
+    try:
+        if "refusal_exit_codes" in check:
+            codes = check["refusal_exit_codes"]
+            if (not isinstance(codes, list)
+                    or any(type(code) is not int for code in codes)
+                    or len(codes) != len(set(codes))
+                    or 0 in codes or _expected_exit_code(check) in codes):
+                raise ValueError("invalid refusal_exit_codes")
+        if "result_artifact" in check:
+            _required_runtime()._output_contract(check, os.environ.get("SERVO_GATE_RUN_ID"))
+    except (ValueError, TypeError) as exc:
+        return {"status": STATUS_ENV_ERROR, "message": str(exc)}
+    return None
+
+
+def _command_output(check, evidence, base_dir):
+    """Carry exact published bytes, rooted at the target, never command cwd."""
+    if evidence.get("exit_code") in check.get("refusal_exit_codes", []):
+        evidence = {**evidence, "status": STATUS_ENV_ERROR,
+                    "message": evidence["message"] + " (configured refusal exit code)"}
+    if "result_artifact" in check:
+        try:
+            reference = _required_runtime()._result_artifact_reference(
+                check, os.environ.get("SERVO_GATE_RUN_ID"), base_dir)
+            evidence = {**evidence, "result_artifact": reference}
+        except (OSError, ValueError, TypeError) as exc:
+            evidence = {**evidence, "status": STATUS_ENV_ERROR,
+                        "message": evidence["message"] + "; result_artifact: " + str(exc)}
+    return evidence
+
+
 def _check_command(check: dict, base_dir: Path) -> dict:
+    invalid = _command_option_error(check)
+    if invalid:
+        return invalid
     argv = _as_argv(check.get("command"))
     if not argv:
         return {"status": STATUS_ENV_ERROR,
@@ -283,24 +319,28 @@ def _check_command(check: dict, base_dir: Path) -> dict:
     result = _run_bounded(argv, cwd, timeout)
 
     if result.not_found:
-        return {"status": STATUS_ENV_ERROR,
-                "message": f"command not found: {argv[0]}",
-                "command": argv}
+        return _command_output(check, {
+            "status": STATUS_ENV_ERROR,
+            "message": f"command not found: {argv[0]}",
+            "command": argv}, base_dir)
     if result.timed_out:
-        return {"status": STATUS_ENV_ERROR,
-                "message": f"command exceeded timeout of {timeout}s: {argv}",
-                "command": argv}
+        return _command_output(check, {
+            "status": STATUS_ENV_ERROR,
+            "message": f"command exceeded timeout of {timeout}s: {argv}",
+            "command": argv,
+            **({"exit_code": result.returncode}
+               if "result_artifact" in check or "refusal_exit_codes" in check else {})}, base_dir)
     if result.returncode == expected:
-        return {"status": STATUS_PASS,
+        return _command_output(check, {"status": STATUS_PASS,
                 "message": f"command exited {result.returncode} as expected",
-                "command": argv, "exit_code": result.returncode}
+                "command": argv, "exit_code": result.returncode}, base_dir)
     tail = _stderr_tail(result.stderr)
     msg = (f"command exited with code {result.returncode} "
            f"(expected {expected}): {argv}")
     if tail:
         msg += f" — stderr: {tail}"
-    return {"status": STATUS_FAIL, "message": msg,
-            "command": argv, "exit_code": result.returncode}
+    return _command_output(check, {"status": STATUS_FAIL, "message": msg,
+            "command": argv, "exit_code": result.returncode}, base_dir)
 
 
 def _check_file_presence(check: dict, base_dir: Path) -> dict:
@@ -575,6 +615,9 @@ def _substitute(argv: list, mapping: dict) -> list:
 
 
 def _check_generated_artifact_command(check: dict, base_dir: Path) -> dict:
+    invalid = _command_option_error(check)
+    if invalid:
+        return invalid
     argv = _as_argv(check.get("command"))
     if not argv:
         return {"status": STATUS_ENV_ERROR,
@@ -630,25 +673,28 @@ def _check_generated_artifact_command(check: dict, base_dir: Path) -> dict:
         run_argv = _substitute(argv, placeholders)
         r = _run_bounded(run_argv, workdir, timeout)
         if r.not_found:
-            return {"status": STATUS_ENV_ERROR,
+            return _command_output(check, {"status": STATUS_ENV_ERROR,
                     "message": f"command not found: {run_argv[0]}",
-                    "command": run_argv}
+                    "command": run_argv}, base_dir)
         if r.timed_out:
-            return {"status": STATUS_ENV_ERROR,
+            return _command_output(check, {"status": STATUS_ENV_ERROR,
                     "message": f"command exceeded timeout of {timeout}s",
-                    "command": run_argv}
+                    "command": run_argv,
+                    **({"exit_code": r.returncode}
+                       if "result_artifact" in check or "refusal_exit_codes" in check else {})},
+                                   base_dir)
         if r.returncode == expected:
-            return {"status": STATUS_PASS,
+            return _command_output(check, {"status": STATUS_PASS,
                     "message": ("command succeeded from generated artifact "
                                 f"(exit {r.returncode})"),
-                    "command": run_argv, "exit_code": r.returncode}
+                    "command": run_argv, "exit_code": r.returncode}, base_dir)
         tail = _stderr_tail(r.stderr)
         msg = (f"command from generated artifact exited {r.returncode} "
                f"(expected {expected}): {run_argv}")
         if tail:
             msg += f" — stderr: {tail}"
-        return {"status": STATUS_FAIL, "message": msg,
-                "command": run_argv, "exit_code": r.returncode}
+        return _command_output(check, {"status": STATUS_FAIL, "message": msg,
+                "command": run_argv, "exit_code": r.returncode}, base_dir)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

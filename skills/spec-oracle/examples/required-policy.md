@@ -66,6 +66,98 @@ entrypoints/executable paths must be absolute and declared/pinned; relative or
 dynamically generated assertion scripts refuse. Subject inputs still remain
 mutable observations.
 
+## Optional command output and refusal contract
+
+Either command family can add these reviewed, frozen fields:
+
+```json
+{
+  "refusal_exit_codes": [2],
+  "result_artifact": {
+    "root": "spec/oracle/card/runs/{run_id}/design",
+    "manifest": "evidence.json",
+    "schema_version": 1,
+    "kind": "design_evidence"
+  }
+}
+```
+
+`refusal_exit_codes` is a unique list of nonboolean integers, excluding zero
+and the configured expected exit. Invalid options refuse **before** build or
+command execution. With `[2]`, exit 2 is `env_error`/required `unknown`, while
+exit 1 remains an observed contradiction. Original exit and diagnostic reason
+are retained, as are any valid output references. The assertion runs once.
+Without this field, legacy unexpected-exit failure semantics are unchanged.
+
+`result_artifact` has exactly the four keys above. Its schema version must be
+an integer and its kind a nonempty string; the generic runtime does not dispatch
+on design meaning. Only literal `{run_id}` substitution is supported, exactly
+once as a complete root path segment, using current canonical
+`SERVO_GATE_RUN_ID`. All paths use normalized relative POSIX spelling. Absolute,
+dot/traversal, duplicate, symlink and foreign-run paths refuse.
+
+The root is relative to the **target**, not the command's `working_directory`
+or a generated check's temporary build tree. Pass `--base-dir` to `checks.py`
+to select the target explicitly; without it, the existing `.servo` layout
+derivation or current-directory fallback still selects the target.
+`working_directory` only changes child execution cwd, never this fallback.
+Component publication derives the target from the approved target-relative
+checks location; for external absolute checks locations its fallback is the
+invoking target cwd, also independent of child cwd. A generated producer must
+publish to that target (e.g. pass it explicitly in reviewed argv), not leave
+output in the disposable build tree. No new command placeholder is added.
+
+The producer writes a JSON manifest with matching integer `schema_version`,
+`kind`, current `run_id`, and `artifacts: [{"path": "...", "hash": "sha256:..."}]`.
+Rows are sorted by unique root-relative path, cover **every other file** under
+the root, and exclude the manifest itself. Hashes are lowercase SHA-256 of
+exact bytes. Additional manifest fields are opaque to this generic carrier.
+Complete inventory, raw byte digests and run/path identity are checked; neither
+a matching exit nor a producer's summary can bypass the output contract.
+
+The schema1 `kind: evidence` row gains exactly this optional value:
+
+```json
+{
+  "result_artifact": {
+    "schema_version": 1,
+    "kind": "command_result_artifacts",
+    "run_id": "<current-UUID>",
+    "root": "spec/oracle/card/runs/<current-UUID>/design",
+    "manifest": {"path": "evidence.json", "hash": "sha256:<exact-file-bytes>"},
+    "artifacts": [
+      {"path": "normal.png", "hash": "sha256:<exact-file-bytes>"},
+      {"path": "open.png", "hash": "sha256:<exact-file-bytes>"}
+    ]
+  }
+}
+```
+
+This value is included unchanged in immutable `required_component_result`/v1
+raw evidence; there is no overall schema bump. Output bytes are observations,
+**not** `evaluator_artifacts` and not frozen into approval. Changing the output
+contract or refusal policy changes `plan_content_hash` and requires review/
+reapproval; legitimate new run output does not.
+
+Missing/partial output makes the command `env_error`, preserving available exit
+and reason without inventing captures or observations. An acquisition error
+can honestly publish unknown evidence without output references. Once present,
+references must remain valid for pass, fail **and** refusal. They are checked
+before component publication and rechecked before overall publication.
+An output mutation before sealing the component downgrades only the affected
+evidence to `env_error`, retaining its original exit/reason/references and
+updating the diagnostic summary. No already published record is rewritten.
+Post-publication mutation makes the affected required item unknown; immutable
+raw exits/reasons/references and other known failures remain inspectable.
+
+For preserved readback, `required_runtime.py` exports the pure API
+`validate_output_references(check, evidence, run_id, base)`. It returns `None`
+on valid references (or an honest output-less acquisition error), and raises
+`ValueError` for invalid references. It only verifies the declared output
+contract, run, paths, complete inventory and exact bytes: no command execution,
+capture, observation, comparison, grade interpretation or re-scoring.
+Absence of both optional fields preserves legacy behavior.
+
 ## Review, approve, install
 
 ```sh
@@ -90,6 +182,16 @@ Only the recognized canonical driver can be upgraded. Existing SEED functions
 and static COMPONENTS entries survive. Unsupported driver edits/dynamic arrays
 refuse before any writes. Runtime `THRESHOLD=0` and zero weights affect quality,
 never required membership. Non-finite quality values refuse.
+
+The canonical driver's numeric default (for example `0.8`) is a reviewed
+project setting, not an arbitrary shell customization. Recognition accepts
+only one strictly finite numeric literal in the exact template declaration;
+substitutions, metacharacters, NaN/Infinity and other driver edits refuse.
+Approval records the exact literal as mandatory `threshold_default`; omission
+or changes refuse before installation, and the installed prefix hash retains
+the actual bytes, including the chosen default. Recognition never normalizes
+away runtime identity. Shared-runtime changes require fresh approval; old
+historical records are not silently upgraded.
 
 To remove membership, edit to `enabled: false` and remove/set false **all**
 required flags, generate, review, approve, then explicitly install again with
@@ -194,3 +296,5 @@ Consumer/autonomy propagation is a separate slice; do not treat this as
 Executable source and generated-host examples, including generated-artifact,
 concurrency, relocation and mutation controls:
 `uvx pytest -q skills/spec-oracle/test_required_gate.py`.
+Focused generic output/refusal and installed publication controls:
+`uvx pytest -q skills/spec-oracle/test_result_artifacts.py`.

@@ -2,21 +2,27 @@
 
 ## Authoring and readiness
 
-- [ ] Parent/owners agree contract/output and Vellum013-01 approved-input
+- [x] Parent/owners agree contract/output and Vellum013-01 approved-input
       C1 checkpoint while IN_PROGRESS; obtain real approved normal/open source
       artifacts without requiring 013-01 DONE or 013-02 state-handoff completion.
-- [ ] Agree canonical approval identity, complete build-input/output closure
+- [x] Agree canonical approval identity, complete build-input/output closure
       and proposed immutable local-bundle/browser transport boundary before
       readiness; the future observer and live runtime proof are not prerequisites.
-- [ ] C0 pins serialization/version/digest domains and reviewed vectors plus
+- [x] C0 pins serialization/version/digest domains and reviewed vectors plus
       required comparison inventory, without runnable-all-consumers proof.
-- [ ] Owners approve proposed +/-1 CSS px derived geometry, zero declared size/
+- [x] Owners approve proposed +/-1 CSS px derived geometry, zero declared size/
       weight and exact normalized text/color/CSS-family declaration comparisons.
 - [ ] Refuse missing required comparison/tolerance policy; no implicit zero
       default can override approved geometry tolerance.
-- [ ] Review exact design-evidence-envelope/gate-payload fields, record digests
+- [x] Review exact design-evidence-envelope/gate-payload fields, record digests
       and run links; overall gate policy, not component pass, is completion authority.
-- [ ] Accept ADR-0044 separately and clear 035-01 before 036-01 implementation.
+- [x] Accept ADR-0044 separately and clear 035-01 before 036-01 implementation.
+- [x] Coordinator assigns narrow opt-in command output/refusal seam; no
+      concurrent writer in checks.py/required_runtime.py.
+- [x] Owner selects current Opus/Claude CLI and approves first-calibration
+      content/sampling with an eight-total-invocation cap.
+- [x] Record independent readiness verdict, then transition through
+      READY_FOR_IMPLEMENTATION to IN_PROGRESS.
 
 ## 036-01
 

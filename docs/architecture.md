@@ -78,6 +78,29 @@ servo/
 
 ## Install surfaces
 
+**Bounded card observer (036-01, IN_PROGRESS):** under Accepted ADR-0044,
+`skills/design-eval/card_install.py` prepares pinned producer inputs/runtime
+and ordinary spec-oracle commands; it separates generation, explicit approval
+and installation. `card_bundle.py` closes the single-document source/output
+set; `card_capture.py` independently observes both states over sealed loopback
+bytes; `card_evidence.py` compares producer-approved facts and verifies current
+delivery without re-scoring. `card_quality.py` composes the reviewed existing
+design-eval policy over those same captures and retains native CLI responses.
+An initial OAuth refusal, a real overall pass and a genuine
+component-pass/quality-fail control are preserved as separate epochs. Each
+necessary live batch freezes its purpose and exactly8 additional judgments,
+carrying the complete consumed history; no unlimited/adaptive search is implied.
+Final-epoch controls and lifecycle reviews remain open. The
+[walkthrough](../skills/design-eval/examples/bound-card.md) records this bounded
+support and incomplete acceptance.
+
+Ordinary command evidence optionally binds a declared run-scoped output
+manifest/capture closure, separate from immutable evaluator input artifacts.
+The shared pure `required_runtime.validate_output_references` validates that
+closure before publication and is the serial consumer-integration seam.
+Opt-in refusal exits distinguish unavailable observations from contradictions;
+unconfigured command semantics remain unchanged.
+
 **Opt-in required gate (035-01):** ordinary scalar installations remain v1.
 The existing overlay flow now accepts explicitly reviewed boolean required
 entries and `required_policy` schema1, freezes a complete

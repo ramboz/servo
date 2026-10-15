@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,180 @@ def load(path):
                           ValueError("non-finite JSON: " + x)))
 
 
+def _output_path(value):
+    """Canonical relative POSIX spelling, without expansion or traversal."""
+    if (not isinstance(value, str) or not value or "\\" in value
+            or "\0" in value or "{" in value or "}" in value
+            or any(p in ("", ".", "..") for p in value.split("/"))):
+        raise ValueError("result_artifact needs normalized relative POSIX paths")
+    return value
+
+
+def _output_contract(check, run_id):
+    if "result_artifact" not in check:
+        return None
+    config = check["result_artifact"]
+    if (not isinstance(config, dict)
+            or set(config) != {"root", "manifest", "schema_version", "kind"}
+            or type(config["schema_version"]) is not int
+            or not isinstance(config["kind"], str) or not config["kind"].strip()):
+        raise ValueError("invalid result_artifact configuration")
+    if not isinstance(run_id, str) or str(uuid.UUID(run_id)) != run_id:
+        raise ValueError("result_artifact needs current canonical gate run UUID")
+    root = config["root"]
+    if (not isinstance(root, str)
+            or root.split("/").count("{run_id}") != 1):
+        raise ValueError("result_artifact root needs one {run_id} segment")
+    root = _output_path(root.replace("{run_id}", run_id))
+    manifest = _output_path(config["manifest"])
+    _output_run_paths([root, manifest], run_id)
+    return {**config, "root": root, "manifest": manifest}
+
+
+def _output_run_paths(paths, run_id):
+    for path in paths:
+        for part in path.split("/"):
+            if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", part):
+                if part != run_id:
+                    raise ValueError("foreign run in result_artifact path")
+
+
+def _output_rows(rows, run_id):
+    if not isinstance(rows, list):
+        raise ValueError("result_artifact artifacts must be a list")
+    paths = []
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) != {"path", "hash"}
+                or not isinstance(row["hash"], str)
+                or not re.fullmatch(r"sha256:[0-9a-f]{64}", row["hash"])):
+            raise ValueError("invalid result_artifact file reference")
+        paths.append(_output_path(row["path"]))
+    if paths != sorted(set(paths)):
+        raise ValueError("result_artifact paths must be sorted and unique")
+    _output_run_paths(paths, run_id)
+
+
+def _output_snapshot(base, root, manifest):
+    """Read a closed tree with no-follow directory-relative file descriptors.
+
+    Two independent snapshots catch changes while collecting references. fstat
+    and named-entry checks also reject replacement during an individual read.
+    Only the manifest bytes are retained; other files are streamed into hashes.
+    """
+    files, directories, raw = {}, [], None
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    def visit(fd, prefix):
+        nonlocal raw
+        before = os.fstat(fd)
+        with os.scandir(fd) as entries:
+            names = sorted(entry.name for entry in entries)
+        for name in names:
+            relative = prefix + name
+            _output_path(relative)
+            child = os.open(name, flags, dir_fd=fd)
+            try:
+                start = os.fstat(child)
+                if stat.S_ISDIR(start.st_mode):
+                    directories.append(relative)
+                    visit(child, relative + "/")
+                elif stat.S_ISREG(start.st_mode):
+                    hasher, chunks = hashlib.sha256(), []
+                    while True:
+                        data = os.read(child, 1024 * 1024)
+                        if not data:
+                            break
+                        hasher.update(data)
+                        if relative == manifest:
+                            chunks.append(data)
+                    files[relative] = "sha256:" + hasher.hexdigest()
+                    if relative == manifest:
+                        raw = b"".join(chunks)
+                else:
+                    raise ValueError("result_artifact contains non-regular entry")
+                end = os.fstat(child)
+                named = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if identity(start) != identity(end) or identity(end) != identity(named):
+                    raise ValueError("result_artifact changed during read")
+            finally:
+                os.close(child)
+        if identity(before) != identity(os.fstat(fd)):
+            raise ValueError("result_artifact directory changed during read")
+
+    fd = os.open(str(Path(base).resolve()), flags | os.O_DIRECTORY)
+    try:
+        for part in root.split("/"):
+            child = os.open(part, flags | os.O_DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        visit(fd, "")
+    finally:
+        os.close(fd)
+    return files, directories, raw
+
+
+def _result_artifact_reference(check, run_id, base):
+    """Acquire only generic closure facts, never interpret producer meaning."""
+    try:
+        config = _output_contract(check, run_id)
+        first = _output_snapshot(base, config["root"], config["manifest"])
+        files, directories, raw = first
+        _output_run_paths(directories, run_id)
+        if raw is None:
+            raise ValueError("result_artifact manifest missing")
+        manifest = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs,
+                              parse_constant=lambda x: (_ for _ in ()).throw(
+                                  ValueError("non-finite output JSON: " + x)))
+        if (not isinstance(manifest, dict)
+                or type(manifest.get("schema_version")) is not int
+                or manifest["schema_version"] != config["schema_version"]
+                or manifest.get("kind") != config["kind"]
+                or manifest.get("run_id") != run_id):
+            raise ValueError("result_artifact manifest contract/run mismatch")
+        rows = manifest.get("artifacts")
+        _output_rows(rows, run_id)
+        expected = [{"path": p, "hash": h} for p, h in sorted(files.items())
+                    if p != config["manifest"]]
+        if rows != expected:
+            raise ValueError("result_artifact inventory/digest mismatch")
+        if first != _output_snapshot(base, config["root"], config["manifest"]):
+            raise ValueError("result_artifact changed during acquisition")
+        return {"schema_version": 1, "kind": "command_result_artifacts",
+                "run_id": run_id, "root": config["root"],
+                "manifest": {"path": config["manifest"],
+                             "hash": files[config["manifest"]]},
+                "artifacts": rows}
+    except (OSError, TypeError, KeyError, UnicodeError) as exc:
+        raise ValueError("result_artifact unavailable: " + str(exc)) from exc
+
+
+def validate_output_references(check, evidence, run_id, base):
+    """Pure declared-output validation for publication or preserved readback.
+
+    No execution, observation, comparison, scoring or design-kind dispatch.
+    Acquisition errors may honestly have no output. Once references exist,
+    they must close exactly, even for a failing/refused command.
+    """
+    config = _output_contract(check, run_id)
+    if "result_artifact" not in evidence:
+        if config is not None and evidence.get("status") != "env_error":
+            raise ValueError("result_artifact references missing")
+        return
+    if config is None:
+        raise ValueError("undeclared result_artifact references")
+    expected = _result_artifact_reference(check, run_id, base)
+    try:
+        matches = canonical(evidence["result_artifact"]) == canonical(expected)
+    except (TypeError, OverflowError) as exc:
+        raise ValueError("invalid result_artifact reference value") from exc
+    if not matches:
+        raise ValueError("result_artifact reference identity/digest mismatch")
+
+
 def publish(path, value):
     """Flush then atomically link, never replace a published record."""
     path = Path(path)
@@ -94,6 +269,18 @@ def finite(value):
     if not math.isfinite(number):
         raise ValueError("non-finite quality number")
     return number
+
+
+def threshold_default(text):
+    """Read one canonical numeric fallback without evaluating any shell."""
+    text = re.sub(r"^# SEED:start [^\n]+\n.*?^# SEED:end [^\n]+", "", text,
+                  flags=re.S | re.M)
+    matches = re.findall(r'^THRESHOLD="\$\{THRESHOLD:-([^}\n]*)\}"$', text, re.M)
+    if (len(matches) != 1 or not re.fullmatch(
+            r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", matches[0])):
+        raise ValueError("unsupported literal threshold default")
+    finite(matches[0])
+    return matches[0]
 
 
 def quality_components(text):
@@ -242,7 +429,8 @@ def check_pins(pins, base=None):
             raise ValueError("approved artifact modified: " + pin["path"])
 
 
-def binding(plan, component, checks_path, engine, runtime, fragment, base):
+def binding(plan, component, checks_path, engine, runtime, fragment, base,
+            threshold):
     mode = policy_mode(plan)
     if mode is None:
         raise ValueError("no explicit required policy to approve")
@@ -262,6 +450,7 @@ def binding(plan, component, checks_path, engine, runtime, fragment, base):
         "required_runtime": {"path": policy_path(runtime, base),
                              "hash": file_hash(runtime)},
         "driver_hash": digest(DRIVER.encode()),
+        "threshold_default": threshold,
     }
 
 
@@ -288,6 +477,9 @@ def validate_binding(entry, plan, content_hash, base):
         raise ValueError("executable resolution modified")
     if entry["driver_hash"] != digest(DRIVER.encode()):
         raise ValueError("required driver modified")
+    if (type(entry.get("threshold_default")) is not str or
+            threshold_default((base / "oracle.sh").read_text()) != entry["threshold_default"]):
+        raise ValueError("approved threshold default missing or modified")
     fragment = (base / entry["checks_path"]).parent / "oracle.sh.fragment"
     if file_hash(fragment) != entry["fragment_hash"]:
         raise ValueError("fragment modified")
@@ -402,6 +594,37 @@ def component_result(plan, result, checks_path, runtime_path):
     expected = checks_path.resolve().parent / "runs" / run_id / "result.json"
     if destination.resolve() != expected:
         raise ValueError("wrong component destination")
+    # Prefer the approved target-relative checks location, not command cwd
+    # (working_directory) or a generated command's disposable build directory.
+    location = Path(entry["checks_path"])
+    base = Path.cwd()
+    if not location.is_absolute():
+        base = checks_path.resolve()
+        for _ in location.parts:
+            base = base.parent
+        if (base / location).resolve() != checks_path.resolve():
+            raise ValueError("component checks location mismatch")
+    checks = {c["id"]: c for c in plan.get("checks", [])}
+    unavailable = False
+    for index, evidence in enumerate(result["evidence"]):
+        check = checks.get(evidence["check_id"], {})
+        try:
+            validate_output_references(check, evidence, run_id, base)
+        except ValueError as exc:
+            # A publication race cannot erase other contradictions or the
+            # original raw exit/references. Refuse only the affected evidence
+            # before sealing it; never rewrite a published component.
+            unavailable = True
+            result["evidence"][index] = {
+                **evidence, "status": "env_error",
+                "message": evidence["message"] + "; result_artifact: " + str(exc)}
+    if unavailable:
+        passed = sum(e["status"] == "pass" for e in result["evidence"])
+        failed = sum(e["status"] == "fail" for e in result["evidence"])
+        errors = sum(e["status"] == "env_error" for e in result["evidence"])
+        result["summary"].update(
+            passed_checks=passed, failed_checks=failed, env_errors=errors,
+            score=passed / (passed + failed) if passed + failed else 0.0)
     envelope = {
         "schema_version": 1, "kind": "required_component_result",
         "run_id": run_id, "component": entry["component"],
@@ -443,6 +666,7 @@ def validate_component(reference, entry, run_id, policy_hash, score, base=None):
     checks = {c["id"]: c for c in plan.get("checks", [])}
     checks.update({c["id"]: {**c, "family": "residual_judgment"}
                    for c in plan.get("residual_judgment", [])})
+    output_errors = {}
     for evidence in record["evidence"]:
         check = checks[evidence["check_id"]]
         if (type(evidence.get("schema_version")) is not int
@@ -452,6 +676,10 @@ def validate_component(reference, entry, run_id, policy_hash, score, base=None):
                 or not isinstance(evidence.get("message"), str)
                 or evidence.get("status") not in ("pass", "fail", "env_error", "not_applicable")):
             raise ValueError("invalid raw evidence: " + evidence["check_id"])
+        try:
+            validate_output_references(check, evidence, run_id, base)
+        except ValueError as exc:
+            output_errors[evidence["check_id"]] = str(exc)
     passed = sum(e["status"] == "pass" for e in record["evidence"])
     failed = sum(e["status"] == "fail" for e in record["evidence"])
     errors = sum(e["status"] == "env_error" for e in record["evidence"])
@@ -461,6 +689,15 @@ def validate_component(reference, entry, run_id, policy_hash, score, base=None):
     interpreted = interpret(entry["required_ids"], record["evidence"])
     if canonical(interpreted) != canonical(record["required"]):
         raise ValueError("required interpretation/counts mismatch")
+    if output_errors:
+        if set(output_errors) - set(entry["required_ids"]):
+            raise ValueError("component output closure unavailable: " + str(output_errors))
+        # Preserve immutable raw exits/reasons and other known failures. An
+        # invalid output cannot carry its former pass into overall publication.
+        return aggregate([
+            {**item, "status": "unknown", "reason": output_errors[item["id"]]}
+            if item["id"] in output_errors else item
+            for item in interpreted["items"]], entry["required_ids"])
     return interpreted
 
 

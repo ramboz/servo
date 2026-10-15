@@ -141,6 +141,12 @@ or invalid evidence refuses with exit 2. Enabled JSON v2 preserves the overall
 gate and run/digest-bound component evidence. A component's pass alone is never
 completion authority. See the
 [installed walkthrough and carrier](https://github.com/ramboz/servo/blob/main/skills/spec-oracle/examples/required-policy.md).
+
+The [bounded card pilot](skills/design-eval/examples/bound-card.md) adds
+source/build-bound DOM/state evidence and same-run quality composition through
+that ordinary carrier. **036-01 remains in progress:** real Opus runs preserve
+an overall pass and a component-pass/quality-fail control. Final-epoch controls
+and lifecycle reviews remain open; diagnostic veto scores are not live fidelity.
 This is the attended gate/install surface, not yet consumer/autonomy propagation.
 
 ## Repository structure (for contributors)
