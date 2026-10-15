@@ -3,7 +3,6 @@
 import http.server
 import threading
 from contextlib import contextmanager
-from pathlib import Path
 
 from card_bundle import file_hash, raw, read_bytes, require
 

@@ -1,9 +1,11 @@
 """Quality provenance and allowance controls, without live model invocations."""
 
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -36,12 +38,18 @@ class QualityControls(unittest.TestCase):
                 "HOME": "/unit-home",
                 "GH_TOKEN": "unit-not-secret",
                 "GITHUB_TOKEN": "unit-not-secret",
+                "OPENAI_API_KEY": "unit-not-secret",
+                "AWS_SECRET_ACCESS_KEY": "unit-not-secret",
+                "CLAUDE_CODE_OAUTH_TOKEN": "unit-normal-auth",
             },
             clear=True,
         ):
             env = card_quality.judge_environment()
             self.assertNotIn("GH_TOKEN", env)
             self.assertNotIn("GITHUB_TOKEN", env)
+            self.assertNotIn("OPENAI_API_KEY", env)
+            self.assertNotIn("AWS_SECRET_ACCESS_KEY", env)
+            self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "unit-normal-auth")
             self.assertEqual(env["HOME"], "/unit-home")
         for key, value in (
             ("CLAUDE_CODE_USE_BEDROCK", "1"),
@@ -67,6 +75,80 @@ class QualityControls(unittest.TestCase):
             path.write_bytes(b"changed-image")
             path.write_bytes(b"original-image")
             self.assertNotEqual(card_quality.input_identity(path), original)
+
+    def test_later_state_cannot_rewrite_an_earlier_states_sealed_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            refs, destination = root / "refs", root / "run"
+            refs.mkdir()
+            destination.mkdir()
+            binary = root / "claude"
+            binary.write_bytes(b"\xcf\xfa\xed\xfe")
+            shots = {}
+            for state in ("normal", "open"):
+                shots[state] = root / f"{state}.png"
+                shots[state].write_bytes(b"unit-actual-" + state.encode())
+                (refs / f"{state}.png").write_bytes(b"unit-reference-" + state.encode())
+            config = {
+                "schema_version": 2,
+                "approval_provenance": "reviewed",
+                "approved_content_hash": "unit-only",
+                "judge": {
+                    "execution_mode": "safe-restricted-read-only",
+                    "auth_mode": "claude-subscription",
+                    "batch_purpose": "unit-only",
+                    "calibration_limit": 8,
+                    "transport": "cli",
+                    "decoding_mode": "native-default",
+                    "model": "opus",
+                    "runtime": {
+                        "binary": str(binary),
+                        "hash": card_quality.file_hash(binary),
+                        "version": "unit-only",
+                    },
+                },
+                "samples": {"n": 4, "k": 1.0, "delta": 0.03},
+                "threshold": 0.8,
+                "viewport": {"width": 800, "height": 600, "deviceScaleFactor": 1},
+                "screens": [
+                    {"id": state, "reference": f"refs/{state}.png", "weight": 1.0}
+                    for state in shots
+                ],
+                "hashes": {
+                    f"refs/{state}.png": card_quality.file_hash(refs / f"{state}.png")
+                    for state in shots
+                },
+            }
+            path = root / "config.json"
+            path.write_text(json.dumps(config))
+            calls = []
+
+            def native(command, **kwargs):
+                if "--version" in command:
+                    return SimpleNamespace(returncode=0, stdout="unit-only")
+                calls.append(command)
+                if len(calls) == 5:
+                    earlier = destination / "judge-inputs/normal-actual.png"
+                    data = earlier.read_bytes()
+                    earlier.write_bytes(b"changed-during-open")
+                    earlier.write_bytes(data)
+                return SimpleNamespace(
+                    returncode=0, stdout=b'{"result":"{\\"score\\":0.9}"}', stderr=b""
+                )
+
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                patch.object(card_quality.scoring, "_require_schema_v2"),
+                patch.object(card_quality.scoring, "validate_freeze"),
+                patch.object(card_quality.scoring, "_validate_policy"),
+                patch.object(card_quality.scoring, "_scoring_prompt", return_value="unit-rubric"),
+                patch.object(card_quality.subprocess, "run", side_effect=native),
+            ):
+                with self.assertRaisesRegex(ValueError, "sealed judge input changed"):
+                    card_quality.run(
+                        path, shots, destination, root / "allowance",
+                        capture_hashes={s: card_quality.file_hash(p) for s, p in shots.items()},
+                    )
 
     def test_requested_alias_is_not_reported_as_observed_concrete_identity(self):
         result = card_quality.parse_reply(

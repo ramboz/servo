@@ -31,10 +31,15 @@ WebSockets, service workers, redirects, additional pages and byte mismatches
 cannot establish a passing observation. This is not arbitrary HTTP provenance.
 
 Use the explicitly selected Python/Playwright/browser/Claude runtime. The
-reviewed manifest pins the Python distribution including stdlib/framework,
-selected packages, browser tree and selected Claude/Node files; the OS is
+reviewed manifest pins the virtualenv prefix/configuration, Python distribution
+including stdlib/framework, selected package origins, complete browser tree,
+selected Claude/Node/bash files and non-OS linkage of the Python native
+extensions and selected command entrypoints; the OS is
 version-bound. A move or runtime update requires fresh preparation and approval,
-not a silent fallback. The actual pilot used Python3.14.0, Playwright1.64.0 and
+not a silent fallback. This macOS pilot refuses unsupported relative native
+linkage and executable virtualenv/user startup customization. Homebrew's
+base-framework `sitecustomize.py` is allowed only inside that pinned framework.
+The actual pilot used Python3.14.0, Playwright1.64.0 and
 Chromium156.0.8078.4 at800x600/deviceScale1.
 
 ## Prepare, independently review, freeze, install
@@ -83,21 +88,40 @@ PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" "$PYTHON" -B \
 # Review checks.json, oracle.sh.fragment, helpers, source/runtime manifests.
 python3 "$SERVO_ROOT/skills/spec-oracle/oracle_overlay.py" approve \
   "$TARGET" "$TARGET/spec" card
+# Stage the exact final installed oracle.sh, including the real quality wrapper.
+# This consumes the first approval, then marks the driver-bound plan draft.
+PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" "$PYTHON" -B \
+  "$SERVO_ROOT/skills/design-eval/card_install.py" seal-driver --target "$TARGET"
+# Independently inspect final oracle.sh + its evaluator_artifacts pin in checks.json.
+python3 "$SERVO_ROOT/skills/spec-oracle/oracle_overlay.py" approve \
+  "$TARGET" "$TARGET/spec" card
 PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" "$PYTHON" -B \
   "$SERVO_ROOT/skills/design-eval/card_install.py" install --target "$TARGET"
 PLAYWRIGHT_BROWSERS_PATH="$BROWSERS" \
   python3 "$SERVO_ROOT/skills/quality-gate/gate.py" "$TARGET" --json --timeout 2700
 ```
 
-Use `--vendor-engine` on both generate/install for the ordinary clone-portable
+Use `--vendor-engine` on generate/seal-driver/install for the ordinary clone-portable
 engine path. Installation consumes approved bytes without generating or granting
-approval. Required removal/uninstall follows
+approval. Draft/unsealed/changed driver bytes refuse; re-generation invalidates
+the driver seal and requires the review sequence again. The runtime checks the
+actually read shell snapshot against the declared exact input hash, not just the
+file found at the end. The installed wrapper selects an absent, run-owned Python
+cache prefix and disables bytecode writes, so pre-existing caches do not replace
+reviewed helper source. Required removal/uninstall follows
 [required-policy.md](../../spec-oracle/examples/required-policy.md); plain
 uninstall cannot silently waive required membership.
 
 The card policy and reviewed design-eval definition are separate freezes.
 Live quality uses exactly the verified current run's normal/open PNGs, four
-samples each, lower bounds with k1 and threshold0.8. Every attempted judge call,
+samples each, lower bounds with k1 and threshold0.8. Browser-returned PNG hashes
+are checked before sealing per-state actual/reference judge inputs. Their byte
+and file identities are rechecked around every invocation, across states and
+before quality publication. Claude runs in safe/restricted Read-only mode with
+normal subscription authentication, not `--bare`; unrelated credential tokens
+are removed from its environment and unselected provider/auth modes refuse.
+These are trusted-local drift checks, not malicious-writer prevention or full
+host/provider attestation. Every attempted judge call,
 including an authentication failure, reserves a persistent allowance slot
 before invocation. Keep the owner-level consumed count across new checkpoints;
 creating a new directory does not grant another eight calls. The owner has

@@ -42,6 +42,7 @@ def _native_dependencies(files, programs):
         if getattr(module, "__file__", None) and Path(module.__file__).suffix in (".so", ".dylib")
     )
     pending.update(path for path in files if path.name == "node")
+    pending.update(path for path in files if path.suffix == ".so")
     seen, resolutions = set(), {}
     while pending:
         path = pending.pop()
@@ -171,6 +172,7 @@ def prepare(
     purpose="bounded-card-calibration",
 ):
     target = Path(target).resolve()
+    claude = Path(claude).resolve(strict=True)
     bundle.require(not (target / "spec/oracle/card").exists(), "card pilot already exists")
     bundle.require((target / "oracle.sh").is_file(), "scaffold the ordinary target first")
     producer = producer_at(producer_root)
@@ -491,7 +493,8 @@ def generate(target, vendor=False):
         + 'if [ -z "${SERVO_GATE_RUN_ID:-}" ]; then\n'
         + '  echo "bound card requires gate.py owned run context" >&2\n  exit 2\nfi\n'
         + "export PYTHONDONTWRITEBYTECODE=1\n"
-        + 'export PYTHONPYCACHEPREFIX="$PWD/.servo/gate-runs/$SERVO_GATE_RUN_ID/python-source-only"\n'
+        + 'export PYTHONPYCACHEPREFIX='
+        + '"$PWD/.servo/gate-runs/$SERVO_GATE_RUN_ID/python-source-only"\n'
         + "score_design_fidelity() {\n  "
         + command
         + "\n}\n# SEED:end design_fidelity\n"
@@ -641,7 +644,8 @@ def main(argv=None):
         elif args.operation == "seal-driver":
             seal_driver(args.target, args.vendor_engine)
             print(
-                "Staged final driver as a required evaluator input; review/reapprove before install. "
+                "Staged final driver as a required evaluator input; "
+                "review/reapprove before install. "
                 "Unsealed/draft evaluation refuses."
             )
         else:

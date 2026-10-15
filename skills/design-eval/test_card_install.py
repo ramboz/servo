@@ -14,6 +14,54 @@ import design_eval
 
 
 class InstallationTests(unittest.TestCase):
+    def test_preparation_selects_the_resolved_native_cli_not_its_launcher_symlink(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory)
+            (target / "oracle.sh").write_text("unit-only")
+            native = target / "native-claude"
+            native.write_bytes(b"\xcf\xfa\xed\xfe")
+            launcher = target / "claude"
+            launcher.symlink_to(native)
+            with (
+                patch.object(card_install, "producer_at"),
+                patch.object(card_install, "packages_at"),
+                patch.object(
+                    card_install, "_runtime", side_effect=ValueError("unit-stop-runtime")
+                ) as runtime,
+            ):
+                with self.assertRaisesRegex(ValueError, "unit-stop-runtime"):
+                    card_install.prepare(
+                        target, target, target, target, sys.executable, target, launcher
+                    )
+            self.assertEqual(runtime.call_args.args[2], native.resolve())
+
+    def test_unimported_native_extension_closes_its_non_os_linkage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            extension = Path(directory).resolve() / "_sqlite3.so"
+            extension.write_bytes(b"unit-extension")
+            library = Path("/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib")
+
+            def linkage(command, **kwargs):
+                dependency = (
+                    str(library) if command[-1] == str(extension) else "/usr/lib/libSystem.B.dylib"
+                )
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=f"{command[-1]}:\n\t{dependency} (compatibility version 1.0.0)\n",
+                )
+
+            files = {extension}
+            with (
+                patch.object(card_install.sys, "modules", {}),
+                patch.object(card_install.platform, "system", return_value="Darwin"),
+                patch.object(Path, "is_file", return_value=True),
+                patch.object(card_install.bundle, "file_hash", return_value="unit-hash"),
+                patch.object(card_install.subprocess, "run", side_effect=linkage),
+            ):
+                resolutions = card_install._native_dependencies(files, [])
+            self.assertIn(library.resolve(), files)
+            self.assertEqual(resolutions[0]["path"], str(library))
+
     def test_native_linkage_handles_fat_binary_architecture_headers(self):
         with tempfile.TemporaryDirectory() as directory:
             native = Path(directory).resolve() / "native.so"

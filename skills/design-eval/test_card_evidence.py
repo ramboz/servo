@@ -324,6 +324,21 @@ class DriverSealTests(unittest.TestCase):
 
 
 class RuntimeContextTests(unittest.TestCase):
+    def test_playwright_node_runtime_and_module_overrides_refuse(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
+            for key in ("PLAYWRIGHT_NODEJS_PATH", "NODE_OPTIONS", "NODE_PATH"):
+                with (
+                    self.subTest(key=key),
+                    patch.object(evidence.site, "ENABLE_USER_SITE", False),
+                    patch.dict("os.environ", {key: "/unit-unpinned-runtime"}),
+                    self.assertRaisesRegex(ValueError, "Node|node|startup"),
+                ):
+                    evidence.check_startup_environment(root, [])
+
     def test_executable_virtualenv_startup_files_are_not_undeclared_inputs(self):
         from unittest.mock import patch
 

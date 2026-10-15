@@ -183,6 +183,13 @@ def check_startup_environment(prefix, roots):
         ),
         "unsupported native loader environment",
     )
+    require(
+        not any(
+            os.environ.get(name)
+            for name in ("PLAYWRIGHT_NODEJS_PATH", "NODE_OPTIONS", "NODE_PATH")
+        ),
+        "unsupported Playwright Node startup override",
+    )
 
 
 def validated_policy(path):
@@ -465,6 +472,8 @@ def _verify_existing(envelope, root, policy, binding, run_id):
 
 
 def evaluate(policy_path):
+    from card_quality import input_identity
+
     policy = validated_policy(policy_path)
     target = Path(policy["target"])
     run_id = _run_id(target)
@@ -527,7 +536,7 @@ def evaluate(policy_path):
         },
     )
     observations, rows, acquisition_error = {}, [], None
-    capture_hashes = {}
+    capture_hashes, acquired_inputs = {}, {}
     try:
         from playwright.sync_api import Error as BrowserError
         from playwright.sync_api import sync_playwright
@@ -564,13 +573,21 @@ def evaluate(policy_path):
                     run_id=run_id, capture_id=str(uuid.uuid4()), acquisition_nonce=claim["nonce"]
                 )
                 bundle.publish(root / f"{state}.observations.json", observed)
+                observation_path = root / f"{state}.observations.json"
+                acquired_inputs[observation_path] = input_identity(observation_path)
                 observations[state] = {
                     "path": f"{state}.observations.json",
-                    "hash": bundle.file_hash(root / f"{state}.observations.json"),
+                    "hash": acquired_inputs[observation_path][0],
                 }
                 rows.extend(compare(package, observed))
                 if observed.get("capture_hash") is not None:
                     capture_hashes[state] = observed["capture_hash"]
+                    capture_path = root / f"{state}.png"
+                    acquired_inputs[capture_path] = input_identity(capture_path)
+                    require(
+                        acquired_inputs[capture_path][0] == capture_hashes[state],
+                        "browser acquisition artifact changed after capture",
+                    )
             environment = {
                 "python": platform.python_version(),
                 "python_executable": str(Path(sys.executable).resolve()),
@@ -598,6 +615,10 @@ def evaluate(policy_path):
                 acquisition_error = "browser cleanup unavailable: " + str(exc)
     rows.sort(key=lambda row: row["id"])
     try:
+        require(
+            all(input_identity(path) == snapshot for path, snapshot in acquired_inputs.items()),
+            "browser acquisition artifact changed before publication",
+        )
         require(
             canonical(current_binding(policy)) == canonical(binding),
             "source/build/current delivery changed during capture",
@@ -645,6 +666,10 @@ def evaluate(policy_path):
         else:
             quality = {"mode": "unavailable", "reason": "live quality not selected"}
     try:
+        require(
+            all(input_identity(path) == snapshot for path, snapshot in acquired_inputs.items()),
+            "browser acquisition artifact changed before publication",
+        )
         require(
             canonical(current_binding(policy)) == canonical(binding),
             "source/build/current delivery changed before result publication",

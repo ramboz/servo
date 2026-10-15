@@ -145,6 +145,30 @@ class LiveCaptureTests(unittest.TestCase):
             self.assertIn("declared", result["acquisition_error"])
 
     def test_unavailable_quality_does_not_overwrite_confirmed_required_facts(self):
+        def unavailable(*args, **kwargs):
+            raise ValueError("judge unavailable")
+
+        result = self._evaluate_quality(unavailable)
+        self.assertEqual(result["summary"]["required_status"], "pass")
+        self.assertEqual(result["constraints"][0]["status"], "pass")
+        self.assertEqual(result["quality"]["mode"], "unavailable")
+        self.assertIn("judge unavailable", result["quality"]["reason"])
+
+    def test_original_acquisition_files_cannot_be_reblessed_during_quality(self):
+        for suffix in (".png", ".observations.json"):
+            with self.subTest(suffix=suffix):
+                def mutate(config, shots, *args, suffix=suffix, **kwargs):
+                    path = shots["normal"].with_suffix(suffix)
+                    original = path.read_bytes()
+                    path.write_bytes(b"changed-during-quality")
+                    path.write_bytes(original)
+                    return {"mode": "live", "composite": 0.99}
+
+                result = self._evaluate_quality(mutate)
+                self.assertEqual(result["summary"]["required_status"], "unknown")
+                self.assertIn("acquisition artifact changed", result["constraints"][0]["reason"])
+
+    def _evaluate_quality(self, quality_action):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
             source = target / "source"
@@ -250,16 +274,13 @@ class LiveCaptureTests(unittest.TestCase):
                     ),
                 ),
                 patch.object(card_evidence, "packages_at", return_value={"normal": package}),
-                patch("card_quality.run", side_effect=ValueError("judge unavailable")) as judge,
+                patch("card_quality.run", side_effect=quality_action) as judge,
                 patch("playwright.sync_api.sync_playwright") as runtime,
             ):
                 runtime.return_value.__enter__.return_value = self.runtime
                 result = card_evidence.evaluate(target / "unit-policy.json")
             self.assertEqual(judge.call_count, 1)
-            self.assertEqual(result["summary"]["required_status"], "pass")
-            self.assertEqual(result["constraints"][0]["status"], "pass")
-            self.assertEqual(result["quality"]["mode"], "unavailable")
-            self.assertIn("judge unavailable", result["quality"]["reason"])
+            return result
 
 
 if __name__ == "__main__":

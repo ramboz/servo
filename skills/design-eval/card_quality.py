@@ -52,8 +52,11 @@ def judge_environment():
         == "https://api.anthropic.com",
         "unselected provider endpoint",
     )
-    for key in ("GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN"):
-        env.pop(key, None)
+    for key in list(env):
+        if key != "CLAUDE_CODE_OAUTH_TOKEN" and key.endswith(
+            ("_TOKEN", "_API_KEY", "_SECRET", "_SECRET_ACCESS_KEY", "_ACCESS_KEY_ID")
+        ):
+            env.pop(key)
     return env
 
 
@@ -272,7 +275,7 @@ def run(config_path, shots, destination, allowance, *, capture_hashes):
     require(set(capture_hashes) == {"normal", "open"}, "complete browser capture hashes required")
     input_root = safe(destination, "judge-inputs")
     input_root.mkdir()
-    samples, invocations = {}, []
+    samples, invocations, sealed_inputs = {}, [], {}
     for screen in config["screens"]:
         state = screen["id"]
         actual, reference = Path(shots[state]), config_path.parent / screen["reference"]
@@ -301,6 +304,7 @@ def run(config_path, shots, destination, allowance, *, capture_hashes):
             with path.open("xb") as stream:
                 stream.write(data)
         input_hashes = {path: input_identity(path) for path in (actual, reference)}
+        sealed_inputs.update(input_hashes)
         prompt = (
             scoring._scoring_prompt(config) + "\nRead these two images with the Read tool:\n"
             f"- FIRST implemented app: {actual.resolve()}\n"
@@ -317,7 +321,7 @@ def run(config_path, shots, destination, allowance, *, capture_hashes):
             number = reserve(allowance, judge.get("calibration_limit"))
             stem = f"quality-{state}-{sample}"
             require(
-                all(input_identity(path) == snapshot for path, snapshot in input_hashes.items()),
+                all(input_identity(path) == snapshot for path, snapshot in sealed_inputs.items()),
                 "sealed judge input changed before invocation",
             )
             command = judge_command(binary, prompt, judge["model"])
@@ -347,7 +351,7 @@ def run(config_path, shots, destination, allowance, *, capture_hashes):
             (destination / (stem + ".stdout")).write_bytes(result.stdout)
             (destination / (stem + ".stderr")).write_bytes(result.stderr)
             require(
-                all(input_identity(path) == snapshot for path, snapshot in input_hashes.items()),
+                all(input_identity(path) == snapshot for path, snapshot in sealed_inputs.items()),
                 "sealed judge input changed during invocation",
             )
             require(
@@ -359,6 +363,10 @@ def run(config_path, shots, destination, allowance, *, capture_hashes):
                 {**parsed, "invocation": number, "state": state, "response": stem + ".stdout"}
             )
             samples[state].append(parsed["score"])
+    require(
+        all(input_identity(path) == snapshot for path, snapshot in sealed_inputs.items()),
+        "sealed judge input changed before quality publication",
+    )
     bounds = {
         state: scoring.aggregate_lower_bound(values, 1.0) for state, values in samples.items()
     }
