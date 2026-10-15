@@ -2,33 +2,30 @@
 slice: 035-02 - required-verdict-consumers
 pass: compliance
 verdict: needs-changes
-reviewer: jig:reviewer / 03502-compliance (fresh context)
-reviewed_at: 2026-10-15T06:28:00Z
-prompt_source: review.py implementation; 035-02-compliance-prompt.txt
+reviewer: jig:reviewer / 03502-compliance-recovery (fresh context)
+reviewed_at: 2026-10-15T06:39:50Z
+prompt_source: review.py implementation; 035-02-compliance-prompt.txt; recovery rereview
 ---
 
 VERDICT: needs-changes
 
 REASONING:
-Core veto propagation has meaningful installed controls, but unavailable-evidence
-reporting and two hook error paths remain incorrect. The 1,245 consumer and 159
-runtime/install passing results were inspected, not rerun. Existing stdlib
-allowlist test assertions remain intact.
+AC1/4 remain partial because other failure/resume paths restore earlier
+evaluated availability. AC2/3/5/6 have meaningful current controls and artifacts.
+The reviewer inspected supplied evidence, did not rerun tests, and could not
+independently enumerate the complete Git delta with available read-only tools.
 
 SPECIFIC ISSUES:
-- heartbeat.py:2166-2175 unconditionally replaces final unavailable status with
-  the retained earlier gate's status. After an evaluated iteration followed by
-  invocation failure/interruption, preserve final env_error/unknown_interrupted
-  separately from prior evidence; add multi-iteration controls and rereads.
-- meta-judge.sh.template:26 inserts an unquoted absolute consumer path. Valid
-  runtime paths containing spaces can abort without advice/warning. Safely
-  quote rendered paths and test actual installations with spaces.
-- meta-judge.sh.template:70 calls d.get() before protected validation. Valid
-  non-object JSON []/null silently continues; validate root type in the guarded
-  warning path and test non-object outputs. Generated templates share both bugs.
+- loop.py:2432-2435,2790-2797: finalization does not persist final availability;
+  zero-new-iteration resume reconstructs fail from earlier history after a
+  gate interruption. Persist/restore unavailable state separately from evidence
+  and cover resume through heartbeat reporting.
+- loop.py:2912-2919,2981-2989: model invocation failure/malformed verdict after
+  a prior evaluated iteration emits its old status, even when the agent
+  already modified subject files. Keep terminal reasons but mark current
+  evaluation unavailable, retaining earlier evidence only diagnostically.
 
 RECONCILIATION NOTES:
-AC1/3/4 are partial until these blockers clear; AC2/5/6 have substantial evidence.
-Legacy minimal no-policy compatibility and absolute-sidecar isolation refusal
-are explicit bounded deviations. Record corrections and obtain fresh review
-evidence before close-out. DoD review/reconciliation remain pending.
+Record failure/resume corrections, regenerate hosts and keep DoD open until
+fresh review evidence clears. Minimal legacy gateways and absolute-sidecar
+isolation refusal are explicit bounded deviations.
