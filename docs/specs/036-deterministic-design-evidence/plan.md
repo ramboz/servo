@@ -5,6 +5,43 @@ implemented by this work. The original proposal is retained below as historical
 authoring context; this checkpoint records the accepted inputs and actual
 implementation boundary.
 
+## Supporting consumer integration checkpoint (2026-10-15)
+
+This bounded lane supports 036-01 AC6/7 and the completed 035-02 consumer
+interface; it does not advance either slice or replace primary036 reviews.
+Selected parent `servo-live-card-evidence` is exactly
+`5440b63458bf862d4fe0b19e274db18c38c170aa`. Consumer branch
+`servo-required-verdict-consumers` at
+`4412a9aef47226f7ed9b339cb12aa2f380a437c6` was merged locally as
+`f4cd22bae3d1cf3ca2969ed4b7c45676117d0e57`. README and learning conflicts
+retain both source cuts; the board and hosts are officially regenerated.
+
+Readiness is scoped to the existing pure API and validated producer plan:
+`required_runtime.validate_output_references(check, evidence, run_id, base)`.
+The implementation will pass the complete frozen check and published evidence
+from the already pinned component/config, never a caller-supplied verdict or
+an invented subset. No producer-core edits, judge calls, regrading, recapture,
+new DSL, closed-record amendments, or whole-slice completion are authorized.
+
+1. Witness a red regression for mutation after overall/component publication.
+2. Wire pure validation into the shared consumer reader for declared output
+   contracts; refuse missing/partial/unlisted/duplicate/foreign/symlink/escaping
+   or changed output without losing the original overall payload/path/hash.
+3. Cover honest unavailable output, retained earlier pass versus later unknown,
+   repeated report reads versus exclusive live acceptance, ordinary commands
+   and legacy v1. Freshly approve synthetic installed fixtures from this source;
+   do not rewrite genuine historical producer evidence.
+4. Run focused consumer/producer, install/vendor/package checks and lint/drift.
+   Obtain fresh read-only scoped compliance/craft evidence and a supporting
+   receipt. Parent owns final producer-head refresh and source-epoch/full-AC
+   review; historical545a is not a new canonical baseline or Jig attestation.
+
+After scoped review, primary036 identified an unsealed quality SEED-wrapper
+drift gap at5440 and owns the existing-evaluator-artifact exact-driver seal.
+This supporting checkpoint may publish at its selected base, but parent must
+sync that forthcoming source and freshly approved installed proof before final
+epoch acceptance; no old b6e14da1/01ec record is rebound to claim the new guard.
+
 ## 036-01 accepted readiness checkpoint (2026-10-15)
 
 **Implementation checkpoint:** the initial OAuth refusal is preserved. After

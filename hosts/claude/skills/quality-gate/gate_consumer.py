@@ -140,6 +140,16 @@ def _validate(target, payload, reference):
         if (pins.file_hash(fragment) != entry["fragment_hash"]
                 or fragment.read_text().rstrip() not in (target / "oracle.sh").read_text()):
             raise ValueError("live required fragment differs")
+        checks = {c["id"]: c for c in plan.get("checks", [])}
+        if any("result_artifact" in c for c in checks.values()):
+            expected_ids = sorted(
+                list(checks) + [c["id"] for c in plan.get("residual_judgment", [])])
+            if sorted(e["check_id"] for e in record["evidence"]) != expected_ids:
+                raise ValueError("extra/omitted/duplicate output evidence ID")
+            for evidence in record["evidence"]:
+                check = checks.get(evidence["check_id"])
+                if check is not None and "result_artifact" in check:
+                    pins.validate_output_references(check, evidence, run_id, target)
         # Compare interpreted channels as published, not observations or grades.
         for item in record["required"]["items"]:
             if {**item, "component": entry["component"]} not in required["items"]:
