@@ -1044,6 +1044,7 @@ class DependencyFreeTests(unittest.TestCase):
         "collections", "itertools", "functools", "tempfile", "io",
         "contextlib", "errno", "enum", "uuid", "textwrap", "string",
         "platform", "signal", "secrets", "hashlib", "math", "time",
+        "importlib",  # stdlib: load the consumer-only identity reader
         # `fcntl` is POSIX-only stdlib — added at slice 011-02 for the
         # double-fire advisory flock (it is imported under a try/except so a
         # non-POSIX host degrades to unlocked; ADR-0010).

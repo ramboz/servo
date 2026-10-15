@@ -1,8 +1,8 @@
 ---
-status: DRAFT
+status: DONE
 kind: feature
 dependencies: [035-01, adr-0044]
-last_verified:
+last_verified: 2026-10-15
 frame_review: true
 arch_review: true
 ---
@@ -63,10 +63,11 @@ high score falsely completing the work.
    surfaced through final reporting.
 
 **DoD:**
-- [ ] Every discovered in-repository consumer is covered by a fixture or a
+- [x] Every discovered in-repository consumer is covered by a fixture or a
       documented no-op with evidence; negative controls cannot falsely pass.
-- [ ] Witnessed regression tests and compliance/craft/architecture reviews pass.
-- [ ] Deviation log and reconciliation cover runtime, generated packages,
+- Evidence: [consumer implementation receipt](consumer-implementation-receipt.md).
+- [x] Witnessed regression tests and compliance/craft/architecture reviews pass.
+- [x] Deviation log and reconciliation cover runtime, generated packages,
       install templates, live docs and reporting; review clears.
 
 ## Assumptions
@@ -79,7 +80,67 @@ high score falsely completing the work.
 correct the failed constraint from its own final handoff, rather than having
 to rerun a different evaluator to discover why it stopped.
 
+### Deviation log
+
+- The shared consumer-only reader is beside quality-gate and reuses existing
+  read-only identity helpers. It never grades, reruns assertions or introduces
+  a registry. Overall `oracle` and exact `gate_ref` are additive to consumer
+  records; gate schema2, component schema1 and checkpoint schema1 stay distinct.
+- Legacy no-policy unversioned minimal gateway adapters retain their old shape.
+  Explicit unknown versions and enabled-policy downgrades refuse. Historical
+  v1 checkpoints remain supported but cannot attest newly enabled policy
+  without a current evaluation.
+- Absolute external component sidecars refuse heartbeat isolation rather than
+  redirecting evaluation into the original checkout or rewriting approval.
+  Approved target-relative sidecars and existing external evaluator pins keep
+  their identities. Custom hooks remain unchanged with explicit migration.
+- Compliance recovery fixed preserved-evidence promotion after later failure,
+  interruption and zero-new-iteration resume. Current unavailability is
+  persisted separately; a fresh bound run can recover. Missing overall report
+  payloads also refuse. Genuine non-clearing reviews are preserved in commits
+  `b3897fd` and `48b4d19`, not fabricated into prior passes.
+- Hook fallback quoting now handles spaces/apostrophes; non-object JSON warns
+  visibly while turn handling stays fail-open. The craft nit added structured
+  planner refusal for malformed policy pins. The arch receipt-pointer nit was
+  resolved by executing the actual final-source runtime command, not relabeling
+  an older result. All corrections have witnessed red/green receipts.
+
+### Reconciliation sweep
+
+| Surface | Disposition | Evidence / rationale |
+|---------|-------------|----------------------|
+| Canonical consumer inventory | updated | Plan inventory and consumer receipt map every declared reader to installed fixtures or bounded no-op evidence. External consumers are not claimed. |
+| Loop/goal/history/resume/sentinel/plateau | updated | Original overall payload, run/digest refs and separate final availability; current-source controls and legacy failure/resume/interruption regressions pass. |
+| Heartbeat provision/verification/handoff/triage | updated | Policy/sidecar closure, no old runs, honest refusal/correction evidence, preserved cost/dispatch timestamps and quarantine behavior. |
+| Hook install/template and advisory Copilot adapter | updated | Real installed high-score block, visible unavailable warning, custom migration and shell-safe fallback; turn fail-open is not attestation. |
+| Planner and runner/judge guidance | updated | Approved policy/config/evaluator/source references, typed malformed-pin refusal, no served-build claims or component-based completion. |
+| Generated Claude/Codex/Copilot packages and project vendor | updated | Only the ordinary builder writes generated hosts; install contract and vendor include the reader. Final runtime/drift checks pass. |
+| Live architecture/README/skills/carrier example | updated | Source-backed consumer semantics, repair-vs-refusal instructions, version namespaces and explicit limitations. Architecture follows Accepted ADR0044; no new load-bearing decision or competing boundary was introduced. |
+| Producer gate/runtime/scaffold/overlay, design/common seams | no-op | Producer bytes remain the pinned 035-01 source; no producer API gap or sibling036 changes. Final smoke hashes verify unchanged gate/runtime. |
+| Accepted ADRs, DONE records, conventions | no-op | Not amended. This implements the accepted decision; no convention or additional ADR/lightweight product decision is needed. |
+| Inbox and use-case coverage | no-op | No resolved inbox item; helper reports zero inbox items. Coverage helper explicitly no-ops because the vision has no use-case breadth section. |
+| Memory | updated | `memory.py add-learning` persists source-backed unavailable-evidence/readback lessons; summary reports 11 learnings, zero glossary/inbox entries. |
+| Team memory advisory | deferred | `team-check` reports missing people.md for six contributors; skip this optional unrelated bootstrap without creating files or a permanent opt-out. |
+| Primers/close-out | no-op | Plugin-only scaffold has no AGENTS.md/CLAUDE.md active-spec primer to compress. No unrelated template or convention change. Durable invariants are in live guidance, memory and this slice. |
+| External adoption, real design/current-delivery proof | deferred | Coordinator/sibling036/Jig119 own integrated validation. This slice proves command fixtures, not general design convergence or served/current-build attestation. |
+
+**Leanness:** One consumer reader and one fixture file serve existing callers;
+no new producer, gate, DSL, registry, scheduler, dependency, generic design
+adapter or native autonomy was added. Existing tests are preserved except
+adding the real stdlib `importlib` to two dependency allowlists.
+
+**Final source-epoch evidence:** `035-02-final-source-controls.txt` records
+107 tests / 50 subtests; Python-floor receipt 34 / 26; runtime receipt
+148 / 73. Lint, generated-host drift and whitespace pass. Exact byte hashes
+and installed final-report controls are in the final-source smoke receipt.
+Earlier broader targeted results are kept with their own source epochs,
+not summed or substituted for current proof.
+
+Fresh independent reconciliation returned pass, covering doc faithfulness,
+honest source/review chronology and bounded scope. Its durable verdict and
+subsequent lifecycle states are helper-owned.
+
 ### Close-out (post-DONE)
 
-- [ ] Regenerate board and reconcile complete consumer inventory and live docs.
-- [ ] Record genuine deferred external-consumer work without marking it done.
+- [x] Regenerate board and reconcile complete consumer inventory and live docs.
+- [x] Record genuine deferred external-consumer work without marking it done.

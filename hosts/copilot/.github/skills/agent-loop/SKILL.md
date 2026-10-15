@@ -25,6 +25,38 @@ Headless iteration driver. Subprocesses `claude -p --agent <runner|judge> --outp
 
 The helper is at `$SERVO_ROOT/skills/agent-loop/loop.py`.
 
+## Required policy and recovery
+
+Scalar gate v1 and old state-schema-1 checkpoints remain supported. Enabled
+gate v2 carries the **original overall payload** as `oracle` and exact published
+`gate_ref: {path, hash}` through iteration history, checkpoints and final
+summaries. Each live call requests a fresh UUID and accepts its immutable run
+once; resume revalidates recorded bytes/bindings without rerunning the evaluator.
+Unknown versions or unavailable mandatory bindings refuse (exit 2,
+`oracle_evaluation_refused`), even with `--resume-anyway`.
+V2 checkpoints also preserve final availability separately from the last
+evaluated gate. A failed/interrupted later turn, including a malformed verdict,
+cannot restore the old verdict on a zero-new-iteration resume. A cap with no
+current evaluation remains unavailable (exit 2); a fresh valid gate can recover.
+A historical v1 checkpoint cannot attest a newly enabled required policy
+without evaluating it, while no-policy v1 resume behavior remains unchanged.
+
+Required veto at composite 1 / zero weight / `THRESHOLD=0` stays `fail`.
+Component pass plus quality failure also stays overall fail. Diagnostic plateau
+can still stop the run with `oracle_plateau`, **never fulfillment**. Existing
+iteration, budget, context and goal disagreement/cap reasons remain separate
+from structured `oracle_reason`. No pass sentinel is authorized by a component
+or remembered score.
+
+Inspect `oracle.required.items` (IDs, reasons, evidence indexes), `gate_ref`, and
+the gate's exact component paths/hashes. For a contradiction, repair the
+implementation and rerun. For `required_evidence_unavailable`, repair acquisition,
+approved runtime/config bindings or installation first; do not substitute `0.0`.
+Policy changes require explicit owner review/reapproval. Preserve raw evidence;
+`source_identity` is approved provenance, not served/current-build attestation.
+Goal/Routine vendors include `gate.py`, `required_runtime.py`, and
+`gate_consumer.py`; commit their portable closure when preparing a clone.
+
 ## Copilot capability boundary
 
 Installing this skill does not select a native execution backend. The helper's
