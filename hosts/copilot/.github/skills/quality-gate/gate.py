@@ -183,7 +183,7 @@ def _resolve_timeout(flag_value: Optional[float]) -> Optional[float]:
 
 
 def _run_oracle_bounded(
-    oracle: Path, target: Path, timeout_seconds: Optional[float]
+    oracle: Path, target: Path, timeout_seconds: Optional[float], *, env=None
 ) -> tuple[str, str, int, bool]:
     """Invoke oracle.sh under an optional timeout.
 
@@ -198,6 +198,7 @@ def _run_oracle_bounded(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
         # New session → child is its own process-group leader; killpg targets
         # the whole tree (oracle + any backgrounded subprocesses spawned by
         # components like `pytest &`).
@@ -441,6 +442,68 @@ def run_gate(
             f"target is not a directory: {target}",
             reason="target_not_directory", json_mode=json_mode, verbose=verbose,
         )
+
+    # The sibling is also copied by supported gate vendors. No producer-name
+    # dispatch and no result lookup outside this invocation's directory.
+    import importlib.util
+    runtime_path = Path(__file__).resolve().with_name("required_runtime.py")
+    if not runtime_path.is_file():
+        try:
+            required_enabled = (target / ".servo/required-policy.json").exists()
+            for path, marker in (
+                (target / ".servo/install.json", r'"required_policy"\s*:'),
+                (target / "oracle.sh", r"# SERVO_REQUIRED_DRIVER:"),
+            ):
+                if path.is_file() and re.search(
+                        marker, path.read_text(errors="replace")):
+                    required_enabled = True
+        except OSError as exc:
+            return _refuse(
+                f"cannot inspect required installation: {exc}",
+                reason="installation_unreadable", json_mode=json_mode, verbose=verbose,
+            )
+        if required_enabled:
+            message = f"required evidence runtime missing: {runtime_path}"
+            sys.stderr.write(f"gate: {message}\n")
+            item = {"id": "<runtime>", "status": "unknown", "reason": message,
+                    "evidence_index": None}
+            payload = {
+                "schema_version": 2, "kind": "gate_result", "run_id": None,
+                "status": "env_error", "exit_code": 2,
+                "reason": "required_evidence_unavailable", "composite": None,
+                "threshold": None, "threshold_override": None, "policy_hash": None,
+                "components": [], "missing": [],
+                "required": {"status": "unknown", "ids": ["<runtime>"],
+                             "passed": [], "failed": [], "unknown": ["<runtime>"],
+                             "counts": {"pass": 0, "fail": 0, "unknown": 1},
+                             "items": [item]},
+            }
+            if json_mode:
+                print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+            else:
+                print("gate: status=env_error exit=2 reason=required_evidence_unavailable")
+            return EXIT_ENV_ERROR
+    if runtime_path.is_file():
+        spec = importlib.util.spec_from_file_location("required_runtime", runtime_path)
+        runtime = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runtime)
+        try:
+            required_enabled = runtime.enabled(target)
+        except OSError:
+            required_enabled = False
+        if required_enabled:
+            # Reuse, rather than bypass, the existing accounting/manifest
+            # guard. Translate its refusal into the enabled v2 carrier.
+            import io
+            from contextlib import redirect_stdout
+            output = io.StringIO()
+            with redirect_stdout(output):
+                rc, _ = _check_manifest(
+                    target, json_mode=True, verbose=False,
+                    usd_budget_context=usd_budget_context)
+            preflight = json.loads(output.getvalue())["reason"] if rc else None
+            return runtime.run_gate(target, _run_oracle_bounded, timeout_seconds,
+                                    json_mode, verbose, preflight_error=preflight)
 
     # Manifest precondition (002-03): refuse if not a servo-scaffolded install.
     rc, _manifest = _check_manifest(

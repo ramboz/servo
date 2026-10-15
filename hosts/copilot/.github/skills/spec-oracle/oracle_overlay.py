@@ -95,6 +95,18 @@ __FN__() {
 # install), not the target — so a target need not vendor checks.py to score
 # an overlay (ADR-0023 AC3).
 _SHARED_ENGINE_PATH = Path(__file__).resolve().parent / "checks.py"
+_REQUIRED_RUNTIME = Path(__file__).resolve().parent.parent / "quality-gate/required_runtime.py"
+if not _REQUIRED_RUNTIME.is_file():
+    _REQUIRED_RUNTIME = (Path(__file__).resolve().parent.parent
+                         / "servo-quality-gate/required_runtime.py")
+
+
+def _required():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("required_runtime", _REQUIRED_RUNTIME)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _validate_spec_id(spec_id: str) -> None:
@@ -220,13 +232,15 @@ def generate(target: Path, spec_dir: Path, spec_id: str, *,
         # the servo plugin installed) — the old default behavior, now opt-in.
         checks_py = oracle_dir / "checks.py"
         shutil.copyfile(_SHARED_ENGINE_PATH, checks_py)
+        shutil.copyfile(_REQUIRED_RUNTIME, oracle_dir / "required_runtime.py")
         result["checks_py"] = checks_py
 
     return result
 
 
 def install(target: Path, spec_dir: Path, spec_id: str,
-           weight: float = DEFAULT_WEIGHT, *, vendor_engine: bool = False) -> None:
+           weight: float = DEFAULT_WEIGHT, *, vendor_engine: bool = False,
+           enable_required: bool = False) -> None:
     """Splice the overlay component into ``<target>/oracle.sh``.
 
     Idempotent: an existing SEED block is replaced and its COMPONENTS weight
@@ -239,9 +253,19 @@ def install(target: Path, spec_dir: Path, spec_id: str,
         raise FileNotFoundError(
             f"oracle.sh not found: {oracle} (scaffold the target first)")
 
-    generate(target, spec_dir, spec_id, vendor_engine=vendor_engine)
-
     oracle_dir = oracle_dir_for_spec(spec_dir, spec_id, target=target)
+    required = _required()
+    plan = required.load(oracle_dir / "checks.json")
+    mode = required.policy_mode(plan)
+    opted_in = required.enabled(target)
+    if enable_required:
+        if mode is None:
+            raise ValueError("--enable-required needs explicit approved policy")
+        _install_required(target, oracle_dir, spec_id, plan, weight, vendor_engine)
+        return
+    if mode is not None or opted_in:
+        raise ValueError("explicit install --enable-required required; no downgrade")
+    generate(target, spec_dir, spec_id, vendor_engine=vendor_engine)
     try:
         rel_oracle_dir = oracle_dir.resolve().relative_to(target.resolve())
     except ValueError:
@@ -285,6 +309,87 @@ def install(target: Path, spec_dir: Path, spec_id: str,
     oracle.write_text(text)
 
 
+def _install_required(target, oracle_dir, spec_id, plan, weight, vendor_engine):
+    """Preflight everything before changing any installation artifact."""
+    runtime = _required()
+    runtime.finite(weight)
+    if weight < 0:
+        raise ValueError("negative weight")
+    name = component_name(spec_id)
+    entry = plan.get("approved_required_binding")
+    if not isinstance(entry, dict) or entry.get("component") != name:
+        raise ValueError("required binding unapproved")
+    runtime.validate_binding(entry, plan, _load_engine().plan_content_hash(plan), target)
+    expected_engine = (oracle_dir / "checks.py" if vendor_engine else _SHARED_ENGINE_PATH)
+    if entry["evaluator"]["path"] != runtime.policy_path(expected_engine, target):
+        raise ValueError("evaluator install mode differs from approval")
+    text = (target / "oracle.sh").read_text()
+    runtime.quality_components(text)
+    if runtime.enabled(target):
+        policy, _ = runtime.installed_policy(target)
+        if not text.endswith(runtime.DRIVER):
+            raise ValueError("unsupported customized required driver")
+        prefix = text[:-len(runtime.DRIVER)]
+        if runtime.driver_identity(prefix) != policy["driver_prefix_hash"]:
+            raise ValueError("unsupported customized required driver")
+    else:
+        # Compare the whole canonical driver outside project-editable seams.
+        templates = Path(__file__).resolve().parents[2] / "templates"
+        if not templates.is_dir():
+            templates = Path(__file__).resolve().parents[2] / "servo/templates"
+        template = (templates / "oracle.sh.template").read_text()
+
+        def normalize(value):
+            value = re.sub(r"^COMPONENTS=\(.*?^\)", "COMPONENTS=()", value,
+                           flags=re.S | re.M)
+            value = re.sub(r"^# SEED:start [^\n]+\n.*?^# SEED:end [^\n]+",
+                           "", value, flags=re.S | re.M)
+            value = value.replace("{{COMPONENTS_LIST}}", "").replace("{{SEED_BLOCKS}}", "")
+            value = re.sub(r"^# \(no SEED blocks.*\n", "", value, flags=re.M)
+            value = value.replace("no signals detected — populate # SEED: blocks manually",
+                                  "{{NO_COMPONENTS_MESSAGE}}")
+            value = value.replace("no components registered", "{{NO_COMPONENTS_MESSAGE}}")
+            return "\n".join(line for line in value.splitlines() if line.strip())
+        if normalize(text) != normalize(template):
+            raise ValueError("unsupported customized oracle driver; keep canonical driver")
+        seed_spans = [match.span() for match in re.finditer(
+            r"^# SEED:start [^\n]+\n.*?^# SEED:end [^\n]+", text, re.S | re.M)]
+        anchors = [match for match in re.finditer(_DRIVER_ANCHOR, text)
+                   if not any(start <= match.start() < end for start, end in seed_spans)]
+        if len(anchors) != 1:
+            raise ValueError("unsupported oracle driver boundary")
+        prefix = text[:anchors[0].start()]
+        policy = {"schema_version": 1, "kind": "required_policy", "components": [],
+                  "runtime_hash": runtime.file_hash(_REQUIRED_RUNTIME),
+                  "driver_prefix_hash": runtime.driver_identity(prefix)}
+    fragment = (oracle_dir / "oracle.sh.fragment").read_text().rstrip()
+    block = re.compile(r"# SEED:start " + re.escape(name)
+                       + r"\n.*?# SEED:end " + re.escape(name), re.S)
+    if block.search(prefix):
+        prefix = block.sub(lambda _: fragment, prefix)
+    else:
+        prefix = prefix.rstrip() + "\n\n" + fragment + "\n\n"
+    entry_re = re.compile(r'"' + re.escape(name) + r':[^"]*"')
+    replacement = f'"{name}:{weight}"'
+    if entry_re.search(prefix):
+        prefix = entry_re.sub(lambda _: replacement, prefix)
+    else:
+        prefix = prefix.replace("COMPONENTS=(\n", "COMPONENTS=(\n  " + replacement + "\n", 1)
+    policy["components"] = sorted(
+        [e for e in policy["components"] if e["component"] != name]
+        + ([entry] if entry["enabled"] else []), key=lambda e: e["component"])
+    policy["runtime_hash"] = runtime.file_hash(_REQUIRED_RUNTIME)
+    manifest_path = target / ".servo/install.json"
+    manifest = runtime.load(manifest_path)
+    manifest["required_policy"] = {"schema_version": 1,
+                                   "hash": runtime.digest(runtime.canonical(policy))}
+    # No generate here: installation consumes the exact reviewed bytes.
+    shutil.copyfile(_REQUIRED_RUNTIME, target / ".servo/required_runtime.py")
+    (target / ".servo/required-policy.json").write_bytes(runtime.canonical(policy))
+    (target / "oracle.sh").write_text(prefix + runtime.DRIVER)
+    manifest_path.write_bytes(runtime.canonical(manifest))
+
+
 def uninstall(target: Path, spec_id: str) -> None:
     """Remove the overlay component from ``oracle.sh``, keeping the artifacts.
 
@@ -299,6 +404,11 @@ def uninstall(target: Path, spec_id: str) -> None:
         raise FileNotFoundError(f"oracle.sh not found: {oracle}")
 
     name = component_name(spec_id)
+    runtime = _required()
+    if runtime.enabled(target):
+        policy, _ = runtime.installed_policy(target)
+        if any(e["component"] == name for e in policy["components"]):
+            raise ValueError("still-required component; disable, review, approve and install first")
     text = oracle.read_text()
     block_re = re.compile(
         r"# SEED:start " + re.escape(name) + r"\n.*?# SEED:end "
@@ -347,7 +457,9 @@ def approve(target: Path, spec_dir: Path, spec_id: str) -> dict:
     checks_json = oracle_dir / "checks.json"
     if not checks_json.is_file():
         raise FileNotFoundError(f"no plan to approve: {checks_json}")
-    plan = json.loads(checks_json.read_text())
+    runtime = _required()
+    plan = runtime.load(checks_json)
+    mode = runtime.policy_mode(plan)
 
     # 1. Source spec must still hash to what the planner recorded (AC2).
     source_path = plan.get("source_spec_path")
@@ -394,6 +506,13 @@ def approve(target: Path, spec_dir: Path, spec_id: str) -> dict:
     # Tripwire-pin the approved checks themselves (review hardening): the freeze
     # gate refuses if checks.json's checks are relaxed after approval.
     plan["approved_content_hash"] = engine.plan_content_hash(plan)
+    if mode is not None:
+        engine_path = vendored_engine if vendored_engine.is_file() else _SHARED_ENGINE_PATH
+        runtime_path = (oracle_dir / "required_runtime.py" if vendored_engine.is_file()
+                        else _REQUIRED_RUNTIME)
+        plan["approved_required_binding"] = runtime.binding(
+            plan, component_name(spec_id), checks_json, engine_path,
+            runtime_path, fragment, target)
     plan["approval_status"] = "approved"
     plan["approved_at"] = _iso_now()
     checks_json.write_text(json.dumps(plan, indent=2) + "\n")
@@ -417,6 +536,7 @@ def main(argv: Optional[list] = None) -> int:
         sp.add_argument("spec_id")
         if cmd == "install":
             sp.add_argument("--weight", type=float, default=DEFAULT_WEIGHT)
+            sp.add_argument("--enable-required", action="store_true")
         if cmd in ("generate", "install"):
             sp.add_argument("--vendor-engine", dest="vendor_engine",
                             action="store_true",
@@ -439,7 +559,7 @@ def main(argv: Optional[list] = None) -> int:
         elif args.cmd == "install":
             spec_dir = Path(args.spec_dir)
             install(target, spec_dir, args.spec_id, args.weight,
-                   vendor_engine=args.vendor_engine)
+                   vendor_engine=args.vendor_engine, enable_required=args.enable_required)
             print(f"servo: installed component {component_name(args.spec_id)} "
                   f"into {target / 'oracle.sh'}")
         elif args.cmd == "uninstall":
@@ -451,7 +571,7 @@ def main(argv: Optional[list] = None) -> int:
             approve(target, spec_dir, args.spec_id)
             print(f"servo: approved spec-oracle {args.spec_id} "
                   f"(frozen — re-plan to change)")
-    except (FileNotFoundError, ValueError) as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

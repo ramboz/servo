@@ -22,8 +22,11 @@ This is new opt-in policy, not a repair or amendment of shipped specs.
 
 Owner approval of the pinned proposal and ADR-0044 acceptance are recorded in
 [owner acceptance and standalone readiness](owner-acceptance.md).
-That dated metadata resolves proposal-time approval qualifiers; the spec and
-its slices remain DRAFT pending normal readiness, not implementation-complete.
+That dated metadata resolves proposal-time approval qualifiers. At the accepted
+parent snapshot all slices were DRAFT. During this implementation pickup,
+035-01 cleared actual independent readiness and the ordinary helper transitions;
+its current state and evidence are in its slice/reviews. 035-02 remains DRAFT,
+and the spec rollup stays active until its remaining selected work closes.
 
 ## Current state and existing owners
 

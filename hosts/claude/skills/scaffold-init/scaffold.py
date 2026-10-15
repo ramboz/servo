@@ -545,6 +545,16 @@ def install(target: Path, *, force: bool) -> None:
     oracle_dst = target / "oracle.sh"
     manifest_dst = target / ".servo" / "install.json"
 
+    # Never let --force erase an opt-in (even an inconsistent or empty one).
+    if ((target / ".servo/required-policy.json").exists()
+            or (oracle_dst.exists()
+                and "# SERVO_REQUIRED_DRIVER:" in oracle_dst.read_text(errors="replace"))
+            or (manifest_dst.exists()
+                and '"required_policy"' in manifest_dst.read_text(errors="replace"))):
+        raise FileExistsError(
+            "required policy installed; revise, review and reapprove overlays, "
+            "not --force re-scaffold")
+
     if oracle_dst.exists() and not force:
         raise FileExistsError(
             f"oracle.sh already present at {oracle_dst}; re-run with --force to overwrite"

@@ -12,14 +12,20 @@
 
 ## 035-01
 
-- [ ] Add failing installed-gate fixtures for high quality + required fail,
+- [x] Add failing installed-gate fixtures for high quality + required fail,
       incomplete/stale results, concurrent runs and unchanged scalar behavior.
-- [ ] Implement minimal approved policy/result extension using existing seams.
-- [ ] Wire template/scaffold/overlay/gate and generated/vendored installations.
-- [ ] Prove no duplicate evaluation, atomic run matching and policy tripwires.
-- [ ] Preserve overall gate authority over run/digest-bound component records;
+- [x] Implement minimal approved policy/result extension using existing seams.
+- [x] Wire template/scaffold/overlay/gate and generated/vendored installations.
+- [x] Prove no duplicate evaluation, atomic run matching and policy tripwires.
+- [x] Preserve overall gate authority over run/digest-bound component records;
       prove component pass plus quality failure is overall fail.
-- [ ] Run required independent reviews and reconcile live documentation.
+- Evidence: [implementation receipt](implementation-receipt.md), with exact
+  red/green commands, source hashes and emitted carrier paths. Slice remains
+  in the normal helper-owned lifecycle; review recovery and final byte
+  identities are recorded separately from the historical implementer handoff.
+- [x] Run required independent compliance/craft/arch reviews; reconcile live
+      documentation and record the bounded sweep. Final reconciliation verdict
+      and lifecycle close-out remain helper-gated.
 
 ## 035-02
 

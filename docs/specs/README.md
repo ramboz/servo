@@ -152,7 +152,7 @@
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-06 - native-visual-judge | **DONE** |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | DEFERRED |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | **DONE** |  |
-| [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-01 - installed-required-gate | DRAFT |  |
+| [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-01 - installed-required-gate | RECONCILED (servo-installed-required-gate) | Explicit v2 opt-in; scalar v1 unchanged; overall gate owns completion. |
 | [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-02 - required-verdict-consumers | DRAFT |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 - bound-card-evidence | DRAFT |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-02 - regional-image-evidence | DRAFT |  |
@@ -184,7 +184,7 @@
 
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
-- **4** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
+- **6** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
 - **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
 - **7** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
