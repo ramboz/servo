@@ -152,6 +152,10 @@
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-06 - native-visual-judge | **DONE** |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | DEFERRED |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | **DONE** |  |
+| [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-01 - installed-required-gate | DRAFT |  |
+| [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-02 - required-verdict-consumers | DRAFT |  |
+| [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 - bound-card-evidence | DRAFT |  |
+| [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-02 - regional-image-evidence | DRAFT |  |
 
 ## Deferred slices
 
