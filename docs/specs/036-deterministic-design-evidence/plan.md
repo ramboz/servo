@@ -1,7 +1,249 @@
 # Plan: deterministic design-evidence component
 
-Artifact-authoring proposal only. All slices remain DRAFT; no implementation,
-source capture, application creation or dependency adoption has started.
+036-01 is in independent readiness review. 036-02 remains DRAFT and is not
+implemented by this work. The original proposal is retained below as historical
+authoring context; this checkpoint records the accepted inputs and actual
+implementation boundary.
+
+## 036-01 accepted readiness checkpoint (2026-10-15)
+
+**Implementation checkpoint:** the initial live Opus invocation was attempted
+and preserved, but returned expired OAuth without scoring. The owner now reports
+renewal of the same subscription; that is not a verified successful model call.
+One of the original eight invocations is consumed, so another complete
+four-per-state calibration needs explicit replacement allowance. Twenty actual
+diagnostic gate controls are preserved as historical source epochs, not a
+live-quality acceptance. Compliance remains `needs-changes`; the slice stays
+IN_PROGRESS until fresh final-code proof and all review gates clear.
+
+The clean implementation base is `servo-installed-required-gate` at
+`aefc9306fa6aa38d55cb9543338b413823624f11` (035-01 DONE, stacked PR41).
+ADR-0044 is Accepted. The coordinator relayed the owner's acceptance of C0:
+Vellum appendix revision `a538a2b474a9f3e1119379aba44257d319e1c276`, exact
+SHA-256 `6909bf22ace380aecd6fbfb007563077ba619398c688dfdbd01a24200435fdaf`.
+The accepted source-side record is
+`plugin/skills/build-to-redline/fixtures/approved-card/c1/release-r3/c0/c0-acceptance.md`
+in Vellum `55dd18007cd5664be17c1e7c4666fd1f00dd93d6`.
+This accepted checkpoint, not proposal-era pending prose below, governs this slice.
+
+The same Vellum revision supplies independently approved `release-r3/`:
+
+| Exact artifact | Raw SHA-256 |
+|---|---|
+| `normal.json` | `b894ed7590cf7678af832071b657085cf9316bb1cd4c4dfde2f4f9be53ec0303` |
+| `open.json` | `5d3ac7de4780ab4cc21802e8e9cd3d5aae7572a3050312f7608ab4e7b839f4fb` |
+| `release.json` | `5aeea5e302038656d17ad881052a0f63d47bb297370f1c0c5d04e0a1339b6313` |
+| `approval.json` | `d4322d16444bba75f6e4384430284595ecf2b203f4278c3ac0fda9564f8c4c5b` |
+
+The actual producer verifier accepted both exact packages with 14 IDs per state.
+Normal/open target cores are
+`54162755c4ab916bf0b82bdb35a411460a4af70a6380c8b66f1f42f3d1aeb349` /
+`739916805cec76ee21470b9d80200f1765cb7685500a1002ecc626c1502f1766`.
+Reuse the producer's `approved_card.py` and `resolve_redline.py` as a pinned
+declared helper closure; do not fork C0 meaning. Their exact hashes are
+`0461146abba5d01c83169f89c6fccbddc79ef7018f6569418e69b5f9d99d5373` /
+`4ac7206d58f7af1cab12ad71f32c373d91afd905284242e78a18e222d7219b57`.
+The external Vellum checkout is read-only. Its source-only support app witnesses
+are not candidate goals; each independent candidate is copied and sealed anew.
+
+An own launch/close probe matched Python3.14.0, Playwright1.64.0 and Chromium
+156.0.8078.4/build1248, executable hash
+`c8509aee32abd6977968e9999769980b7a420dea05402d90042d9e5b41db15ef`,
+on macOS27.0.1 arm64. Candidate observation still has to be implemented.
+The bounded viewport is800x600/deviceScale1, with `fonts.ready` and four
+identical animation-frame layout/style snapshots. Unsupported network,
+resources, units and normalizations refuse, not fallback.
+
+### Assigned ordinary command output/refusal seam
+
+The coordinator assigned this slice the narrowly necessary canonical changes
+in `checks.py` command/generated-artifact handlers and `required_runtime.py`
+component/output-reference validation. 035-02 is a disjoint completed consumer
+cut. Neither `gate.py` nor the controller is changed.
+
+Opt-in command configuration declares the output contract, not output bytes:
+
+```json
+{
+  "refusal_exit_codes": [2],
+  "result_artifact": {
+    "root": "spec/oracle/card/runs/{run_id}/design",
+    "manifest": "evidence.json",
+    "schema_version": 1,
+    "kind": "design_evidence"
+  }
+}
+```
+
+Only literal `{run_id}` substitution is permitted, using validated current
+`SERVO_GATE_RUN_ID`. Paths are normalized target-relative POSIX paths; the
+root must be uniquely run-scoped. The generated-artifact handler resolves
+published output against the target, not its disposable build directory.
+The declared JSON has matching integer `schema_version`, `kind`, `run_id`
+and `artifacts: [{path, hash}]` covering every other file under that root.
+Artifact paths are root-relative. Exact published bytes, complete directory
+inventory, no duplicate paths, no symlinks/escapes and no foreign run are
+required. The generic evidence records manifest and artifact references with
+digests; `validate_component` revalidates them before overall publication,
+including evaluated failure/refusal. Expose a pure reference validator for
+later consumer readback without invoking comparison or re-scoring.
+
+No result setting preserves legacy evidence behavior. With the setting,
+missing/partial/mutated output is `env_error`/unknown; it never inherits pass.
+The independent collector owns design meaning and ensures all 28 approved IDs
+are accounted exactly once, preserving known failures beside unavailable
+observations. An absent required element makes its dependent constraints
+conclusive failures, not invented raw defaults or unrelated acquisition errors.
+
+`refusal_exit_codes` is opt-in and frozen with the complete command config:
+unique nonboolean integers, excluding0 and the configured expected exit.
+Configured2 becomes `env_error`; actual1 remains contradiction. Without the
+field legacy unexpected-exit semantics remain unchanged. Preserve original
+exit, reason and any valid available artifact refs. Tests cover both families,
+actual installed publication, approval/config drift, replay, output mutations
+and race windows. Existing `evaluator_artifacts` remains immutable code/helper
+input closure, never mutable output capture bytes.
+
+The new field in an ordinary schema1 `kind: evidence` row is named
+`result_artifact`; its exact planned value is:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "command_result_artifacts",
+  "run_id": "<current-UUID>",
+  "root": "spec/oracle/card/runs/<current-UUID>/design",
+  "manifest": {"path": "evidence.json", "hash": "sha256:<exact-file-bytes>"},
+  "artifacts": [
+    {"path": "normal.png", "hash": "sha256:<exact-file-bytes>"},
+    {"path": "normal.observations.json", "hash": "sha256:<exact-file-bytes>"},
+    {"path": "open.png", "hash": "sha256:<exact-file-bytes>"},
+    {"path": "open.observations.json", "hash": "sha256:<exact-file-bytes>"}
+  ]
+}
+```
+
+`root` is target-relative; every nested `path` is root-relative, sorted,
+unique and normalized. The actual inventory includes every additional sealed
+closure/raw-response artifact emitted by the run, not merely the four example
+capture paths above. All `hash` references use lowercase `sha256:` plus64hex
+over exact file bytes, without JSON reserialization or domain prefix. The
+manifest's `artifacts` equals this referenced list, excluding only itself.
+The complete reference value is included in the component's raw evidence and
+therefore in its raw file digest bound by overall gate schema2.
+Export `validate_output_references(check, evidence, run_id, base)` from
+`required_runtime.py`: pure path/run/contract/inventory/byte validation, raising
+`ValueError` on invalid references, with no command execution, observation,
+comparison, grade interpretation or recapture. The assigned producer calls
+it before publication. Parent's later integration calls the same helper from
+035-02's `gate_consumer._validate`; this slice does not copy that consumer into
+its older base. The pinned consumer cut is035-02 at
+`4412a9aef47226f7ed9b339cb12aa2f380a437c6`, PR42. Jig119's accepted owner is
+ADR0065/spec119 at the coordinator's C0 pin
+`e83ad795e5bc692ea9ac4e2a25c9b6923e26522e`; its unimplemented attestation
+runtime is not a prerequisite. Both readback integrations consume the overall
+gate verdict and pure immutable references; they do not re-score.
+
+Collector cache reuse additionally requires a gate-owned exclusive acquisition
+claim and a separate receipt under the current `.servo/gate-runs/<UUID>/`.
+The receipt binds the exact final envelope bytes and a random acquisition
+nonce; the run tree's local claim and each raw state's run/capture identity
+must agree. A preseeded or relabelled tree without that independently preserved
+receipt refuses. Reusing a current invocation's sealed observations is not
+permission to relabel observations from another invocation.
+
+### Candidate, delivery and run proof
+
+The first controlled candidate is self-contained static HTML with inline
+CSS/JS and no dependencies. Explicitly inventory source files, build recipe,
+config, dependency declaration (empty), assets (empty) and generated outputs.
+A bounded build copies declared inputs into a separate output directory;
+source and output manifests use canonical Servo identities with ASCII escapes.
+The selected current delivery is a separately supplied directory, independently
+enumerated and hashed, not an echoed ID, URL or HEAD claim.
+
+Each run copies source/output bytes into an exclusive run directory and
+serves only the sealed output through a bounded read-only loopback server.
+The observer measures candidate-bound nodes, verifies all browser-loaded
+response bytes against that exact output inventory, and rejects external/
+unlisted resources, redirects, cache/service-worker ambiguity and page errors.
+Rehash source, output and independent current delivery before and after
+acquisition and before accepting a preserved result. Changed source, same-HEAD
+wrong bundle, same-URL new bytes, post-run edit, replay and races must refuse.
+All browsers/servers are bounded and closed.
+
+The immutable design-evidence/v1 envelope includes raw per-state observations,
+crop/state/action and environment identity, exact input/policy/evaluator/source/
+build/current-delivery/run identities, and interpreted per-constraint results.
+Its manifest references every raw observation/capture/closure artifact.
+Generic required-component/v1 binds this artifact tree beneath overall
+gate-result/v2. Candidate edits require a fresh build/run, not source-target
+reapproval. No template fixture output substitutes for actual acquisition.
+
+The exact planned design-envelope field mapping is:
+
+| Field | Wire shape / binding |
+|---|---|
+| `schema_version`, `kind`, `run_id` | integer1, `design_evidence`, current gate UUID |
+| `acquisition_nonce` | collector-owned nonce tied to the independent current gate acquisition claim/receipt and each raw capture |
+| `source` | `contract_version`, `packages` by state with raw `hash`, `target_revision`, `approval_hash`; producer-verifier artifact pins |
+| `policy` | `hash` of `servo-policy-v1` + LF + canonical Servo JSON bytes; `required_ids` sorted across both states |
+| `evaluator` | canonical collector/comparator/helper/executable dependency manifest and its byte/domain identity |
+| `build` | source/input/output manifests plus their `servo-input-closure-v1` / `servo-output-closure-v1` domain hashes; source revision is diagnostic only |
+| `current_delivery` | independently selected directory path, manifest and output-domain hash; compared with evaluated output before and after acquisition |
+| `environment` | actual Python/browser/package/OS/executable hashes, viewport/device scale and settle recipe |
+| `observations` | state-keyed root-relative `{path, hash}` references to immutable raw JSON; each raw property identifies bound element, presence/visibility, actual value/unit and state/action result |
+| `constraints` | one row per exact approved ID: `id`, `state`, `binding_id`, `required: true`, `expected`, `actual`, `observation` (`path` plus property locator), `comparison`, `normalizer`, `units`, `tolerance`, `status` (`pass/fail/unknown`), `reason` |
+| `summary` | component-only `status` (`pass/fail/env_error`), `required_status` (`pass/fail/unknown`), exact `passed/failed/unknown` ID arrays and counts |
+| `artifacts` | complete root-relative `{path, hash}` inventory, excluding this envelope; includes raw observations, PNGs, source/output/delivery manifests and retained judge responses if any |
+
+Canonical Servo JSON is UTF-8, sorted keys, compact separators, ASCII escaping,
+finite native numbers only. Semantic arrays preserve order; explicit manifests
+sort paths. Vellum exact bytes and its NUL-domain decimal-string encoding remain
+separate and are consumed through its pinned verifier, not reserialized into
+Servo identity. File references are raw-byte hashes; only named semantic
+identities use their declared domain preimages. The envelope itself has no
+self-digest; generic `result_artifact.manifest.hash` supplies its raw identity.
+
+### Owner-selected first quality calibration
+
+The owner selected **Current Opus via Claude CLI**, explicitly preferring latest
+Claude Opus as the suggested default when the known parent is non-Claude.
+The current parent is GPT-6.1 Sol. Existing explicit `--model`/`--transport`
+options suffice; no picker/provider registry or automatic inheritance is added.
+Use supported `opus` at setup; record requested alias, actual CLI/runtime and
+returned concrete identity when exposed. A requested string is not verified
+provider resolution. Do not silently substitute or upgrade a frozen evaluator.
+
+The owner approved the proposed content dimensions/exclusions/sampling for
+the first **eight total judge invocations**, including exploratory calls.
+Use normal/open references with equal weights, n4/k1/delta0.03 and threshold0.8.
+Catalogue and score layout, palette, typography appearance, visible content,
+and card shape. Explicitly exclude only actual font-face certification and
+the sibling state driver's appearance outside the reference crop. No dynamic
+content exclusion, fake scalar or unselected raster engine is allowed.
+Actual independent reference re-enumeration precedes reviewed freeze.
+Pin the concrete Python/helper/browser/quality command closure and retain raw
+judge responses. Reuse the same verified run PNGs for the quality and required
+channels. Required veto controls may carry explicitly diagnostic high-quality
+controls, but genuine live quality is necessary for overall acceptance.
+Preserve component-pass/quality-fail as overall failure, not completion.
+The CLI uses frozen `decoding_mode: native-default`; ineffective numeric
+temperature/max-token claims are omitted. Generation binds the reviewed0.8
+quality threshold into the ordinary oracle default, and installation refuses a
+different default. Generate, explicit overlay approval and install are separate
+operations; install never generates or grants approval.
+
+### Delivery and reviews
+
+Readiness is independently reviewed before IN_PROGRESS. Use a Jig implementer
+with witnessed red/green tests; run focused installed and browser controls.
+Record genuine compliance, craft, architecture and reconciliation verdicts.
+Update current docs/memory and regenerate hosts from canonical source. Preserve
+all actual runs in session artifacts and report their exact digests/paths.
+Publish a separate implementation PR targeting `servo-installed-required-gate`;
+do not merge, amend closed records, or implement036-02. Jig119 completion is
+not a prerequisite for this producer slice's DONE.
 
 ## Readiness and upstream authority
 

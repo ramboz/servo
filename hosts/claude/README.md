@@ -141,6 +141,13 @@ or invalid evidence refuses with exit 2. Enabled JSON v2 preserves the overall
 gate and run/digest-bound component evidence. A component's pass alone is never
 completion authority. See the
 [installed walkthrough and carrier](https://github.com/ramboz/servo/blob/main/skills/spec-oracle/examples/required-policy.md).
+
+The [bounded card pilot](skills/design-eval/examples/bound-card.md) adds
+source/build-bound DOM/state evidence and same-run quality composition through
+that ordinary carrier. **036-01 remains in progress:** the first selected
+Opus/Claude CLI attempt refused on expired OAuth. Renewal is owner-reported and
+a replacement-attempt allowance decision is pending; diagnostic veto controls
+are not a live-fidelity acceptance result.
 This is the attended gate/install surface, not yet consumer/autonomy propagation.
 
 ## Repository structure (for contributors)

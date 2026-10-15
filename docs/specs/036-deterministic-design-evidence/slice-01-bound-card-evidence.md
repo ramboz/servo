@@ -1,10 +1,11 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 kind: feature
 dependencies: [035-01, adr-0044]
 last_verified:
 frame_review: true
 arch_review: true
+claimed_by: servo-live-card-evidence
 ---
 
 ## Slice 036-01 - bound-card-evidence
@@ -12,6 +13,14 @@ arch_review: true
 **Goal:** A developer runs the installed Servo gate on a self-contained matching
 card app and gets per-constraint observations, a required veto on a wrong card,
 and bound evidence that Jig can later attest.
+
+**Readiness checkpoint (2026-10-15):** Accepted C0 and independently approved C1
+release-r3 are pinned in `plan.md`, with exact package/helper hashes and an own
+browser launch probe. 035-01 is DONE at the clean pinned base. The coordinator
+assigned the necessary opt-in generic artifact/refusal carrier seam. The owner
+selected current Opus via Claude CLI for eight first-calibration invocations;
+live capture, quality, closure and mutation proof remain implementation work.
+036-02 remains outside this assignment.
 
 **DoR:**
 - 035-01 DONE and ADR-0044 accepted after cross-project alignment.
@@ -144,6 +153,31 @@ and bound evidence that Jig can later attest.
 **Anti-horizontal-phasing check:** The user can evaluate and repair a complete
 matching card through the installed gate; the collector is not merely a
 standalone measurement helper waiting for later integration.
+
+### Implementation checkpoint (not reconciliation)
+
+036-01 remains IN_PROGRESS. The first actual approved Opus/CLI attempt
+returned an expired-OAuth error; native request/stdout/stderr, normal/open
+captures, sealed closures, component and overall exit2 are preserved.
+The owner reports renewing the same subscription, but a replacement-attempt
+decision is pending: one of eight authorized attempts is spent, leaving seven
+for an eight-judgment calibration. No retry/substitution or fresh-model
+availability is inferred.
+
+Twenty actual no-judge diagnostic controls are preserved as an earlier source
+epoch (twelve veto1, eight refusal2; no overall pass). Their0.99 is explicitly
+synthetic negative-control quality, not live fidelity. Matching required
+observations retain component pass but unavailable quality/overall2.
+Later witnessed fixes bind the default quality threshold, separate
+gate-owned acquisition claims/receipts, reject relabelled cached captures,
+and distinguish hidden descendant text from visible boxless wrappers.
+Historical records are not rewritten as final-code proof.
+
+The durable compliance checkpoint is `needs-changes`. Fresh final-code
+installed proof, live overall pass, component-pass/quality-fail, complete
+package/reinstall/uninstall acceptance, craft/architecture and reconciliation
+reviews remain open. This is not REVIEWED, RECONCILED, DONE or Jig attestation.
+No 036-02 implementation or closed-record amendment occurred.
 
 ### Close-out (post-DONE)
 

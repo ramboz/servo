@@ -314,6 +314,19 @@ follow-up in `docs/refinement-todo.md`.)
 
 ## Authoring tips
 
+### Bounded required card pilot (036-01, in progress)
+
+The opt-in [bound-card walkthrough](examples/bound-card.md) composes independent
+DOM/style/state evidence with the existing reviewed quality policy through
+ordinary required spec-oracle commands. It uses sealed local bundles,
+verified browser-response bytes and a separately selected current delivery.
+Required constraints and quality remain separate channels. Model/transport
+selection is explicit; no older example model is mandatory, aliases are not
+immutable provider identity, and frozen choices never upgrade silently.
+The first live Opus call refused on expired Claude OAuth. Renewal is
+owner-reported; a replacement-attempt allowance decision is pending. No
+live-quality acceptance or slice completion is claimed.
+
 ### Native Copilot judging
 
 Create a **new** definition with an explicitly chosen native decoding policy:
