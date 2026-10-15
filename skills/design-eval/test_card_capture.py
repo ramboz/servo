@@ -59,7 +59,14 @@ class LiveCaptureTests(unittest.TestCase):
             path = Path(directory)
             entry = path / "index.html"
             entry.write_text(html)
-            result = card_capture.acquire(self.browser, entry, MAPPING, state, path / "shot.png")
+            result = card_capture.acquire(
+                self.browser,
+                entry,
+                MAPPING,
+                state,
+                path / "shot.png",
+                expected_hash=card_bundle.raw(html.encode()),
+            )
             self.assertTrue((path / "shot.png").is_file())
             return result
 
@@ -103,6 +110,13 @@ class LiveCaptureTests(unittest.TestCase):
                 self.assertEqual(result["elements"]["title"]["visible"], visible)
                 self.assertIsNone(result["acquisition_error"])
 
+    def test_required_text_outside_crop_is_not_visible_and_driver_provenance_is_geometric(self):
+        moved = self.observe(APP.replace(".title{", ".title{transform:translateX(500px);"))
+        self.assertFalse(moved["elements"]["title"]["visible"])
+        overlay = self.observe(APP + "<style>button{position:absolute;top:0;left:0}</style>")
+        self.assertFalse(overlay["driver"]["outside_crop"])
+        self.assertIn("crop", overlay["acquisition_error"])
+
     def test_actual_unrounded_geometry_controls(self):
         for value, beyond in (("239", False), ("241", False), ("238.98", True), ("241.02", True)):
             actual = self.observe(APP.replace("header{width:240px", "header{width:" + value + "px"))
@@ -115,7 +129,46 @@ class LiveCaptureTests(unittest.TestCase):
         result = self.observe(html)
         self.assertIn("unapproved", result["acquisition_error"])
 
+    def test_loaded_document_must_match_declared_output_not_a_self_echo(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entry = root / "index.html"
+            entry.write_text(APP.replace("Trailhead", "Substituted"))
+            result = card_capture.acquire(
+                self.browser,
+                entry,
+                MAPPING,
+                "normal",
+                root / "shot.png",
+                expected_hash=card_bundle.raw(APP.encode()),
+            )
+            self.assertIn("declared", result["acquisition_error"])
+
     def test_unavailable_quality_does_not_overwrite_confirmed_required_facts(self):
+        def unavailable(*args, **kwargs):
+            raise ValueError("judge unavailable")
+
+        result = self._evaluate_quality(unavailable)
+        self.assertEqual(result["summary"]["required_status"], "pass")
+        self.assertEqual(result["constraints"][0]["status"], "pass")
+        self.assertEqual(result["quality"]["mode"], "unavailable")
+        self.assertIn("judge unavailable", result["quality"]["reason"])
+
+    def test_original_acquisition_files_cannot_be_reblessed_during_quality(self):
+        for suffix in (".png", ".observations.json"):
+            with self.subTest(suffix=suffix):
+                def mutate(config, shots, *args, suffix=suffix, **kwargs):
+                    path = shots["normal"].with_suffix(suffix)
+                    original = path.read_bytes()
+                    path.write_bytes(b"changed-during-quality")
+                    path.write_bytes(original)
+                    return {"mode": "live", "composite": 0.99}
+
+                result = self._evaluate_quality(mutate)
+                self.assertEqual(result["summary"]["required_status"], "unknown")
+                self.assertIn("acquisition artifact changed", result["constraints"][0]["reason"])
+
+    def _evaluate_quality(self, quality_action):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)
             source = target / "source"
@@ -147,11 +200,14 @@ class LiveCaptureTests(unittest.TestCase):
                 },
             )
             (target / "normal.json").write_text("{}")
+            (target / "refs").mkdir()
+            (target / "refs/normal.png").write_bytes(b"unit-reference-only")
             package = {
                 "view": {"state": "normal"},
                 "application_binding_intent": MAPPING,
                 "target_revision": "unit-only",
                 "approval": {"sha256": "unit-only"},
+                "reference": {"sha256": card_bundle.raw(b"unit-reference-only")[7:]},
                 "required_inventory": {"required_ids": ["normal-title-text"]},
                 "source_facts": [
                     {
@@ -182,17 +238,28 @@ class LiveCaptureTests(unittest.TestCase):
                 "selection": "selection.json",
                 "output_root": "runs/{run_id}/design",
                 "runtime": {
-                    "browser_hash": card_bundle.file_hash(self.runtime.chromium.executable_path)
+                    "browser_hash": card_bundle.file_hash(self.runtime.chromium.executable_path),
+                    "executable": str(Path(sys.executable).resolve()),
                 },
-                "quality": {"mode": "live", "config": "unit-only"},
+                "quality": {"mode": "live", "config": str(target / "unit-quality.json")},
                 "evaluator_files": [],
             }
             with (
                 patch.dict(
                     os.environ,
-                    {"SERVO_GATE_RUN_ID": run_id, "SERVO_GATE_RESULT_DIR": str(invocation)},
+                    {
+                        "SERVO_GATE_RUN_ID": run_id,
+                        "SERVO_GATE_RESULT_DIR": str(invocation),
+                        "PATH": str(Path(sys.executable).parent) + os.pathsep + os.environ["PATH"],
+                    },
                 ),
                 patch.object(card_evidence, "validated_policy", return_value=policy),
+                patch.object(card_evidence, "assert_driver_seal"),
+                patch.object(
+                    sys,
+                    "pycache_prefix",
+                    str(target / ".servo/gate-runs" / run_id / "python-source-only"),
+                ),
                 patch.object(
                     card_evidence,
                     "producer_at",
@@ -207,16 +274,13 @@ class LiveCaptureTests(unittest.TestCase):
                     ),
                 ),
                 patch.object(card_evidence, "packages_at", return_value={"normal": package}),
-                patch("card_quality.run", side_effect=ValueError("judge unavailable")) as judge,
+                patch("card_quality.run", side_effect=quality_action) as judge,
                 patch("playwright.sync_api.sync_playwright") as runtime,
             ):
                 runtime.return_value.__enter__.return_value = self.runtime
                 result = card_evidence.evaluate(target / "unit-policy.json")
             self.assertEqual(judge.call_count, 1)
-            self.assertEqual(result["summary"]["required_status"], "pass")
-            self.assertEqual(result["constraints"][0]["status"], "pass")
-            self.assertEqual(result["quality"]["mode"], "unavailable")
-            self.assertIn("judge unavailable", result["quality"]["reason"])
+            return result
 
 
 if __name__ == "__main__":

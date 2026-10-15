@@ -1,5 +1,6 @@
 """Bounded card acquisition and immutable delivery controls."""
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -87,6 +88,62 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(bundle.load(sealed / "build.json"), record)
         with self.assertRaisesRegex(ValueError, "overlap"):
             bundle.build(self.source, self.source / "nested-build")
+
+    def test_atomic_replacement_during_hashing_does_not_claim_old_bytes(self):
+        from unittest.mock import patch
+
+        path = self.source / "index.html"
+        replacement = self.root / "replacement.html"
+        replacement.write_text("<!doctype html><p>changed</p>")
+        original = hashlib.sha256
+        changed = []
+
+        def replace_once():
+            if not changed:
+                replacement.replace(path)
+                changed.append(True)
+
+        def raced(data=b""):
+            value = original(data)
+            if data:
+                replace_once()
+
+            class Hasher:
+                def update(self, chunk):
+                    value.update(chunk)
+                    replace_once()
+
+                def hexdigest(self):
+                    return value.hexdigest()
+
+            return Hasher()
+
+        with patch.object(bundle.hashlib, "sha256", raced):
+            with self.assertRaisesRegex(ValueError, "changed|replacement"):
+                bundle.file_hash(path)
+        self.assertTrue(changed)
+
+    def test_copy_build_cannot_bind_stale_input_manifest_to_new_output_bytes(self):
+        from unittest.mock import patch
+
+        before = bundle.source_inventory(self.source)
+        (self.source / "index.html").write_text("<!doctype html><p>new bytes</p>")
+        with patch.object(bundle, "source_inventory", return_value=before):
+            with self.assertRaisesRegex(ValueError, "source|input"):
+                bundle.build(self.source, self.root / "raced-build")
+
+    def test_self_consistent_output_manifest_is_not_copy_recipe_proof(self):
+        sealed, delivery = self.root / "forged-build", self.root / "forged-delivery"
+        record = bundle.build(self.source, sealed)
+        (sealed / "output/index.html").write_text("<p>different served bytes</p>")
+        record["outputs"] = bundle.inventory(sealed / "output")
+        record["output_hash"] = bundle.identity("servo-output-closure-v1", record["outputs"])
+        (sealed / "build.json").write_bytes(bundle.canonical(record))
+        import shutil
+
+        shutil.copytree(sealed / "output", delivery)
+        with self.assertRaisesRegex(ValueError, "copy|input|source"):
+            bundle.verify(record, sealed, delivery)
 
 
 class ComparisonTests(unittest.TestCase):
@@ -205,6 +262,188 @@ class AcquisitionOwnershipTests(unittest.TestCase):
             }
             with self.assertRaisesRegex(ValueError, "acquisition|ownership|receipt"):
                 evidence._verify_existing(envelope, root, policy, binding, "fresh-run")
+
+
+class DriverSealTests(unittest.TestCase):
+    def test_real_quality_wrapper_is_frozen_not_only_its_python_helper(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            oracle = root / "oracle.sh"
+            oracle.write_text(
+                "# SEED:start design_fidelity\nscore_design_fidelity(){ python real.py; }\n"
+                "# SEED:end design_fidelity\n"
+            )
+            checks = root / "spec/oracle/card/checks.json"
+            checks.parent.mkdir(parents=True)
+            plan = {
+                "approval_status": "approved",
+                "approved_required_binding": {
+                    "evaluator_artifacts": [],
+                },
+            }
+            checks.write_text(json.dumps(plan))
+            with self.assertRaisesRegex(ValueError, "oracle|seal"):
+                evidence.assert_driver_seal(root)
+            plan["approved_required_binding"]["evaluator_artifacts"] = [
+                {"path": "oracle.sh", "hash": bundle.file_hash(oracle)}
+            ]
+            checks.write_text(json.dumps(plan))
+            evidence.assert_driver_seal(root)
+            oracle.write_text(oracle.read_text().replace("python real.py", "echo 1.0"))
+            with self.assertRaisesRegex(ValueError, "oracle|seal"):
+                evidence.assert_driver_seal(root)
+
+    def test_source_required_ids_cannot_be_optionalized_or_omitted_after_reapproval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "oracle.sh").write_text("approved driver bytes")
+            path = root / "spec/oracle/card/checks.json"
+            path.parent.mkdir(parents=True)
+            plan = {
+                "approval_status": "approved",
+                "required_policy": {"enabled": True},
+                "checks": [{"id": "normal-title-text", "required": False}],
+                "approved_required_binding": {
+                    "evaluator_artifacts": [
+                        {"path": "oracle.sh", "hash": bundle.file_hash(root / "oracle.sh")}
+                    ],
+                    "required_ids": [],
+                },
+            }
+            path.write_text(json.dumps(plan))
+            with self.assertRaisesRegex(ValueError, "inventory|optional"):
+                evidence.assert_driver_seal(root, ["normal-title-text"])
+            plan["checks"][0]["required"] = True
+            plan["approved_required_binding"]["required_ids"] = ["normal-title-text"]
+            path.write_text(json.dumps(plan))
+            evidence.assert_driver_seal(root, ["normal-title-text"])
+            plan["checks"] = []
+            path.write_text(json.dumps(plan))
+            with self.assertRaisesRegex(ValueError, "inventory|omitted"):
+                evidence.assert_driver_seal(root, ["normal-title-text"])
+
+
+class RuntimeContextTests(unittest.TestCase):
+    def test_playwright_node_runtime_and_module_overrides_refuse(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
+            for key in ("PLAYWRIGHT_NODEJS_PATH", "NODE_OPTIONS", "NODE_PATH"):
+                with (
+                    self.subTest(key=key),
+                    patch.object(evidence.site, "ENABLE_USER_SITE", False),
+                    patch.dict("os.environ", {key: "/unit-unpinned-runtime"}),
+                    self.assertRaisesRegex(ValueError, "Node|node|startup"),
+                ):
+                    evidence.check_startup_environment(root, [])
+
+    def test_executable_virtualenv_startup_files_are_not_undeclared_inputs(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
+            packages = root / "packages"
+            packages.mkdir()
+            with patch.object(evidence.site, "ENABLE_USER_SITE", False):
+                evidence.check_startup_environment(root, [str(packages)])
+                (packages / "unapproved.pth").write_text("import unapproved\n")
+                with self.assertRaisesRegex(ValueError, "startup"):
+                    evidence.check_startup_environment(root, [str(packages)])
+
+    def policy(self, root):
+        import platform
+        import shutil
+
+        manifest = root / "runtime.json"
+        bundle.publish(manifest, [])
+        policy = {
+            "schema_version": 1,
+            "kind": "card_evidence_policy",
+            "target": str(root),
+            "producer": "unit-only",
+            "references": "unit-only",
+            "selection": "unit-only",
+            "output_root": "unit-only",
+            "evaluator_files": [],
+            "quality": {},
+            "runtime": {
+                "python": platform.python_version(),
+                "executable": str(Path(sys.executable).resolve()),
+                "prefix": str(Path(sys.prefix).resolve()),
+                "module_origins": {},
+                "bash": str(Path(shutil.which("bash")).resolve()),
+                "dependencies": {},
+                "os": platform.platform(),
+                "browser_root": "/unit-browser",
+                "manifest": {"path": str(manifest), "hash": bundle.file_hash(manifest)},
+            },
+        }
+        return policy
+
+    def approve_unit_policy(self, path, policy):
+        policy["approval"] = {
+            "decision": "approved",
+            "author": "unit-author",
+            "reviewer": "unit-reviewer",
+            "policy_hash": evidence.policy_hash(policy),
+        }
+        path.write_text(json.dumps(policy))
+
+    def test_same_interpreter_bytes_do_not_hide_wrong_virtual_environment(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = self.policy(root)
+            policy["runtime"]["prefix"] = "/different-venv"
+            path = root / "policy.json"
+            self.approve_unit_policy(path, policy)
+            with patch.dict("os.environ", {"PLAYWRIGHT_BROWSERS_PATH": "/unit-browser"}):
+                with self.assertRaisesRegex(ValueError, "prefix|environment"):
+                    evidence.validated_policy(path)
+
+    def test_shadowed_module_origin_is_not_the_declared_dependency_closure(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = self.policy(root)
+            policy["runtime"]["module_origins"] = {"json": "/unexpected/json.py"}
+            policy["runtime"]["dependencies"] = {"json": "unit-only"}
+            path = root / "policy.json"
+            self.approve_unit_policy(path, policy)
+            with patch.dict("os.environ", {"PLAYWRIGHT_BROWSERS_PATH": "/unit-browser"}):
+                with self.assertRaisesRegex(ValueError, "module|origin"):
+                    evidence.validated_policy(path)
+
+    def test_native_library_alias_cannot_silently_select_different_bytes(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, new = root / "old.dylib", root / "new.dylib"
+            old.write_bytes(b"unit-old-library")
+            new.write_bytes(b"unit-new-library")
+            alias = root / "library.dylib"
+            alias.symlink_to(new)
+            policy = self.policy(root)
+            policy["runtime"]["site_roots"] = sorted(
+                str(Path(path).resolve()) for path in evidence.site.getsitepackages()
+            )
+            policy["runtime"]["native_resolutions"] = [
+                {"path": str(alias), "resolved": str(old), "hash": bundle.file_hash(old)}
+            ]
+            path = root / "policy.json"
+            self.approve_unit_policy(path, policy)
+            with (
+                patch.dict("os.environ", {"PLAYWRIGHT_BROWSERS_PATH": "/unit-browser"}),
+                patch.object(evidence, "check_startup_environment"),
+            ):
+                with self.assertRaisesRegex(ValueError, "native dependency resolution"):
+                    evidence.validated_policy(path)
 
 
 if __name__ == "__main__":
