@@ -312,9 +312,11 @@ verified browser-response bytes and a separately selected current delivery.
 Required constraints and quality remain separate channels. Model/transport
 selection is explicit; no older example model is mandatory, aliases are not
 immutable provider identity, and frozen choices never upgrade silently.
-The first live Opus call refused on expired Claude OAuth. Renewal is
-owner-reported; a replacement-attempt allowance decision is pending. No
-live-quality acceptance or slice completion is claimed.
+Real Opus runs preserve an overall pass and a component-pass/quality-fail
+control; the initial OAuth refusal remains historical evidence. Each necessary
+batch freezes its purpose, inherits all consumed attempts and allocates exactly
+eight judgments. Final-epoch proof/reviews remain open; no slice completion
+or general design-oracle accuracy is claimed.
 
 ### Native Copilot judging
 

@@ -85,6 +85,9 @@ def prepare(
     claude,
     model="opus",
     quality_mode="live",
+    calibration_limit=8,
+    prior_attempts=None,
+    purpose="bounded-card-calibration",
 ):
     target = Path(target).resolve()
     bundle.require(not (target / "spec/oracle/card").exists(), "card pilot already exists")
@@ -92,6 +95,15 @@ def prepare(
     producer = producer_at(producer_root)
     packages = packages_at(references, producer)
     runtime = _runtime(python, browser_root, claude)
+    bundle.require(
+        type(calibration_limit) is int and calibration_limit >= 8,
+        "unapproved calibration allowance",
+    )
+    bundle.require(type(purpose) is str and purpose.strip(), "batch purpose required")
+    bundle.require(
+        calibration_limit == 8 or prior_attempts is not None,
+        "new allowance requires preserved prior attempt history",
+    )
     helper = target / "tools/card"
     helper.mkdir(parents=True)
     for name in (
@@ -159,6 +171,13 @@ def prepare(
     )
     quality = target / ".servo/design-eval"
     quality.mkdir(parents=True)
+    prior_rows = []
+    if prior_attempts is not None:
+        from card_quality import inherit_attempts
+
+        prior_rows = inherit_attempts(
+            prior_attempts, quality / "calibration-invocations", calibration_limit
+        )
     (quality / "refs").mkdir()
     (quality / "setups").mkdir()
     for state in packages:
@@ -196,7 +215,9 @@ def prepare(
             "model": model,
             "transport": "cli",
             "decoding_mode": "native-default",
-            "calibration_limit": 8,
+            "calibration_limit": calibration_limit,
+            "prior_attempts": prior_rows,
+            "batch_purpose": purpose,
             "runtime": {
                 "binary": str(Path(claude).resolve()),
                 "hash": bundle.file_hash(claude),
@@ -454,6 +475,9 @@ def main(argv=None):
     ):
         prepare_parser.add_argument("--" + name, required=True, type=Path)
     prepare_parser.add_argument("--model", default="opus")
+    prepare_parser.add_argument("--calibration-limit", type=int, default=8)
+    prepare_parser.add_argument("--prior-attempts", type=Path)
+    prepare_parser.add_argument("--purpose", default="bounded-card-calibration")
     prepare_parser.add_argument(
         "--quality-mode", choices=("live", "diagnostic-negative-control"), default="live"
     )
@@ -477,6 +501,9 @@ def main(argv=None):
                 args.claude,
                 args.model,
                 args.quality_mode,
+                args.calibration_limit,
+                args.prior_attempts,
+                args.purpose,
             )
             print("Prepared for independent review, not approved/installed: " + str(path))
         elif args.operation == "approve-policy":

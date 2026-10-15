@@ -7,14 +7,18 @@ implementation boundary.
 
 ## 036-01 accepted readiness checkpoint (2026-10-15)
 
-**Implementation checkpoint:** the initial live Opus invocation was attempted
-and preserved, but returned expired OAuth without scoring. The owner now reports
-renewal of the same subscription; that is not a verified successful model call.
-One of the original eight invocations is consumed, so another complete
-four-per-state calibration needs explicit replacement allowance. Twenty actual
-diagnostic gate controls are preserved as historical source epochs, not a
-live-quality acceptance. Compliance remains `needs-changes`; the slice stays
-IN_PROGRESS until fresh final-code proof and all review gates clear.
+**Implementation checkpoint:** the initial OAuth refusal is preserved. After
+explicit replacement authorization, attempts2-9 produced a real overall pass
+at0.9675/default0.8/all28requiredpass. Attempts10-17 on one preselected
+title120/subtitle40 misalignment produced component pass but genuine
+quality0.512065/default0.8/overallfail1. Native responses report `claude-opus-5`,
+now selected concretely for new definitions. The owner subsequently authorized
+necessary further bounded pilot invocations without repeated prompts.
+Each batch freezes purpose and exactly8 additional judgments while inheriting
+all consumed history; no adaptive search or threshold/rubric/exclusion tuning.
+Twenty diagnostic controls and initial live runs remain preserved source epochs,
+not relabelled as newer proof. Compliance remains `needs-changes`; IN_PROGRESS
+continues until final-code proof and all review gates clear.
 
 The clean implementation base is `servo-installed-required-gate` at
 `aefc9306fa6aa38d55cb9543338b413823624f11` (035-01 DONE, stacked PR41).
@@ -233,6 +237,11 @@ temperature/max-token claims are omitted. Generation binds the reviewed0.8
 quality threshold into the ordinary oracle default, and installation refuses a
 different default. Generate, explicit overlay approval and install are separate
 operations; install never generates or grants approval.
+The ordinary required installer now recognizes only the canonical declaration's
+strict finite numeric fallback, retaining every other driver guard. Approval
+pins its exact literal; missing/changed pins refuse. Full raw prefix identity
+remains threshold-sensitive. This narrowly assigned fix is necessary for the
+reviewed0.8 default to install without an environment-override workaround.
 
 ### Delivery and reviews
 

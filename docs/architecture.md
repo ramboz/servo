@@ -86,9 +86,11 @@ set; `card_capture.py` independently observes both states over sealed loopback
 bytes; `card_evidence.py` compares producer-approved facts and verifies current
 delivery without re-scoring. `card_quality.py` composes the reviewed existing
 design-eval policy over those same captures and retains native CLI responses.
-An actual OAuth refusal is preserved; after owner-reported renewal, a
-replacement-attempt decision still gates live-quality acceptance, not the
-definition of required facts. The
+An initial OAuth refusal, a real overall pass and a genuine
+component-pass/quality-fail control are preserved as separate epochs. Each
+necessary live batch freezes its purpose and exactly8 additional judgments,
+carrying the complete consumed history; no unlimited/adaptive search is implied.
+Final-epoch controls and lifecycle reviews remain open. The
 [walkthrough](../skills/design-eval/examples/bound-card.md) records this bounded
 support and incomplete acceptance.
 

@@ -156,13 +156,16 @@ standalone measurement helper waiting for later integration.
 
 ### Implementation checkpoint (not reconciliation)
 
-036-01 remains IN_PROGRESS. The first actual approved Opus/CLI attempt
-returned an expired-OAuth error; native request/stdout/stderr, normal/open
-captures, sealed closures, component and overall exit2 are preserved.
-The owner reports renewing the same subscription, but a replacement-attempt
-decision is pending: one of eight authorized attempts is spent, leaving seven
-for an eight-judgment calibration. No retry/substitution or fresh-model
-availability is inferred.
+036-01 remains IN_PROGRESS. The first Opus attempt's expired-OAuth response
+is preserved. Following explicit replacement authorization, attempts2-9
+produced actual overallpass0, all28requiredpass and genuine quality0.9675
+against default0.8. A fixed, preselected misalignment on attempts10-17 retained
+all28 required facts but scored0.512065 at the unchanged0.8, preserving actual
+component-pass/quality-fail/overallfail1. Native replies report `claude-opus-5`;
+new definitions freeze that concrete observed CLI ID.
+The owner authorizes necessary further bounded pilot calls, not adaptive
+search or policy tuning. Each batch documents its purpose, inherits all
+consumed claims and allocates exactly8 judgments.
 
 Twenty actual no-judge diagnostic controls are preserved as an earlier source
 epoch (twelve veto1, eight refusal2; no overall pass). Their0.99 is explicitly
@@ -173,10 +176,10 @@ gate-owned acquisition claims/receipts, reject relabelled cached captures,
 and distinguish hidden descendant text from visible boxless wrappers.
 Historical records are not rewritten as final-code proof.
 
-The durable compliance checkpoint is `needs-changes`. Fresh final-code
-installed proof, live overall pass, component-pass/quality-fail, complete
-package/reinstall/uninstall acceptance, craft/architecture and reconciliation
-reviews remain open. This is not REVIEWED, RECONCILED, DONE or Jig attestation.
+The durable compliance checkpoint is `needs-changes`. Final-code source-epoch
+consolidation, complete controls/package/uninstall acceptance and
+compliance/craft/architecture/reconciliation reviews remain open.
+This is not REVIEWED, RECONCILED, DONE or Jig attestation.
 No 036-02 implementation or closed-record amendment occurred.
 
 ### Close-out (post-DONE)

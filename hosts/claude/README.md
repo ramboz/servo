@@ -144,10 +144,9 @@ completion authority. See the
 
 The [bounded card pilot](skills/design-eval/examples/bound-card.md) adds
 source/build-bound DOM/state evidence and same-run quality composition through
-that ordinary carrier. **036-01 remains in progress:** the first selected
-Opus/Claude CLI attempt refused on expired OAuth. Renewal is owner-reported and
-a replacement-attempt allowance decision is pending; diagnostic veto controls
-are not a live-fidelity acceptance result.
+that ordinary carrier. **036-01 remains in progress:** real Opus runs preserve
+an overall pass and a component-pass/quality-fail control. Final-epoch controls
+and lifecycle reviews remain open; diagnostic veto scores are not live fidelity.
 This is the attended gate/install surface, not yet consumer/autonomy propagation.
 
 ## Repository structure (for contributors)

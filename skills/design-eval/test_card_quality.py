@@ -58,6 +58,54 @@ class QualityControls(unittest.TestCase):
                 card_quality.reserve(root, 8)
             self.assertEqual(len(list(root.iterdir())), 8)
 
+    def test_explicit_one_replacement_extends_existing_history_by_only_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for _ in range(8):
+                card_quality.reserve(root, 8)
+            self.assertEqual(card_quality.reserve(root, 9), 9)
+            with self.assertRaisesRegex(ValueError, "allowance"):
+                card_quality.reserve(root, 9)
+            for invalid in (True, 0, -1, "10", float("inf")):
+                with self.assertRaisesRegex(ValueError, "allowance"):
+                    card_quality.reserve(root, invalid)
+
+    def test_new_checkpoint_copies_consumed_attempt_instead_of_resetting_budget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original, checkpoint = root / "original", root / "checkpoint"
+            card_quality.reserve(original, 8)
+            rows = card_quality.inherit_attempts(original, checkpoint, 9)
+            self.assertEqual([row["path"] for row in rows], ["1.claim"])
+            self.assertEqual(
+                (original / "1.claim").read_bytes(), (checkpoint / "1.claim").read_bytes()
+            )
+            self.assertEqual(
+                [card_quality.reserve(checkpoint, 9) for _ in range(8)], list(range(2, 10))
+            )
+            with self.assertRaisesRegex(ValueError, "allowance"):
+                card_quality.reserve(checkpoint, 9)
+            with self.assertRaises(FileExistsError):
+                card_quality.inherit_attempts(original, checkpoint, 9)
+
+    def test_new_approved_batch_carries_all_nine_spent_attempts_and_adds_exactly_eight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old, new = root / "old", root / "new"
+            for _ in range(9):
+                card_quality.reserve(old, 9)
+            rows = card_quality.inherit_attempts(old, new, 17)
+            self.assertEqual(len(rows), 9)
+            self.assertEqual([card_quality.reserve(new, 17) for _ in range(8)], list(range(10, 18)))
+            with self.assertRaisesRegex(ValueError, "allowance"):
+                card_quality.reserve(new, 17)
+            with self.assertRaisesRegex(ValueError, "eight|history|allowance"):
+                card_quality.inherit_attempts(old, root / "too-many", 18)
+            next_epoch = root / "next-epoch"
+            history = card_quality.inherit_attempts(new, next_epoch, 25)
+            self.assertEqual([row["path"] for row in history], [f"{n}.claim" for n in range(1, 18)])
+            self.assertEqual(card_quality.reserve(next_epoch, 25), 18)
+
 
 if __name__ == "__main__":
     unittest.main()

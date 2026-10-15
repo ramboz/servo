@@ -489,3 +489,80 @@ def test_working_directory_does_not_change_publication_base(tmp_path, monkeypatc
     result = ck.run_checks(plan, tmp_path)
     ref = rt.component_result(plan, result, path, Path(ck.__file__))
     assert rt.validate_component(ref, entry, RUN, "policy", 1.0, tmp_path)["status"] == "pass"
+
+
+@pytest.mark.parametrize("literal", ["0.5", "0.8"])
+def test_numeric_default_threshold_is_supported_and_exactly_frozen(harness, literal):
+    oracle = harness.target / "oracle.sh"
+    oracle.write_text(oracle.read_text().replace(
+        'THRESHOLD="${THRESHOLD:-0.5}"', 'THRESHOLD="${THRESHOLD:-' + literal + '}"'))
+    (harness.target / "subject").touch()
+    harness.install_required()
+    process, payload = harness.gate()
+    assert process.returncode == 0, payload
+    assert payload["threshold"] == float(literal)
+    assert payload["threshold_override"]["source"] == "oracle_default"
+    assert harness.plan["checks"][0]["id"] in payload["required"]["passed"]
+    oracle.write_text(oracle.read_text().replace(
+        'THRESHOLD="${THRESHOLD:-' + literal + '}"', 'THRESHOLD="${THRESHOLD:-0.6}"'))
+    changed, refused = harness.gate()
+    assert changed.returncode == 2, refused
+
+
+def test_approved_point8_really_vetoes_point7_quality_with_required_pass(harness):
+    oracle = harness.target / "oracle.sh"
+    oracle.write_text(oracle.read_text().replace(
+        'THRESHOLD="${THRESHOLD:-0.5}"', 'THRESHOLD="${THRESHOLD:-0.8}"').replace(
+        "print(1.0)", "print(0.7)"))
+    (harness.target / "subject").touch()
+    harness.install_required()
+    process, payload = harness.gate()
+    assert process.returncode == 1, payload
+    assert payload["composite"] == 0.7
+    assert payload["threshold"] == 0.8
+    assert payload["required"]["status"] == "pass"
+    assert payload["reason"] == "quality_below_threshold"
+
+
+@pytest.mark.parametrize("literal", ["nan", "NaN", "inf", "Infinity", "1e999", "",
+                                     "$(echo 0)", "${OTHER}", "0.8;true", "`true`"])
+def test_nonliteral_or_nonfinite_threshold_refuses_without_writes(harness, literal):
+    assert harness.overlay("generate").returncode == 0
+    assert harness.overlay("approve").returncode == 0
+    oracle = harness.target / "oracle.sh"
+    oracle.write_text(oracle.read_text().replace(
+        'THRESHOLD="${THRESHOLD:-0.5}"', 'THRESHOLD="${THRESHOLD:-' + literal + '}"'))
+    before = {p: p.read_bytes() for p in harness.target.rglob("*") if p.is_file()}
+    refused = harness.overlay("install", "--enable-required")
+    assert refused.returncode == 2
+    assert before == {p: p.read_bytes() for p in harness.target.rglob("*") if p.is_file()}
+
+
+def test_threshold_change_between_approval_and_install_requires_reapproval(harness):
+    assert harness.overlay("generate").returncode == 0
+    assert harness.overlay("approve").returncode == 0
+    oracle = harness.target / "oracle.sh"
+    oracle.write_text(oracle.read_text().replace(
+        'THRESHOLD="${THRESHOLD:-0.5}"', 'THRESHOLD="${THRESHOLD:-0.8}"'))
+    refused = harness.overlay("install", "--enable-required")
+    assert refused.returncode == 2
+    assert "threshold" in refused.stderr or "driver" in refused.stderr
+
+
+@pytest.mark.parametrize("change_default", [False, True])
+def test_omitted_threshold_approval_pin_cannot_refreeze_changed_default(harness, change_default):
+    assert harness.overlay("generate").returncode == 0
+    assert harness.overlay("approve").returncode == 0
+    path = harness.out / "checks.json"
+    plan = json.loads(path.read_bytes())
+    del plan["approved_required_binding"]["threshold_default"]
+    path.write_text(json.dumps(plan))
+    oracle = harness.target / "oracle.sh"
+    if change_default:
+        oracle.write_text(oracle.read_text().replace(
+            'THRESHOLD="${THRESHOLD:-0.5}"', 'THRESHOLD="${THRESHOLD:-0.8}"'))
+    before = {p: p.read_bytes() for p in harness.target.rglob("*") if p.is_file()}
+    refused = harness.overlay("install", "--enable-required")
+    assert refused.returncode == 2
+    assert "threshold" in refused.stderr
+    assert before == {p: p.read_bytes() for p in harness.target.rglob("*") if p.is_file()}

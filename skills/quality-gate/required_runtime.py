@@ -271,6 +271,18 @@ def finite(value):
     return number
 
 
+def threshold_default(text):
+    """Read one canonical numeric fallback without evaluating any shell."""
+    text = re.sub(r"^# SEED:start [^\n]+\n.*?^# SEED:end [^\n]+", "", text,
+                  flags=re.S | re.M)
+    matches = re.findall(r'^THRESHOLD="\$\{THRESHOLD:-([^}\n]*)\}"$', text, re.M)
+    if (len(matches) != 1 or not re.fullmatch(
+            r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", matches[0])):
+        raise ValueError("unsupported literal threshold default")
+    finite(matches[0])
+    return matches[0]
+
+
 def quality_components(text):
     block = re.search(r"^COMPONENTS=\((.*?)^\)", text, re.S | re.M)
     if not block:
@@ -417,7 +429,8 @@ def check_pins(pins, base=None):
             raise ValueError("approved artifact modified: " + pin["path"])
 
 
-def binding(plan, component, checks_path, engine, runtime, fragment, base):
+def binding(plan, component, checks_path, engine, runtime, fragment, base,
+            threshold):
     mode = policy_mode(plan)
     if mode is None:
         raise ValueError("no explicit required policy to approve")
@@ -437,6 +450,7 @@ def binding(plan, component, checks_path, engine, runtime, fragment, base):
         "required_runtime": {"path": policy_path(runtime, base),
                              "hash": file_hash(runtime)},
         "driver_hash": digest(DRIVER.encode()),
+        "threshold_default": threshold,
     }
 
 
@@ -463,6 +477,9 @@ def validate_binding(entry, plan, content_hash, base):
         raise ValueError("executable resolution modified")
     if entry["driver_hash"] != digest(DRIVER.encode()):
         raise ValueError("required driver modified")
+    if (type(entry.get("threshold_default")) is not str or
+            threshold_default((base / "oracle.sh").read_text()) != entry["threshold_default"]):
+        raise ValueError("approved threshold default missing or modified")
     fragment = (base / entry["checks_path"]).parent / "oracle.sh.fragment"
     if file_hash(fragment) != entry["fragment_hash"]:
         raise ValueError("fragment modified")

@@ -349,6 +349,9 @@ def _install_required(target, oracle_dir, spec_id, plan, weight, vendor_engine):
             value = value.replace("no signals detected — populate # SEED: blocks manually",
                                   "{{NO_COMPONENTS_MESSAGE}}")
             value = value.replace("no components registered", "{{NO_COMPONENTS_MESSAGE}}")
+            runtime.threshold_default(value)
+            value = re.sub(r'^THRESHOLD="\$\{THRESHOLD:-[^}\n]*\}"$',
+                           'THRESHOLD="${THRESHOLD:-<numeric-default>}"', value, flags=re.M)
             return "\n".join(line for line in value.splitlines() if line.strip())
         if normalize(text) != normalize(template):
             raise ValueError("unsupported customized oracle driver; keep canonical driver")
@@ -512,7 +515,8 @@ def approve(target: Path, spec_dir: Path, spec_id: str) -> dict:
                         else _REQUIRED_RUNTIME)
         plan["approved_required_binding"] = runtime.binding(
             plan, component_name(spec_id), checks_json, engine_path,
-            runtime_path, fragment, target)
+            runtime_path, fragment, target,
+            threshold=runtime.threshold_default((target / "oracle.sh").read_text()))
     plan["approval_status"] = "approved"
     plan["approved_at"] = _iso_now()
     checks_json.write_text(json.dumps(plan, indent=2) + "\n")

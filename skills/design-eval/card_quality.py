@@ -2,11 +2,12 @@
 
 import json
 import math
+import shutil
 import subprocess
 from pathlib import Path
 
 import score as scoring
-from card_bundle import file_hash, load, publish, require
+from card_bundle import file_hash, inventory, load, publish, require, safe
 
 
 def parse_reply(envelope, requested):
@@ -46,7 +47,7 @@ def parse_reply(envelope, requested):
 
 
 def reserve(directory, limit):
-    require(type(limit) is int and 1 <= limit <= 8, "unapproved calibration allowance")
+    require(type(limit) is int and limit > 0, "unapproved calibration allowance")
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
     for number in range(1, limit + 1):
@@ -56,7 +57,27 @@ def reserve(directory, limit):
             return number
         except FileExistsError:
             continue
-    raise ValueError("first-calibration allowance exhausted; explicit new approval required")
+    raise ValueError("approved batch allowance exhausted; no automatic replenishment")
+
+
+def inherit_attempts(source, destination, limit):
+    rows = inventory(source)
+    require(type(limit) is int and limit >= 8, "unapproved calibration allowance")
+    require(
+        all(row["path"].endswith(".claim") and row["path"][:-6].isdigit() for row in rows),
+        "invalid prior attempt history",
+    )
+    rows.sort(key=lambda row: int(row["path"][:-6]))
+    require(
+        [row["path"] for row in rows] == [f"{n}.claim" for n in range(1, len(rows) + 1)]
+        and limit == len(rows) + 8,
+        "new allowance must preserve history and authorize exactly eight planned judgments",
+    )
+    destination = Path(destination)
+    destination.mkdir(parents=True)
+    for row in rows:
+        shutil.copyfile(safe(source, row["path"]), safe(destination, row["path"]))
+    return rows
 
 
 def run(config_path, shots, destination, allowance):
@@ -71,6 +92,33 @@ def run(config_path, shots, destination, allowance):
         "card quality requires independent reviewed freeze",
     )
     judge = config["judge"]
+    require(
+        type(judge.get("batch_purpose")) is str and judge["batch_purpose"].strip(),
+        "approved batch purpose required",
+    )
+    prior = judge.get("prior_attempts", [])
+    require(
+        type(prior) is list
+        and all(type(row) is dict and set(row) == {"path", "hash"} for row in prior)
+        and [row["path"] for row in prior] == [f"{n}.claim" for n in range(1, len(prior) + 1)],
+        "missing or noncontiguous prior attempt history",
+    )
+    for row in prior:
+        require(
+            file_hash(safe(allowance, row["path"])) == row["hash"],
+            "consumed attempt history changed",
+        )
+    require(
+        type(judge.get("calibration_limit")) is int
+        and judge["calibration_limit"] == len(prior) + 8,
+        "approved batch must preserve history and allocate exactly eight judgments",
+    )
+    existing = list(Path(allowance).glob("*.claim")) if Path(allowance).exists() else []
+    require(
+        type(judge.get("calibration_limit")) is int
+        and judge["calibration_limit"] - len(existing) >= 8,
+        "remaining allowance cannot cover eight planned judgments; explicit approval required",
+    )
     require(judge["transport"] == "cli", "pilot owner selected Claude CLI")
     require(
         judge.get("decoding_mode") == "native-default"
@@ -121,6 +169,11 @@ def run(config_path, shots, destination, allowance):
         )
         samples[state] = []
         for sample in range(1, 5):
+            for row in prior:
+                require(
+                    file_hash(safe(allowance, row["path"])) == row["hash"],
+                    "consumed attempt history changed",
+                )
             number = reserve(allowance, judge.get("calibration_limit"))
             stem = f"quality-{state}-{sample}"
             command = [
@@ -145,6 +198,7 @@ def run(config_path, shots, destination, allowance):
                     "actual_hash": file_hash(actual),
                     "reference_hash": file_hash(reference),
                     "definition_hash": config["approved_content_hash"],
+                    "batch_purpose": judge["batch_purpose"],
                 },
             )
             try:

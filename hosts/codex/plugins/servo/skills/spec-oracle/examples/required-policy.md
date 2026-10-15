@@ -183,6 +183,16 @@ and static COMPONENTS entries survive. Unsupported driver edits/dynamic arrays
 refuse before any writes. Runtime `THRESHOLD=0` and zero weights affect quality,
 never required membership. Non-finite quality values refuse.
 
+The canonical driver's numeric default (for example `0.8`) is a reviewed
+project setting, not an arbitrary shell customization. Recognition accepts
+only one strictly finite numeric literal in the exact template declaration;
+substitutions, metacharacters, NaN/Infinity and other driver edits refuse.
+Approval records the exact literal as mandatory `threshold_default`; omission
+or changes refuse before installation, and the installed prefix hash retains
+the actual bytes, including the chosen default. Recognition never normalizes
+away runtime identity. Shared-runtime changes require fresh approval; old
+historical records are not silently upgraded.
+
 To remove membership, edit to `enabled: false` and remove/set false **all**
 required flags, generate, review, approve, then explicitly install again with
 `--enable-required` (same engine mode). Only that component's membership is

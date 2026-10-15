@@ -5,14 +5,13 @@ approved Vellum `vellum-design-input/0.1-pilot` normal/open card packages.
 It is not general design extraction, a production acceptance oracle, an image
 metric engine, or evidence of Jig DONE.
 
-**Current approval checkpoint:** the first owner-approved Opus/Claude CLI invocation
-returned `Failed to authenticate: OAuth session expired and could not be
-refreshed`. The installed overall gate correctly refused with exit2. The owner
-reports renewing the same subscription, not yet verified by a new model call.
-One of the eight authorized first-calibration invocations is consumed; an
-explicit replacement-attempt decision is pending before a complete new
-eight-judgment calibration. No provider/model substitution bypasses this.
-No live fidelity pass or component-pass/quality-fail acceptance is claimed.
+**Current implementation checkpoint:** after a preserved initial OAuth refusal,
+eight real judgments produced an overall pass at0.9675 against0.8 with all28
+required constraints passing. A single preselected misalignment retained all28
+required facts but scored0.512065 against the same0.8, yielding overall
+`quality_below_threshold`/exit1. All native responses reported `claude-opus-5`;
+later definitions freeze that observed concrete CLI model ID. This is bounded
+fixture evidence, not a production/general-accuracy or DONE claim.
 
 ## Inputs and supported boundary
 
@@ -101,7 +100,13 @@ Live quality uses exactly the verified current run's normal/open PNGs, four
 samples each, lower bounds with k1 and threshold0.8. Every attempted judge call,
 including an authentication failure, reserves a persistent allowance slot
 before invocation. Keep the owner-level consumed count across new checkpoints;
-creating a new directory does not grant another eight calls.
+creating a new directory does not grant another eight calls. The owner has
+explicitly authorized necessary further pilot invocations, without repeated
+per-run prompts, not unbounded/adaptive candidate search or policy tuning.
+Each prepared batch documents `--purpose`, copies the complete prior claim
+history with `--prior-attempts`, and sets `--calibration-limit` to the inherited
+count plus exactly8. Four judgments per state remain fixed. Record every
+outcome/model usage; a new epoch is never relabelled as an old passing run.
 
 ## Candidate and output identities
 
