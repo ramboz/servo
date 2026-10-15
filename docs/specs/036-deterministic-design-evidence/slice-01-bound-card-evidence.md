@@ -43,14 +43,18 @@ and bound evidence that Jig can later attest.
    Matching normal and opened card states return component `pass`; when
    quality also passes, the overall installed gate returns 0 with complete
    required evidence. Installing a draft/unapproved component returns 2.
-2. **Confirmed properties.** The app observations independently measure card
-   width 240 CSS px; band height 44 CSS px/background `#1e2329`; visible title
+2. **Confirmed properties.** The app observations independently measure
+   band width 240 CSS px/height 44 CSS px/background `#1e2329` through confirmed
+   source `#band` and its approved app binding in each state; visible title
    20px/600/`#eef1f4`; visible subtitle 12px/400/`#8a929c`. The approved
    normalization and tolerance are applied and included in the result. Exact
    normal title `Trailhead`, normal subtitle `hiking route planner`, opened
    subtitle `opened` and approved normalized computed CSS-family declaration
    are required; declaration equality makes no actual rendered-font-face claim.
    No 140px card height or Inter value is inferred from old redlines.
+   `normal-band-width` and `open-band-width` each reference their own bound band
+   observation once; a `#card` width or separately classified non-required
+   card-width diagnostic cannot substitute for either approved required ID.
 3. **State and crop.** The confirmed open action changes observed subtitle
    text to exactly `opened` under a bounded approved settle rule. Capture
    provenance reports closed/open state and measured card crop. Sibling
@@ -67,6 +71,12 @@ and bound evidence that Jig can later attest.
    fails under proposed zero size tolerance; weight, normalized color/text/
    family controls follow exact approved comparisons. Owners must approve
    this policy before scoring; unsupported required properties refuse.
+   Keep `#card` width at 240px while changing only the bound band width to
+   242px: each affected state reports its band-width ID failing and gate exit1
+   despite quality0.99/`THRESHOLD=0`. Required geometry boundary controls
+   measure the band, not the card. Generic `sans-serif` versus named
+   `"sans-serif"` remains a changed CSS-family token control, not a normalized
+   match or a rendered-font-face test.
 5. **Unavailable evidence.** Unknown/ambiguous app binding, unsupported required
    target/type/version, omitted comparison/tolerance, absent source approval, unavailable browser/app,
    missing/partial observations, failed state acquisition, invalid units/
@@ -75,6 +85,8 @@ and bound evidence that Jig can later attest.
    separately 1, not misclassified as missing capture. Duplicate/extra/
    omitted required IDs refuse; known failures remain visible beside refusal.
    Omitted tolerance never becomes default zero or drops a required comparison.
+   A missing/unconfirmed band binding or card-only width record cannot establish
+   required band width and returns unknown/refusal, even when card width is240px.
 6. **Freeze and running-build proof.** Source target/capture, policy/binding/
    normalization/tolerance/exclusion and evaluator artifact edits invalidate
    approval. The collector implements the agreed local immutable bundle

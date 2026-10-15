@@ -102,8 +102,7 @@ not an existing production app. These are confirmed fixture target values,
 
 | Constraint | Fixture target | Implementation observation |
 |------------|----------------|----------------------------|
-| Card width | 240 CSS px | Bound card's layout rectangle under approved viewport/device scale. |
-| Content band | Height 44 CSS px, background `#1e2329` | Bound band's rectangle and resolved background color. |
+| Content band | Width 240 CSS px, height 44 CSS px, background `#1e2329` | Confirmed band's layout rectangle and resolved background color under approved viewport/device scale. |
 | Title | 20 CSS px, weight 600, color `#eef1f4` | Visible bound title, resolved font size/weight/color. |
 | Subtitle | 12 CSS px, weight 400, color `#8a929c` | Visible bound subtitle, resolved font size/weight/color. |
 | Normal text | Title `Trailhead`, subtitle `hiking route planner` | Exact visible bound normal-state text, not source text substituted as an app observation. |
@@ -114,7 +113,16 @@ Parent verified the three source text literals; that verifies fixture content,
 not owner acceptance of targets or tolerance policy. Approved C1 input must
 carry them and the declared CSS-family target explicitly.
 
-Confirmed source anchors are `#card`, `#title`, `#subtitle`, with sibling
+The [Vellum C0 appendix at `453945c`](https://github.com/PinkException/vellum/blob/453945cdc0402841b6d1886b15fdbdcf81f74c98/docs/specs/013-design-to-oracle-handoff/input-contract-pilot.md)
+names `normal-band-width` and `open-band-width` in its required state
+inventories. Both must observe the confirmed source `#band` and its approved
+app binding, once each in the corresponding state. `#card` is the capture root,
+not a substitute for that band binding; equal declared widths do not make the
+elements interchangeable. Any extra card-width observation is separately
+classified as a non-required diagnostic, cannot satisfy a band-width ID, and
+cannot replace or alter Vellum's approved required inventory.
+
+Confirmed source anchors are `#card`, `#band`, `#title`, `#subtitle`, with sibling
 `#open` **outside** the card reference crop. App bindings must be explicitly
 confirmed, not assumed identical to source anchors. The open control can
 drive state without being asserted visible in the reference PNG.
@@ -133,7 +141,7 @@ metrics are not inferred from it.
 
 **Coordinator-proposed tolerance, not owner-approved:** compare derived
 `getBoundingClientRect()` geometry in CSS pixels with inclusive absolute
-error <=1 CSS px for card width/band height. Keep zero tolerance for declared
+error <=1 CSS px for required band width/band height. Keep zero tolerance for declared
 font size/weight, exact visible text and normalized color/CSS-family strings.
 Record raw geometry without rounding away failures; test exact +/-1px
 boundaries and immediately outside them. Owner review/approval must pin
@@ -142,7 +150,10 @@ approved choice needs updated controls, not a runtime fallback.
 
 Normalize resolved colors to exact sRGB RGBA including alpha, declared sizes
 to CSS px and weights to numeric values without inferring a rendered font
-face. CSS-family normalization must preserve family order and token semantics;
+face. CSS-family normalization must preserve family order and token semantics,
+including generic `sans-serif` versus the named family `"sans-serif"`; these
+are not equivalent tokens. Vellum owns the normalizer and its corrected
+vectors; a quote-stripping rule that equates these tokens cannot clear C0.
 normal text uses the approved text rule, not an ad hoc fuzzy match. Required
 unsupported properties or omitted comparison/tolerance policy remain
 `unknown`/refusal, never dropped. In particular, omitted geometry tolerance

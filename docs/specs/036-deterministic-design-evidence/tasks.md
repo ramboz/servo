@@ -23,6 +23,10 @@
 - [ ] Create matching web card and independent observable build/state fixture.
 - [ ] Witness missing-title, wrong normal text/family/color/font declaration,
       broken-action, geometry-boundary and served/current-bundle failures.
+- [ ] Measure required normal/open band-width IDs through confirmed band bindings;
+      prove card240px/band242px fails and card-only width evidence refuses.
+- [ ] Keep extra card width non-required and preserve generic versus named
+      quoted CSS-family tokens in normalization controls.
 - [ ] Implement bounded collector/comparator using confirmed Vellum targets.
 - [ ] Build/prove the controlled immutable bundle transport and independently
       identified current delivery; reject self-echoed IDs and incomplete closure.

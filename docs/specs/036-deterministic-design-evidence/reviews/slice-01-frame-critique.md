@@ -2,18 +2,18 @@
 slice: 036-01 - bound-card-evidence
 pass: frame-critique
 verdict: pass
-reviewer: jig:reviewer / servo-alignment-frame (fresh context)
-reviewed_at: 2026-10-15T00:26:20Z
+reviewer: jig:reviewer / servo-band-binding-frame (fresh context)
+reviewed_at: 2026-10-15T00:53:49Z
 prompt_source: review.py frame-critique docs/specs/036-deterministic-design-evidence/spec.md 036-01 docs/specs/036-deterministic-design-evidence/spec.md docs/specs/036-deterministic-design-evidence/plan.md docs/specs/036-deterministic-design-evidence/tasks.md
 ---
 
 VERDICT: pass
 
 REASONING:
-The highest-risk assumption is that observed app state can be linked to the actual evaluated and current delivered bytes; the narrow immutable local-bundle transport makes this a credible, falsifiable implementation obligation without claiming arbitrary HTTP provenance. Readiness requires approved identity/closure definitions and C1 source inputs, not a pre-existing observer, upstream DONE or completed Jig runtime. The pilot explicitly covers normal/opened text, computed CSS-family declaration rather than rendered face, declared size/weight, exact normalized colors, proposed inclusive +/-1 CSSpx geometry, zero declared-value tolerance and missing-policy refusal.
+The highest-risk assumption, equal declared card and band widths permit interchangeable evidence, is explicitly rejected: spec.md:116-123 and slice-01-bound-card-evidence.md:46-57 require state-specific band observations through approved bindings. The slice's lines 74-89 require card240/band242 failures despite quality0.99/THRESHOLD=0, band-based geometry boundaries, and refusal for missing-band/card-only evidence. spec.md:151-156 preserves generic versus quoted named CSS-family semantics, disclaims rendered-face detection, and leaves normalizer/vector ownership with Vellum rather than defining a competing normalizer. Ordering, owner approval, schema separation, overall-gate authority and 0/1/2 outcomes remain explicit; this verdict covers only the affected pre-implementation frame.
 
 SPECIFIC ISSUES:
-No specific framing issues reported.
+No consumer-frame issues reported.
 
 RECONCILIATION NOTES:
-No framing deviations observed. C1, tolerance/normalization policy, canonical vectors and transport boundaries remain owner-approved readiness decisions; live linkage and preserved overall-gate controls remain implementation proof.
+No consumer-frame deviations found. The fetched vellum-c0-453945c.txt:106 still contains the overbroad quote-stripping equivalence vector; its exact correction and revision-bound owner approval remain Vellum's responsibility before C0 clears, as required by docs/specs/036-deterministic-design-evidence/spec.md:155-156. The appendix remains proposed/unapproved.

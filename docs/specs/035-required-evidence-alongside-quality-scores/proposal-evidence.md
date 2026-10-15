@@ -158,3 +158,36 @@ board/index audits (clean, same pre-existing ADR0024/0026 warnings), existing
 spec-oracle local-link checks (17 files pass), whitespace and 17-path artifact-
 only scope checks. ADR remains Proposed; both specs/four slices remain DRAFT.
 No unrelated source suite or plugin installation was performed.
+
+## Required band-binding correction (2026-10-14)
+
+Focused coordinator verification found one remaining comparison-identity
+mismatch: Servo named card width while Vellum C0 requires band width.
+This session retrieved and read the actual producer
+[C0 appendix at `453945cdc0402841b6d1886b15fdbdcf81f74c98`](https://github.com/PinkException/vellum/blob/453945cdc0402841b6d1886b15fdbdcf81f74c98/docs/specs/013-design-to-oracle-handoff/input-contract-pilot.md).
+Its proposed 14-ID inventory per state includes `normal-band-width` and
+`open-band-width`; equal 240px declarations do not make band/card interchangeable.
+
+Spec036, slice036-01 and its plan/tasks now require state-specific band width
+through confirmed source `#band` and approved app bindings. Extra card width
+is separately non-required diagnostic evidence, never required coverage.
+Controls keep card240px/band242px and require failure, and require refusal for
+missing band binding/card-only width evidence. Geometry boundaries measure
+the band. Generic `sans-serif` and named `"sans-serif"` retain distinct token
+semantics; no actual font-face claim or consumer-owned normalizer was introduced.
+Vellum owns correction of its still-overbroad quoted-family vector and C0
+revision approval.
+
+A new fresh-context read-only `jig:reviewer` (`servo-band-binding-frame`) applied
+the affected installed-helper 036-01 frame prompt against the revised files
+and exact producer appendix: **pass**, no consumer-frame issues reported.
+Its durable standard verdict replaces the prior 036-01 frame artifact; git
+retains history. No other policy, readiness order, authority, lifecycle state
+or implementation surface changed.
+
+Affected validation passed: strict spec036 lint (both slices), 036-01
+`check-reviews --stage READY_FOR_REVIEW` without transition, board/index
+audits, all17 proposal/review local-link checks, whitespace, unchanged
+Proposed/DRAFT states and the exact six-path artifact-only scope. Existing
+ADR0024/0026 index warnings remain untouched; no source suite or dependency
+installation was needed for this authoring correction.

@@ -65,6 +65,11 @@ digest and run beneath the overall gate-payload policy verdict. Exercise exact
 normal `Trailhead`/`hiking route planner`, family/color, geometry boundaries,
 opened `opened` text and other
 negative controls through the real installed gate with high diagnostic quality.
+Required width controls use the approved band binding for `normal-band-width`
+and `open-band-width`; hold card width240px while changing band width242px.
+Any extra card-width measurement is a separate non-required diagnostic, never
+required-coverage substitution. Preserve generic versus quoted named CSS-family
+token kinds through the producer-approved normalizer; no rendered-face claim.
 Also preserve component-pass/quality-fail runs: only overall gate success can
 support Jig119 attestation.
 
