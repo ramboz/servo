@@ -20,6 +20,11 @@ It serves the evaluation-model, oracle-synthesis and evaluation-report goals in
 The vision has no `## Use cases` section; `use_cases: []` is intentional.
 This is new opt-in policy, not a repair or amendment of shipped specs.
 
+Owner approval of the pinned proposal and ADR-0044 acceptance are recorded in
+[owner acceptance and standalone readiness](owner-acceptance.md).
+That dated metadata resolves proposal-time approval qualifiers; the spec and
+its slices remain DRAFT pending normal readiness, not implementation-complete.
+
 ## Current state and existing owners
 
 Inspected at main `067ef5092d3c3ebe7d55a4e27610d7fe1d688463` on 2026-10-14:

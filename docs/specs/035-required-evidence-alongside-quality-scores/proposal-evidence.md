@@ -191,3 +191,40 @@ audits, all17 proposal/review local-link checks, whitespace, unchanged
 Proposed/DRAFT states and the exact six-path artifact-only scope. Existing
 ADR0024/0026 index warnings remain untouched; no source suite or dependency
 installation was needed for this authoring correction.
+
+## Owner-directed acceptance (2026-10-14)
+
+The owner selected "Approve the ADRs and pilot contract; start implementation
+(Recommended)", relayed by the coordinating parent, for Vellum ADR0011/C0 at
+`a538a2b474a9f3e1119379aba44257d319e1c276`, ServoADR0044/proposal at
+`91f8d97d2d6f7c358a5de93c22aa143fd417d07c` and JigADR0065/proposal at
+`e83ad795e5bc692ea9ac4e2a25c9b6923e26522e`. The exact input appendix and Jig
+proposal were retrieved at those immutable snapshots; no peer checkout or
+global account was changed.
+
+Installed `adr.py accept 0044` cleared against current genuine frame evidence.
+A git comparison confirmed ADR0044's decision body was unchanged since the
+reviewed alignment revision. The acceptance helper changed only frontmatter
+status, status mirror and verification date; `adr.py index` regenerated the
+derived status. No semantic amendment, helper bypass or PR merge occurred.
+The new [owner-acceptance record](owner-acceptance.md) names the approval scope,
+peer C0 reference, explicit exclusions and standalone035-01 readiness findings.
+
+`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s
+skills/spec-oracle -p test_checks.py -k Command` passed all17 existing
+command/generated-artifact tests. The035-01 frame evidence still clears
+`check-reviews --stage READY_FOR_REVIEW`; no lifecycle transition was made.
+Standalone035-01 needs concrete accepted-semantics carrier/field mapping and
+normal readiness review, not completed Vellum, source captures, a future
+observer or already-working installed-result/race proof.
+
+Source-capture/C1 approval and live quality-policy approval remain separate
+future actions. No source implementation began in this acceptance turn.
+
+Acceptance metadata validation passed both strict spec lints, board/index
+audits, all18 proposal/review local-link checks and whitespace checks. A byte
+comparison against the approved Servo snapshot verified the ADR changed only
+the three installed-helper acceptance metadata fields; decision content is
+unchanged. Specs/four slices remain DRAFT and the complete change is five
+metadata/documentation paths, including the new approval record. Existing
+ADR0024/0026 index-description warnings remain untouched.

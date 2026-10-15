@@ -50,7 +50,7 @@
 - [ADR-0041: Unpriced oracle components refuse USD-bounded execution](adr-0041-unpriced-oracles-refuse-usd-execution.md) — Native judged components must not silently bypass a caller's USD budget. (2026-10-12, Accepted)
 - [ADR-0042: Native generic evals read explicit frozen candidate file paths](adr-0042-native-generic-candidate-files.md) — Generic native scoring needs real candidate output, not an injected score. (2026-10-12, Accepted)
 - [ADR-0043: Copilot capability boundaries preserve Servo guarantees](adr-0043-copilot-capability-boundaries.md) — Installing Servo must not silently remove its execution safeguards. (2026-10-12, Accepted)
-- [ADR-0044: Required constraints cannot be averaged away](adr-0044-required-constraints-cannot-be-averaged-away.md) — An approved required constraint must remain a gate even when the quality score is high. (2026-10-14, Proposed)
+- [ADR-0044: Required constraints cannot be averaged away](adr-0044-required-constraints-cannot-be-averaged-away.md) — An approved required constraint must remain a gate even when the quality score is high. (2026-10-14, Accepted)
 
 ## Pending
 
