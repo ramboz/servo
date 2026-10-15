@@ -290,8 +290,12 @@ the oracle. That pre-invocation refusal has `run_id: null` and no preserved
 invocation; it cannot attest completion. Repair the installed gate package
 and rerun to obtain bound evidence. A false-only `required: false` annotation
 without policy remains an ordinary scalar overlay.
-Consumer/autonomy propagation is a separate slice; do not treat this as
-035-02/036 support.
+Supported loop/goal, hook advice and heartbeat consumers now preserve the
+overall payload and exact gate path/hash (035-02). Inspect required IDs/reasons
+and raw evidence, repair implementation on contradiction, or acquisition/bindings
+on refusal, then rerun. Policy changes require reviewed reapproval; customized
+hooks require explicit migration. This is not spec036 design/served-build
+attestation or proof of native Copilot unattended autonomy.
 
 Executable source and generated-host examples, including generated-artifact,
 concurrency, relocation and mutation controls:

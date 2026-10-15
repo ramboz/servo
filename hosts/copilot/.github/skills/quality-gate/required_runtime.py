@@ -737,7 +737,12 @@ def oracle(target):
                 "value": os.environ.get("THRESHOLD", "0.5")}
     try:
         policy, policy_hash = installed_policy(target)
-        text = (target / "oracle.sh").read_text()
+        oracle_bytes = (target / "oracle.sh").read_bytes()
+        text = oracle_bytes.decode("utf-8")
+        for entry in policy["components"]:
+            for pin in entry["evaluator_artifacts"]:
+                if pin["path"] == "oracle.sh" and pin["hash"] != digest(oracle_bytes):
+                    raise ValueError("executed oracle snapshot differs from approved input pin")
         if not text.endswith(DRIVER):
             raise ValueError("required driver modified")
         prefix = text[:-len(DRIVER)]

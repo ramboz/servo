@@ -94,6 +94,16 @@ reciprocal Compile-side artifact to the per-run `state.json` (ADR-0004): a
 *plan* — durable, reviewable, produced once per compile — versus an
 *outcome* — rewritten every iteration of a run.
 
+For enabled required policy the plan references `.servo/required-policy.json`
+and its manifest digest, gate schema2 and the completion-authority pattern
+`.servo/gate-runs/<run_id>/gate.json`. Its evaluation model retains the approved
+required binding (config, evaluator, required IDs and source provenance).
+These are planning references, not an evaluation or served/current-build claim.
+Run consumers preserve the original overall `oracle` plus exact `gate_ref`
+path/hash; neither a standalone component pass nor the plan authorizes completion.
+Inspect required IDs/reasons on fail, repair implementation and rerun; on refusal,
+repair acquisition/bindings. Policy changes require explicit reviewed reapproval.
+
 ## Refusal table — closed `{0, 2}` exit contract
 
 `compile` never exits `1`. Exit `0` means the plan was emitted (or, on a

@@ -56,6 +56,7 @@ Summary line: one JSON line on stdout after the last iteration (or refusal).
 """
 
 import argparse
+import importlib.util
 import json
 import os
 import platform
@@ -302,6 +303,10 @@ EXIT_INTERRUPTED = 130
 # gate.py lives at a sibling skill path. Resolve once at import time so a
 # repeated `subprocess.run` cost stays trivial.
 GATE_PATH = Path(__file__).resolve().parent.parent / "quality-gate" / "gate.py"
+_consumer_spec = importlib.util.spec_from_file_location(
+    "_loop_gate_consumer", GATE_PATH.with_name("gate_consumer.py"))
+gate_consumer = importlib.util.module_from_spec(_consumer_spec)
+_consumer_spec.loader.exec_module(gate_consumer)
 
 # Slice 023-02: readiness.py (the 023-01 autonomy-readiness skill) lives at a
 # sibling skill path, same layout convention as GATE_PATH. loop.py subprocesses
@@ -760,8 +765,8 @@ def _load_state(state_path: Path) -> Optional[dict]:
     if not state_path.exists():
         return None
     try:
-        data = json.loads(state_path.read_text())
-    except (json.JSONDecodeError, OSError):
+        data = gate_consumer.parse(state_path.read_text())
+    except (ValueError, OSError):
         return None
     return data if isinstance(data, dict) else None
 
@@ -2299,12 +2304,13 @@ def _ensure_vendored_gate(target: Path) -> tuple[Optional[Path], Optional[str]]:
     try:
         # The required carrier is a stdlib sibling dependency of the gate,
         # including on clone-portable goal/Routine installs.
-        runtime_src = src.with_name("required_runtime.py")
-        runtime_dest = dest.with_name("required_runtime.py")
-        if (not runtime_dest.is_file()
-                or runtime_dest.read_bytes() != runtime_src.read_bytes()):
-            runtime_dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(runtime_src, runtime_dest)
+        for name in ("required_runtime.py", "gate_consumer.py"):
+            runtime_src = src.with_name(name)
+            runtime_dest = dest.with_name(name)
+            if (not runtime_dest.is_file()
+                    or runtime_dest.read_bytes() != runtime_src.read_bytes()):
+                runtime_dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(runtime_src, runtime_dest)
         if dest.is_file() and dest.read_bytes() == src_bytes:
             return dest, None  # present and current → no rewrite
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -2346,8 +2352,10 @@ def _invoke_gate(target: Path, gate_path: Path = GATE_PATH) -> Optional[dict]:
             "terminal_breadcrumb": message,
         }
     cmd = [sys.executable, str(gate_path), str(target), "--json", "--usd-budget-context"]
+    run_id, environment = gate_consumer.request(target)
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, **environment},
     )
     _active_subprocess = proc
     try:
@@ -2355,8 +2363,8 @@ def _invoke_gate(target: Path, gate_path: Path = GATE_PATH) -> Optional[dict]:
     finally:
         _active_subprocess = None
     try:
-        return json.loads(stdout)
-    except json.JSONDecodeError:
+        return gate_consumer.accept(target, gate_consumer.parse(stdout), proc.returncode, run_id)
+    except ValueError:
         # Truncate the diagnostic dump — a misbehaving gate could otherwise
         # spam megabytes into our stderr. 500 chars each is enough to ID the
         # failure shape without flooding the log.
@@ -2398,6 +2406,9 @@ def _summary_payload(
     }
     if terminal_breadcrumb is not None:
         payload["terminal_breadcrumb"] = terminal_breadcrumb
+    if state.get("oracle") is not None:
+        payload.update(gate_consumer.fields(state))
+        payload["oracle_reason"] = state.get("oracle_reason")
     return payload
 
 
@@ -2419,6 +2430,8 @@ def _finalize_state_and_summary(
     record.
     """
     state["last_terminal_reason"] = terminal_reason
+    if state.get("oracle") is not None:
+        state["final_oracle_status"] = final_oracle_status
     if terminal_breadcrumb is not None:
         state["terminal_breadcrumb"] = terminal_breadcrumb
     _atomic_write_state(state, state_path)
@@ -2654,6 +2667,33 @@ def run_loop(
         state.setdefault("plateau_noise_floor", DEFAULT_PLATEAU_NOISE_FLOOR)
         state.setdefault("last_verdict", None)
         state.setdefault("last_oracle_json", None)
+        # Resume reuses immutable evidence, never a remembered scalar. Validate
+        # every v2 history entry before any new model call; --resume-anyway
+        # cannot waive evidence/run binding.
+        records = list(state.get("oracle_score_history") or [])
+        if state.get("oracle") is not None:
+            records.append(state)
+        elif (state.get("last_oracle_json") or {}).get("schema_version") != 1:
+            if state.get("last_oracle_json"):
+                records.append(state["last_oracle_json"])
+        for record in records:
+            if (isinstance(record, dict) and "oracle" not in record
+                    and "schema_version" not in record):
+                continue  # old scalar v1 checkpoint history
+            checked = gate_consumer.read(target, record)
+            if checked.get("consumer_error"):
+                state.update(gate_consumer.fields(checked))
+                _finalize_state_and_summary(
+                    state, state_path, terminal_reason="oracle_evaluation_refused",
+                    final_oracle_status=STATUS_ENV_ERROR,
+                    terminal_breadcrumb=gate_consumer.guidance(checked),
+                )
+                return EXIT_ENV_ERROR
+            if "oracle" in record and "status" in record:
+                # History scalars are diagnostics, never readback authority.
+                # Copy the preserved overall decision, do not rescore it.
+                record.update(status=checked["status"], composite=checked.get("composite"),
+                              threshold=checked.get("threshold"))
         # Slice 031-01 (ADR-0037): additive fields; a state file written before
         # this slice has neither. Default False (safe: an unarmed resume can
         # still be relabeled, never falsely disarmed; a never-computed resume
@@ -2756,6 +2796,12 @@ def run_loop(
     history = state.get("oracle_score_history") or []
     if history:
         final_oracle_status = history[-1].get("status", STATUS_ENV_ERROR)
+    if (state.get("oracle") is not None
+            and state.get("final_oracle_status") in (STATUS_ENV_ERROR, STATUS_UNKNOWN_INTERRUPTED)):
+        final_oracle_status = state["final_oracle_status"]
+    required_enabled = gate_consumer.pins.enabled(target)
+    if required_enabled and state.get("oracle") is None:
+        final_oracle_status = STATUS_ENV_ERROR
     starting_iteration = state["iteration_count"] + 1
     terminal_reason = REASON_MAX_ITERATIONS_REACHED
     halted_on_pass = False
@@ -2876,7 +2922,8 @@ def run_loop(
             _finalize_state_and_summary(
                 state, state_path,
                 terminal_reason=REASON_CLAUDE_INVOCATION_FAILED,
-                final_oracle_status=final_oracle_status,
+                final_oracle_status=(STATUS_ENV_ERROR if state.get("oracle") is not None
+                                     else final_oracle_status),
             )
             return EXIT_ENV_ERROR
 
@@ -2947,7 +2994,8 @@ def run_loop(
             _finalize_state_and_summary(
                 state, state_path,
                 terminal_reason=REASON_VERDICT_SCHEMA_MISMATCH,
-                final_oracle_status=final_oracle_status,
+                final_oracle_status=(STATUS_ENV_ERROR if state.get("oracle") is not None
+                                     else final_oracle_status),
             )
             return EXIT_ENV_ERROR
         # `verdict_fields` may be None (no block found); that's fine — the
@@ -3003,7 +3051,9 @@ def run_loop(
             "composite": oracle_composite,
             "threshold": oracle_threshold,
             "status": oracle_status,
+            **gate_consumer.fields(gate_data),
         })
+        state.update(gate_consumer.fields(gate_data))
         state["last_terminal_reason"] = claude_terminal_reason
         state["last_oracle_json"] = gate_data
         _atomic_write_state(state, state_path)
@@ -3025,6 +3075,7 @@ def run_loop(
             "oracle_composite": oracle_composite,
             "oracle_threshold": oracle_threshold,
             "run_id": state["run_id"],
+            **gate_consumer.fields(gate_data),
         })
 
         final_oracle_status = oracle_status
@@ -3034,6 +3085,14 @@ def run_loop(
             terminal_reason = REASON_ORACLE_PASSED
             halted_on_pass = True
             break
+
+        if gate_data.get("schema_version") == 2 and oracle_exit_code == 2:
+            _finalize_state_and_summary(
+                state, state_path, terminal_reason="oracle_evaluation_refused",
+                final_oracle_status=STATUS_ENV_ERROR,
+                terminal_breadcrumb=gate_consumer.guidance(gate_data),
+            )
+            return EXIT_ENV_ERROR
 
         # Post-iteration cost-ceiling check.
         if (
@@ -3083,13 +3142,19 @@ def run_loop(
         terminal_breadcrumb = EDIT_PERMISSION_BREADCRUMB
         sys.stderr.write(f"loop: {terminal_breadcrumb}\n")
 
+    unavailable = ((required_enabled or state.get("oracle") is not None)
+                   and final_oracle_status in (STATUS_ENV_ERROR, STATUS_UNKNOWN_INTERRUPTED))
+    if unavailable and terminal_breadcrumb is None:
+        terminal_breadcrumb = gate_consumer.guidance({
+            **state, "exit_code": 2, "reason": "required_evidence_unavailable",
+        })
     _finalize_state_and_summary(
         state, state_path,
         terminal_reason=terminal_reason,
         final_oracle_status=final_oracle_status,
         terminal_breadcrumb=terminal_breadcrumb,
     )
-    return EXIT_ENV_ERROR if relabel is not None else EXIT_OK
+    return EXIT_ENV_ERROR if relabel is not None or unavailable else EXIT_OK
 
 
 # ===========================================================================
@@ -3154,6 +3219,13 @@ def _compose_goal_prompt(
         f"Never print the sentinel with `status=pass` unless that gate run "
         f"reported exit_code 0 this turn — the oracle, not your judgement, "
         f"decides what passes.\n"
+        f"For gate schema_version 2, the overall gate_result is authority, not "
+        f"a component pass or a high diagnostic composite. Preserve the full "
+        f"payload and exact .servo/gate-runs/<run_id>/gate.json path/hash. "
+        f"Required failure needs implementation repair; unavailable evidence "
+        f"needs acquisition/binding repair and must not print a pass sentinel. "
+        f"Unknown versions refuse. Policy changes require reviewed reapproval; "
+        f"source_identity is provenance, not served-build attestation.\n"
     )
 
 
@@ -3338,13 +3410,14 @@ def _refuse_goal(
 ) -> int:
     """Stderr breadcrumb + goal-shaped summary line; return rc=2 (no run dir)."""
     sys.stderr.write(f"loop: {message}\n")
-    _emit_json(_goal_summary(
+    summary = _goal_summary(
         run_id=run_id, terminal_reason=reason, cumulative_cost_usd=0.0,
         cost_ceiling=cost_ceiling, max_turns=max_turns,
         final_oracle_status=STATUS_ENV_ERROR, composite=None, threshold=None,
         subtype=None, claude_terminal_reason=None, num_turns=0,
         transcript_showed_pass=False,
-    ))
+    )
+    _emit_json(summary)
     return EXIT_ENV_ERROR
 
 
@@ -3493,7 +3566,7 @@ def run_goal_loop(
         if terminal_breadcrumb is not None:
             state["terminal_breadcrumb"] = terminal_breadcrumb
         _atomic_write_state(state, state_path)
-        _emit_json(_goal_summary(
+        summary = _goal_summary(
             run_id=run_id, terminal_reason=terminal_reason,
             cumulative_cost_usd=cumulative_cost_usd, cost_ceiling=ceiling,
             max_turns=max_turns, final_oracle_status=final_oracle_status,
@@ -3501,7 +3574,9 @@ def run_goal_loop(
             claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
             transcript_showed_pass=transcript_showed_pass,
             terminal_breadcrumb=terminal_breadcrumb,
-        ))
+        )
+        summary.update(gate_consumer.fields(state))
+        _emit_json(summary)
         return exit_code
 
     goal_prompt = _compose_goal_prompt(prompt, gate_path=vendored_gate)
@@ -3648,6 +3723,7 @@ def run_goal_loop(
             exit_code=EXIT_ENV_ERROR,
         )
     gate_exit = int(gate_data.get("exit_code", 2))
+    state.update(gate_consumer.fields(gate_data))
     gate_status = str(gate_data.get("status", STATUS_ENV_ERROR))
     composite = gate_data.get("composite")
     threshold = gate_data.get("threshold")
@@ -3672,6 +3748,8 @@ def run_goal_loop(
         terminal_reason, exit_code = REASON_ORACLE_DISAGREEMENT, EXIT_ENV_ERROR
     elif gate_exit == 0:
         terminal_reason, exit_code = REASON_ORACLE_PASS, EXIT_OK
+    elif gate_data.get("schema_version") == 2 and gate_exit == 2:
+        terminal_reason, exit_code = "oracle_evaluation_refused", EXIT_ENV_ERROR
     else:
         terminal_reason, exit_code = REASON_ORACLE_BELOW_THRESHOLD, EXIT_OK
 
@@ -3684,6 +3762,11 @@ def run_goal_loop(
     # (or a cap whose final gate passed) is never relabeled, and a capable run
     # (delta non-empty) keeps its original reason.
     terminal_breadcrumb = None
+    if gate_data.get("schema_version") == 2 and gate_exit == 2:
+        # Caps remain the terminal cause; refusal still returns 2 and is
+        # separately carried as oracle_reason, not rewritten as convergence.
+        exit_code = EXIT_ENV_ERROR
+        terminal_breadcrumb = gate_consumer.guidance(gate_data)
     relabel = _relabel_terminal_reason(
         terminal_reason,
         runner_ever_edited=ever_edited,

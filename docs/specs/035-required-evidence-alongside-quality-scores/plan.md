@@ -195,11 +195,93 @@ No shared watchers/services or upstream captures are needed.
 
 ## 035-02: consumers
 
-Start from the bounded canonical inventory in spec.md, then enumerate actual
-readers before edits. Cover loop/goal gate invocation and sentinel handling,
-history/resume/plateau/final summaries, hook advice, execution-plan references,
-heartbeat copy/verify/handoff/triage and agent prompts. Regenerate host packages
-and validate supported project vendors. No native Copilot autonomy work.
+### Pickup and readiness
+
+035-02 pickup is based on clean `servo-installed-required-gate` at
+`aefc9306fa6aa38d55cb9543338b413823624f11`, the OPEN implementation PR41,
+whose selected parent is `servo-required-design-evidence`. The new slice's PR
+targets `servo-installed-required-gate`; there is no merge or main retarget.
+035-01 is DONE with real gate/component fixtures. The earlier 035-01 readiness
+and scope paragraphs above are its historical pickup, not this slice's scope.
+After fresh independent framing/readiness review, use the actual helper
+READY_FOR_REVIEW -> READY_FOR_IMPLEMENTATION -> IN_PROGRESS transitions.
+
+### Bounded consumer inventory
+
+The inventory comes from literal gate/oracle/status/sentinel references in
+canonical `skills/`, `templates/`, `agents/`, `hooks/`, `scripts/` and the install
+contract, plus the concrete subprocess and persistence seams read below.
+Generated `hosts/` are projections of that canonical source under the existing
+builder. This closes the repository's declared runtime/install surfaces; it
+does not establish compatibility with dynamic or external consumers.
+
+| Consumer | Source seam at pickup | Treatment |
+|----------|-----------------------|-----------|
+| Loop subprocess and completion | `skills/agent-loop/loop.py:2320-2368,2990-3098` | Read the overall gate, reject unavailable/unsupported/stale/replayed v2, halt v2 refusal with exit 2. Keep existing budget/context/iteration/plateau brakes. |
+| Loop checkpoint, resume, prompts, final summary | `loop.py:753-768,2370-2439,2570-2660,2750-2762,3010-3050` | Add preserved overall payload and exact gate reference to history/summary; validate v2 checkpoint bindings before reuse. Legacy state version 1 stays readable. |
+| Goal, sentinel and Routine guidance | `loop.py:3100-3174,3266-3333,3626-3708,3720-3780` | Only the overall gate can pass. Preserve final evidence and separate oracle cause from existing cap/disagreement terminal reasons. No native Copilot goal driver. |
+| Clone-portable gate vendor | `loop.py:2278-2317` | Vendor the consumer reader beside gate/runtime through the existing installer. |
+| Hook install and advice | `skills/oracle-hook/hook.py:96-107,180-237,325-452`; `templates/meta-judge.sh.template` | Version-aware required-failure hint and refusal warning; env-error remains turn fail-open, never completion. Existing customized scripts are not replaced; emit migration guidance. Copilot adapter remains advisory. |
+| Planner | `skills/execution-planner/execution_plan.py:176-212,229-271,286-334` | Reference approved required policy/config/source identities and overall carrier pattern without evaluating, grading or claiming served-build provenance. |
+| Heartbeat gate preflight/provision/verification | `skills/heartbeat/heartbeat.py:1634-1689,1766-1797,2340-2426` | Validate overall v2, copy policy and approved evaluator sidecars, exclude prior gate/component run records; preserve verification refusal evidence. |
+| Heartbeat final outcome and triage | `heartbeat.py:1050-1078,1480-1590,2083-2116,2490-2600` | Preserve final overall authority/refusal and evidence in outcomes and human/JSON reports; required fail cannot become passed. Keep quarantine/accounting behavior. |
+| Runner/judge instructions | `agents/runner.md`, `agents/judge.md` | Explain required contradiction versus unavailable evidence, inspection and rerun, with policy reapproval only as an explicit owner change. |
+| Host/install documentation | `skills/{agent-loop,heartbeat,oracle-hook,execution-planner}/SKILL.md`, `README.md`, `docs/architecture.md`, `.claude-plugin/install-contract.json`, `scripts/build_host_packages.py` | Update live guidance, runtime closure and generated packages via the existing builder. |
+| Scalar evaluators and upstream readiness | `skills/_common/fidelity_eval.py`, `skills/{design-eval,content-fidelity,eval-authoring,autonomy-readiness,edd-suitability}/*` | No-op: these emit component scores or inspect compile-time readiness, not installed overall gate completion. Their component/policy versions are not gate versions. No design/common changes. |
+| Gate producer/scaffold/overlay | `skills/{quality-gate,scaffold-init,spec-oracle}/*`, `templates/oracle.sh.template` | No new grading or producer edits. Reuse 035-01's approved policy and carrier; raise a producer API gap to the coordinator before touching shared core. |
+
+### Carrier handling
+
+Use a small consumer-only reader next to quality-gate, shared by the named
+consumers and included in the existing project vendor closure. It reads and
+checks evidence; it never invokes checks or recomputes quality/required grades.
+No new DSL, registry, scheduler or competing completion authority is added.
+The coordinator is notified of this consumer-only seam before source edits.
+
+For a live v2 invocation, the caller requests a fresh UUID and exact
+`.servo/gate-runs/<UUID>` destination via the existing run-context variables.
+Accept only that run, matching subprocess exit/status and exact published
+`gate.json` bytes. Carry the original overall payload as `oracle` and its
+`{path, hash}` reference as `gate_ref` in consumer records. The payload already
+closes policy, effective quality policy and exact component references;
+validate referenced bytes, run/config/evaluator/source bindings and the current
+approved installed policy using existing read-only pins. Do not pick a latest
+ledger, fabricate a score on refusal, equate a component pass with gate pass,
+or interpret approved source provenance as served/current-build attestation.
+Any build/observation identity already present in component raw evidence is
+preserved, not fabricated or re-derived.
+
+V2 failure remains `fail` with its typed cause; v2 refusal remains `env_error`
+with actionable unavailable-evidence diagnostics, retaining known failures.
+Invalid/missing mandatory references and unknown versions refuse with exit 2.
+Once-only/replay controls apply to new invocation acceptance; multiple reports
+may read the same immutable recorded run. Checkpoint/final handoff readers
+revalidate their recorded exact-byte references without running the evaluator.
+No pass can be inferred from a remembered scalar score or an unbound summary.
+Pre-publication producer refusals without a usable run are unavailable, not
+invented immutable records. Scalar v1 behavior and legacy checkpoints stay
+compatible; additive fields do not conflate checkpoint and gate schema versions.
+
+### TDD and installed controls
+
+The implementer witnesses failing tests before source edits and stores exact
+commands/results in a slice-specific consumer receipt. Exercise pass, high-score
+required veto (including zero weight/THRESHOLD=0), component pass plus overall
+quality fail, unavailable evidence, unsupported version, wrong/missing/digest-
+mutated carrier, stale/replayed run, old v1 state and hook turn fail-open.
+Prove goal disagreement/caps, diagnostic plateau and heartbeat triage final
+reporting without a real model call or a native Copilot autonomy claim.
+Use actual freshly installed command fixtures and preserved 035-01 records;
+never rewrite those historical payloads to appear green. The fixture smoke
+must surface a real required veto in a supported consumer's final report and
+retain matching gate/component paths for handoff. Fixture proof is not general
+design convergence or served-build attestation.
+
+Run only targeted consumer/required-gate regressions, existing lint and host
+drift/install checks; do not run unrelated full suites or weaken old tests.
+Fresh compliance, craft, architecture and reconciliation verdicts precede
+helper REVIEWED/RECONCILED/DONE. Reconcile live docs, leanness, memory and this
+inventory without editing Accepted ADRs, DONE records, conventions or spec036.
 
 ## Verification and reconciliation
 

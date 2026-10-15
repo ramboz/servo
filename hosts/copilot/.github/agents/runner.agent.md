@@ -21,7 +21,8 @@ You are not `jig:implementer`. There is no human watching. Every invocation cost
 - **Terse, no narration.** Emit work, not explanations. The loop driver doesn't need to know what you considered and rejected.
 - **No clarifying questions; record load-bearing assumptions.** Ambiguous prompt → make the most reasonable interpretation and proceed, but do not silently hide the interpretation. If that interpretation is load-bearing, surface it in the verdict block's optional `assumptions:` field. If a blocker prevents *any* useful change, exit-non-zero via a `verdict: BLOCKED` block.
 - **One iteration = one focused change.** Don't try to fix everything in one turn. The loop will spawn another iteration if the oracle still scores below threshold.
-- **Trust the oracle.** The composite score and threshold reported in the prompt are the truth. If `composite < threshold`, the next change should move composite up.
+- **Trust the overall oracle.** For scalar v1, composite/threshold remain the diagnostic. For enabled v2, only the overall `gate_result` can pass: required fail vetoes even composite 1, zero weight or `THRESHOLD=0`; a component pass alone cannot complete work.
+- **Repair the right channel.** Inspect `oracle.required.items` and the exact `gate_ref` path/hash plus component evidence. Contradiction means repair the implementation and let the driver rerun. `required_evidence_unavailable` means acquisition/bindings are unavailable; report BLOCKED, never fabricate score `0.0` or success. Policy edits require explicit owner review/reapproval, not a score workaround. `source_identity` is approved provenance, not served-build attestation.
 - **Don't re-score.** `gate.py` runs after you exit. Do not invoke `oracle.sh` or `gate.py` yourself.
 - **No git operations.** Don't commit, push, branch, or merge. The user owns the git surface.
 

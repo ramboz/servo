@@ -46,12 +46,32 @@ In enabled projects `0 = pass`, `1 = evaluated failure`, `2 = unavailable
 evidence/environment refusal`. Status is `pass|fail|env_error`, with
 `required_constraints_failed`, `quality_below_threshold`,
 `required_and_quality_failed`, or `required_evidence_unavailable` as appropriate.
-Quality weights/threshold and override provenance remain diagnostic. A
+Quality policy remains independently authoritative; weights/threshold and
+override provenance are preserved. A
 contradiction veto cannot be averaged away or cleared by THRESHOLD=0.
 Unknown takes precedence while retaining known failures. **Only the overall
 gate record is completion authority**, not a component's passing envelope.
-Default projects retain the v1 contract below; consumer propagation is not
-implied by this opt-in.
+Default projects retain the v1 contract below. Supported loop/goal, hook advice
+and heartbeat consumers preserve the original overall payload as `oracle` plus
+exact `gate_ref: {path, hash}` and validate invocation-bound evidence without
+reevaluation/rescore. Unknown versions and unavailable mandatory refs refuse.
+Inspect required IDs/reasons and raw component evidence, repair implementation
+on contradiction and rerun; repair acquisition/bindings on refusal. Policy
+changes require explicit reviewed reapproval. Existing customized hooks need
+explicit migration, not silent replacement. Source provenance is not
+served-build attestation; native Copilot unattended autonomy remains unsupported.
+
+For frozen command checks declaring `result_artifact`, report readback also
+revalidates the same run's manifest and complete output file inventory with
+the producer's pure `validate_output_references` helper. Changed captures or
+envelope bytes, missing/partial/unlisted output, duplicate/foreign-run paths
+and symlinks/escapes make evidence unavailable even when the outer component
+record is unchanged. The refusal retains original `oracle`, `gate_ref` and
+raw reasons, with a separate `consumer_error`; it does not execute, recapture
+or rescore. Acquisition refusals may honestly lack output or component refs
+and remain unavailable. Repeated reports do not claim another live execution;
+the exclusive `consumer-accepted.json` marker is only for live acceptance.
+Legacy v1 and commands without a declared output contract are unchanged.
 
 ## Two subcommands
 

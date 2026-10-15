@@ -4,7 +4,7 @@
 # Marker (do not remove — uninstall matches on it): .servo/hooks/meta-judge.sh
 #
 # On every turn-stop, score this project with servo's quality gate and, when the
-# oracle is BELOW THRESHOLD, block the stop with a structured retry hint so the
+# overall oracle fails, block the stop with a structured retry hint so the
 # agent keeps working instead of declaring victory early.
 #
 # Safety posture (the inverse of agent-loop's fail-closed brakes):
@@ -22,7 +22,9 @@ INPUT=$(cat)
 
 # Quality gate: SERVO_GATE_PY override wins (tests / power users), else the path
 # baked in at install time.
-GATE="${SERVO_GATE_PY:-__GATE_PY__}"
+GATE=__GATE_PY__
+GATE="${SERVO_GATE_PY:-$GATE}"
+CONSUMER=__CONSUMER_PY__
 
 # --- Runaway guard -------------------------------------------------------- #
 # Suppress the nudge (let the stop proceed) when `stop_hook_active` is set OR
@@ -48,22 +50,54 @@ TARGET="${CLAUDE_PROJECT_DIR:-}"
 # --timeout (spec 002-04) fires before Claude Code's hook timeout, yielding a
 # clean env-error we can fail open on. Override with SERVO_META_JUDGE_GATE_TIMEOUT.
 GATE_TIMEOUT="${SERVO_META_JUDGE_GATE_TIMEOUT:-45}"
-GATE_OUT=$(python3 "$GATE" "$TARGET" --json --timeout "$GATE_TIMEOUT" 2>/dev/null)
+RUN_ID=$(python3 -c 'import uuid; print(uuid.uuid4())') || exit 0
+GATE_OUT=$(SERVO_GATE_RUN_ID="$RUN_ID" SERVO_GATE_RESULT_DIR="$TARGET/.servo/gate-runs/$RUN_ID" \
+    python3 "$GATE" "$TARGET" --json --timeout "$GATE_TIMEOUT" 2>/dev/null)
 RC=$?
 
 # --- Decide --------------------------------------------------------------- #
 # rc=0 (pass)            → silent; let the stop proceed.
 # rc=1 (below threshold) → BLOCK with an evidence-backed hint.
 # rc=2 / other / failure → FAIL OPEN with a user-facing warning (never block).
-if [ "$RC" = "0" ]; then
-    exit 0
-elif [ "$RC" = "1" ]; then
-    printf '%s' "$GATE_OUT" | python3 -c '
-import json, sys
+printf '%s' "$GATE_OUT" | python3 -c '
+import importlib.util, json, sys
+rc, run_id, target, consumer = sys.argv[1:]
+rc = int(rc)
+raw = sys.stdin.read()
+d = {}
+enabled = False
 try:
-    d = json.load(sys.stdin)
-except Exception:
-    sys.exit(0)   # unparseable gate output → fail open (emit nothing)
+    spec = importlib.util.spec_from_file_location("hook_gate_consumer", consumer)
+    reader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    d = reader.parse(raw)
+    if not isinstance(d, dict):
+        raise ValueError("gate payload must be a JSON object")
+    version = d.get("schema_version", 1)
+    enabled = reader.pins.enabled(reader.Path(target))
+    if enabled or type(version) is not int or version != 1:
+        d = reader.accept(target, d, rc, run_id)
+        rc = d["exit_code"]
+        hint = reader.guidance(d)
+    else:
+        hint = None  # preserve no-policy legacy advisory behavior
+except (OSError, ValueError, TypeError, AttributeError, KeyError, ImportError) as exc:
+    rc, hint = 2, "required_evidence_unavailable: %s" % exc
+    if not isinstance(d, dict):
+        d = {}
+if rc == 0:
+    sys.exit(0)  # turn continuation only, never completion attestation
+if rc != 1:
+    reason = d.get("reason") or "unknown"
+    msg = ("servo meta-judge: oracle env_error (reason=%s); not gating this turn — "
+           "run `/servo:quality-gate` to diagnose." % reason)
+    if hint:
+        msg += " " + hint
+    print(json.dumps({"systemMessage": msg}))
+    sys.exit(0)
+if hint:
+    print(json.dumps({"decision": "block", "reason": "servo overall gate: " + hint}))
+    sys.exit(0)
 comp = d.get("composite")
 thr = d.get("threshold")
 missing = d.get("missing") or []
@@ -72,23 +106,5 @@ if missing:
     reason += " Weak or missing components: %s." % ", ".join(map(str, missing))
 reason += " Keep working to raise the oracle score before stopping."
 print(json.dumps({"decision": "block", "reason": reason}))
-'
-    exit 0
-fi
-
-# Env-error (or an uninvocable / unparseable gate): warn the USER and let the
-# stop proceed. The warning is a `systemMessage` (shown to the user, not fed to
-# Claude as a block) — a misconfigured oracle must never trap a live session.
-printf '%s' "$GATE_OUT" | python3 -c '
-import json, sys
-reason = "unknown"
-try:
-    reason = (json.load(sys.stdin).get("reason")
-              or "unknown")
-except Exception:
-    pass
-msg = ("servo meta-judge: oracle env_error (reason=%s); not gating this turn — "
-       "run `/servo:quality-gate` to diagnose." % reason)
-print(json.dumps({"systemMessage": msg}))
-' 2>/dev/null
+' "$RC" "$RUN_ID" "$TARGET" "$CONSUMER" 2>/dev/null
 exit 0
