@@ -131,7 +131,41 @@ or input/envelope namespaces. Source provenance remains approved planner
 identity, not current living-document bytes or evaluated-build attestation.
 Full CLI, identity domains and carrier examples:
 [required policy](../skills/spec-oracle/examples/required-policy.md).
-Consumer propagation and actual design/build observation remain 035-02 / 036.
+**Consumer closure (035-02):** `skills/quality-gate/gate_consumer.py` is a stdlib
+identity reader, not an evaluator, grader or producer registry. Loop/goal and
+heartbeat request fresh UUID destinations, compare subprocess exit and exact
+published overall bytes, and validate current approved policy and component
+run/config/evaluator/source/digest bindings
+([validation](../skills/quality-gate/gate_consumer.py#L66),
+[acceptance](../skills/quality-gate/gate_consumer.py#L152)). Exclusive consumer claims prevent
+live acceptance replay; immutable reports can reread the same run. Checkpoints,
+history, summaries and triage outcomes carry the original overall `oracle` and
+`gate_ref: {path, hash}`. Readback revalidates without evaluation or rescore.
+See the [recorded-result reader](../skills/quality-gate/gate_consumer.py#L182).
+V1 checkpoints/results remain readable; unknown gate versions and unavailable
+mandatory refs refuse. Published env_error can legitimately lack unavailable
+refs: preserve refusal and known contradictions, not fabricated scalar scores.
+
+Required or quality failure never becomes heartbeat `passed`; scalar plateau
+is diagnostic non-convergence. Structured `oracle_reason` is independent of
+existing cap/cost/quarantine terminals. Heartbeat copies approved sidecars and
+local evaluator pins without old gate/component runs; it refuses unsafe
+absolute component-sidecar isolation rather than rewriting approval identities.
+An invocation failure or interruption after an evaluated iteration retains that
+older evidence for diagnosis, but its final unavailable status is not replaced
+by the older verdict. Loop checkpoints persist that availability separately;
+zero-new-iteration resume cannot restore the old decision. Historical v1
+checkpoints do not attest newly enabled policy without an evaluation.
+See [finalization](../skills/agent-loop/loop.py#L2432) and the
+[outcome mapping](../skills/heartbeat/heartbeat.py#L2148).
+Goal/Routine vendors and the install contract include the consumer reader.
+Generated hosts are projections of canonical source via the existing builder.
+Meta-judge validates v2 before advice: repair implementation on contradiction,
+acquisition/bindings on refusal; policy changes require reviewed reapproval.
+Env-error remains turn fail-open, never completion evidence. Custom scripts
+remain untouched with explicit migration guidance. Copilot hooks are advisory,
+and native unattended autonomy remains unsupported. Actual design/build
+observation/served-current-delivery closure remains spec 036.
 
 Servo has two distinct layers:
 

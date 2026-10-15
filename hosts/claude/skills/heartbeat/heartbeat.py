@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -284,7 +285,7 @@ def _is_volatile_evidence_key(key: str) -> bool:
 # directory, so `git worktree add`'s checkout already reproduces it — no
 # provisioning step needed for the new layout.
 _NON_PROVISIONED_SERVO_DIRS = frozenset(
-    {"runs", "races", TRIAGE_DIRNAME, DISPATCH_DIRNAME, QUARANTINE_DIRNAME}
+    {"runs", "gate-runs", "races", TRIAGE_DIRNAME, DISPATCH_DIRNAME, QUARANTINE_DIRNAME}
 )
 
 # Sibling-skill resolution for the subprocessed `gate.py` / `loop.py` (never
@@ -294,6 +295,10 @@ _NON_PROVISIONED_SERVO_DIRS = frozenset(
 # `SERVO_MANAGED_SETTINGS_PATH`) so a test injects a deterministic stand-in and
 # no test makes a live `claude -p` call.
 GATE_PY_PATH = Path(__file__).resolve().parent.parent / "quality-gate" / "gate.py"
+_consumer_spec = importlib.util.spec_from_file_location(
+    "_heartbeat_gate_consumer", GATE_PY_PATH.with_name("gate_consumer.py"))
+gate_consumer = importlib.util.module_from_spec(_consumer_spec)
+_consumer_spec.loader.exec_module(gate_consumer)
 LOOP_PY_PATH = Path(__file__).resolve().parent.parent / "agent-loop" / "loop.py"
 _GATE_PY_ENV = "SERVO_HEARTBEAT_GATE_PY"
 _LOOP_PY_ENV = "SERVO_HEARTBEAT_LOOP_PY"
@@ -1065,6 +1070,17 @@ def _outcome_details(outcome: object) -> list[str]:
         value = outcome.get(key)
         if isinstance(value, str) and value:
             details.append(f"{label}: {value}")
+    if outcome.get("oracle") is not None:
+        unavailable = outcome.get("oracle_status") in (OUTCOME_ENV_ERROR, "unknown_interrupted")
+        oracle = outcome["oracle"]
+        if unavailable and (not isinstance(oracle, dict)
+                            or oracle.get("status") != outcome["oracle_status"]):
+            details.append(
+                "Retained last evaluated gate evidence, not a current completion verdict.")
+        details.append(gate_consumer.guidance({
+            **outcome, "reason": outcome.get("oracle_reason"),
+            "exit_code": 2 if unavailable else 1,
+        }))
     return details
 
 
@@ -1427,6 +1443,24 @@ def _read_inbox_for_status(jsonl_path: Path) -> tuple[Optional[list[dict]], Opti
         return None, "schema_version_unsupported"
     if len(versions) > 1:
         return None, "schema_version_mixed (records disagree on schema_version)"
+    # Reports revalidate immutable bindings without invoking the oracle. Do not
+    # trust a persisted "passed" scalar after evidence/policy drift.
+    for rec in records:
+        if (isinstance(rec.get("outcome"), dict)
+                and any(key in rec["outcome"] for key in ("oracle", "gate_ref", "oracle_reason"))):
+            original = rec["outcome"]
+            rec["outcome"] = _outcome_from_summary(
+                {**rec["outcome"],
+                 "final_oracle_status": rec["outcome"].get("oracle_status"),
+                 "cumulative_cost_usd": rec["outcome"].get("cost_usd")},
+                target=gate_consumer.record_target(rec["outcome"], jsonl_path.parent.parent.parent),
+            )
+            # Readback must not move historical spend into this heartbeat's
+            # accounting window or discard additive sticky outcome fields.
+            rec["outcome"] = {**original, **rec["outcome"],
+                              "dispatched_at": original.get("dispatched_at")}
+            if rec["outcome"]["oracle_status"] != "pass" and rec.get("status") == STATUS_PASSED:
+                rec["status"] = STATUS_TRIED
     return records, None
 
 
@@ -1504,7 +1538,7 @@ def _summarize_inbox(records: list[dict]) -> dict:
                 "last_seen_at": r.get("last_seen_at", ""),
                 "actionable_reason": r.get("actionable_reason", ""),
             })
-    return {
+    summary = {
         "schema_version": SCHEMA_VERSION,
         "total": len(records),
         "counts": {
@@ -1515,6 +1549,11 @@ def _summarize_inbox(records: list[dict]) -> dict:
         },
         "open_actionable_candidates": candidates,
     }
+    outcomes = [{"finding_id": r.get("finding_id"), "outcome": r["outcome"]}
+                for r in records if isinstance(r.get("outcome"), dict) and "oracle" in r["outcome"]]
+    if outcomes:
+        summary["outcomes"] = outcomes
+    return summary
 
 
 def _render_status_human(
@@ -1656,9 +1695,11 @@ def _run_gate_json(path: Path) -> Optional[dict]:
         }
     gate_py = _resolve_helper(_GATE_PY_ENV, GATE_PY_PATH)
     argv = [sys.executable, str(gate_py), str(path), "--json", "--usd-budget-context"]
+    run_id, environment = gate_consumer.request(path)
     try:
         proc = subprocess.run(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env={**os.environ, **environment},
         )
     except (FileNotFoundError, OSError):
         return None
@@ -1668,12 +1709,13 @@ def _run_gate_json(path: Path) -> Optional[dict]:
         if not line:
             continue
         try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
+            obj = gate_consumer.parse(line)
+        except ValueError:
             continue
         if isinstance(obj, dict) and "exit_code" in obj:
             parsed = obj  # keep the last structured summary line
-    return parsed
+    return (gate_consumer.accept(path, parsed, proc.returncode, run_id)
+            if parsed is not None else None)
 
 
 def _is_refuse_without_oracle(gate: Optional[dict]) -> bool:
@@ -1791,9 +1833,33 @@ def _provision_oracle(target: Path, worktree: Path) -> None:
                 continue
             dst = dst_servo / entry.name
             if entry.is_dir():
-                shutil.copytree(entry, dst, dirs_exist_ok=True)
+                shutil.copytree(entry, dst, dirs_exist_ok=True,
+                                ignore=shutil.ignore_patterns("runs"))
             else:
                 shutil.copy2(entry, dst)
+
+    # Colocated approved sidecars may be ignored/uncommitted, so HEAD is not a
+    # sufficient provisioning closure. Preserve target-relative identities;
+    # external approved engines remain external, never rewritten/reapproved.
+    if gate_consumer.pins.enabled(target):
+        policy, _ = gate_consumer.pins.installed_policy(target)
+        for entry in policy["components"]:
+            sidecar = Path(entry["checks_path"]).parent
+            if sidecar.is_absolute():
+                raise OSError(
+                    "absolute component sidecar cannot isolate; explicitly migrate/reapprove")
+            shutil.copytree(target / sidecar, worktree / sidecar, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns("runs", "ledger.jsonl"))
+            old_runs = worktree / sidecar / "runs"
+            if old_runs.exists():
+                shutil.rmtree(old_runs)
+            for pin in ([entry["evaluator"], entry["required_runtime"]]
+                        + entry["evaluator_artifacts"]):
+                relative = Path(pin["path"])
+                if not relative.is_absolute():
+                    destination = worktree / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(target / relative, destination)
 
 
 # Servo-authored imperative task + injection-resistant preamble (AC5, Guardrail
@@ -2080,7 +2146,7 @@ def _env_error_outcome() -> dict:
     }
 
 
-def _outcome_from_summary(summary: dict) -> dict:
+def _outcome_from_summary(summary: dict, *, target: Optional[Path] = None) -> dict:
     """Build an `outcome` from a loop.py summary (AC6/AC7) in the reserved shape.
 
     Reads `run_id`, `final_oracle_status` (→ `oracle_status`), the loop's last
@@ -2104,6 +2170,21 @@ def _outcome_from_summary(summary: dict) -> dict:
         "cost_usd": cost if isinstance(cost, (int, float)) else 0.0,
         "dispatched_at": _now_iso(),
     }
+    if (any(key in summary for key in ("oracle", "gate_ref", "oracle_reason"))
+            or (target is not None and gate_consumer.pins.enabled(target))):
+        # A component pass, scalar final_oracle_status or loop terminal cannot
+        # override the exact overall gate. Missing refs remain unavailable.
+        checked = gate_consumer.read(
+            target or Path("."), summary,
+            require_v2=target is not None and gate_consumer.pins.enabled(target))
+        outcome.update(gate_consumer.fields(checked))
+        if outcome["oracle_status"] in (OUTCOME_ENV_ERROR, "unknown_interrupted"):
+            # Earlier immutable evidence cannot clear a later failed/incomplete
+            # invocation. Retain it for diagnosis, not as the final verdict.
+            outcome["oracle_composite"] = None
+        else:
+            outcome["oracle_status"] = checked["status"]
+            outcome["oracle_composite"] = checked.get("composite")
     for key in ("terminal_reason", "terminal_breadcrumb"):
         value = summary.get(key)
         if isinstance(value, str) and value:
@@ -2398,7 +2479,10 @@ def _dispatch_one(
             REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
         ):
             return None, reason  # Pass-level refusal, not a scored outcome.
-        return _env_error_outcome(), None
+        outcome = _env_error_outcome()
+        if gate is not None:
+            outcome.update(gate_consumer.fields(gate))
+        return outcome, None
 
     # Activation after verification must not fund another bounded model call.
     for path in (target, worktree):
@@ -2423,7 +2507,7 @@ def _dispatch_one(
         )
         return _env_error_outcome(), None
     terminal_reason = str(summary.get("terminal_reason") or "") or None
-    return _outcome_from_summary(summary), terminal_reason
+    return _outcome_from_summary(summary, target=worktree), terminal_reason
 
 
 def run_dispatch(
@@ -2496,12 +2580,19 @@ def run_dispatch(
     gate = _run_gate_json(target)
     if _is_refuse_without_oracle(gate):
         reason = (gate or {}).get("reason", "gate_uninvocable")
+        hint = (gate_consumer.guidance(gate) if gate and "oracle" in gate else
+                "Run /servo:scaffold-init to install an oracle.")
         _emit_breadcrumb(
             f"oracle preflight refused for {target}: reason={reason}; "
             f"dispatching nothing, leaving {len(candidates)} candidate"
             f"{'' if len(candidates) == 1 else 's'} open. "
-            f"Run /servo:scaffold-init to install an oracle. (refuse_without_oracle)"
+            f"{hint} (refuse_without_oracle)"
         )
+        if gate and "oracle" in gate:
+            sys.stdout.write(json.dumps({
+                "oracle_preflight": {"oracle_status": gate["status"],
+                                     **gate_consumer.fields(gate)},
+            }) + "\n")
         return EXIT_ENV_ERROR
 
     dispatch_dir = target / ".servo" / DISPATCH_DIRNAME

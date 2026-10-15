@@ -147,7 +147,15 @@ source/build-bound DOM/state evidence and same-run quality composition through
 that ordinary carrier. **036-01 remains in progress:** real Opus runs preserve
 an overall pass and a component-pass/quality-fail control. Final-epoch controls
 and lifecycle reviews remain open; diagnostic veto scores are not live fidelity.
-This is the attended gate/install surface, not yet consumer/autonomy propagation.
+This does not establish native unattended autonomy or Jig delivery attestation.
+
+Supported Claude-backed loop/goal, oracle-hook advice and heartbeat reports
+preserve the original overall payload and exact gate path/hash. Inspect required
+IDs/reasons, repair implementation and rerun; on unavailable evidence repair
+acquisition/bindings instead. Policy changes require explicit reviewed reapproval.
+Existing customized hooks need explicit migration, never silent replacement.
+Diagnostic plateau is not completion; source provenance is not served-build
+attestation. Native Copilot unattended autonomy remains unsupported.
 
 ## Repository structure (for contributors)
 

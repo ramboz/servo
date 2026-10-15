@@ -204,11 +204,27 @@ def _load_oracle(target: Path) -> dict:
             "oracle_missing",
             f"oracle.sh not found at {target}; run /servo:scaffold-init first",
         )
-    return {
+    oracle = {
         "path": "oracle.sh",
         "components": list(data["components"]),
         "threshold": _parse_threshold(oracle_sh),
     }
+    if "required_policy" in data:
+        pin = data["required_policy"]
+        if (not isinstance(pin, dict) or set(pin) != {"schema_version", "hash"}
+                or type(pin.get("schema_version")) is not int or pin["schema_version"] != 1
+                or not isinstance(pin.get("hash"), str)
+                or re.fullmatch(r"sha256:[0-9a-f]{64}", pin["hash"]) is None):
+            raise EnvError(
+                "manifest_malformed",
+                ".servo/install.json has an invalid required policy pin; "
+                "repair the approved installation before compiling",
+            )
+        oracle["required_policy"] = {
+            "path": ".servo/required-policy.json", **pin}
+        oracle["completion_authority"] = ".servo/gate-runs/<run_id>/gate.json"
+        oracle["gate_schema_version"] = 2
+    return oracle
 
 
 def _parse_threshold(oracle_sh: Path) -> float:
@@ -259,11 +275,15 @@ def _load_evaluation_model(target: Path, spec_dir: Path, spec_id: str):
         return None
     if not isinstance(plan, dict):
         return None
-    return {
+    model = {
         "spec_oracle_id": plan.get("spec_id") or spec_id,
         "ac_count": len(plan.get("checks", []) or []),
         "residual": len(plan.get("residual_judgment", []) or []),
     }
+    if "approved_required_binding" in plan:
+        # Approved provenance only; no claim about the served/current build.
+        model["required_binding"] = plan["approved_required_binding"]
+    return model
 
 
 # ---------------------------------------------------------------------------

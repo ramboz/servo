@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: DONE
 skill: quality-gate
 use_cases: []
 ---
@@ -25,8 +25,10 @@ Owner approval of the pinned proposal and ADR-0044 acceptance are recorded in
 That dated metadata resolves proposal-time approval qualifiers. At the accepted
 parent snapshot all slices were DRAFT. During this implementation pickup,
 035-01 cleared actual independent readiness and the ordinary helper transitions;
-its current state and evidence are in its slice/reviews. 035-02 remains DRAFT,
-and the spec rollup stays active until its remaining selected work closes.
+its current state and evidence are in its slice/reviews. 035-02 cleared its own
+fresh readiness and ordinary helper transitions. Both slices' lifecycle states
+and durable verdicts are maintained in their slice records and reviews; the
+spec status is derived from those records.
 
 ## Current state and existing owners
 

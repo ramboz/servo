@@ -759,6 +759,7 @@ class DependencyFreeTests(unittest.TestCase):
             "collections", "itertools", "functools", "tempfile", "io",
             "contextlib", "errno", "enum", "uuid", "textwrap", "string",
             "platform", "signal", "secrets", "hashlib", "math", "time",
+            "importlib",  # stdlib: load the consumer-only identity reader
         }
         for line in text.splitlines():
             stripped = line.strip()
