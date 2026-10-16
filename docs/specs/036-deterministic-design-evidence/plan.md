@@ -1,17 +1,17 @@
 # Plan: deterministic design-evidence component
 
 036-01 closeout selected integration parent
-`6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5`, with producer bytes unchanged
-from `6cc759e807cab5411363b44c19c58e7a457b3715`. The
-[final-source receipt](implementation-receipt.md) pins three actual live
-outcomes, eleven no-judge controls and combined-source validation. Closeout
-uses fresh compliance, craft, architecture and reconciliation reviews, then
-normal helper transitions; it does not restart implementation or await upstream
-merges. The coordinator explicitly handed off the existing claim. Full review
-then reproduced a required-title overflow visibility defect and authorized only
-the [capture/test correction](visibility-correction-receipt.md). Its source
-and diagnostic reviews pass; full-slice acceptance remains blocked pending
-affected fixed-epoch live proof and full reviews.
+`6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5` and settled executable source
+`44a96d9549cd73f8a8ea3e1307157cb994b138ac` after the separately authorized
+[visibility](visibility-correction-receipt.md) and
+[repeated-run allowance](multi-run-allowance-receipt.md) corrections.
+[The current closeout receipt](settled-closeout-receipt.md) pins four actual
+live outcomes (including same-definition A/B), fourteen current no-judge
+installed controls and current merged validation. Fresh full compliance,
+craft, architecture and reconciliation plus normal helper transitions govern
+acceptance; earlier nonpassing reviews remain history, not silently passed.
+The coordinator explicitly handed off the existing claim. No implementation
+restart or upstream PR merge is needed.
 036-02 remains DRAFT. Checkpoints and the original proposal below are historical
 context, not statements that earlier source already passed final review.
 

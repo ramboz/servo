@@ -50,11 +50,15 @@
 - [x] Permit explicitly approved whole eight-judgment batches under one frozen
       quality definition; retain default8, strict history, remaining allowance,
       exhaustion and ordinary reapproval on cap changes.
-- [ ] Refresh approved actual-quality proof on the corrected evaluator, then
-      rerun required full reviews before reconciliation/lifecycle completion.
+- [x] Refresh approved actual-quality proof on the corrected evaluator:
+      four genuine runs including same-definition A/B, fourteen current
+      installed no-judge controls and immutable indexes published.
+- [x] Rerun required full compliance/craft/architecture reviews on exact
+      corrected source and current immutable proofs.
 
 Final-source evidence and historical-versus-current control boundaries are
-recorded in [implementation-receipt.md](implementation-receipt.md).
+recorded in [settled-closeout-receipt.md](settled-closeout-receipt.md); earlier
+implementation/correction receipts preserve their own source epochs.
 
 ## 036-02
 

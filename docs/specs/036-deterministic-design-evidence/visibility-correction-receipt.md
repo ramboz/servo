@@ -1,6 +1,8 @@
 # 036-01 required-title visibility correction
 
-**Status: source correction reviewed; whole-slice acceptance still blocked.**
+**Historical correction checkpoint.** Its later corrected-source actual proof
+is pinned in [the settled closeout receipt](settled-closeout-receipt.md);
+normal full review/lifecycle records govern acceptance.
 Fresh full compliance, craft and architecture reviews of the combined 6d5e5b6
 source all returned `needs-changes` for one reproduced AC2/AC4 defect: a
 zero-height `overflow:hidden` ancestor could fully hide the required title while
@@ -134,8 +136,8 @@ commands above pass. The same attempt caught a new README repository-docs
 relative link; it was corrected to the existing host-portable GitHub-link
 pattern and hosts regenerated. No unrelated source fix was made.
 
-The standard three full-slice verdicts intentionally remain `needs-changes`.
-Parent owns new bounded actual-quality proof on this exact corrected source.
+At this checkpoint the standard three full-slice verdicts remained
+`needs-changes`; the later44a proof is separate, not rebound to09f.
 Only after that proof and required full reviews pass may reconciliation and
 normal REVIEWED → RECONCILED → DONE proceed. There is no waiver, merge,
 036-02 advancement, Jig119 completion or general accuracy claim.

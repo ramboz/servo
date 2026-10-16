@@ -86,7 +86,7 @@ set; `card_capture.py` independently observes both states over sealed loopback
 bytes; `card_evidence.py` compares producer-approved facts and verifies current
 delivery without re-scoring. `card_quality.py` composes the reviewed existing
 design-eval policy over those same captures and retains native CLI responses.
-The [frozen final-source receipt](specs/036-deterministic-design-evidence/implementation-receipt.md)
+The [frozen final-source receipt](specs/036-deterministic-design-evidence/settled-closeout-receipt.md)
 preserves an overall pass, component-pass/quality-fail and high-quality
 required-fail; the initial OAuth refusal remains historical. Each
 necessary live run uses exactly8 judgments. Its frozen allowance defaults to one

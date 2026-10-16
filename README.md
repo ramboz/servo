@@ -144,7 +144,7 @@ completion authority. See the
 
 The [bounded card pilot](skills/design-eval/examples/bound-card.md) adds
 source/build-bound DOM/state evidence and same-run quality composition through
-that ordinary carrier. Its [frozen pilot proof](https://github.com/ramboz/servo/blob/main/docs/specs/036-deterministic-design-evidence/implementation-receipt.md)
+that ordinary carrier. Its [frozen pilot proof](https://github.com/ramboz/servo/blob/main/docs/specs/036-deterministic-design-evidence/settled-closeout-receipt.md)
 preserves an overall pass, a component-pass/quality-fail control, and a required
 failure despite genuine passing quality. Diagnostic veto scores remain
 separate from live fidelity.

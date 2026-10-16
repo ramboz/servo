@@ -1,13 +1,15 @@
 # 036-01 settled-source implementation and proof receipt
 
-**Current acceptance: blocked.** Full reviews of this 6cc759e proof epoch found
+**Historical 6cc759e proof epoch.** Current corrected-source proof and acceptance
+evidence are in [the settled closeout receipt](settled-closeout-receipt.md).
+Full reviews of this earlier epoch found
 and reproduced the visible-title ancestor-overflow defect. The authorized
 [narrow correction](visibility-correction-receipt.md) has fresh red/green and
 installed diagnostic proof. A later separately authorized
 [repeated-run allowance](multi-run-allowance-receipt.md) now supports explicitly
 approved same-definition A/B proof with monotonic local consumption.
-Both need affected actual-quality proof and full reviews before lifecycle
-completion. The three preserved runs below remain
+Both received freshly approved actual proof on44a96d9, separately recorded;
+normal full reviews and lifecycle records determine acceptance. The three preserved runs below remain
 genuine 6cc759e observations, not proof of the corrected evaluator.
 
 The bounded Trailhead card has three preserved, genuine installed-gate
@@ -43,7 +45,7 @@ Proposal-era pending prose in the overview is historical; it does not revoke
 that accepted checkpoint. Accepted ADR-0044 and DONE 035-01 remain unchanged.
 036-02 regional image evidence remains DRAFT.
 
-## Immutable final proof
+## Immutable historical proof
 
 Read-only proof root:
 

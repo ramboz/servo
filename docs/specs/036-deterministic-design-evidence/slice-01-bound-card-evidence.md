@@ -1,11 +1,11 @@
 ---
-status: IN_PROGRESS
+status: REVIEWED
 kind: feature
 dependencies: [035-01, adr-0044]
 last_verified:
 frame_review: true
 arch_review: true
-claimed_by: servo-live-card-evidence
+claimed_by: servo-card-slice-closeout
 ---
 
 ## Slice 036-01 - bound-card-evidence
@@ -132,10 +132,10 @@ live capture, quality, closure and mutation proof remain implementation work.
    attestation runtime is not a prerequisite for 036-01 DONE.
 
 **DoD:**
-- [ ] Real served-app/capture -> frozen component -> installed gate controls
+- [x] Real served-app/capture -> frozen component -> installed gate controls
       cover all criteria with witnessed failures and corrected passes.
-- [ ] Per-constraint/identity/refusal cases have focused regression tests.
-- [ ] Independent compliance/craft/architecture reviews pass.
+- [x] Per-constraint/identity/refusal cases have focused regression tests.
+- [x] Independent compliance/craft/architecture reviews pass.
 - [ ] Output/command documentation, deviation log and reconciliation complete;
       no closed records amended or unsupported host claims added.
 
@@ -154,7 +154,22 @@ live capture, quality, closure and mutation proof remain implementation work.
 matching card through the installed gate; the collector is not merely a
 standalone measurement helper waiting for later integration.
 
-### Final-source proof checkpoint (2026-10-15)
+### Corrected-source proof checkpoint (2026-10-16)
+
+Frozen executable source is
+`44a96d9549cd73f8a8ea3e1307157cb994b138ac`, with corrected capture55fbc0cb
+and qualityc43480df. [The settled closeout receipt](settled-closeout-receipt.md)
+pins the current immutable667-artifact live index,465-artifact diagnostic index
+and combined manifest. Actual A and comment-only B pass under identical frozen
+grading bytes, old A refuses against selected current B, misalignment fails
+quality despite28requiredpass, and20.01px title fails required despite real
+quality0.97. Fourteen actual installed no-judge controls include corrected
+fully-clipped-title failure and exact restored baseline. Original source
+epochs and nonpassing full reviews remain preserved. Fresh full reviews and
+normal helper transitions, not these summaries or narrower source passes,
+determine current lifecycle acceptance.
+
+### Historical closeout entry checkpoint (2026-10-15)
 
 The coordinator handed off the existing IN_PROGRESS work for final closeout on
 integration parent `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5`. All eight producer
@@ -241,8 +256,9 @@ REVIEWED, RECONCILED, DONE or renewed live-call allowance is claimed.
 
 ### Deviation log
 
-Prepared during closeout; final reconciliation review and lifecycle acceptance
-are still pending. Original ACs above are preserved.
+Original ACs above are preserved. The current proof, historical deviations and
+live guidance are reconciled below; the independent reconciliation verdict and
+normal helper transitions determine acceptance.
 
 - The assigned ordinary command output/refusal carrier and pure consumer
   readback use existing spec-oracle/required-runtime seams. The combined
@@ -260,8 +276,8 @@ are still pending. Original ACs above are preserved.
   Its real red/green, independent narrow source/driver reviews, installed
   synthetic-quality veto and restored required-pass/unavailable-quality
   control are recorded separately. Actual-quality proof on that corrected
-  source and fresh full verdicts remain necessary; diagnostic 0.99 never
-  becomes live fidelity.
+  source is now separately published on44a96d9; fresh full verdicts still
+  govern acceptance. Diagnostic 0.99 never becomes live fidelity.
 - Before new 09f judge calls, the coordinator assigned the existing
   quality-budget seam to permit explicitly approved whole eight-judgment
   batches under one frozen definition for a fresh changed-build A/B pair.
@@ -281,15 +297,32 @@ are still pending. Original ACs above are preserved.
 - This closeout made zero live judge calls. Owner-level consumed history
   stays attached to each proof epoch; a new target or unused diagnostic
   allowance does not grant new judge authorization.
+- The proof worker completed32 actual44a judgments (four runs), inheriting49
+  consumed attempts for81 total. Fourteen separately approved diagnostic
+  controls consumed zero calls/claims; spare cap89 is unspent. A/B grading
+  config/policy/checks/full-oracle bytes are identical; renewed B is fresh
+  evidence, not restoration or cached A re-scoring.
+- GitHub CI exposed test isolation: setup-python's `LD_LIBRARY_PATH` reached
+  two unit tests intended to check Node overrides and `.pth` startup files.
+  A CI-like environment reproduced the four failures. Only those tests'
+  environment setup was isolated; an explicit loader-refusal regression was
+  added. Production refusal and all frozen helper bytes are unchanged.
+- Fresh full compliance, craft and architecture passes evaluated the corrected
+  source plus both current proof bundles, not just test totals. They found no
+  additional material blockers or nits. Craft recorded the clipped-title,
+  monotonic-budget and shared pure-output-validator strengths; architecture
+  recorded preserved producer/observer/consumer ownership, approved normalizer
+  reuse and the actually-read full-driver seal. Reconciliation does not add a
+  substitute grading or completion authority.
 
 ### Reconciliation sweep
 
-Prepared dispositions; the independent reconciliation reviewer must verify
-these against the final fixed-epoch proof before RECONCILED.
+The independent reconciliation reviewer verifies these dispositions against
+the final fixed-epoch proof before RECONCILED.
 
 | Surface | Disposition |
 |---|---|
-| Acceptance criteria, plan and tasks | Updated current checkpoints and explicit pending proof/review work; original nine ACs and historical nonpassing checkpoints preserved. Downstream Jig/Vellum tasks are explicitly owned/deferred, not hidden prerequisites. |
+| Acceptance criteria, plan and tasks | Updated current proof and review checkpoints; original nine ACs and historical nonpassing checkpoints preserved. Downstream Jig/Vellum tasks are explicitly owned/deferred, not hidden prerequisites. |
 | Output/command/install guidance | Updated walkthrough and live guidance for exact driver sealing, ordinary shared/vendor installation, pure readback, source epochs and honest 0/1/2 authority. Official hosts are regenerated, never hand-edited. |
 | Architecture and decisions | Updated live bounded-observer description with source citations. No module boundary or new load-bearing alternative was introduced by the visibility correction; Accepted ADR-0044 remains the existing authority. No new ADR or amendment to Accepted/DONE records is needed. |
 | Conventions | No-op: no convention change was requested or made. |
@@ -298,8 +331,8 @@ these against the final fixed-epoch proof before RECONCILED.
 | Primer/scaffold surfaces | No root AGENTS/CLAUDE primer exists in this plugin-only scaffold. 036-02 remains DRAFT, so this is not whole-spec compress-on-closeout. No scaffold template or global plugin change was needed. |
 | Use-case trace | Advisory helper reports no-op because the vision has no `## Use cases` section; no new use case was invented. |
 | Closed-spec drift | No closed spec/slice, DONE035 record, Accepted ADR or historical approval was amended. Earlier open 036 checkpoints remain explicitly historical. |
-| Status board | Derived with `workflow.py status-board`, not hand-edited; 036 remains IN_PROGRESS while full evidence gates are open. Candidate-selection telemetry reflects the actual richer craft/arch selections. |
-| Final proof and verdicts | Pending fixed-epoch actual proof and normal full compliance/craft/arch/reconciliation; neither narrow patch passes nor peer lifecycle completion substitutes. |
+| Status board | Derived with `workflow.py status-board`, not hand-edited; the spec remains IN_PROGRESS because036-02 is DRAFT. Candidate-selection telemetry reflects the actual richer craft/arch selections. |
+| Final proof and verdicts | Updated with current667live/465diagnostic immutable indexes, combined manifest, repeated pure merged-consumer readback and actual A/B freshness. Normal full compliance/craft/arch/reconciliation are recorded separately; narrow source passes and peer lifecycle completion never substitute. |
 
 ### Leanness sweep
 
@@ -315,5 +348,6 @@ decision record or broader architecture proposal is introduced.
 
 ### Close-out (post-DONE)
 
-- [ ] Regenerate board and record exact pilot scope and upstream contract pin.
-- [ ] Reconcile live skill/output/install docs; parent owns cross-project attestation.
+- [x] Record exact pilot scope, upstream contract pin and current proof indexes;
+      derive the board through normal helper transitions without changing036-02.
+- [x] Reconcile live skill/output/install docs; parent owns cross-project attestation.

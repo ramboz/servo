@@ -5,19 +5,16 @@ approved Vellum `vellum-design-input/0.1-pilot` normal/open card packages.
 It is not general design extraction, a production acceptance oracle, an image
 metric engine, or evidence of Jig DONE.
 
-**Sealed 6cc759e checkpoint:** the
-[immutable proof receipt](https://github.com/ramboz/servo/blob/main/docs/specs/036-deterministic-design-evidence/implementation-receipt.md)
-preserves baseline quality0.97/all28requiredpass/overall0, preselected
-misalignment quality0.5278427304671842/all28requiredpass/overall1, and declared
-title20.01px quality0.9675/26pass2fail/overall1, all against unchanged0.8.
-Each case has eight real native `claude-opus-5` replies. Earlier failed OAuth,
-live and diagnostic epochs are retained, not relabeled as final-source proof.
+**Corrected-source proof:** the
+[settled receipt](https://github.com/ramboz/servo/blob/main/docs/specs/036-deterministic-design-evidence/settled-closeout-receipt.md)
+preserves real A/B quality0.9660566243270259/0.9675 with28requiredpass and
+overall0 under identical frozen grading bytes; fixed misalignment quality0.515
+with28requiredpass/overall1; and title20.01px quality0.97 with26pass2fail/overall1,
+all against unchanged0.8. Each run has eight real native `claude-opus-5` replies.
+Fourteen separate installed diagnostic controls make no judge calls and label
+synthetic0.99 explicitly. Earlier failed OAuth, live and diagnostic epochs
+remain history, not relabeled as corrected-source proof.
 This proves the bounded fixture, not production/general accuracy or Jig DONE.
-The subsequent
-[visibility correction](https://github.com/ramboz/servo/blob/main/docs/specs/036-deterministic-design-evidence/visibility-correction-receipt.md)
-is a distinct source epoch; earlier live proof is not automatically approval
-of changed evaluator bytes. Whole-slice acceptance remains blocked pending its
-affected proof and full reviews.
 
 ## Inputs and supported boundary
 

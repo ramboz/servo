@@ -87,10 +87,12 @@ controls retain their original code epochs and approvals.
 
 ## Remaining boundary
 
-Parent owns fresh approved actual-quality proof on these two corrected helper
-hashes, including any assigned same-definition A/B case. Whole036 compliance,
-craft and architecture remain `needs-changes` until affected proof and fresh
-full reviews clear; reconciliation/lifecycle have not been advanced.
+Fresh approved actual-quality proof on these two corrected helper hashes,
+including same-definition A/B, is now published in
+[the settled closeout receipt](settled-closeout-receipt.md).
+This narrower source verdict is not substituted for full compliance, craft,
+architecture or reconciliation. Normal full-review/lifecycle records determine
+their clearance; this receipt preserves the earlier source checkpoint.
 036-02, Jig119/Vellum013 completion and upstream merges are not introduced as
 Servo prerequisites. No general accuracy/convergence, native autonomy, hostile
 co-writer or provider-internal attestation is claimed.
