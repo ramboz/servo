@@ -309,8 +309,11 @@ immutable provider identity, and frozen choices never upgrade silently.
 The frozen pilot preserves an overall pass, a component-pass/quality-fail
 control, and a required failure despite genuine passing quality; the initial
 OAuth refusal remains historical evidence. Each necessary
-batch freezes its purpose, inherits all consumed attempts and allocates exactly
-eight judgments. These are bounded fixed-card observations, not general
+run uses exactly eight judgments. The frozen allowance defaults to one batch;
+explicitly reviewed whole batches may fund repeated fresh runs under the same
+definition, retaining all consumed attempts and refusing exhaustion or drift.
+Changing the approved cap still requires reapproval. These are bounded
+fixed-card observations, not general
 design-oracle accuracy or downstream completion attestation.
 
 ### Native Copilot judging

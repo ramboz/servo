@@ -89,8 +89,10 @@ design-eval policy over those same captures and retains native CLI responses.
 The [frozen final-source receipt](specs/036-deterministic-design-evidence/implementation-receipt.md)
 preserves an overall pass, component-pass/quality-fail and high-quality
 required-fail; the initial OAuth refusal remains historical. Each
-necessary live batch freezes its purpose and exactly8 additional judgments,
-carrying the complete consumed history; no unlimited/adaptive search is implied.
+necessary live run uses exactly8 judgments. Its frozen allowance defaults to one
+batch; explicitly approved whole batches can fund multiple fresh runs under the
+same definition while retaining complete consumed history. Exhaustion or drift
+refuses; increasing the cap requires reapproval, not unlimited/adaptive search.
 The actually read driver snapshot, including its quality SEED, is checked
 against existing evaluator-artifact pins (`required_runtime.py:740-745`);
 collection verifies independently selected local delivery

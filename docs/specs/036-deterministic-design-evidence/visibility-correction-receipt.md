@@ -33,7 +33,10 @@ No Accepted ADR, DONE 035 record or convention is amended.
 
 Exact corrected `skills/design-eval/card_capture.py` raw SHA-256:
 `55fbc0cb87dff08c7c7a396c2dc33c39fd2995287c62e751ab49ca336e9fcecd`.
-All seven other canonical producer files retain their integration-parent bytes.
+At the 09f0879 checkpoint, all seven other canonical producer files retain
+their integration-parent bytes. A later separately assigned quality-budget
+extension permits an explicitly approved same-definition A/B allowance; the
+09f diagnostic records below are not relabeled as proof of that later code.
 
 ## Witnessed regression and bounded independent reviews
 

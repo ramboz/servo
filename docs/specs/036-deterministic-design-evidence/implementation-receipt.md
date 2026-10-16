@@ -3,8 +3,11 @@
 **Current acceptance: blocked.** Full reviews of this 6cc759e proof epoch found
 and reproduced the visible-title ancestor-overflow defect. The authorized
 [narrow correction](visibility-correction-receipt.md) has fresh red/green and
-installed diagnostic proof, but needs affected actual-quality proof and full
-reviews before lifecycle completion. The three preserved runs below remain
+installed diagnostic proof. A later separately authorized
+[repeated-run allowance](multi-run-allowance-receipt.md) now supports explicitly
+approved same-definition A/B proof with monotonic local consumption.
+Both need affected actual-quality proof and full reviews before lifecycle
+completion. The three preserved runs below remain
 genuine 6cc759e observations, not proof of the corrected evaluator.
 
 The bounded Trailhead card has three preserved, genuine installed-gate
@@ -28,7 +31,9 @@ At that selected parent, the eight producer files in the source table of
 [the integration receipt](consumer-integration-receipt.md#exact-merge-and-preserved-ownership),
 excluding its additional consumer row, match 6cc759e byte-for-byte. Subsequent
 review caused the separately authorized capture/test correction linked above;
-seven other producer files remain unchanged. No upstream PR merge is a
+at 09f0879 seven other producer files remained unchanged. The later allowance
+extension additionally changes only `card_quality.py` and focused tests.
+No upstream PR merge is a
 prerequisite or performed.
 
 C0 and C1 use the accepted checkpoint in [plan.md](plan.md#036-01-accepted-readiness-checkpoint-2026-10-15):

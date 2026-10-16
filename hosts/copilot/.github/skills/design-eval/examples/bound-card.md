@@ -6,7 +6,7 @@ It is not general design extraction, a production acceptance oracle, an image
 metric engine, or evidence of Jig DONE.
 
 **Sealed 6cc759e checkpoint:** the
-[immutable proof receipt](../../../docs/specs/036-deterministic-design-evidence/implementation-receipt.md)
+[immutable proof receipt](https://github.com/ramboz/servo/blob/main/docs/specs/036-deterministic-design-evidence/implementation-receipt.md)
 preserves baseline quality0.97/all28requiredpass/overall0, preselected
 misalignment quality0.5278427304671842/all28requiredpass/overall1, and declared
 title20.01px quality0.9675/26pass2fail/overall1, all against unchanged0.8.
@@ -14,7 +14,7 @@ Each case has eight real native `claude-opus-5` replies. Earlier failed OAuth,
 live and diagnostic epochs are retained, not relabeled as final-source proof.
 This proves the bounded fixture, not production/general accuracy or Jig DONE.
 The subsequent
-[visibility correction](../../../docs/specs/036-deterministic-design-evidence/visibility-correction-receipt.md)
+[visibility correction](https://github.com/ramboz/servo/blob/main/docs/specs/036-deterministic-design-evidence/visibility-correction-receipt.md)
 is a distinct source epoch; earlier live proof is not automatically approval
 of changed evaluator bytes. Whole-slice acceptance remains blocked pending its
 affected proof and full reviews.
@@ -133,10 +133,26 @@ before invocation. Keep the owner-level consumed count across new checkpoints;
 creating a new directory does not grant another eight calls. The owner has
 explicitly authorized necessary further pilot invocations, without repeated
 per-run prompts, not unbounded/adaptive candidate search or policy tuning.
-Each prepared batch documents `--purpose`, copies the complete prior claim
-history with `--prior-attempts`, and sets `--calibration-limit` to the inherited
-count plus exactly8. Four judgments per state remain fixed. Record every
+Each definition documents `--purpose` and copies the complete prior claim
+history with `--prior-attempts`. The default allowance adds exactly8 judgments.
+An explicitly reviewed positive whole number of eight-judgment batches may be
+approved up front under that same frozen definition: for example, inherited49
+plus16 gives `--calibration-limit 65` for an A/B pair of fresh evaluations.
+Each run still needs eight remaining slots and uses four judgments per state.
+Claims remain contiguous, byte-bound and monotonically consumed; incomplete,
+changed or exhausted history refuses without reset. Without inherited attempts,
+preparing more than the default batch requires an explicitly supplied empty
+prior-history directory. Raising an already frozen cap or changing its purpose
+requires ordinary reapproval, never automatic replenishment. Record every
 outcome/model usage; a new epoch is never relabelled as an old passing run.
+The private companion consumed-state directory locks and atomically updates
+the consumed high-water count, while each run retains its observed/reserved
+claim prefix. Missing/corrupt initialized state or lost claims refuse; do not
+delete/reset state to replenish an allowance. Legacy read-only claim history
+can still be imported into a freshly approved definition. This is same-trust
+local durability accounting, not authenticated authority against a malicious
+writer replacing both claims and their counter; it is not graded policy and
+does not change the frozen definition between A/B runs.
 
 ## Candidate and output identities
 

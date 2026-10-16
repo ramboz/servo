@@ -17,6 +17,20 @@ context, not statements that earlier source already passed final review.
 
 ## Supporting consumer integration checkpoint (2026-10-15)
 
+**Later active closeout assignment:** before any 09f0879 judge calls, the
+coordinator identified that a changed-build A/B proof needs two fresh runs
+under one frozen definition. The existing exactly-one-batch budget rejected
+that legitimate repeat. Only `card_quality.py` budget/history validation,
+focused tests and related guidance are additionally assigned: keep default8
+and exactly8 per run, but allow an explicitly approved positive whole number
+of batches (for example, prior49 +16 =65). Purpose/cap stay frozen; increasing
+them requires reapproval. Actual claims, finite integer caps, eight remaining
+slots, exhaustion and prior-history drift remain strict. No score, model,
+threshold, input target or controller change is authorized. The proof worker
+held 09f before approval/judging; no actual judge calls were wasted.
+
+The supporting integration narrative below predates these closeout corrections.
+
 This bounded lane supports 036-01 AC6/7 and the completed 035-02 consumer
 interface; it does not advance either slice or replace primary036 reviews.
 Selected parent `servo-live-card-evidence` is exactly

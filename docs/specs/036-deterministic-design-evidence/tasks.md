@@ -47,6 +47,9 @@
 - [ ] Review and reconcile output, capture, package/install and bounded claims.
 - [x] Reproduce and narrowly fix full-review AC2/4 ancestor-overflow visibility;
       preserve genuine red/green and installed diagnostic veto/restoration.
+- [x] Permit explicitly approved whole eight-judgment batches under one frozen
+      quality definition; retain default8, strict history, remaining allowance,
+      exhaustion and ordinary reapproval on cap changes.
 - [ ] Refresh approved actual-quality proof on the corrected evaluator, then
       rerun required full reviews before reconciliation/lifecycle completion.
 

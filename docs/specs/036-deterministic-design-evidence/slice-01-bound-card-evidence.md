@@ -239,6 +239,80 @@ Historical samples and prior control epochs are unchanged. Trusted-local
 closure only: no hostile-writer/full-host attestation, whole-slice compliance,
 REVIEWED, RECONCILED, DONE or renewed live-call allowance is claimed.
 
+### Deviation log
+
+Prepared during closeout; final reconciliation review and lifecycle acceptance
+are still pending. Original ACs above are preserved.
+
+- The assigned ordinary command output/refusal carrier and pure consumer
+  readback use existing spec-oracle/required-runtime seams. The combined
+  integration parent includes the completed 035-02 consumer; no new registry,
+  controller, generic constraint language or cross-project completion
+  dependency was added.
+- Earlier review findings about threshold binding, acquisition ownership,
+  visible descendant text and the exact execution closure received witnessed
+  fixes in their own source epochs. The prior unsuccessful reviews, expired
+  authentication attempt and actual runs remain historical; they were not
+  rewritten as proof that the final guards already existed.
+- The three actual 6cc759e runs proved distinct bounded overall outcomes.
+  Full review nevertheless reproduced ancestor-overflow title invisibility.
+  The coordinator then explicitly authorized the capture/test-only correction.
+  Its real red/green, independent narrow source/driver reviews, installed
+  synthetic-quality veto and restored required-pass/unavailable-quality
+  control are recorded separately. Actual-quality proof on that corrected
+  source and fresh full verdicts remain necessary; diagnostic 0.99 never
+  becomes live fidelity.
+- Before new 09f judge calls, the coordinator assigned the existing
+  quality-budget seam to permit explicitly approved whole eight-judgment
+  batches under one frozen definition for a fresh changed-build A/B pair.
+  Default one-batch behavior, eight judgments per run, prior history,
+  monotonic claims and exhaustion remain strict. The cap/purpose remain
+  frozen; raising them still requires ordinary reapproval. This is not a new
+  judge framework, score cache or generalized convergence claim.
+- The approved inclusive geometry comparison is unchanged. Exact +/-1.01px
+  arithmetic controls and measured +/-1.02px browser controls distinguish
+  policy from Chromium layout quantization; no measured failure is rounded
+  into a pass. The title-size 20.01px control retains zero tolerance.
+- The visibility correction rejects fully clipped rectangular text while
+  allowing surviving positive-area partial visibility. It does not certify
+  full glyph visibility, arbitrary masking/transforms or general occlusion.
+  No source design, comparison tolerance, exclusion, threshold, sample policy
+  or frozen model was changed to improve a score.
+- This closeout made zero live judge calls. Owner-level consumed history
+  stays attached to each proof epoch; a new target or unused diagnostic
+  allowance does not grant new judge authorization.
+
+### Reconciliation sweep
+
+Prepared dispositions; the independent reconciliation reviewer must verify
+these against the final fixed-epoch proof before RECONCILED.
+
+| Surface | Disposition |
+|---|---|
+| Acceptance criteria, plan and tasks | Updated current checkpoints and explicit pending proof/review work; original nine ACs and historical nonpassing checkpoints preserved. Downstream Jig/Vellum tasks are explicitly owned/deferred, not hidden prerequisites. |
+| Output/command/install guidance | Updated walkthrough and live guidance for exact driver sealing, ordinary shared/vendor installation, pure readback, source epochs and honest 0/1/2 authority. Official hosts are regenerated, never hand-edited. |
+| Architecture and decisions | Updated live bounded-observer description with source citations. No module boundary or new load-bearing alternative was introduced by the visibility correction; Accepted ADR-0044 remains the existing authority. No new ADR or amendment to Accepted/DONE records is needed. |
+| Conventions | No-op: no convention change was requested or made. |
+| Inbox | No-op: this plugin-only project has no `docs/inbox.md`; remaining 036-02 and cross-project work stays in its existing owner records. |
+| Memory | Updated through `memory.py` with the overflow visibility/proof-epoch lesson; existing ownership/threshold/history lessons retained. Team-context bootstrap was skipped as unrelated to this lane. |
+| Primer/scaffold surfaces | No root AGENTS/CLAUDE primer exists in this plugin-only scaffold. 036-02 remains DRAFT, so this is not whole-spec compress-on-closeout. No scaffold template or global plugin change was needed. |
+| Use-case trace | Advisory helper reports no-op because the vision has no `## Use cases` section; no new use case was invented. |
+| Closed-spec drift | No closed spec/slice, DONE035 record, Accepted ADR or historical approval was amended. Earlier open 036 checkpoints remain explicitly historical. |
+| Status board | Derived with `workflow.py status-board`, not hand-edited; 036 remains IN_PROGRESS while full evidence gates are open. Candidate-selection telemetry reflects the actual richer craft/arch selections. |
+| Final proof and verdicts | Pending fixed-epoch actual proof and normal full compliance/craft/arch/reconciliation; neither narrow patch passes nor peer lifecycle completion substitutes. |
+
+### Leanness sweep
+
+The visibility correction adds one local rectangle-intersection predicate and
+two focused browser regression methods in existing files. The separately
+authorized repeated-run allowance stays in the existing quality helper, with
+private durable claim accounting rather than a new registry or controller.
+Neither adds a runtime module, policy/config field or platform. Source/input/output
+and current-delivery validation retain the existing approved carrier and pure
+consumer API. Detailed receipts are audit documentation, not installed runtime
+inputs. No out-of-spec UI/product decision was settled; no lightweight
+decision record or broader architecture proposal is introduced.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and record exact pilot scope and upstream contract pin.
