@@ -108,11 +108,15 @@ remain entirely unspent.
 | Missing root binding | 0pass/0fail/28unknown | Exit2 with unavailable binding. |
 | Duplicate, missing or extra unapproved check ID | Each0pass/0fail/28unknown | Each exit2 from frozen approval/inventory guards; not claimed as reapproved target semantics or kernel coverage. |
 
-The index binds each run's actual overall/component/envelope, raw observations,
-capture bytes, selected candidate/output/delivery and restored frozen inputs.
+The index binds all fourteen actual overall gate records. Eleven acquired runs
+also publish component/envelope/raw-observation/capture closures; the three
+unapproved-ID guards refuse before those records exist, so their component
+references are intentionally unavailable. The index preserves selected
+candidate/output/delivery bytes and restored frozen inputs.
 Both baseline and restored `verify-current` controls pass. The raw closure audit
 hashes all3,887 runtime entries, nine copied helpers,43 frozen evaluator-artifact
-pins and all fourteen output closures; zero mismatches.
+pins, all fourteen overall records and the eleven available output closures;
+zero mismatches. Unavailable component output is not invented for early refusal.
 The eleven exported freshness controls remain explicitly 6cc history; current
 source has its focused drift/replay regressions and actual A/B freshness proof.
 
@@ -172,10 +176,9 @@ They execute no evaluator, reserve no attempt and recompute no score.
 
 Historical nonpassing full reviews and narrower source/driver passes remain
 in Git history and separate supporting records. Fresh standard full compliance,
-craft and architecture verdicts now pass at the normal
+craft, architecture and reconciliation verdicts now pass at the normal
 `reviews/slice-01-*.md` paths. They were generated through installed Jig,
-reviewed independently in sequence and durably recorded; normal reconciliation
-and lifecycle gates remain separate, not implied by these three passes.
+reviewed independently in sequence and durably recorded; normal lifecycle gates remain separate, not implied by the review verdicts.
 The declined alternative richer craft skill is advisory telemetry, not a waiver.
 No closed record, Accepted ADR or convention is
 amended; no judge permission is inferred from an unused cap. Figma, user

@@ -1,8 +1,8 @@
 ---
-status: REVIEWED
+status: RECONCILED
 kind: feature
 dependencies: [035-01, adr-0044]
-last_verified:
+last_verified: 2026-10-16
 frame_review: true
 arch_review: true
 claimed_by: servo-card-slice-closeout
@@ -136,7 +136,7 @@ live capture, quality, closure and mutation proof remain implementation work.
       cover all criteria with witnessed failures and corrected passes.
 - [x] Per-constraint/identity/refusal cases have focused regression tests.
 - [x] Independent compliance/craft/architecture reviews pass.
-- [ ] Output/command documentation, deviation log and reconciliation complete;
+- [x] Output/command documentation, deviation log and reconciliation complete;
       no closed records amended or unsupported host claims added.
 
 ## Assumptions
@@ -314,6 +314,11 @@ normal helper transitions determine acceptance.
   recorded preserved producer/observer/consumer ownership, approved normalizer
   reuse and the actually-read full-driver seal. Reconciliation does not add a
   substitute grading or completion authority.
+- The first reconciliation review correctly distinguished fourteen overall
+  diagnostic records from eleven available component/output closures; three
+  unapproved-ID guards refuse before acquisition. Wording was corrected, no
+  output fabricated. Its request to include refinement triggers was addressed
+  explicitly in the sweep, without reopening unrelated deferred work.
 
 ### Reconciliation sweep
 
@@ -327,6 +332,7 @@ the final fixed-epoch proof before RECONCILED.
 | Architecture and decisions | Updated live bounded-observer description with source citations. No module boundary or new load-bearing alternative was introduced by the visibility correction; Accepted ADR-0044 remains the existing authority. No new ADR or amendment to Accepted/DONE records is needed. |
 | Conventions | No-op: no convention change was requested or made. |
 | Inbox | No-op: this plugin-only project has no `docs/inbox.md`; remaining 036-02 and cross-project work stays in its existing owner records. |
+| Refinement backlog | Read `docs/refinement-todo.md`, including the per-dimension probe, Figma origin, retention/provider limits and composed-pilot/012-05 revival trigger. Deferred, not silently resolved: the coordinator/consuming-project owner decides any012-05 revival and hosts actual loop wiring when that broader pilot phase is assigned; this slice proves the bounded gate, not loop adoption. Per-dimension/noise calibration remains the later design-eval planning owner's probe on independently approved real-design pairs, not a new request to tune this frozen pilot. Figma remains triggered by a real Figma target; retention/mobile-provider limits remain with their existing follow-up owners. No backlog claim or deferred slice status is rewritten as DONE. |
 | Memory | Updated through `memory.py` with the overflow visibility/proof-epoch lesson; existing ownership/threshold/history lessons retained. Team-context bootstrap was skipped as unrelated to this lane. |
 | Primer/scaffold surfaces | No root AGENTS/CLAUDE primer exists in this plugin-only scaffold. 036-02 remains DRAFT, so this is not whole-spec compress-on-closeout. No scaffold template or global plugin change was needed. |
 | Use-case trace | Advisory helper reports no-op because the vision has no `## Use cases` section; no new use case was invented. |

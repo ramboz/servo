@@ -44,7 +44,7 @@
       after its own completion proof, not after input preparation alone.
       Downstream-owned follow-through, deferred to Jig119/Vellum013; not an
       unmet Servo036-01 prerequisite (AC9).
-- [ ] Review and reconcile output, capture, package/install and bounded claims.
+- [x] Review and reconcile output, capture, package/install and bounded claims.
 - [x] Reproduce and narrowly fix full-review AC2/4 ancestor-overflow visibility;
       preserve genuine red/green and installed diagnostic veto/restoration.
 - [x] Permit explicitly approved whole eight-judgment batches under one frozen
