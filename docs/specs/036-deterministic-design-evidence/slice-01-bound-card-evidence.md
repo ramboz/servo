@@ -1,11 +1,10 @@
 ---
-status: RECONCILED
+status: DONE
 kind: feature
 dependencies: [035-01, adr-0044]
 last_verified: 2026-10-16
 frame_review: true
 arch_review: true
-claimed_by: servo-card-slice-closeout
 ---
 
 ## Slice 036-01 - bound-card-evidence
