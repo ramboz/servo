@@ -154,7 +154,27 @@ live capture, quality, closure and mutation proof remain implementation work.
 matching card through the installed gate; the collector is not merely a
 standalone measurement helper waiting for later integration.
 
-### Implementation checkpoint (not reconciliation)
+### Final-source proof checkpoint (2026-10-15)
+
+The coordinator handed off the existing IN_PROGRESS work for final closeout on
+integration parent `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5`. All eight producer
+files at that parent are byte-identical to sealed source `6cc759e807cab5411363b44c19c58e7a457b3715`.
+[The final-source receipt](implementation-receipt.md) pins the immutable
+678-artifact index, three actual live outcomes, eleven no-judge controls and
+combined-source validation. Fresh full reviews and normal transitions determine
+the current frontmatter status. Earlier checkpoints below retain their original
+nonpassing state and source-epoch limits; they are historical, not superseded
+claims about final-code acceptance.
+
+Fresh compliance/craft/architecture all returned `needs-changes` for the
+reproduced ancestor-overflow required-title visibility defect. The coordinator
+authorized the [narrow capture/test correction](visibility-correction-receipt.md);
+its witnessed red/green, independent source/driver reviews and actual installed
+diagnostic veto/restoration pass within their stated scope. Full-slice reviews
+remain nonpassing pending affected actual-quality proof. No lifecycle gate is
+waived and the earlier live runs are not relabeled as corrected-source proof.
+
+### Historical implementation checkpoint (not reconciliation)
 
 036-01 remains IN_PROGRESS. The first Opus attempt's expired-OAuth response
 is preserved. Following explicit replacement authorization, attempts2-9
@@ -182,7 +202,7 @@ compliance/craft/architecture/reconciliation reviews remain open.
 This is not REVIEWED, RECONCILED, DONE or Jig attestation.
 No 036-02 implementation or closed-record amendment occurred.
 
-### Execution-closure recovery checkpoint (2026-10-15)
+### Historical execution-closure recovery checkpoint (2026-10-15)
 
 The exact 74,424-byte dirty patch from base
 `5440b63458bf862d4fe0b19e274db18c38c170aa` is preserved in `b73306c`.

@@ -1,17 +1,23 @@
-# Bound card evidence pilot (036-01, in progress)
+# Bound card evidence pilot (036-01)
 
 This opt-in pilot measures one self-contained candidate against the independently
 approved Vellum `vellum-design-input/0.1-pilot` normal/open card packages.
 It is not general design extraction, a production acceptance oracle, an image
 metric engine, or evidence of Jig DONE.
 
-**Current implementation checkpoint:** after a preserved initial OAuth refusal,
-eight real judgments produced an overall pass at0.9675 against0.8 with all28
-required constraints passing. A single preselected misalignment retained all28
-required facts but scored0.512065 against the same0.8, yielding overall
-`quality_below_threshold`/exit1. All native responses reported `claude-opus-5`;
-later definitions freeze that observed concrete CLI model ID. This is bounded
-fixture evidence, not a production/general-accuracy or DONE claim.
+**Sealed 6cc759e checkpoint:** the
+[immutable proof receipt](../../../docs/specs/036-deterministic-design-evidence/implementation-receipt.md)
+preserves baseline quality0.97/all28requiredpass/overall0, preselected
+misalignment quality0.5278427304671842/all28requiredpass/overall1, and declared
+title20.01px quality0.9675/26pass2fail/overall1, all against unchanged0.8.
+Each case has eight real native `claude-opus-5` replies. Earlier failed OAuth,
+live and diagnostic epochs are retained, not relabeled as final-source proof.
+This proves the bounded fixture, not production/general accuracy or Jig DONE.
+The subsequent
+[visibility correction](../../../docs/specs/036-deterministic-design-evidence/visibility-correction-receipt.md)
+is a distinct source epoch; earlier live proof is not automatically approval
+of changed evaluator bytes. Whole-slice acceptance remains blocked pending its
+affected proof and full reviews.
 
 ## Inputs and supported boundary
 
@@ -157,6 +163,9 @@ size/weight use0; strings, colours and typed ordered family tokens are exact.
 Quoted `"sans-serif"` remains named, not generic. A missing/hidden required title
 fails dependent assertions without inventing values or turning known UI absence
 into unrelated browser failure. Missing/ambiguous/unsupported acquisition refuses.
+Rectangular ancestor overflow clips reject fully clipped text. Partial clipping
+with surviving positive-area text rectangles is not full invisibility; this is
+not glyph/OCR, arbitrary mask/transform or general occlusion certification.
 Quality unavailability does not erase conclusive required facts; it still
 prevents overall completion.
 Current-invocation reuse also checks a gate-owned exclusive acquisition claim
@@ -167,8 +176,9 @@ result tree cannot substitute for that owned acquisition.
 `validate_output_references(check, evidence, run_id, base)` in the installed
 required runtime is pure run/path/contract/complete-inventory/byte validation,
 including failure/refusal records. It executes no evaluator or grade.
-The coordinator's later 035-02 integration calls this same helper during
-readback. This branch does not copy the newer consumer into its older base.
+The combined 035-02 integration calls this same helper during readback.
+Repeated report reads validate immutable output without claiming live
+acceptance, executing commands or re-scoring.
 
 For independent current-delivery readback without recapture/re-scoring:
 

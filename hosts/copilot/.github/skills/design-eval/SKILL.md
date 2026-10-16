@@ -314,7 +314,7 @@ follow-up in `docs/refinement-todo.md`.)
 
 ## Authoring tips
 
-### Bounded required card pilot (036-01, in progress)
+### Bounded required card pilot (036-01)
 
 The opt-in [bound-card walkthrough](examples/bound-card.md) composes independent
 DOM/style/state evidence with the existing reviewed quality policy through
@@ -323,11 +323,12 @@ verified browser-response bytes and a separately selected current delivery.
 Required constraints and quality remain separate channels. Model/transport
 selection is explicit; no older example model is mandatory, aliases are not
 immutable provider identity, and frozen choices never upgrade silently.
-Real Opus runs preserve an overall pass and a component-pass/quality-fail
-control; the initial OAuth refusal remains historical evidence. Each necessary
+The frozen pilot preserves an overall pass, a component-pass/quality-fail
+control, and a required failure despite genuine passing quality; the initial
+OAuth refusal remains historical evidence. Each necessary
 batch freezes its purpose, inherits all consumed attempts and allocates exactly
-eight judgments. Final-epoch proof/reviews remain open; no slice completion
-or general design-oracle accuracy is claimed.
+eight judgments. These are bounded fixed-card observations, not general
+design-oracle accuracy or downstream completion attestation.
 
 ### Native Copilot judging
 

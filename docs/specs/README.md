@@ -186,7 +186,7 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
 
 - **6** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
 - **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **8** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+- **9** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
   - `034-copilot-installed-runtime/slice-04-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
@@ -195,3 +195,4 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
   - `034-copilot-installed-runtime/slice-06-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
   - `034-copilot-installed-runtime/slice-08-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `035-required-evidence-alongside-quality-scores/slice-02-craft.md` — applied `pr-review`; declined: scout-pr-review
+  - `036-deterministic-design-evidence/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review

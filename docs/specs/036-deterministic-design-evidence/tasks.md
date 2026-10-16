@@ -12,7 +12,7 @@
       required comparison inventory, without runnable-all-consumers proof.
 - [x] Owners approve proposed +/-1 CSS px derived geometry, zero declared size/
       weight and exact normalized text/color/CSS-family declaration comparisons.
-- [ ] Refuse missing required comparison/tolerance policy; no implicit zero
+- [x] Refuse missing required comparison/tolerance policy; no implicit zero
       default can override approved geometry tolerance.
 - [x] Review exact design-evidence-envelope/gate-payload fields, record digests
       and run links; overall gate policy, not component pass, is completion authority.
@@ -26,23 +26,32 @@
 
 ## 036-01
 
-- [ ] Create matching web card and independent observable build/state fixture.
-- [ ] Witness missing-title, wrong normal text/family/color/font declaration,
+- [x] Create matching web card and independent observable build/state fixture.
+- [x] Witness missing-title, wrong normal text/family/color/font declaration,
       broken-action, geometry-boundary and served/current-bundle failures.
-- [ ] Measure required normal/open band-width IDs through confirmed band bindings;
+- [x] Measure required normal/open band-width IDs through confirmed band bindings;
       prove card240px/band242px fails and card-only width evidence refuses.
-- [ ] Keep extra card width non-required and preserve generic versus named
+- [x] Keep extra card width non-required and preserve generic versus named
       quoted CSS-family tokens in normalization controls.
-- [ ] Implement bounded collector/comparator using confirmed Vellum targets.
-- [ ] Build/prove the controlled immutable bundle transport and independently
+- [x] Implement bounded collector/comparator using confirmed Vellum targets.
+- [x] Build/prove the controlled immutable bundle transport and independently
       identified current delivery; reject self-echoed IDs and incomplete closure.
-- [ ] Freeze policy; install ordinary evidence and prove real gate 0/1/2.
-- [ ] Cover replay/identity/required-set/normalization/refusal edge cases.
-- [ ] Preserve component-pass/quality-fail overall-gate runs with digested
+- [x] Freeze policy; install ordinary evidence and prove real gate 0/1/2.
+- [x] Cover replay/identity/required-set/normalization/refusal edge cases.
+- [x] Preserve component-pass/quality-fail overall-gate runs with digested
       immutable observations for Jig119's no-rerun/no-rescore control.
 - [ ] Jig119 consumes preserved overall runs; Vellum integration closes only
       after its own completion proof, not after input preparation alone.
+      Downstream-owned follow-through, deferred to Jig119/Vellum013; not an
+      unmet Servo036-01 prerequisite (AC9).
 - [ ] Review and reconcile output, capture, package/install and bounded claims.
+- [x] Reproduce and narrowly fix full-review AC2/4 ancestor-overflow visibility;
+      preserve genuine red/green and installed diagnostic veto/restoration.
+- [ ] Refresh approved actual-quality proof on the corrected evaluator, then
+      rerun required full reviews before reconciliation/lifecycle completion.
+
+Final-source evidence and historical-versus-current control boundaries are
+recorded in [implementation-receipt.md](implementation-receipt.md).
 
 ## 036-02
 

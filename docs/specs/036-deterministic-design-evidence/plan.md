@@ -1,9 +1,19 @@
 # Plan: deterministic design-evidence component
 
-036-01 is in independent readiness review. 036-02 remains DRAFT and is not
-implemented by this work. The original proposal is retained below as historical
-authoring context; this checkpoint records the accepted inputs and actual
-implementation boundary.
+036-01 closeout selected integration parent
+`6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5`, with producer bytes unchanged
+from `6cc759e807cab5411363b44c19c58e7a457b3715`. The
+[final-source receipt](implementation-receipt.md) pins three actual live
+outcomes, eleven no-judge controls and combined-source validation. Closeout
+uses fresh compliance, craft, architecture and reconciliation reviews, then
+normal helper transitions; it does not restart implementation or await upstream
+merges. The coordinator explicitly handed off the existing claim. Full review
+then reproduced a required-title overflow visibility defect and authorized only
+the [capture/test correction](visibility-correction-receipt.md). Its source
+and diagnostic reviews pass; full-slice acceptance remains blocked pending
+affected fixed-epoch live proof and full reviews.
+036-02 remains DRAFT. Checkpoints and the original proposal below are historical
+context, not statements that earlier source already passed final review.
 
 ## Supporting consumer integration checkpoint (2026-10-15)
 
