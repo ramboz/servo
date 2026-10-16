@@ -334,7 +334,7 @@ class RuntimeContextTests(unittest.TestCase):
                 with (
                     self.subTest(key=key),
                     patch.object(evidence.site, "ENABLE_USER_SITE", False),
-                    patch.dict("os.environ", {key: "/unit-unpinned-runtime"}),
+                    patch.dict("os.environ", {key: "/unit-unpinned-runtime"}, clear=True),
                     self.assertRaisesRegex(ValueError, "Node|node|startup"),
                 ):
                     evidence.check_startup_environment(root, [])
@@ -347,11 +347,29 @@ class RuntimeContextTests(unittest.TestCase):
             (root / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
             packages = root / "packages"
             packages.mkdir()
-            with patch.object(evidence.site, "ENABLE_USER_SITE", False):
+            with (
+                patch.object(evidence.site, "ENABLE_USER_SITE", False),
+                patch.dict("os.environ", {}, clear=True),
+            ):
                 evidence.check_startup_environment(root, [str(packages)])
                 (packages / "unapproved.pth").write_text("import unapproved\n")
                 with self.assertRaisesRegex(ValueError, "startup"):
                     evidence.check_startup_environment(root, [str(packages)])
+
+    def test_native_loader_overrides_still_refuse_with_isolated_other_inputs(self):
+        from unittest.mock import patch
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pyvenv.cfg").write_text("include-system-site-packages = false\n")
+            for key in ("LD_LIBRARY_PATH", "LD_PRELOAD", "DYLD_LIBRARY_PATH"):
+                with (
+                    self.subTest(key=key),
+                    patch.object(evidence.site, "ENABLE_USER_SITE", False),
+                    patch.dict("os.environ", {key: "/unit-unpinned-library"}, clear=True),
+                    self.assertRaisesRegex(ValueError, "native loader"),
+                ):
+                    evidence.check_startup_environment(root, [])
 
     def policy(self, root):
         import platform
