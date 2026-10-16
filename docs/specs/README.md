@@ -154,7 +154,7 @@
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | **DONE** |  |
 | [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-01 - installed-required-gate | **DONE** | Explicit v2 opt-in; scalar v1 unchanged; overall gate owns completion. |
 | [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-02 - required-verdict-consumers | **DONE** |  |
-| [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 - bound-card-evidence | IN_PROGRESS (servo-live-card-evidence) |  |
+| [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 - bound-card-evidence | **DONE** |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-02 - regional-image-evidence | DRAFT |  |
 
 ## Deferred slices
@@ -186,7 +186,7 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
 
 - **6** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
 - **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **8** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+- **9** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
   - `034-copilot-installed-runtime/slice-04-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
@@ -195,3 +195,4 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
   - `034-copilot-installed-runtime/slice-06-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
   - `034-copilot-installed-runtime/slice-08-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `035-required-evidence-alongside-quality-scores/slice-02-craft.md` — applied `pr-review`; declined: scout-pr-review
+  - `036-deterministic-design-evidence/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review

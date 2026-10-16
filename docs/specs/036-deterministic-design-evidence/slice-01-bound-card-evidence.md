@@ -1,11 +1,10 @@
 ---
-status: IN_PROGRESS
+status: DONE
 kind: feature
 dependencies: [035-01, adr-0044]
-last_verified:
+last_verified: 2026-10-16
 frame_review: true
 arch_review: true
-claimed_by: servo-live-card-evidence
 ---
 
 ## Slice 036-01 - bound-card-evidence
@@ -132,11 +131,11 @@ live capture, quality, closure and mutation proof remain implementation work.
    attestation runtime is not a prerequisite for 036-01 DONE.
 
 **DoD:**
-- [ ] Real served-app/capture -> frozen component -> installed gate controls
+- [x] Real served-app/capture -> frozen component -> installed gate controls
       cover all criteria with witnessed failures and corrected passes.
-- [ ] Per-constraint/identity/refusal cases have focused regression tests.
-- [ ] Independent compliance/craft/architecture reviews pass.
-- [ ] Output/command documentation, deviation log and reconciliation complete;
+- [x] Per-constraint/identity/refusal cases have focused regression tests.
+- [x] Independent compliance/craft/architecture reviews pass.
+- [x] Output/command documentation, deviation log and reconciliation complete;
       no closed records amended or unsupported host claims added.
 
 ## Assumptions
@@ -154,7 +153,42 @@ live capture, quality, closure and mutation proof remain implementation work.
 matching card through the installed gate; the collector is not merely a
 standalone measurement helper waiting for later integration.
 
-### Implementation checkpoint (not reconciliation)
+### Corrected-source proof checkpoint (2026-10-16)
+
+Frozen executable source is
+`44a96d9549cd73f8a8ea3e1307157cb994b138ac`, with corrected capture55fbc0cb
+and qualityc43480df. [The settled closeout receipt](settled-closeout-receipt.md)
+pins the current immutable667-artifact live index,465-artifact diagnostic index
+and combined manifest. Actual A and comment-only B pass under identical frozen
+grading bytes, old A refuses against selected current B, misalignment fails
+quality despite28requiredpass, and20.01px title fails required despite real
+quality0.97. Fourteen actual installed no-judge controls include corrected
+fully-clipped-title failure and exact restored baseline. Original source
+epochs and nonpassing full reviews remain preserved. Fresh full reviews and
+normal helper transitions, not these summaries or narrower source passes,
+determine current lifecycle acceptance.
+
+### Historical closeout entry checkpoint (2026-10-15)
+
+The coordinator handed off the existing IN_PROGRESS work for final closeout on
+integration parent `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5`. All eight producer
+files at that parent are byte-identical to sealed source `6cc759e807cab5411363b44c19c58e7a457b3715`.
+[The final-source receipt](implementation-receipt.md) pins the immutable
+678-artifact index, three actual live outcomes, eleven no-judge controls and
+combined-source validation. Fresh full reviews and normal transitions determine
+the current frontmatter status. Earlier checkpoints below retain their original
+nonpassing state and source-epoch limits; they are historical, not superseded
+claims about final-code acceptance.
+
+Fresh compliance/craft/architecture all returned `needs-changes` for the
+reproduced ancestor-overflow required-title visibility defect. The coordinator
+authorized the [narrow capture/test correction](visibility-correction-receipt.md);
+its witnessed red/green, independent source/driver reviews and actual installed
+diagnostic veto/restoration pass within their stated scope. Full-slice reviews
+remain nonpassing pending affected actual-quality proof. No lifecycle gate is
+waived and the earlier live runs are not relabeled as corrected-source proof.
+
+### Historical implementation checkpoint (not reconciliation)
 
 036-01 remains IN_PROGRESS. The first Opus attempt's expired-OAuth response
 is preserved. Following explicit replacement authorization, attempts2-9
@@ -182,7 +216,7 @@ compliance/craft/architecture/reconciliation reviews remain open.
 This is not REVIEWED, RECONCILED, DONE or Jig attestation.
 No 036-02 implementation or closed-record amendment occurred.
 
-### Execution-closure recovery checkpoint (2026-10-15)
+### Historical execution-closure recovery checkpoint (2026-10-15)
 
 The exact 74,424-byte dirty patch from base
 `5440b63458bf862d4fe0b19e274db18c38c170aa` is preserved in `b73306c`.
@@ -219,7 +253,106 @@ Historical samples and prior control epochs are unchanged. Trusted-local
 closure only: no hostile-writer/full-host attestation, whole-slice compliance,
 REVIEWED, RECONCILED, DONE or renewed live-call allowance is claimed.
 
+### Deviation log
+
+Original ACs above are preserved. The current proof, historical deviations and
+live guidance are reconciled below; the independent reconciliation verdict and
+normal helper transitions determine acceptance.
+
+- The assigned ordinary command output/refusal carrier and pure consumer
+  readback use existing spec-oracle/required-runtime seams. The combined
+  integration parent includes the completed 035-02 consumer; no new registry,
+  controller, generic constraint language or cross-project completion
+  dependency was added.
+- Earlier review findings about threshold binding, acquisition ownership,
+  visible descendant text and the exact execution closure received witnessed
+  fixes in their own source epochs. The prior unsuccessful reviews, expired
+  authentication attempt and actual runs remain historical; they were not
+  rewritten as proof that the final guards already existed.
+- The three actual 6cc759e runs proved distinct bounded overall outcomes.
+  Full review nevertheless reproduced ancestor-overflow title invisibility.
+  The coordinator then explicitly authorized the capture/test-only correction.
+  Its real red/green, independent narrow source/driver reviews, installed
+  synthetic-quality veto and restored required-pass/unavailable-quality
+  control are recorded separately. Actual-quality proof on that corrected
+  source is now separately published on44a96d9; fresh full verdicts still
+  govern acceptance. Diagnostic 0.99 never becomes live fidelity.
+- Before new 09f judge calls, the coordinator assigned the existing
+  quality-budget seam to permit explicitly approved whole eight-judgment
+  batches under one frozen definition for a fresh changed-build A/B pair.
+  Default one-batch behavior, eight judgments per run, prior history,
+  monotonic claims and exhaustion remain strict. The cap/purpose remain
+  frozen; raising them still requires ordinary reapproval. This is not a new
+  judge framework, score cache or generalized convergence claim.
+- The approved inclusive geometry comparison is unchanged. Exact +/-1.01px
+  arithmetic controls and measured +/-1.02px browser controls distinguish
+  policy from Chromium layout quantization; no measured failure is rounded
+  into a pass. The title-size 20.01px control retains zero tolerance.
+- The visibility correction rejects fully clipped rectangular text while
+  allowing surviving positive-area partial visibility. It does not certify
+  full glyph visibility, arbitrary masking/transforms or general occlusion.
+  No source design, comparison tolerance, exclusion, threshold, sample policy
+  or frozen model was changed to improve a score.
+- This closeout made zero live judge calls. Owner-level consumed history
+  stays attached to each proof epoch; a new target or unused diagnostic
+  allowance does not grant new judge authorization.
+- The proof worker completed32 actual44a judgments (four runs), inheriting49
+  consumed attempts for81 total. Fourteen separately approved diagnostic
+  controls consumed zero calls/claims; spare cap89 is unspent. A/B grading
+  config/policy/checks/full-oracle bytes are identical; renewed B is fresh
+  evidence, not restoration or cached A re-scoring.
+- GitHub CI exposed test isolation: setup-python's `LD_LIBRARY_PATH` reached
+  two unit tests intended to check Node overrides and `.pth` startup files.
+  A CI-like environment reproduced the four failures. Only those tests'
+  environment setup was isolated; an explicit loader-refusal regression was
+  added. Production refusal and all frozen helper bytes are unchanged.
+- Fresh full compliance, craft and architecture passes evaluated the corrected
+  source plus both current proof bundles, not just test totals. They found no
+  additional material blockers or nits. Craft recorded the clipped-title,
+  monotonic-budget and shared pure-output-validator strengths; architecture
+  recorded preserved producer/observer/consumer ownership, approved normalizer
+  reuse and the actually-read full-driver seal. Reconciliation does not add a
+  substitute grading or completion authority.
+- The first reconciliation review correctly distinguished fourteen overall
+  diagnostic records from eleven available component/output closures; three
+  unapproved-ID guards refuse before acquisition. Wording was corrected, no
+  output fabricated. Its request to include refinement triggers was addressed
+  explicitly in the sweep, without reopening unrelated deferred work.
+
+### Reconciliation sweep
+
+The independent reconciliation reviewer verifies these dispositions against
+the final fixed-epoch proof before RECONCILED.
+
+| Surface | Disposition |
+|---|---|
+| Acceptance criteria, plan and tasks | Updated current proof and review checkpoints; original nine ACs and historical nonpassing checkpoints preserved. Downstream Jig/Vellum tasks are explicitly owned/deferred, not hidden prerequisites. |
+| Output/command/install guidance | Updated walkthrough and live guidance for exact driver sealing, ordinary shared/vendor installation, pure readback, source epochs and honest 0/1/2 authority. Official hosts are regenerated, never hand-edited. |
+| Architecture and decisions | Updated live bounded-observer description with source citations. No module boundary or new load-bearing alternative was introduced by the visibility correction; Accepted ADR-0044 remains the existing authority. No new ADR or amendment to Accepted/DONE records is needed. |
+| Conventions | No-op: no convention change was requested or made. |
+| Inbox | No-op: this plugin-only project has no `docs/inbox.md`; remaining 036-02 and cross-project work stays in its existing owner records. |
+| Refinement backlog | Read `docs/refinement-todo.md`, including the per-dimension probe, Figma origin, retention/provider limits and composed-pilot/012-05 revival trigger. Deferred, not silently resolved: the coordinator/consuming-project owner decides any012-05 revival and hosts actual loop wiring when that broader pilot phase is assigned; this slice proves the bounded gate, not loop adoption. Per-dimension/noise calibration remains the later design-eval planning owner's probe on independently approved real-design pairs, not a new request to tune this frozen pilot. Figma remains triggered by a real Figma target; retention/mobile-provider limits remain with their existing follow-up owners. No backlog claim or deferred slice status is rewritten as DONE. |
+| Memory | Updated through `memory.py` with the overflow visibility/proof-epoch lesson; existing ownership/threshold/history lessons retained. Team-context bootstrap was skipped as unrelated to this lane. |
+| Primer/scaffold surfaces | No root AGENTS/CLAUDE primer exists in this plugin-only scaffold. 036-02 remains DRAFT, so this is not whole-spec compress-on-closeout. No scaffold template or global plugin change was needed. |
+| Use-case trace | Advisory helper reports no-op because the vision has no `## Use cases` section; no new use case was invented. |
+| Closed-spec drift | No closed spec/slice, DONE035 record, Accepted ADR or historical approval was amended. Earlier open 036 checkpoints remain explicitly historical. |
+| Status board | Derived with `workflow.py status-board`, not hand-edited; the spec remains IN_PROGRESS because036-02 is DRAFT. Candidate-selection telemetry reflects the actual richer craft/arch selections. |
+| Final proof and verdicts | Updated with current667live/465diagnostic immutable indexes, combined manifest, repeated pure merged-consumer readback and actual A/B freshness. Normal full compliance/craft/arch/reconciliation are recorded separately; narrow source passes and peer lifecycle completion never substitute. |
+
+### Leanness sweep
+
+The visibility correction adds one local rectangle-intersection predicate and
+two focused browser regression methods in existing files. The separately
+authorized repeated-run allowance stays in the existing quality helper, with
+private durable claim accounting rather than a new registry or controller.
+Neither adds a runtime module, policy/config field or platform. Source/input/output
+and current-delivery validation retain the existing approved carrier and pure
+consumer API. Detailed receipts are audit documentation, not installed runtime
+inputs. No out-of-spec UI/product decision was settled; no lightweight
+decision record or broader architecture proposal is introduced.
+
 ### Close-out (post-DONE)
 
-- [ ] Regenerate board and record exact pilot scope and upstream contract pin.
-- [ ] Reconcile live skill/output/install docs; parent owns cross-project attestation.
+- [x] Record exact pilot scope, upstream contract pin and current proof indexes;
+      derive the board through normal helper transitions without changing036-02.
+- [x] Reconcile live skill/output/install docs; parent owns cross-project attestation.

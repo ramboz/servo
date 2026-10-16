@@ -1,11 +1,35 @@
 # Plan: deterministic design-evidence component
 
-036-01 is in independent readiness review. 036-02 remains DRAFT and is not
-implemented by this work. The original proposal is retained below as historical
-authoring context; this checkpoint records the accepted inputs and actual
-implementation boundary.
+036-01 closeout selected integration parent
+`6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5` and settled executable source
+`44a96d9549cd73f8a8ea3e1307157cb994b138ac` after the separately authorized
+[visibility](visibility-correction-receipt.md) and
+[repeated-run allowance](multi-run-allowance-receipt.md) corrections.
+[The current closeout receipt](settled-closeout-receipt.md) pins four actual
+live outcomes (including same-definition A/B), fourteen current no-judge
+installed controls and current merged validation. Fresh full compliance,
+craft, architecture and reconciliation plus normal helper transitions govern
+acceptance; earlier nonpassing reviews remain history, not silently passed.
+The coordinator explicitly handed off the existing claim. No implementation
+restart or upstream PR merge is needed.
+036-02 remains DRAFT. Checkpoints and the original proposal below are historical
+context, not statements that earlier source already passed final review.
 
 ## Supporting consumer integration checkpoint (2026-10-15)
+
+**Later active closeout assignment:** before any 09f0879 judge calls, the
+coordinator identified that a changed-build A/B proof needs two fresh runs
+under one frozen definition. The existing exactly-one-batch budget rejected
+that legitimate repeat. Only `card_quality.py` budget/history validation,
+focused tests and related guidance are additionally assigned: keep default8
+and exactly8 per run, but allow an explicitly approved positive whole number
+of batches (for example, prior49 +16 =65). Purpose/cap stay frozen; increasing
+them requires reapproval. Actual claims, finite integer caps, eight remaining
+slots, exhaustion and prior-history drift remain strict. No score, model,
+threshold, input target or controller change is authorized. The proof worker
+held 09f before approval/judging; no actual judge calls were wasted.
+
+The supporting integration narrative below predates these closeout corrections.
 
 This bounded lane supports 036-01 AC6/7 and the completed 035-02 consumer
 interface; it does not advance either slice or replace primary036 reviews.

@@ -67,17 +67,30 @@ _SNAPSHOT = """(el,frame) => {
       (b.left>=Number(frame.x)&&b.top>=Number(frame.y)&&
        b.right<=Number(frame.x)+Number(frame.width)&&
        b.bottom<=Number(frame.y)+Number(frame.height)));
+   let painted=rectangles.map(b=>({left:b.left,right:b.right,top:b.top,bottom:b.bottom}));
    for(let a=p;a;a=a.parentElement){
       const style=getComputedStyle(a);
       if(style.clipPath!=='none'||style.clip!=='auto'||style.filter!=='none'||
          (style.maskImage&&style.maskImage!=='none')||style.textShadow!=='none')
          throw Error('unsupported text visibility paint effect');
+      if(style.display==='contents')continue;
+      const clips=value=>['hidden','clip','scroll','auto'].includes(value);
+      const clipX=clips(style.overflowX),clipY=clips(style.overflowY);
+      if(clipX||clipY){
+         const b=a.getBoundingClientRect();
+         painted=painted.map(r=>({
+            left:clipX?Math.max(r.left,b.left+parseFloat(style.borderLeftWidth)):r.left,
+            right:clipX?Math.min(r.right,b.right-parseFloat(style.borderRightWidth)):r.right,
+            top:clipY?Math.max(r.top,b.top+parseFloat(style.borderTopWidth)):r.top,
+            bottom:clipY?Math.min(r.bottom,b.bottom-parseFloat(style.borderBottomWidth)):r.bottom
+         })).filter(r=>r.right>r.left&&r.bottom>r.top);
+      }
    }
    const transparent=alpha(s.color)===0||alpha(s.webkitTextFillColor||s.color)===0;
    let box=p;
    while(box&&getComputedStyle(box).display==='contents')box=box.parentElement;
    const visibleBox=box&&box.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});
-   textVisible=textVisible&&hasInk&&!transparent&&visibleBox&&
+   textVisible=textVisible&&hasInk&&painted.length>0&&!transparent&&visibleBox&&
       s.visibility==='visible'&&Number(s.opacity)>0&&s.contentVisibility!=='hidden';
  }
  return {bounds:Object.fromEntries(['x','y','width','height'].map(k=>[k,String(r[k])])),

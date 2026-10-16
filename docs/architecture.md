@@ -78,7 +78,7 @@ servo/
 
 ## Install surfaces
 
-**Bounded card observer (036-01, IN_PROGRESS):** under Accepted ADR-0044,
+**Bounded card observer (036-01):** under Accepted ADR-0044,
 `skills/design-eval/card_install.py` prepares pinned producer inputs/runtime
 and ordinary spec-oracle commands; it separates generation, explicit approval
 and installation. `card_bundle.py` closes the single-document source/output
@@ -86,13 +86,20 @@ set; `card_capture.py` independently observes both states over sealed loopback
 bytes; `card_evidence.py` compares producer-approved facts and verifies current
 delivery without re-scoring. `card_quality.py` composes the reviewed existing
 design-eval policy over those same captures and retains native CLI responses.
-An initial OAuth refusal, a real overall pass and a genuine
-component-pass/quality-fail control are preserved as separate epochs. Each
-necessary live batch freezes its purpose and exactly8 additional judgments,
-carrying the complete consumed history; no unlimited/adaptive search is implied.
-Final-epoch controls and lifecycle reviews remain open. The
+The [frozen final-source receipt](specs/036-deterministic-design-evidence/settled-closeout-receipt.md)
+preserves an overall pass, component-pass/quality-fail and high-quality
+required-fail; the initial OAuth refusal remains historical. Each
+necessary live run uses exactly8 judgments. Its frozen allowance defaults to one
+batch; explicitly approved whole batches can fund multiple fresh runs under the
+same definition while retaining complete consumed history. Exhaustion or drift
+refuses; increasing the cap requires reapproval, not unlimited/adaptive search.
+The actually read driver snapshot, including its quality SEED, is checked
+against existing evaluator-artifact pins (`required_runtime.py:740-745`);
+collection verifies independently selected local delivery
+(`card_evidence.py:340,474`). The
 [walkthrough](../skills/design-eval/examples/bound-card.md) records this bounded
-support and incomplete acceptance.
+support. This is trusted-local fixed-card evidence, not hostile-host or
+provider-internal attestation, general accuracy or downstream Jig completion.
 
 Ordinary command evidence optionally binds a declared run-scoped output
 manifest/capture closure, separate from immutable evaluator input artifacts.

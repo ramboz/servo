@@ -97,6 +97,72 @@ class LiveCaptureTests(unittest.TestCase):
         self.assertFalse(result["elements"]["title"]["visible"])
         self.assertIsNone(result["acquisition_error"])
 
+    def test_fully_overflow_clipped_title_is_a_named_required_failure(self):
+        for state in ("normal", "open"):
+            for axis, dimension in (("x", "width"), ("y", "height")):
+                for overflow in ("hidden", "clip", "scroll", "auto"):
+                    with self.subTest(state=state, axis=axis, overflow=overflow):
+                        html = APP.replace(
+                            '<div class="title">Trailhead</div>',
+                            f'<div style="{dimension}:0;overflow-{axis}:{overflow}">'
+                            '<div class="title" style="width:240px">Trailhead</div></div>',
+                        )
+                        observed = self.observe(html, state=state)
+                        identity = state + "-title-text"
+                        package = {
+                            "view": {"state": state},
+                            "required_inventory": {"required_ids": [identity]},
+                            "source_facts": [{"id": identity, "value": "Trailhead"}],
+                            "policy": {
+                                "constraints": [{
+                                    "id": identity,
+                                    "binding_id": "title",
+                                    "required": True,
+                                    "comparison": "exact",
+                                    "normalizer": "text-content-exact-v0",
+                                    "units": "text",
+                                    "tolerance": "0",
+                                }],
+                            },
+                        }
+                        actual = observed["elements"]["title"]["raw"]["text"]
+                        rows = card_evidence.compare(
+                            package,
+                            {**observed, "facts": [{"id": identity, "value": actual}]},
+                        )
+                        self.assertIsNone(observed["acquisition_error"])
+                        self.assertFalse(observed["elements"]["title"]["visible"])
+                        self.assertFalse(observed["elements"]["title"]["raw"]["textVisible"])
+                        self.assertEqual(rows[0]["id"], identity)
+                        self.assertEqual(rows[0]["status"], "fail")
+                        self.assertEqual(rows[0]["actual"], "Trailhead")
+                        self.assertIn("not visible", rows[0]["reason"])
+
+    def test_unclipped_and_partially_clipped_wrappers_keep_visible_text(self):
+        for state in ("normal", "open"):
+            for style in (
+                "",
+                "display:contents",
+                "height:0;overflow:visible",
+                "width:0;overflow:visible",
+                "height:30px;overflow:hidden",
+                "height:10px;overflow:hidden",
+                "width:20px;overflow:hidden",
+            ):
+                with self.subTest(state=state, style=style):
+                    html = APP.replace(
+                        '<div class="title">Trailhead</div>',
+                        f'<div style="{style}">'
+                        '<div class="title" style="width:240px">Trailhead</div></div>',
+                    )
+                    observed = self.observe(html, state=state)
+                    self.assertIsNone(observed["acquisition_error"])
+                    self.assertIsNone(observed["state_error"])
+                    self.assertTrue(observed["elements"]["title"]["visible"])
+                    self.assertTrue(observed["elements"]["title"]["raw"]["textVisible"])
+                    expected = "opened" if state == "open" else "hiking route planner"
+                    self.assertEqual(observed["elements"]["subtitle"]["raw"]["text"], expected)
+
     def test_modern_transparent_descendant_is_hidden_but_contents_wrapper_is_visible(self):
         for style, visible in (
             ("color:color(srgb 0 0 0 / 0)", False),

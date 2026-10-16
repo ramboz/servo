@@ -1,17 +1,20 @@
-# Bound card evidence pilot (036-01, in progress)
+# Bound card evidence pilot (036-01)
 
 This opt-in pilot measures one self-contained candidate against the independently
 approved Vellum `vellum-design-input/0.1-pilot` normal/open card packages.
 It is not general design extraction, a production acceptance oracle, an image
 metric engine, or evidence of Jig DONE.
 
-**Current implementation checkpoint:** after a preserved initial OAuth refusal,
-eight real judgments produced an overall pass at0.9675 against0.8 with all28
-required constraints passing. A single preselected misalignment retained all28
-required facts but scored0.512065 against the same0.8, yielding overall
-`quality_below_threshold`/exit1. All native responses reported `claude-opus-5`;
-later definitions freeze that observed concrete CLI model ID. This is bounded
-fixture evidence, not a production/general-accuracy or DONE claim.
+**Corrected-source proof:** the
+[settled receipt](https://github.com/ramboz/servo/blob/main/docs/specs/036-deterministic-design-evidence/settled-closeout-receipt.md)
+preserves real A/B quality0.9660566243270259/0.9675 with28requiredpass and
+overall0 under identical frozen grading bytes; fixed misalignment quality0.515
+with28requiredpass/overall1; and title20.01px quality0.97 with26pass2fail/overall1,
+all against unchanged0.8. Each run has eight real native `claude-opus-5` replies.
+Fourteen separate installed diagnostic controls make no judge calls and label
+synthetic0.99 explicitly. Earlier failed OAuth, live and diagnostic epochs
+remain history, not relabeled as corrected-source proof.
+This proves the bounded fixture, not production/general accuracy or Jig DONE.
 
 ## Inputs and supported boundary
 
@@ -127,10 +130,26 @@ before invocation. Keep the owner-level consumed count across new checkpoints;
 creating a new directory does not grant another eight calls. The owner has
 explicitly authorized necessary further pilot invocations, without repeated
 per-run prompts, not unbounded/adaptive candidate search or policy tuning.
-Each prepared batch documents `--purpose`, copies the complete prior claim
-history with `--prior-attempts`, and sets `--calibration-limit` to the inherited
-count plus exactly8. Four judgments per state remain fixed. Record every
+Each definition documents `--purpose` and copies the complete prior claim
+history with `--prior-attempts`. The default allowance adds exactly8 judgments.
+An explicitly reviewed positive whole number of eight-judgment batches may be
+approved up front under that same frozen definition: for example, inherited49
+plus16 gives `--calibration-limit 65` for an A/B pair of fresh evaluations.
+Each run still needs eight remaining slots and uses four judgments per state.
+Claims remain contiguous, byte-bound and monotonically consumed; incomplete,
+changed or exhausted history refuses without reset. Without inherited attempts,
+preparing more than the default batch requires an explicitly supplied empty
+prior-history directory. Raising an already frozen cap or changing its purpose
+requires ordinary reapproval, never automatic replenishment. Record every
 outcome/model usage; a new epoch is never relabelled as an old passing run.
+The private companion consumed-state directory locks and atomically updates
+the consumed high-water count, while each run retains its observed/reserved
+claim prefix. Missing/corrupt initialized state or lost claims refuse; do not
+delete/reset state to replenish an allowance. Legacy read-only claim history
+can still be imported into a freshly approved definition. This is same-trust
+local durability accounting, not authenticated authority against a malicious
+writer replacing both claims and their counter; it is not graded policy and
+does not change the frozen definition between A/B runs.
 
 ## Candidate and output identities
 
@@ -157,6 +176,9 @@ size/weight use0; strings, colours and typed ordered family tokens are exact.
 Quoted `"sans-serif"` remains named, not generic. A missing/hidden required title
 fails dependent assertions without inventing values or turning known UI absence
 into unrelated browser failure. Missing/ambiguous/unsupported acquisition refuses.
+Rectangular ancestor overflow clips reject fully clipped text. Partial clipping
+with surviving positive-area text rectangles is not full invisibility; this is
+not glyph/OCR, arbitrary mask/transform or general occlusion certification.
 Quality unavailability does not erase conclusive required facts; it still
 prevents overall completion.
 Current-invocation reuse also checks a gate-owned exclusive acquisition claim
@@ -167,8 +189,9 @@ result tree cannot substitute for that owned acquisition.
 `validate_output_references(check, evidence, run_id, base)` in the installed
 required runtime is pure run/path/contract/complete-inventory/byte validation,
 including failure/refusal records. It executes no evaluator or grade.
-The coordinator's later 035-02 integration calls this same helper during
-readback. This branch does not copy the newer consumer into its older base.
+The combined 035-02 integration calls this same helper during readback.
+Repeated report reads validate immutable output without claiming live
+acceptance, executing commands or re-scoring.
 
 For independent current-delivery readback without recapture/re-scoring:
 

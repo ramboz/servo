@@ -1,15 +1,20 @@
 """Bounded live CLI calibration using the existing reviewed design-eval policy."""
 
+import fcntl
 import json
 import math
 import os
 import shutil
 import stat
 import subprocess
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 import score as scoring
 from card_bundle import file_hash, inventory, load, publish, raw, require, safe
+
+_CLAIM_BYTES = b"reserved before live invocation\n"
 
 
 def assert_native_cli(path):
@@ -138,6 +143,14 @@ def parse_reply(envelope, requested):
     }
 
 
+def _sync_directory(directory):
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def reserve(directory, limit):
     require(type(limit) is int and limit > 0, "unapproved calibration allowance")
     directory = Path(directory)
@@ -145,25 +158,111 @@ def reserve(directory, limit):
     for number in range(1, limit + 1):
         try:
             with (directory / f"{number}.claim").open("xb") as stream:
-                stream.write(b"reserved before live invocation\n")
+                stream.write(_CLAIM_BYTES)
+                stream.flush()
+                os.fsync(stream.fileno())
+            _sync_directory(directory)
+            _sync_directory(directory.parent)
             return number
         except FileExistsError:
             continue
     raise ValueError("approved batch allowance exhausted; no automatic replenishment")
 
 
-def inherit_attempts(source, destination, limit):
-    rows = inventory(source)
-    require(type(limit) is int and limit >= 8, "unapproved calibration allowance")
+def _attempt_history(directory):
+    rows = inventory(directory)
     require(
         all(row["path"].endswith(".claim") and row["path"][:-6].isdigit() for row in rows),
         "invalid prior attempt history",
     )
     rows.sort(key=lambda row: int(row["path"][:-6]))
     require(
-        [row["path"] for row in rows] == [f"{n}.claim" for n in range(1, len(rows) + 1)]
-        and limit == len(rows) + 8,
-        "new allowance must preserve history and authorize exactly eight planned judgments",
+        [row["path"] for row in rows] == [f"{n}.claim" for n in range(1, len(rows) + 1)],
+        "missing or noncontiguous prior attempt history",
+    )
+    return rows
+
+
+def _consumed_history(directory, prior):
+    rows = _attempt_history(directory) if Path(directory).exists() else []
+    require(
+        rows[:len(prior)] == prior
+        and all(row["hash"] == raw(_CLAIM_BYTES) for row in rows[len(prior):]),
+        "consumed attempt history changed",
+    )
+    return rows
+
+
+def _consumed_state(directory):
+    directory = Path(directory)
+    return directory.with_name(directory.name + ".consumed")
+
+
+def _check_counter(state, rows):
+    counter = load(safe(state, "counter.json"))
+    require(
+        type(counter) is dict and set(counter) == {"consumed"}
+        and type(counter["consumed"]) is int and counter["consumed"] == len(rows),
+        "consumed claim high-water history mismatch",
+    )
+
+
+def _write_counter(state, count):
+    with tempfile.NamedTemporaryFile(dir=state, delete=False) as stream:
+        temporary = Path(stream.name)
+        stream.write(json.dumps({"consumed": count}).encode("utf-8") + b"\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    try:
+        os.replace(temporary, safe(state, "counter.json"))
+        _sync_directory(state)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+@contextmanager
+def _claim_state(directory, prior, observed):
+    state = _consumed_state(directory)
+    try:
+        state.mkdir(mode=0o700, parents=True)
+        initialize = True
+    except FileExistsError:
+        initialize = False
+    with safe(state, "lock").open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            rows = _consumed_history(directory, prior)
+            require(rows[:len(observed)] == observed, "observed claim history changed")
+            if initialize:
+                require(rows == prior, "unrecorded consumed claim history")
+                _write_counter(state, len(rows))
+                _sync_directory(state.parent)
+            else:
+                _check_counter(state, rows)
+            yield rows, state
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _reserve_attempt(directory, limit, prior, observed):
+    with _claim_state(directory, prior, observed) as (rows, state):
+        require(len(rows) < limit, "approved batch allowance exhausted")
+        number = reserve(directory, limit)
+        require(number == len(rows) + 1, "non-monotonic consumed claim reservation")
+        rows.append({"path": f"{number}.claim", "hash": raw(_CLAIM_BYTES)})
+        _write_counter(state, len(rows))
+        return number, rows
+
+
+def inherit_attempts(source, destination, limit):
+    rows = _attempt_history(source)
+    state = _consumed_state(source)
+    require(not state.is_symlink(), "symlink consumed claim state")
+    if state.exists():
+        _check_counter(state, rows)
+    require(
+        type(limit) is int and limit >= len(rows) + 8 and (limit - len(rows)) % 8 == 0,
+        "new allowance must preserve history and approve whole eight-judgment batches",
     )
     destination = Path(destination)
     destination.mkdir(parents=True)
@@ -201,17 +300,14 @@ def run(config_path, shots, destination, allowance, *, capture_hashes):
         and [row["path"] for row in prior] == [f"{n}.claim" for n in range(1, len(prior) + 1)],
         "missing or noncontiguous prior attempt history",
     )
-    for row in prior:
-        require(
-            file_hash(safe(allowance, row["path"])) == row["hash"],
-            "consumed attempt history changed",
-        )
     require(
         type(judge.get("calibration_limit")) is int
-        and judge["calibration_limit"] == len(prior) + 8,
-        "approved batch must preserve history and allocate exactly eight judgments",
+        and judge["calibration_limit"] >= len(prior) + 8
+        and (judge["calibration_limit"] - len(prior)) % 8 == 0,
+        "approved allowance must preserve history and allocate whole eight-judgment batches",
     )
-    existing = list(Path(allowance).glob("*.claim")) if Path(allowance).exists() else []
+    with _claim_state(allowance, prior, prior) as (existing, _):
+        observed = existing
     require(
         type(judge.get("calibration_limit")) is int
         and judge["calibration_limit"] - len(existing) >= 8,
@@ -313,12 +409,9 @@ def run(config_path, shots, destination, allowance, *, capture_hashes):
         )
         samples[state] = []
         for sample in range(1, 5):
-            for row in prior:
-                require(
-                    file_hash(safe(allowance, row["path"])) == row["hash"],
-                    "consumed attempt history changed",
-                )
-            number = reserve(allowance, judge.get("calibration_limit"))
+            number, observed = _reserve_attempt(
+                allowance, judge.get("calibration_limit"), prior, observed
+            )
             stem = f"quality-{state}-{sample}"
             require(
                 all(input_identity(path) == snapshot for path, snapshot in sealed_inputs.items()),
@@ -367,6 +460,8 @@ def run(config_path, shots, destination, allowance, *, capture_hashes):
         all(input_identity(path) == snapshot for path, snapshot in sealed_inputs.items()),
         "sealed judge input changed before quality publication",
     )
+    with _claim_state(allowance, prior, observed):
+        pass
     bounds = {
         state: scoring.aggregate_lower_bound(values, 1.0) for state, values in samples.items()
     }
