@@ -137,6 +137,12 @@ Settlement samples approved required properties and correspondence/visibility
 atomically. Unselected counters, pulses and unrequired root height are not
 readiness conditions; changing a required property still refuses after the
 bounded sixty-frame window.
+Instability is tracked per required ID, including its correspondence/visibility,
+not by grading arbitrary final values. Raw atomic sample history is retained;
+only properties independently settled for the four-frame rule can retain
+conclusive classifications. Stable observed absence remains a named failure
+beside another property's unknown instability. Selector/query exceptions are
+unknown acquisition, never a default zero-count absence.
 
 ## Pure current readback and limits
 

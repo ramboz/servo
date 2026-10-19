@@ -189,6 +189,24 @@ Old packet bytes/capture tooling and pending APP drafts are not rewritten or
 replayed as the new writer. New fifteen-fact SOURCE and exact APP pre-result
 approval remain outstanding.
 
+**Nonpassing compliance recovery:** Fresh compliance at `7239a92` returned
+needs-changes for selector-error/count0 precedence, lost sampled contradictions
+on instability, and the genuinely missing APP proof/approval obligations.
+Actual isolated reds reproduced both code defects before any APP result.
+New APP-only fixes distinguish unobserved count from observed absence and retain
+atomic raw sample history with per-required-ID four-frame stability; unstable
+values stay unknown while independently stable absence remains fail.
+This does not clear compliance or the remaining proof gates.
+
+The parent independently approved new SOURCE15 (`2df5c29f...` authorization).
+Public selected-writer finalize/verify produced approved input
+`e6de06c2ed585b1fbcc861e4c41721ed28ba4424b9dbfcfe7441a227228eda99`
+with unchanged target `27bb5380...` / request `4b291631...`.
+That remains SOURCE ONLY. An independent policy-only PASS for old Dashboard05
+was explicitly withdrawn from all staging/execution after the compliance
+findings; it is preserved as historical missed-error-path evidence, not rebound
+to corrected helpers. No APP component staging/install/capture has occurred.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and retain precise static-contract-only proof scope.

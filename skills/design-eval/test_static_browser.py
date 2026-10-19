@@ -110,6 +110,8 @@ class BrowserTests(unittest.TestCase):
                 "transformed",
                 "dynamic-residual",
                 "required-unstable",
+                "invalid-binding",
+                "absence-plus-instability",
             ):
                 with self.subTest(variant=variant), tempfile.TemporaryDirectory() as temp:
                     root = Path(temp)
@@ -165,7 +167,7 @@ class BrowserTests(unittest.TestCase):
                             "n.style.opacity=i%2?'0.5':'1';requestAnimationFrame(tick)}"
                             "requestAnimationFrame(tick);"
                         )
-                    elif variant == "required-unstable":
+                    elif variant in ("required-unstable", "absence-plus-instability"):
                         script += (
                             "let i=0;function tick(){document.querySelector('.caption')"
                             ".style.fontSize="
@@ -210,6 +212,17 @@ class BrowserTests(unittest.TestCase):
                     record = snapshot.build(source, root / "build")
                     out = root / "observed"
                     out.mkdir()
+                    elements = {"caption": "[" if variant == "invalid-binding" else ".caption"}
+                    constraints = [
+                        {"id": "caption-text", "element": "caption", "property": "text"},
+                        {"id": "caption-size", "element": "caption", "property": "font-size"},
+                        {"id": "root-width", "element": "root", "property": "width"},
+                    ]
+                    if variant == "absence-plus-instability":
+                        elements["missing"] = ".missing"
+                        constraints.append(
+                            {"id": "missing-presence", "element": "missing", "property": "presence"}
+                        )
                     observed = app.acquire(
                         browser,
                         record,
@@ -217,7 +230,7 @@ class BrowserTests(unittest.TestCase):
                         {
                             "root": "#frame",
                             "document_witnesses": ["#toolbar"],
-                            "elements": {"caption": ".caption"},
+                            "elements": elements,
                         },
                         {
                             "viewport": {"width": 800, "height": 600},
@@ -228,14 +241,68 @@ class BrowserTests(unittest.TestCase):
                             "reduced_motion": "reduce",
                         },
                         out,
-                        constraints=[
-                            {"id": "caption-text", "element": "caption", "property": "text"},
-                            {"id": "caption-size", "element": "caption", "property": "font-size"},
-                            {"id": "root-width", "element": "root", "property": "width"},
-                        ],
+                        constraints=constraints,
                     )
                     if variant == "required-unstable":
                         self.assertIn("unstable", observed["error"])
+                    elif variant == "absence-plus-instability":
+                        self.assertIn("missing", observed["elements"])
+                        self.assertEqual(observed["elements"]["missing"]["count"], 0)
+                        self.assertIn("caption-size", observed["settlement"]["unstable_ids"])
+                        self.assertNotIn("missing-presence", observed["settlement"]["unstable_ids"])
+                        self.assertEqual(len(observed["settlement"]["samples"]), 60)
+                        core = {
+                            "policy": [
+                                {
+                                    "id": "missing-presence",
+                                    "element": "missing",
+                                    "property": "presence",
+                                    "normalizer": "explicit-unit",
+                                    "comparison": "present",
+                                    "tolerance": "0",
+                                    "units": "boolean",
+                                }
+                            ],
+                            "inventory": ["missing-presence"],
+                            "facts": [{"id": "missing-presence", "value": True}],
+                        }
+                        self.assertEqual(app.compare(core, observed, None)[0]["status"], "fail")
+                        changing = {
+                            "policy": [
+                                {
+                                    "id": "caption-size",
+                                    "element": "caption",
+                                    "property": "font-size",
+                                    "normalizer": "css-scalar-v0",
+                                    "comparison": "absolute-inclusive",
+                                    "tolerance": "0",
+                                    "units": "CSSpx",
+                                }
+                            ],
+                            "inventory": ["caption-size"],
+                            "facts": [{"id": "caption-size", "value": "18"}],
+                        }
+                        row = app.compare(changing, observed, None)[0]
+                        self.assertEqual(row["status"], "unknown")
+                        self.assertIn("did not settle", row["reason"])
+                    elif variant == "invalid-binding":
+                        core = {
+                            "policy": [
+                                {
+                                    "id": "caption-text",
+                                    "element": "caption",
+                                    "property": "text",
+                                    "normalizer": "explicit-unit",
+                                    "comparison": "exact",
+                                    "tolerance": "0",
+                                    "units": "text",
+                                }
+                            ],
+                            "inventory": ["caption-text"],
+                            "facts": [{"id": "caption-text", "value": "Independent"}],
+                        }
+                        self.assertEqual(app.compare(core, observed, None)[0]["status"], "unknown")
+                        self.assertIsNone(observed["elements"]["caption"]["count"])
                     elif variant == "external":
                         self.assertIn("unapproved", observed["error"])
                     else:

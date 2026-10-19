@@ -120,12 +120,20 @@ def compare(core, observation, producer):
         prop = policy["property"]
         node = observation["elements"].get(policy["element"])
         value, raw = None, None
-        if node is None or type(node.get("count")) is not int or node["count"] not in (0, 1):
-            status, reason = "unknown", "missing/ambiguous approved bound-element observation"
-        elif node.get("count") == 0 or node.get("visible") is False:
-            status, reason = "fail", "approved bound element absent or not visible"
+        settlement = observation.get("settlement") or {}
+        if policy["id"] in settlement.get("unstable_ids", []):
+            status, reason = "unknown", "required observation/correspondence did not settle"
+        elif node is None or type(node.get("count")) is not int or node["count"] not in (0, 1):
+            status, reason = (
+                "unknown",
+                node.get("error")
+                if node and node.get("error")
+                else "missing/ambiguous approved bound-element observation",
+            )
         elif node.get("error"):
             status, reason = "unknown", node["error"]
+        elif node.get("count") == 0 or node.get("visible") is False:
+            status, reason = "fail", "approved bound element absent or not visible"
         elif type(node.get("visible")) is not bool:
             status, reason = "unknown", "missing explicit bound-element visibility observation"
         elif prop == "text" and type(node.get("raw", {}).get("textVisible")) is not bool:
@@ -168,8 +176,9 @@ def compare(core, observation, producer):
                 reason = "approved comparison satisfied" if matches else "observed value differs"
             except (ValueError, KeyError, TypeError) as exc:
                 status, reason = "unknown", str(exc)
-        if observation.get("error") and status != "fail":
-            status, reason = "unknown", observation["error"]
+        acquisition_error = observation.get("acquisition_error", observation.get("error"))
+        if acquisition_error and status != "fail":
+            status, reason = "unknown", acquisition_error
         result.append(
             {
                 **policy,
@@ -294,7 +303,7 @@ def observe_roles(page, bindings, constraints):
         if(roots.length!==1)throw Error('missing/ambiguous APP root binding');
         const root=roots[0],frame=values(root).bounds,elements={};
         for(const [role,selector] of Object.entries({root:null,...bindings.elements})){
-          const row={count:0};elements[role]=row;
+          const row={count:null};elements[role]=row;
           try{
             const nodes=selector===null?[root]:[...root.querySelectorAll(selector)];
             row.count=nodes.length;if(nodes.length!==1)continue;
@@ -316,14 +325,10 @@ def observe_roles(page, bindings, constraints):
 def settle_required(page, bindings, constraints):
     require(type(constraints) is list and bool(constraints), "explicit APP inventory required")
     page.evaluate("document.fonts.ready")
-    previous, stable = None, 0
-    for _ in range(60):
+    previous, streaks, history = {}, {}, []
+    for sample in range(60):
         page.evaluate("()=>new Promise(requestAnimationFrame)")
         elements = observe_roles(page, bindings, constraints)
-        correspondence = {
-            role: {key: node.get(key) for key in ("count", "visible", "error")}
-            for role, node in elements.items()
-        }
         facts = {}
         for row in constraints:
             prop = row["property"]
@@ -331,23 +336,45 @@ def settle_required(page, bindings, constraints):
             node = elements[row["element"]]
             raw = node.get("raw", {})
             facts[row["id"]] = {
+                "correspondence": {key: node.get(key) for key in ("count", "visible", "error")},
                 "raw": True
                 if prop == "presence" and node["count"] == 1
                 else raw.get(RAW_KEYS[prop]),
                 "text_paint": raw.get("textVisible") if prop == "text" else None,
             }
-        current = {"correspondence": correspondence, "facts": facts}
-        stable = stable + 1 if current == previous else 0
-        if stable >= 3:
-            return elements
-        previous = current
-    raise ValueError("unstable required APP observations after 60 animation frames")
+        history.append({"sample": sample + 1, "required": facts})
+        for identity, signature in facts.items():
+            streaks[identity] = (
+                streaks.get(identity, 0) + 1 if previous.get(identity) == signature else 0
+            )
+        unstable = [identity for identity in facts if streaks[identity] < 3]
+        if not unstable:
+            break
+        previous = facts
+    return {
+        "elements": elements,
+        "sample_count": sample + 1,
+        "samples": history,
+        "unstable_ids": sorted(unstable),
+        "error": (
+            "unstable required APP observations after 60 animation frames: "
+            + ", ".join(sorted(unstable))
+        )
+        if unstable
+        else None,
+    }
 
 
 def acquire(browser, record, build_root, bindings, environment, output, *, constraints):
     from playwright.sync_api import Error as BrowserError
 
-    observed = {"elements": {}, "loaded_resources": [], "error": None}
+    observed = {
+        "elements": {},
+        "loaded_resources": [],
+        "settlement": None,
+        "acquisition_error": None,
+        "error": None,
+    }
     errors, seen, completed, replies = [], set(), set(), {}
     output = Path(output)
     with snapshot.serve(record, build_root) as (origin, routes):
@@ -433,7 +460,11 @@ def acquire(browser, record, build_root, bindings, environment, output, *, const
             for path in sorted(replies):
                 read_response(path, replies[path])
             page.wait_for_timeout(30)
-            observed["elements"] = settle_required(page, bindings, constraints)
+            settled = settle_required(page, bindings, constraints)
+            observed["elements"] = settled["elements"]
+            observed["settlement"] = {
+                key: value for key, value in settled.items() if key != "elements"
+            }
             actual_environment = page.evaluate(
                 "()=>({width:innerWidth,height:innerHeight,device_scale:String(devicePixelRatio)})"
             )
@@ -448,9 +479,16 @@ def acquire(browser, record, build_root, bindings, environment, output, *, const
         except (BrowserError, ValueError, OSError) as exc:
             errors.append(str(exc))
         finally:
-            context.close()
+            try:
+                context.close()
+            except BrowserError as exc:
+                errors.append("APP context cleanup unavailable: " + str(exc))
     observed["loaded_resources"].sort(key=lambda row: row["url"])
-    observed["error"] = "; ".join(errors) if errors else None
+    observed["acquisition_error"] = "; ".join(errors) if errors else None
+    settlement_error = (observed["settlement"] or {}).get("error")
+    observed["error"] = (
+        "; ".join(filter(None, (observed["acquisition_error"], settlement_error))) or None
+    )
     return observed
 
 
@@ -492,6 +530,7 @@ NORMALIZERS = {
     "empty_text": "literal-DOM-value-no-ghost-ink-visible-bound-box-still-required",
     "visible_text": "positive-area-per-non-whitespace-range-not-occlusion-or-legibility",
     "settlement": "complete-responses-fonts-ready-four-equal-required-fact-and-visibility-frames",
+    "partial_instability": "per-required-id-last-four-atomic-samples-raw-history-retained",
 }
 
 
@@ -945,11 +984,11 @@ def evaluate(policy_path):
             finally:
                 browser.close()
     except BrowserError as exc:
-        observed["error"] = "; ".join(
-            filter(
-                None, (observed.get("error"), "APP browser acquisition unavailable: " + str(exc))
-            )
+        message = "APP browser acquisition unavailable: " + str(exc)
+        observed["acquisition_error"] = "; ".join(
+            filter(None, (observed.get("acquisition_error"), message))
         )
+        observed["error"] = "; ".join(filter(None, (observed.get("error"), message)))
     observed.update(run_id=run_id, acquisition_nonce=claim["nonce"])
     bundle.publish(root / "observations.json", observed)
     rows = compare(doc["core"], observed, producer)
