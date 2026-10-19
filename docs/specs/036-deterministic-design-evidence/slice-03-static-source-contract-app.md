@@ -155,6 +155,27 @@ policy/pre-result approval, real Dashboard/positive APP gate runs, mutations,
 actual Generic consumer readback, full postreviews/reconciliation and PR
 publication are still open. No APP quality, Jig DONE or merge is claimed.
 
+**Further pre-freeze checkpoint:** Actual isolated 8x8 geometry-only acquisition
+works with text-paint evaluation forbidden. A witnessed empty-DOM-text fix
+requires no ghost ink while retaining a visible bound box, and missing
+visibility/text-paint observation flags now produce unknown rather than success
+or inferred absence. These are primitive controls, not APP acceptance.
+
+The parent requested a separate fifteen-fact controlled SOURCE/APP variant
+adding an exactly textless marker with existing presence/width/height/background
+properties. It is authored/preselected under this session's
+`files/independent-marker-control/`; only a real SOURCE reference image has been
+captured. No source preview/approval or APP result exists for that variant.
+The old eleven-fact SOURCE/approval and preselected APP files remain unchanged.
+
+Source owner reported Vellum bug003 corrective reader at `cb07f310`, helper
+SHA256 `4f88ce4fe6af14ba044146eee27543116e3d9180977fdf5150125f9983e9ae5d`,
+with actual pure-inspect compatibility on unchanged old20/11 packets.
+That is a compatibility heads-up, not authority to replay/rewrite old packets.
+The parent holds reader-pin selection pending the coordinated corrective cut;
+this observer's producer pins have not been changed. Human ADR acceptance and
+exact APP policy/pre-result approval remain separate gates.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and retain precise static-contract-only proof scope.

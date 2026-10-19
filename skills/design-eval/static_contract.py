@@ -120,13 +120,22 @@ def compare(core, observation, producer):
         prop = policy["property"]
         node = observation["elements"].get(policy["element"])
         value, raw = None, None
-        if node is None or node.get("count") not in (0, 1):
+        if node is None or type(node.get("count")) is not int or node["count"] not in (0, 1):
             status, reason = "unknown", "missing/ambiguous approved bound-element observation"
         elif node.get("count") == 0 or node.get("visible") is False:
             status, reason = "fail", "approved bound element absent or not visible"
         elif node.get("error"):
             status, reason = "unknown", node["error"]
-        elif prop == "text" and not node["raw"].get("textVisible"):
+        elif type(node.get("visible")) is not bool:
+            status, reason = "unknown", "missing explicit bound-element visibility observation"
+        elif prop == "text" and type(node.get("raw", {}).get("textVisible")) is not bool:
+            status, reason = "unknown", "missing explicit text-paint observation"
+        elif (
+            prop == "text"
+            and type(node["raw"].get("text")) is str
+            and node["raw"]["text"].strip()
+            and not node["raw"]["textVisible"]
+        ):
             status, reason = (
                 "fail",
                 "approved bound text lacks a positive-area witness for each non-whitespace range",
@@ -480,6 +489,7 @@ NORMALIZERS = {
     },
     "visibility": "scoped-dom-text-ancestor-overflow-and-paint-intersection-app/1",
     "raw_dom_text": "literal-including-whitespace",
+    "empty_text": "literal-DOM-value-no-ghost-ink-visible-bound-box-still-required",
     "visible_text": "positive-area-per-non-whitespace-range-not-occlusion-or-legibility",
     "settlement": "complete-responses-fonts-ready-four-equal-required-fact-and-visibility-frames",
 }

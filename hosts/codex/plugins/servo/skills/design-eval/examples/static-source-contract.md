@@ -123,6 +123,11 @@ paint containment. Formatting-only whitespace is not an ink prerequisite but
 remains in raw DOM text. Partial positive-area text can pass this guard: it is
 not OCR, whole-string legibility or occlusion/pixel proof. Unsupported
 descendant transforms/paint refuse.
+Geometry/presence/background-only roles need no contained text or text-paint
+observation. If text itself is required and its observed DOM value is empty,
+that literal value needs no ghost ink; the binding still requires a unique
+visible nonzero box. Missing visibility/text-paint observation flags are
+unknown, never defaults to success or observed absence.
 Settlement samples approved required properties and correspondence/visibility
 atomically. Unselected counters, pulses and unrequired root height are not
 readiness conditions; changing a required property still refuses after the

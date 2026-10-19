@@ -158,6 +158,67 @@ class SnapshotTests(unittest.TestCase):
 
 
 class ComparisonTests(unittest.TestCase):
+    def test_missing_observation_flags_are_unknown_not_success_or_absence(self):
+        app = importlib.import_module("static_contract")
+        for prop, expected, raw in (
+            ("presence", True, {}),
+            ("text", "Stable", {"text": "Stable"}),
+        ):
+            core = {
+                "policy": [
+                    {
+                        "id": "one",
+                        "element": "element",
+                        "property": prop,
+                        "normalizer": "explicit-unit-test",
+                        "comparison": "exact",
+                        "units": "boolean" if prop == "presence" else "text",
+                        "tolerance": "0",
+                    }
+                ],
+                "inventory": ["one"],
+                "facts": [{"id": "one", "value": expected}],
+            }
+            node = {"count": 1, "raw": raw}
+            if prop == "text":
+                node["visible"] = True
+            observed = {"elements": {"element": node}, "error": None}
+            with self.subTest(prop=prop):
+                self.assertEqual(app.compare(core, observed, None)[0]["status"], "unknown")
+
+    def test_exact_empty_text_on_visible_box_does_not_require_ghost_ink(self):
+        app = importlib.import_module("static_contract")
+        core = {
+            "policy": [
+                {
+                    "id": "empty-text",
+                    "element": "marker",
+                    "property": "text",
+                    "normalizer": "text-content-exact-v0",
+                    "comparison": "exact",
+                    "units": "text",
+                    "tolerance": "0",
+                }
+            ],
+            "inventory": ["empty-text"],
+            "facts": [{"id": "empty-text", "value": ""}],
+        }
+        observation = {
+            "error": None,
+            "elements": {
+                "marker": {
+                    "count": 1,
+                    "visible": True,
+                    "raw": {"text": "", "textVisible": False},
+                }
+            },
+        }
+        result = app.compare(core, observation, None)
+        self.assertEqual(result[0]["status"], "pass")
+        self.assertEqual(result[0]["actual"], "")
+        observation["elements"]["marker"]["visible"] = False
+        self.assertEqual(app.compare(core, observation, None)[0]["status"], "fail")
+
     def test_finite_inventory_visible_failures_and_unknowns_without_same_value_guard(self):
         app = importlib.import_module("static_contract")
         rows = [

@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import static_contract as app
@@ -17,6 +18,78 @@ import static_snapshot as snapshot
     "explicit frozen Playwright runtime required",
 )
 class BrowserTests(unittest.TestCase):
+    def test_geometry_only_empty_role_does_not_request_text_paint(self):
+        from playwright.sync_api import sync_playwright
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.mkdir()
+            (source / "scene.html").write_text(
+                '<!doctype html><div id="context">Geometry unit control</div><main id="scene">'
+                '<i class="dot" style="display:block;width:8px;height:8px;background:#f0b24e">'
+                "</i></main>"
+            )
+            (source / "candidate.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "kind": "static_snapshot_candidate",
+                        "entry": "/scene.html",
+                        "metadata": [],
+                        "resources": [
+                            {
+                                "url": "/scene.html",
+                                "path": "scene.html",
+                                "content_type": "text/html",
+                            }
+                        ],
+                    }
+                )
+            )
+            record = snapshot.build(source, root / "build")
+            out = root / "observed"
+            out.mkdir()
+            with sync_playwright() as pw:
+                browser = pw.chromium.launch(headless=True)
+                try:
+                    with patch.object(
+                        app, "_TEXT_PAINT", "()=>{throw Error('ghost text required')}"
+                    ):
+                        observed = app.acquire(
+                            browser,
+                            record,
+                            root / "build",
+                            {
+                                "root": "#scene",
+                                "document_witnesses": ["#context"],
+                                "elements": {"marker": ".dot"},
+                            },
+                            {
+                                "viewport": {"width": 800, "height": 600},
+                                "device_scale": "1",
+                                "color_scheme": "light",
+                                "locale": "en-US",
+                                "timezone": "UTC",
+                                "reduced_motion": "reduce",
+                            },
+                            out,
+                            constraints=[
+                                {"id": prop, "element": "marker", "property": prop}
+                                for prop in ("presence", "width", "height", "background-color")
+                            ],
+                        )
+                finally:
+                    browser.close()
+            self.assertIsNone(observed["error"])
+            marker = observed["elements"]["marker"]
+            self.assertEqual(marker["count"], 1)
+            self.assertTrue(marker["visible"])
+            self.assertEqual(marker["raw"]["text"], "")
+            self.assertEqual((marker["raw"]["width"], marker["raw"]["height"]), ("8", "8"))
+            self.assertEqual(marker["raw"]["backgroundColor"], "rgb(240, 178, 78)")
+            self.assertNotIn("textVisible", marker["raw"])
+
     def test_app_capture_preserves_mutations_and_closes_all_resources(self):
         from playwright.sync_api import sync_playwright
 
