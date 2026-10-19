@@ -456,7 +456,7 @@ def acquire(browser, record, build_root, bindings, environment, output, *, const
 
 PRODUCER_PINS = {
     "confirmed_source.py": (
-        "sha256:1c350056788edf04572058e9d494e91a69990815e609a6c697144bd83545e455"
+        "sha256:4f88ce4fe6af14ba044146eee27543116e3d9180977fdf5150125f9983e9ae5d"
     ),
     "approved_card.py": "sha256:0461146abba5d01c83169f89c6fccbddc79ef7018f6569418e69b5f9d99d5373",
     "resolve_redline.py": "sha256:4ac7206d58f7af1cab12ad71f32c373d91afd905284242e78a18e222d7219b57",

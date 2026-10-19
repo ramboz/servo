@@ -1,8 +1,9 @@
 # Finite static-contract APP observer
 
 **Status:** 036-03 implementation in progress, not an approved installation or
-application-success receipt. ADR-0045 remains Proposed pending owner acceptance.
-Exact APP policy and an independent positive control require separate genuine
+application-success receipt. The user accepted ADR-0045's bounded approach;
+that is not APP policy, result or merge approval. Exact APP policy and an
+independent positive control require separate genuine
 pre-result review. Never fabricate approval files from these instructions.
 
 This observer compares a finite approved source inventory with a separate
@@ -19,6 +20,10 @@ authority stays with Vellum; do not relabel it as the old card contract or alter
 its facts/normalizers. The present runtime preparation uses macOS `otool` and
 requires an existing isolated Playwright runtime/browser; it installs nothing.
 Other platforms are not established by this experiment.
+The selected corrective source reader accepts explicit empty role text without
+defaults. Its pure `inspect()` can consume older approved 0.2 packets without
+changing their original writer/capture/approval identity; do not use the new
+writer's replay/verify path to reapprove those old packets.
 
 Create an independent candidate directory containing APP resources, any real
 frozen API bodies, provenance metadata and `candidate.json`. Its exact shape is:

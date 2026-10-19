@@ -176,6 +176,19 @@ The parent holds reader-pin selection pending the coordinated corrective cut;
 this observer's producer pins have not been changed. Human ADR acceptance and
 exact APP policy/pre-result approval remain separate gates.
 
+**ADR authority release (2026-10-19):** The user explicitly selected
+`Approve ADR-0045 and continue (Recommended)` for the unchanged reviewed
+approach at `a65c8e07` (Proposed ADR hash `f7dd927c...`, protocol `067dab49...`).
+Normal Jig `accept`/index recorded that separate acceptance; it does not
+approve an APP policy/result or merge. Source owner then supplied the genuinely
+reviewed/DONE corrective cut `1dd572fa`, with unchanged candidate reader
+`4f88ce4f...` and pure-inspect compatibility on old20/11 packets.
+The parent explicitly selected that corrective pure reader for fresh preparation
+and new fifteen-fact SOURCE preview, not APP freeze/capture/install or approval.
+Old packet bytes/capture tooling and pending APP drafts are not rewritten or
+replayed as the new writer. New fifteen-fact SOURCE and exact APP pre-result
+approval remain outstanding.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and retain precise static-contract-only proof scope.
