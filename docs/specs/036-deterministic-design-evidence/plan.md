@@ -1,5 +1,28 @@
 # Plan: deterministic design-evidence component
 
+## 036-03: finite real-source APP consumer (2026-10-19)
+
+This additive slice starts at exact `servo-card-slice-closeout`
+`2cd33a4a08dea72a961662e24b5f11da5e7bdeb0`. It does not reopen 036-01 or
+implement 036-02. The parent owns source meaning and must inspect the exact
+APP policy/normalizer/output/closure plan before freeze/install.
+
+1. Frame all seven 036-03 criteria and obtain independent framing/readiness.
+2. TDD an explicit finite APP normalizer and multi-resource immutable snapshot,
+   retaining old source primitives, exact inventory and generic gate seams.
+3. Acquire real unchanged Dashboard static declarations from approved10 plus
+   actual frozen fixture-backed API bodies; retain all failures and gaps.
+4. Independently approve an unrelated SOURCE and separate APP pre-result, then
+   prove bounded positive/negative/restoration behavior through the same gate.
+5. Exercise pure current readback and existing generic consumers; retain
+   expected Jig 0.2 incompatibility, no rescore/recapture and no full-app claim.
+6. Run genuine independent postreviews/reconciliation and ordinary gates,
+   publish an unmerged ready-for-review PR stacked on the selected base.
+
+The parent proposal is preserved in this session's delivered message; exact
+approved policy bytes and immutable command/evidence indexes supersede the
+proposal only after real independent review. No model calls are authorized.
+
 036-01 closeout selected integration parent
 `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5` and settled executable source
 `44a96d9549cd73f8a8ea3e1307157cb994b138ac` after the separately authorized

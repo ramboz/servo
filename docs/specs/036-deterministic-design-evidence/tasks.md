@@ -1,5 +1,20 @@
 # Tasks: deterministic design-evidence component
 
+## 036-03
+
+- [x] Independently frame/readiness-review the new APP-side vertical slice.
+- [ ] Parent inspects exact normalizer/policy/output/closure before freeze.
+- [x] Witness finite normalization and snapshot/refusal red-to-green tests.
+- [ ] Install exact approved10 consumer, measure unchanged Dashboard and retain
+      all twenty constraints plus full-app/backend/Jig gaps.
+- [ ] Parent approves unrelated SOURCE and separate APP policy before results;
+      prove actual positive, mutation and restoration controls.
+      SOURCE-only approval and public finalize/verify are complete; APP policy
+      and pre-result proof remain pending.
+- [ ] Exercise real Generic output-reference consumers and pure current readback.
+- [ ] Complete independent postreviews/reconciliation, host regeneration,
+      lifecycle gates and unmerged stacked PR.
+
 ## Authoring and readiness
 
 - [x] Parent/owners agree contract/output and Vellum013-01 approved-input

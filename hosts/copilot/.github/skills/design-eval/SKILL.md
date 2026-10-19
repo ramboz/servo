@@ -333,6 +333,17 @@ Changing the approved cap still requires reapproval. These are bounded
 fixed-card observations, not general
 design-oracle accuracy or downstream completion attestation.
 
+### Finite static-source-contract APP consumer (036-03)
+
+The [static-contract walkthrough](examples/static-source-contract.md) describes
+the separately versioned, manifest-driven APP observer for approved
+`vellum-confirmed-source/0.2` inputs. It uses the ordinary required command and
+output-reference seams, not the card signature or a visual-quality score.
+This slice is in progress: exact policy and independent positive-control
+approval, actual installed proof and postreviews remain gates. Do not treat
+source-only integrity acceptance, a measurement fraction or this documentation
+as APP success, whole-view fidelity or Jig completion. No model calls are used.
+
 ### Native Copilot judging
 
 Create a **new** definition with an explicitly chosen native decoding policy:

@@ -335,3 +335,21 @@ useful vertical slice.
 
 - [036-01 - bound card evidence through installed gate](slice-01-bound-card-evidence.md)
 - [036-02 - regional image evidence and local corrections](slice-02-regional-image-evidence.md)
+- [036-03 - finite real-source static-contract APP consumer](slice-03-static-source-contract-app.md)
+
+## Real-source static-contract consumer (036-03)
+
+The additive 036-03 experiment consumes Vellum's independently approved
+`vellum-confirmed-source/0.2` / `static-css-subset/1` input, rather than extending
+the closed card pilot or the regional-image slice. Its application-side policy
+and output are separately versioned; accepted C0 and source normalizers do not
+change. The useful result is a named static-contract mismatch/refusal on an
+independent unchanged real APP, plus an unrelated independent positive control.
+It does not expand the first pilot's claims to real-app acceptance.
+
+The initial twenty-fact package covers selected root/heading/breadcrumb/static
+header declarations only. Dynamic rows/counts/content, whole-view height,
+interactions, pixels and actual font face remain residuals. Snapshot-only
+loopback delivery does not certify a backend or arbitrary HTTP app. Existing
+Jig `design_bindings` compatibility is a separately owned limitation, not
+permission to relabel 0.2 as 0.1 or manufacture an application-DONE attestation.
