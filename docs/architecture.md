@@ -101,6 +101,30 @@ collection verifies independently selected local delivery
 support. This is trusted-local fixed-card evidence, not hostile-host or
 provider-internal attestation, general accuracy or downstream Jig completion.
 
+**Finite static-source-contract APP observer (036-03, in progress):** Accepted
+[ADR-0045](decisions/adr-0045-finite-static-source-contract-app.md) separates
+Vellum's approved `vellum-confirmed-source/0.2` facts from independently
+acquired APP observations and their explicitly versioned grammar.
+`static_contract.source_at` calls the compatible reader's identity-only
+`inspect`, not source replay (`skills/design-eval/static_contract.py:537`).
+`static_snapshot.py:86,124,181` closes finite input/output manifests, independently
+selected delivery and actually loaded read-only loopback response bytes.
+It does not certify a backend, current upstream branch or arbitrary HTTP app.
+
+The ordinary command/refusal/output-reference and required-policy seams own
+installation and engine results; no new registry or scoring controller is
+introduced. Per-required-ID atomic settlement retains sampled raw evidence:
+stable contradictions survive alongside unknown changing properties
+(`static_contract.py:325,939`). Runtime bytes, current browser membership and
+selected Bash/non-OS linkage are pinned. Pure current verification checks
+identity/inventory and returns the preserved verdict without capture or
+comparison (`:1048`). The
+[walkthrough](../skills/design-eval/examples/static-source-contract.md)
+documents this bounded experimental path. Exact APP policies/pre-result release,
+actual installed APP proof and postreviews remain gates; source integrity or a
+measurement fraction is not visual quality/full-APP acceptance. Existing Jig's
+old input allowlist does not attest this separate 0.2 experiment.
+
 Ordinary command evidence optionally binds a declared run-scoped output
 manifest/capture closure, separate from immutable evaluator input artifacts.
 The shared pure `required_runtime.validate_output_references` validates that
