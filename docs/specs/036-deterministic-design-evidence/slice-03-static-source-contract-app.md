@@ -229,6 +229,19 @@ Original inputs are restored; old installs, pilot results and nonpasses remain
 immutable. A reviewed generic repair and fresh installed-definition epochs with
 their own exact review/release are required before continuing the finite proof.
 
+**Corrected native526 release and actual-path proof (2026-10-20):**
+Bug 006 is normally DONE and the new Dashboard07/marker02 installed checkpoint
+`c6648026...` received separate exact release `4fb229ad...`.
+The [pilot evidence](static-app-pilot-evidence.md) now records the real
+baseline -> original protected copied-SOURCE drift -> exact restoration
+sequence: twenty unique original-cause UNKNOWN items without acquisition on
+the drift, then the original 16/4 Dashboard result after a fresh APP capture.
+The unrelated marker passes its fifteen selected facts. Independent parent
+verification covers all seventy-five actual rows in these four records;
+generic test fixtures were not substituted for this APP-path proof.
+The remaining finite plan and normal final postreviews/reconciliation still
+govern completion of this Servo slice, not completion of either application.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and retain precise static-contract-only proof scope.

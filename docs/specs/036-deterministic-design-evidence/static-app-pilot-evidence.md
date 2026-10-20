@@ -130,3 +130,56 @@ actual APP/gate/current-reader experiments are held until the normal bug
 lifecycle clears and fresh installed-definition epochs receive their own exact
 review/release. The first four proven cases above remain truthful and immutable;
 this later NONPASS is not hidden, averaged away or rebound to a changed runtime.
+
+## Corrected native526 epoch (2026-10-20; finite scope)
+
+Bug 006 completed its normal lifecycle, qualified stack-base red/green,
+independent bug/craft reviews and learning at `8b44398...` (fix `6bd19a7...`).
+That generic test evidence was not used as a substitute for the actual APP path.
+New Dashboard07 and marker02 policies received genuinely new reviews and ordinary
+installation/sealing; old f0 installs and every old outcome remain unchanged.
+Installed checkpoint `A/static-nativefix-final-staging-checkpoint.json`,
+SHA256 `c6648026e392ad5bd4a0cbff87a8df0b8815c04ca11d5ae1979e9ae1335a50a9`,
+was separately released by
+`P/static-nativefix-final-pre-result-release.json`, SHA256
+`4fb229ad5942300ea0b17fc2a8dd2b8333b43152a34b242e9f582c2551a0209d`.
+Its shared native runtime is
+`526039f363a3e9737875d5ab6756e66c54bb4c354f87565988c38d7869af8359`.
+
+SOURCE20/15 targets, original writer authorities, facts, zero tolerances,
+bindings, normalizers, residuals and independently authored APP baseline bytes
+are unchanged. The corrected epoch does not relabel an old approval or claim
+a new SOURCE capture. Its exact finite plan is
+`A/static-app-control-plan-nativefix-01.json`, SHA256
+`56a4952a674068c449ddc3f4222cf11d2886486fb57a3deb8397e0d83e87689d`.
+
+| Actual released case | Native UUID | Exit | Pass / fail / unknown |
+| --- | --- | --- | --- |
+| Dashboard07 fresh baseline | `96507236-ec38-4260-93e9-cbf61cdc1dc5` | 1 | 16 / 4 / 0 |
+| Original protected copied-SOURCE drift | `1b8ce7bb-1634-4d09-ad0e-b6b1881c1851` | 2 | 0 / 0 / 20 |
+| Byte-exact SOURCE restore and fresh APP capture | `f61c7ea0-2b3f-4f24-9bf8-335b47a4f759` | 1 | 16 / 4 / 0 |
+| Independent marker02 fresh baseline | `5a213752-5961-4943-a3e9-357044a3ebf7` | 0 | 15 / 0 / 0 |
+
+The original protected-input mutation now yields exactly the twenty approved
+UNKNOWN IDs once. Each retains
+`approved artifact modified: design-input/input.json`; no secondary `NoneType`,
+duplicate ID or `<gate>` item appears. The actual component reference is null,
+there is no APP output or acquisition claim for this refusal, and native and
+Generic acceptance/readback carriers agree. Both the copied input and canonical
+read-only original retain SHA256 `385f73c2...` after exact restoration.
+The subsequent real APP acquisition restores the original four declared-stack/
+DOM-text failures, not a newly tuned target.
+
+The immutable actual-path repair audit is
+`A/static-nativefix-proof/dashboard/mutated-copied-source-input/actual-repair-audit.json`,
+SHA256 `a6367b93af23ca72d5490539a3dab68508eb28cd8dde9bc8e26dcefc46a08083`.
+The parent independently checked all seventy-five required rows, native/Generic
+carriers, actual invocation identities, source restoration and current released
+grading identities. Its audit
+`P/native526-actual-repair-parent-verification.json` has SHA256
+`0a42467343bf8385bd3abe9573263d64215234554ce1667e177a79f4974f4da5`.
+
+Other finite controls/readbacks/restorations and final slice reviews remain
+separate obligations. The new marker PASS still covers fifteen selected facts,
+not empty APP text, icon meaning or full UI quality. No model call, actual-face
+proof, backend authenticity, full-app/Jig completion or merge is claimed.
