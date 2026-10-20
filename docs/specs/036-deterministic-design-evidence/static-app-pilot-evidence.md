@@ -183,3 +183,91 @@ Other finite controls/readbacks/restorations and final slice reviews remain
 separate obligations. The new marker PASS still covers fifteen selected facts,
 not empty APP text, icon meaning or full UI quality. No model call, actual-face
 proof, backend authenticity, full-app/Jig completion or merge is claimed.
+
+## Complete finite-plan checkpoint
+
+The corrected native526 plan subsequently completed all 28 actual native gate
+cases, with 500 published required items. Every case contains its exact approved
+twenty- or fifteen-ID inventory once, every gate carrier equals its oracle
+carrier, and all native/Generic outcomes match the preselected plan. No new
+unexpected nonpass or changed grading/helper/policy/controller bytes were
+discarded. Both selected baselines and every frozen definition are restored.
+
+The complete immutable index is
+`A/static-nativefix-final-evidence-index.json`, SHA256
+`c2c9de004b2362791d82d07ff8de117576d9c08ddfc827406c824cfe157c495c`.
+It binds 741 distinct raw files: argv/stdout/stderr, invocation/nonce/claims,
+native/component/observer carriers, actual loaded bodies, Generic
+acceptance/readback and named control audits. Counts describe published
+required items, not a quality score. The old 26-command/500-file partial index
+remains separately preserved at `A/static-native-partial-evidence-index.json`,
+SHA256 `2ab55bb2d737d1879558501e288c3513448a8c5174e18a3c2e95cd37fced169a`.
+
+| Control family | Actual typed result |
+| --- | --- |
+| Dashboard absent/hidden/paint-clipped heading; changed exact heading text | Failure 1; known absence/visibility/text contradictions retained |
+| Dashboard ambiguous binding, unsupported family, wrong structural lens | Refusal 2; raw ambiguity/grammar/state cause retained |
+| Native invalid selector `49308f9c-760a-405d-ba77-0df7036fb6a0` | Four valid responses, native `[` error, `count:null`, six heading UNKNOWN |
+| Unlisted resource | Refusal 2 retaining four independently observed Dashboard failures beside sixteen UNKNOWN |
+| Unlisted candidate member, changed delivery and protected copied SOURCE | Refusal 2 with twenty original-cause UNKNOWN items once; no APP acquisition |
+| Independent marker absence/hidden/paint clip, width 9 and changed background | Failure 1; zero-tolerance geometry/colour discrimination |
+| Ambiguous marker and known width failure plus unsupported caption family | Refusal 2; known contradiction retained beside UNKNOWN |
+| Mixed instability `b422e7f0-5e76-4be7-9f95-757316c8ea5b` | All sixty atomic samples retained; marker FAIL, sixty distinct caption sizes `20.04px` to `20.63px` UNKNOWN, no settled last-value FAIL |
+| Copied old observer output under new owned UUID `2e2e595b-d03a-4e25-9a3a-b9a31994d208` | Refusal 2 in the real fifteen-ID component; missing current acquisition claim and old manifest/run mismatch, not an early null-UUID setup guard |
+| Exact marker restoration and fresh recovery after replay | Actual PASS 0 for all fifteen selected facts; fresh nonce, not copied success |
+| Legitimate comment-only Dashboard build B `b44d1257-fded-421f-856c-d836f51135c8` | Fresh native failure 1 with the same 16/4 selected facts, separately bound build/delivery |
+
+Actual readbacks preserve the separation between recorded verdict and selected
+snapshot currentness. While B is selected, producer `verify-current(A)` refuses
+2, `verify-current(B)` checks identity successfully, and Generic reading A
+retains its original failure 1 and gate path/hash. Restoring A's exact selection
+clears its pure currentness check without a new capture, comparison or score.
+The audit is
+`A/static-nativefix-proof/dashboard/selected-build-A-B-currentness-audit.json`.
+Marker baseline/restoration also have actual public producer-current readbacks.
+
+Repeated Generic reads retain the original baseline verdicts. Output negatives
+use the complete actual frozen check and native published evidence against
+disposable shadows, not invented references: changed PNG, extra member,
+deleted response and symlink each refuse; unchanged closure passes validation.
+Original produced outputs remain unchanged. This pure audit is
+`A/static-nativefix-proof/pure-readback-audit/audit.json`, SHA256
+`1f790faf0cfbd0ff25c58d1bc9b0871abf0bd900bc2d858220d8aab34fca56a2`.
+
+Installation resealing/idempotent reinstall is actual ordinary staging evidence
+in checkpoint `c6648026...`. Existing native tests additionally exercise
+required uninstall refusal, explicit disable/reapproval and repeated uninstall
+(`test_required_gate.py::InstalledRequiredGateTests::test_ac6_disabled_reapproved_removal_empty_stays_v2_and_force_refuses`),
+draft refusal (`test_checks.py::FreezeEnforcementTests::test_draft_refused`), shared/vendor overlays and
+all three real generated host flows
+(`test_required_gate.py::GeneratedRequiredGateTests::test_ac6_generated_hosts_real_scaffold_approve_install_gate`).
+The final current suite passed 2570 tests and 316 subtests, with fourteen skips;
+raw output is `A/bug006-final-full-pytest.stdout`. Browser-membership and
+no-acquire/no-compare reader regressions are in `test_static_contract.py`.
+
+Jig nonclearance is an explicit inspected contract boundary, not a fabricated
+attestation failure or PASS. Its current reader declares
+`vellum-design-input/0.1-pilot` and enforces the complete namespaced contract
+literally; the actual inputs remain `vellum-confirmed-source/0.2`.
+`A/static-Jig-contract-nonclearance-inspection.json`, SHA256
+`80c908b8dbb84a2ec054c68e1081ac6717c80921018087ecaf710182b61aedb1`,
+records exact source/line/hash evidence. No old-format context was manufactured,
+no peer Jig file changed, and no downstream design attestation was run or cleared.
+**Bounded integration gap:** an actual existing Jig pure-consumer negative for
+the 0.2 input/new `static_source_contract_evidence` kind was not executed.
+This is inspected contract NONCLEARANCE only. Native/Generic success does not
+complete or validate that Jig bridge.
+
+The parent independently verified the complete index, all 741 file hashes,
+all 28 native/oracle/stdout/return-code carriers, all 500 unique approved items,
+actual released grading/claims and both exact restorations. It also inspected
+the A/B/currentness and complete-check shadow audits without running APP,
+grading or current readers. The record
+`P/complete-native526-proof-parent-verification.json` has SHA256
+`d38e929f7c64a77b9c13be5eaee3922b1d29c66d1bdac744d2c00f8b86a091a5`;
+its native distribution is three exits 0, thirteen exits 1 and twelve exits 2.
+This independent raw-evidence verification is not a slice lifecycle verdict.
+
+Final independent slice compliance/craft/architecture, reconciliation and
+publication remain. This complete finite experiment is not full-app or
+whole-view acceptance.

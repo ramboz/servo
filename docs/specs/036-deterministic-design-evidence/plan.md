@@ -23,6 +23,21 @@ The parent proposal is preserved in this session's delivered message; exact
 approved policy bytes and immutable command/evidence indexes supersede the
 proposal only after real independent review. No model calls are authorized.
 
+### 036-03 empirical checkpoint (2026-10-20)
+
+Steps 1-5, through actual finite controls/readbacks, are complete before final
+slice reviews. The current native526 epoch has 28 genuine gate
+cases and 500 published required items, each matching its approved inventory
+exactly once. The [pilot evidence](static-app-pilot-evidence.md) links the
+immutable 741-file index, fresh policy/release authorities, actual protected
+source refusal and byte-exact restoration, native query error, sixty atomic
+mixed-instability samples, legitimate A/B currentness and pure readback.
+Old f0 outcomes, the 41-row defect and replay-setup NONPROOF remain historical.
+Bug 006 is independently reviewed and normally DONE; no closed 035/036-01 record,
+source goal, source writer authority or peer producer was rewritten.
+This establishes finite static-contract discrimination only. Final
+compliance/craft/architecture, reconciliation and publication remain.
+
 036-01 closeout selected integration parent
 `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5` and settled executable source
 `44a96d9549cd73f8a8ea3e1307157cb994b138ac` after the separately authorized

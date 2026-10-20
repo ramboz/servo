@@ -101,7 +101,7 @@ collection verifies independently selected local delivery
 support. This is trusted-local fixed-card evidence, not hostile-host or
 provider-internal attestation, general accuracy or downstream Jig completion.
 
-**Finite static-source-contract APP observer (036-03, in progress):** Accepted
+**Finite static-source-contract APP observer (036-03):** Accepted
 [ADR-0045](decisions/adr-0045-finite-static-source-contract-app.md) separates
 Vellum's approved `vellum-confirmed-source/0.2` facts from independently
 acquired APP observations and their explicitly versioned grammar.
@@ -120,10 +120,15 @@ selected Bash/non-OS linkage are pinned. Pure current verification checks
 identity/inventory and returns the preserved verdict without capture or
 comparison (`:1048`). The
 [walkthrough](../skills/design-eval/examples/static-source-contract.md)
-documents this bounded experimental path. Exact APP policies/pre-result release,
-actual installed APP proof and postreviews remain gates; source integrity or a
-measurement fraction is not visual quality/full-APP acceptance. Existing Jig's
-old input allowlist does not attest this separate 0.2 experiment.
+documents this bounded experimental path. Each installation requires exact APP
+policy/pre-result authority and sealed ordinary grading identities.
+The [recorded pilot](specs/036-deterministic-design-evidence/static-app-pilot-evidence.md)
+has twenty-fact Dashboard nonpasses, an independent fifteen-fact positive and
+actual 0/1/2 controls/readbacks; it is not visual quality/full-APP acceptance.
+The generic outer gate reuses its pin authority before interpreting an
+unavailable component, preserving the original refusal cause and exactly-once
+inventory for protected-input drift (`required_runtime.py:903`; Bug 006).
+Existing Jig's old input allowlist does not attest this separate 0.2 experiment.
 
 Ordinary command evidence optionally binds a declared run-scoped output
 manifest/capture closure, separate from immutable evaluator input artifacts.

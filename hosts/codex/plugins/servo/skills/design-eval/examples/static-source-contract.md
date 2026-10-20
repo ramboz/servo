@@ -1,10 +1,12 @@
 # Finite static-contract APP observer
 
-**Status:** 036-03 implementation in progress, not an approved installation or
-application-success receipt. The user accepted ADR-0045's bounded approach;
-that is not APP policy, result or merge approval. Exact APP policy and an
-independent positive control require separate genuine
-pre-result review. Never fabricate approval files from these instructions.
+**Scope:** this walkthrough is not an installation approval or
+application-success receipt. ADR-0045 accepts the bounded approach, not a
+new target's APP policy, result or merge. Each installation requires genuine
+source authority and a separate exact APP-policy/pre-result review.
+Never fabricate approval files from these instructions. The repository's
+`docs/specs/036-deterministic-design-evidence/static-app-pilot-evidence.md`
+records the independently approved, actually executed bounded pilot.
 
 This observer compares a finite approved source inventory with a separate
 application snapshot. It does not measure pixels, actual font face, dynamic
@@ -77,12 +79,19 @@ Build through the **copied target helper**, whose exact recipe path/hash will
 be checked during frozen execution:
 
 ```bash
+mkdir -p "$TARGET/builds"
 "$PY" -I -B "$TARGET/tools/static/static_snapshot.py" build \
   --source "$TARGET/candidate" --out "$TARGET/builds/baseline"
 ```
 
 Create a separate delivery copy of `builds/baseline/output` and a reviewed
 `candidate-selection.json` naming relative `build` and `delivery` directories.
+For the paths above, its complete JSON is:
+
+```json
+{"build":"builds/baseline","delivery":"delivery"}
+```
+
 The source must be canonical, absolute and nonsymlinked inside the target.
 The verifier independently inventories selected delivery and browser-loaded
 response bytes; HEAD/URL/echoed IDs are not substitutes.
@@ -114,8 +123,12 @@ driver, incomplete/optionalized source inventory or a pending/stale APP policy.
 Do not execute any discarded intermediate installation.
 
 Invoke the real `skills/quality-gate/gate.py "$TARGET" --json` using the selected
-runtime and preserve its published gate/component/output references. There is
-one ordinary required command per approved ID. The first acquires one
+runtime and preserve its published gate/component/output references. The existing
+`gate_consumer.request -> gate.py -> accept/read` path serves callers
+that need exclusive invocation ownership and repeatable preserved readback;
+do not precreate invocation directories or copy old native claims.
+There is one ordinary required command per approved ID. On valid acquisition,
+the first acquires one
 gate-owned UUID/nonce-bound APP observation; subsequent commands only reuse
 those same immutable bytes after identity checks. Required failures veto
 overall success even at `THRESHOLD=0`; unknown acquisition refuses.
@@ -156,6 +169,10 @@ selected candidate/build/delivery identity, including added browser-runtime
 members, but does not launch browser, capture, compare or rescore. Its output
 preserves the original producer summary. Existing Generic gate consumers
 validate the declared output references through the ordinary pure seam.
+Generic readback preserves a recorded verdict; it does not independently
+establish that its APP snapshot is still selected. Use producer
+`verify-current` for that additional claim. Selecting a legitimate new build
+requires a fresh observation, not a changed SOURCE target.
 Currentness means that selected local snapshot, not a deployed backend or
 current upstream branch.
 

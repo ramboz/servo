@@ -15,6 +15,14 @@ source package, measures a separate unchanged application snapshot, and receives
 named static-contract failures/refusals through the ordinary required gate.
 This is not a whole-view fidelity or application-completion verdict.
 
+**Current empirical checkpoint:** the complete approved native526 finite plan
+has run: 28 actual gate cases, 500 exact required items and pure readback/
+restoration controls. [The pilot evidence](static-app-pilot-evidence.md) records
+the current exact authorities and immutable raw index. Final independent
+postreviews, reconciliation and publication remain. Earlier implementation
+checkpoints below preserve their historical pre-approval state, not current
+claims that approval or APP proof is absent.
+
 **DoR:**
 - Read all 036 criteria; leave closed 036-01 and regional 036-02 unchanged.
 - Pin the producer's approved `vellum-confirmed-source/0.2`,
@@ -88,8 +96,8 @@ This is not a whole-view fidelity or application-completion verdict.
    govern this slice; no merge or downstream completion is claimed.
 
 **DoD:**
-- [ ] Witnessed focused red/green and actual installed 0/1/2 controls.
-- [ ] Exact immutable evidence index and command receipts, with real
+- [x] Witnessed focused red/green and actual installed 0/1/2 controls.
+- [x] Exact immutable evidence index and command receipts, with real
       Dashboard nonpasses and separately approved independent positive control.
 - [ ] Required independent reviews and reconciliation pass; current docs,
       packages and status board agree without amending closed records.
@@ -241,6 +249,17 @@ verification covers all seventy-five actual rows in these four records;
 generic test fixtures were not substituted for this APP-path proof.
 The remaining finite plan and normal final postreviews/reconciliation still
 govern completion of this Servo slice, not completion of either application.
+
+**Completed finite proof:** all named controls and restorations now match the
+preselected plan. The full 28-case/500-item index is
+`files/static-nativefix-final-evidence-index.json`, SHA256
+`c2c9de004b2362791d82d07ff8de117576d9c08ddfc827406c824cfe157c495c`,
+with 741 distinct raw files. Every native gate equals its oracle carrier,
+and both selected baselines and all frozen definitions are restored.
+The source-producer and generic readers preserve their distinct meanings:
+old A refuses producer currentness under selected B while Generic readback
+retains A's original verdict/path/hash; exact A restoration clears only the
+identity readback, without capture or rescore.
 
 ### Close-out (post-DONE)
 

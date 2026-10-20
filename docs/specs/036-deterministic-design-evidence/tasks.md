@@ -3,15 +3,18 @@
 ## 036-03
 
 - [x] Independently frame/readiness-review the new APP-side vertical slice.
-- [ ] Parent inspects exact normalizer/policy/output/closure before freeze.
+- [x] Parent inspects exact normalizer/policy/output/closure before freeze.
 - [x] Witness finite normalization and snapshot/refusal red-to-green tests.
-- [ ] Install exact approved10 consumer, measure unchanged Dashboard and retain
+- [x] Install exact approved10 consumer, measure unchanged Dashboard and retain
       all twenty constraints plus full-app/backend/Jig gaps.
-- [ ] Parent approves unrelated SOURCE and separate APP policy before results;
+- [x] Parent approves unrelated SOURCE and separate APP policy before results;
       prove actual positive, mutation and restoration controls.
-      SOURCE-only approval and public finalize/verify are complete; APP policy
-      and pre-result proof remain pending.
-- [ ] Exercise real Generic output-reference consumers and pure current readback.
+      Exact source/APP approvals, installed-definition releases and actual
+      native526 proof are recorded in `static-app-pilot-evidence.md`.
+- [x] Exercise real Generic output-reference consumers and pure current readback.
+- [x] Complete all 28 finite native cases, 500 exact required rows, protected
+      copied-source repair/restoration, query/mixed-instability controls,
+      legitimate A/B freshness and full-reference shadow mutation refusals.
 - [ ] Complete independent postreviews/reconciliation, host regeneration,
       lifecycle gates and unmerged stacked PR.
 
