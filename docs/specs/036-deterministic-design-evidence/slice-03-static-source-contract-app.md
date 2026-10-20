@@ -222,6 +222,13 @@ proof. Remaining finite controls/restorations, currentness/output checks,
 installation lifecycle coverage, final postreviews/reconciliation and
 publication still prevent slice completion.
 
+The later copied-source integrity control exposed a generic 41-row duplicate
+inventory, tracked through the normal standard [Bug 006](../../bugs/006-required-pin-drift-duplicate-inventory.md)
+lifecycle. The parent suspended further actual APP/gate/current-reader execution.
+Original inputs are restored; old installs, pilot results and nonpasses remain
+immutable. A reviewed generic repair and fresh installed-definition epochs with
+their own exact review/release are required before continuing the finite proof.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and retain precise static-contract-only proof scope.

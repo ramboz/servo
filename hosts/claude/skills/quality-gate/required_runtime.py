@@ -900,6 +900,8 @@ def run_gate(target, runner, timeout, json_mode, verbose, preflight_error=None):
         for entry in policy["components"]:
             component = by_name.get(entry["component"])
             try:
+                check_pins([entry["evaluator"], entry["required_runtime"]]
+                           + entry["evaluator_artifacts"], target)
                 required = validate_component(component["result"], entry, run_id,
                                               policy_hash, component["score"], target)
                 items.extend({**i, "component": entry["component"]}

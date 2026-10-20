@@ -106,3 +106,27 @@ Dynamic data/rows/counts, whole-view height, interactions, pixel fidelity,
 actual font faces and backend Git/time authenticity remain unproved.
 Existing Jig's 0.1-pilot allowlist does not admit this 0.2 contract; no input
 relabelling, peer Jig change, full-app DONE or merge is authorized.
+
+## Subsequent generic error-path NONPASS
+
+Later planned copied-source integrity control
+`24a10dd7-c782-41db-9727-3213e4e381ca` correctly refused with exit 2 and no APP
+capture, but published 41 UNKNOWN items: each twenty approved IDs twice plus
+`<gate>`. Generic acceptance/readback preserved that defective native carrier;
+the complete-inventory audit, not the driver's exit-only expectation, exposed
+it. The original cause was `approved artifact modified: design-input/input.json`;
+outer reconstruction added secondary `NoneType` causes and an aggregate error.
+
+[Bug 006](../../bugs/006-required-pin-drift-duplicate-inventory.md) owns the
+standard generic repair and its independent reviews. The copied input was
+restored exactly, and the canonical original SOURCE was never modified.
+Raw native/gate/component/consumer records remain under
+`A/static-native-proof/dashboard/mutated-copied-source-input/`.
+`unexpected-duplicate-required-inventory.json` has SHA256
+`ca47f603f92f240892bd14f475eb99ee5daa25d7ddb926662441b430c24b236b`.
+
+The parent suspended release `bd524f04...` after this outcome. All further
+actual APP/gate/current-reader experiments are held until the normal bug
+lifecycle clears and fresh installed-definition epochs receive their own exact
+review/release. The first four proven cases above remain truthful and immutable;
+this later NONPASS is not hidden, averaged away or rebound to a changed runtime.

@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -190,6 +191,85 @@ weighted_sum="0" """.rstrip())
         result, payload = self.gate()
         self.assertEqual(result.returncode, 2, payload)
         self.assertIn("modified", str(payload["required"]))
+
+    def test_ac3_pinned_input_drift_retains_exact_inventory_and_original_cause(self):
+        source = self.target / "approved-input.json"
+        original = b'{"approved":true}\n'
+        source.write_bytes(original)
+        self.plan["checks"][0]["evaluator_artifacts"] = ["approved-input.json"]
+        self.plan["checks"].append({
+            **self.plan["checks"][0], "id": "second",
+        })
+        self.write_plan()
+        for operation, extra in (("generate", ["--vendor-engine"]), ("approve", []),
+                                 ("install", ["--vendor-engine", "--enable-required"])):
+            result = self.overlay(operation, *extra)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        entry = json.loads((self.out / "checks.json").read_text())["approved_required_binding"]
+        (self.target / "subject").touch()
+        pins = [{"path": "approved-input.json"}, entry["evaluator"], entry["required_runtime"]]
+        for pin in pins:
+            with self.subTest(pin=pin["path"]):
+                path = self.target / pin["path"]
+                self.assertTrue(path.resolve().is_relative_to(self.target.resolve()))
+                saved = path.read_bytes()
+                calls = self.target / "calls"
+                before = calls.read_bytes() if calls.exists() else None
+                try:
+                    path.write_bytes(saved + b"\n")
+                    result, payload = self.gate(THRESHOLD="0")
+                finally:
+                    path.write_bytes(saved)
+                self.assertEqual(result.returncode, 2, payload)
+                self.assertEqual(payload["required"]["ids"], ["assertion", "second"])
+                self.assertEqual(payload["required"]["counts"],
+                                 {"pass": 0, "fail": 0, "unknown": 2})
+                self.assertEqual(payload["required"]["unknown"], ["assertion", "second"])
+                self.assertTrue(all(
+                    item["reason"] == "approved artifact modified: " + pin["path"]
+                    for item in payload["required"]["items"]
+                ), payload)
+                self.assertEqual(calls.read_bytes() if calls.exists() else None, before)
+                component = next(c for c in payload["components"]
+                                 if c["component"] == "spec_oracle_demo")
+                self.assertIsNone(component["result"])
+                result, restored = self.gate(THRESHOLD="0")
+                self.assertEqual(result.returncode, 0, restored)
+                self.assertEqual(restored["required"]["passed"], ["assertion", "second"])
+
+    def test_ac3_current_pins_do_not_accept_missing_or_malformed_component_results(self):
+        self.install_required()
+        (self.target / "subject").touch()
+        runtime = load_runtime()
+        for mutation in ("missing-reference", "missing-file", "malformed-record"):
+            with self.subTest(mutation=mutation):
+                def intercepted(oracle, target, timeout, env, mutation=mutation):
+                    result = subprocess.run([str(oracle)], cwd=target, env=env,
+                                            capture_output=True, text=True, timeout=30)
+                    path = Path(env["SERVO_GATE_RESULT_DIR"]) / "oracle-result.json"
+                    payload = runtime.load(path)
+                    component = next(c for c in payload["components"]
+                                     if c["component"] == "spec_oracle_demo")
+                    if mutation == "missing-reference":
+                        component["result"] = None
+                        path.write_bytes(runtime.canonical(payload))
+                    elif mutation == "missing-file":
+                        Path(component["result"]["path"]).unlink()
+                    else:
+                        Path(component["result"]["path"]).write_text('{"schema_version":')
+                    return result.stdout, result.stderr, result.returncode, False
+
+                output = io.StringIO()
+                with redirect_stdout(output):
+                    code = runtime.run_gate(self.target, intercepted, 30, True, False)
+                payload = json.loads(output.getvalue())
+                self.assertEqual(code, 2, payload)
+                self.assertIn("assertion", payload["required"]["unknown"])
+                self.assertEqual(payload["required"]["passed"], [])
+                policy, _ = runtime.installed_policy(self.target)
+                entry = policy["components"][0]
+                runtime.check_pins([entry["evaluator"], entry["required_runtime"]]
+                                   + entry["evaluator_artifacts"], self.target)
 
     def test_ac3_working_directory_pins_the_executed_assertion(self):
         directory = self.target / "sub"
