@@ -331,8 +331,9 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   negative has an invalid absence premise; it is not correct paint proof.
   Repository-only corrections and separately approved native epochs are
   distinct evidence. Profile `/3` own-box/contents recovery is implemented
-  and reviewed at source level, but its pending D09/M04 policies and new
-  self-content native outcomes are not yet approved or executed.
+  and reviewed at source level. D09/M04 policies subsequently received exact
+  staging-only selection and ordinary sealed installation; final installed
+  review/release and new self-content native outcomes remain outstanding.
 - The actual unchanged-Jig PURE format negative closes only the earlier
   unexecuted-negative gap. It refuses before semantic/tree/served validation;
   positive0.2 bridge, CLI/lifecycle and downstream Jig completion remain
@@ -361,9 +362,12 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   Use-case coverage correctly reports no adopted breadth layer. Memory
   includes actual failure/recovery/authority limits; the user already skipped
   the optional people-context advisory for this run.
-- **Deferred to actual remaining gates, not waived:** independent exact
-  D09/M04 policy review, staging/installed-definition review, separate execution
-  release, finite actual affected proof, full craft recovery and final
+- **Updated:** independent exact D09/M04 policy review and parent selection
+  c614498f authorized ordinary sealed staging only. Exact installed checkpoint
+  1b830519 binds fourteen public staging/two pure metadata command successes,
+  not an APP result or execution release.
+- **Deferred to actual remaining gates, not waived:** final installed-definition
+  review, separate execution release, finite actual affected proof, full craft recovery and final
   reconciliation review. Only then may normal REVIEWED/RECONCILED/DONE and
   unmerged stacked publication proceed. No merge or full-app/Jig DONE follows.
 

@@ -37,6 +37,10 @@
       baseline/resource/runtime closures and all eight actual metadata receipts.
       Submit exact bundlef5cd2540 for independent policy-only review; no staging
       or APP execution is authorized by preparation/scoped-control PASS.
+- [x] Apply separately selected actual policy reviews under c614498f through
+      ordinary public sealed staging; retain all fourteen stage/two pure
+      metadata commands0 and final exact checkpoint1b830519. Hand it back for
+      separate installed review/release; no new APP/native outcome exists yet.
 - [ ] Reconcile the nonblocking recurring pure-reader ownership/closure
       regression-test gap without treating retained offline evidence as a
       replacement for that test or expanding the current recovery.

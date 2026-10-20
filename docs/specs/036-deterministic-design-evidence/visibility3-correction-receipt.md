@@ -204,9 +204,66 @@ A fresh read-only scoped pending-control review returned PASS:
 It inspected static consistency without independently recomputing hashes or
 executing commands; it is not canonical craft/compliance or policy approval.
 The exact bundle was sent to the parent for ordinary independent policy-only
-review. No approval/freeze/generate/install/seal/reapprove, APP request/gate/
-accept/read, result-current reader or source recapture has occurred.
-Canonical craft NONPASS and suspension17aff remain in force.
+review. At that pending checkpoint no approval/freeze/generate/install/seal/
+reapprove or APP execution had occurred. The subsequent separate staging
+authority and actual installation are below; canonical craft NONPASS and
+suspension17aff remain in force.
+
+### Exact selected staging, not pre-result execution release
+
+The parent selected the two genuine independent policy records unchanged:
+D09 review SHA256 `16e221a282fc1996b4fb2275b060022f08dc374f21d9955c4facfe118d566298`;
+M04 review `6eccf7b99ac0c386f5e77a10f54517e1b5f30b959e6d37a2ae3ae5b99408e920`.
+Independent semantic audit `db41c2a8...` and parent mechanical closure
+`9f47fcf6...` support that decision, with their disclosed static-review and
+read/hash-only harness limits. Actual selection
+`P/visibility3-policy-staging-selection.json`, SHA256
+`c614498f91168f9d90f3a6eb10175c5609247eb5f96cad6b8b650b494f82b117`,
+authorizes only ordinary staging and pure installed metadata checks on D09/M04.
+
+The public APP approval/generate/approve/install, driver artifact seal and
+ordinary regenerate/reapprove/reinstall completed seven commands per target.
+Both exact isolated TARGET `validated_policy`/`driver_seal`/`current_binding`
+metadata preflights then passed. All sixteen actual commands returned0;
+no refusal occurred. There was no R3/controller invocation, APP acquisition,
+request/gate/grading/accept/read/result-current reader or SOURCE recapture.
+Before/after seal checklists are byte-archived. The final oracle stays pinned;
+no discarded intermediate installation was executed.
+
+The final exact installed checkpoint is
+`A/visibility3-final-staging-checkpoint.json`, SHA256
+`1b83051948cf29499bca424d47e8eadf9b2eaf21e05a188160f568c1bc7e5ec7`.
+
+| Final installed identity | D09 | M04 |
+| --- | --- | --- |
+| Effective grade | `423fe7b91ef234afe636d4bc1a18f41c6c7966a06eddb9f4fa37e8e35a84628e` | `df94de5550186cc558ace164f71ed7d300b2f0206043e566e93323e9a9580b27` |
+| Required policy | `c82743aa505956c8a4c49fdcbedf3e483d0e14729c565e5d248d9fb610d6230d` | `109cf802a58702260658544dd98b3a4fd4ab98ee4f6a6dd8ea132a926f1800ce` |
+| Postapproval APP policy raw | `70515291b47399c64fab91f278e7467286e914e117379763288dfe52994a932d` | `3beb47655ecd616cb7fbc6c350849874d823ade0fc4c4e5acf32f591eb679d42` |
+| Required IDs | 20 | 15 |
+
+Root oracle `a57bf298...`, grader `1dc07210...`, both native-runtime copies
+`526039f3...` and APP helper `90e2bc36...` match their selected sources.
+The checkpoint binds every final target file (97/45 files, 35 unique required
+IDs), source/runtime/helper/build/delivery/checklist/install/approval/seal
+artifact, all sixteen staging/metadata argv/raw streams and all eight earlier
+preparation commands. Stage directories are
+`A/dashboard-static-09-staging/` and `A/independent-marker-static-04-staging/`.
+Old D08/M03, controller/plan/index and installation bytes rehash unchanged.
+New targets still have no native gate or APP output-run directories.
+
+The baseline input-domain changes are solely relocated absolute recipe paths,
+not changed source goals, resource inputs, outputs or recipe bytes:
+D09 input `a966148a947badee8b0c6ad9d57c3e765a586c8530fe27e725cbdd20c6ced674`,
+M04 input `b3c90df92564e3f3be00fb855ab0eebd5c9c2593454f692cb3453e50cf9494f4`.
+Their output domains remain `fdf50720...` and `56351edc...`.
+The independent reviewer recomputed this domain distinction; its static
+inspection is not fresh browser/runtime/APP proof.
+
+This checkpoint has been handed to the parent for separate actual installed
+definition review and explicit pre-result execution release. No new native
+outcome is claimed: all self-content and other finite vectors remain
+unexecuted expectations. Staging does not clear canonical craft NONPASS,
+old suspension17aff, full quality/Jig integration or merge gates.
 
 The craft pure-reader ownership/closure recurring-test gap is a recorded
 nonblocking reconciliation nit. The existing mocked forwarding test and actual

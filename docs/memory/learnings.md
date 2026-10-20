@@ -205,3 +205,11 @@ ownpresence/stylePASS; both restorations allPASS. Eight actual public
 preparation/metadata commands returned0, no APPcapture/resultreader executed.
 Scoped controlsPASS08fce9d5 is not independent policy approval or release;
 canonicalcraftNONPASS and17aff remain until fresh exact authority/proof.
+The parent subsequently selected actual independent policy reviews16e221a2/
+6eccf7b9 under staging-only authorityc614498f. Ordinary public sealed staging
+and pure installed metadata passed14+2commands; exact checkpoint1b830519 binds
+newgrades423fe7b9/df94de55 and requiredpoliciesc82743aa/109cf802, native526/
+APP90e2/oraclea57. Input-domain differences are solely absolute recipe-path
+relocation, not changed input/output rows or goals. No APP/R3/gate/resultreader
+ran. Separate finalinstalledreview/executionrelease and newactualproof remain
+required; policy/staging PASS does not clear craftNONPASS or suspension17aff.
