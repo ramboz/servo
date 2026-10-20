@@ -97,6 +97,30 @@ The ordinary `check-reviews --stage REVIEWED` still actually refuses (exit2)
 for craft NONPASS and missing architecture review. No bypass or lifecycle
 transition was used.
 
+### Subsequent architecture-only pass and repository gates
+
+The first architecture launch was interrupted without a recorded result or
+remaining agent. After inspecting that state, a fresh read-only architecture
+pass completed on source `445e69ef...`/documentation `ef62ee3...`, against exact
+stack base `2cd33a4a...`. The actual PASS is recorded through ordinary
+`record-review` in `reviews/slice-03-arch.md` and in
+`A/036-03-visibility3-arch-verdict.txt`. It confirms the source/APP authority
+split, existing generic seams, versioned policy meaning and separate pure
+readers. It retains the nonblocking direct-closure regression-test gap and
+explicitly does not clear craft, APP authority or lifecycle gates.
+
+Subsequent repository-only manifest validation, repository-wide cached Ruff,
+install-surface verification (150 actual tests) and generated-host drift check
+all passed. The status-board audit first found stale derived review-selection
+telemetry; ordinary regeneration corrected it without changing slice states.
+The board now checks clean. Use-case coverage reports its documented no-op:
+the product vision has no `## Use cases` section. The ordinary review-evidence
+gate now refuses only canonical craft NONPASS; no transition or bypass occurred.
+
+Fresh D09/M04 metadata/control preparation has been proposed to the parent, not
+executed or approved by this record. No new APP subjects, policies, controller,
+plan, installed definition or pre-result execution authority exists yet.
+
 The craft pure-reader ownership/closure recurring-test gap is a recorded
 nonblocking reconciliation nit. The existing mocked forwarding test and actual
 offline closure mutation audit are different evidence; neither is relabelled

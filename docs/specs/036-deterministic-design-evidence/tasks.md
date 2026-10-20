@@ -26,6 +26,8 @@
       independent hard-hidden precedence, complete readback/replay/restoration.
 - [ ] Complete independent postreviews/reconciliation, host regeneration,
       lifecycle gates and unmerged stacked PR.
+- [x] Record the genuine architecture-only PASS on the repository visibility/3
+      correction; preserve canonical craft NONPASS and separate APP authority.
 - [ ] Recover the genuine craft self-content-visibility blocker through
       repository-only profile `/3` TDD, fresh scoped review and exact new
       policy/installed-definition review/release before actual APP proof.
