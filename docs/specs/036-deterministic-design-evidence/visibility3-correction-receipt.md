@@ -61,8 +61,13 @@ Exact commands/environment and source/test hashes are retained in
 The adjacent pure suite passed ten tests/26 subtests.
 The regenerated host packages match canonical source; focused public/package
 checks passed 83 tests/66 subtests. Cached Ruff checks passed for the two changed
-Python files. The earlier full2570/15/316 run belongs to profile `/2`; a new full
-suite is not inferred from these focused checks.
+Python files. A separate actual full run on source cut `445e69ef...` then passed
+2570 tests, skipped16 and passed316 subtests in396.80s (exit0).
+`A/visibility3-full-pytest.stdout`, SHA256
+`b2c5246be3fe4b6ef24d3e7ae07b35276ae067d5306aea46adea79d9bac64196`,
+and empty `A/visibility3-full-pytest.stderr` retain that run.
+The four opt-in browser methods were executed separately above; their skips in
+the full suite are not counted as browser passes.
 These are repository-only CSS controls, not a newly approved APP experiment
 or full CSS/pixel/face/backend quality claim.
 
@@ -73,11 +78,21 @@ or full CSS/pixel/face/backend quality claim.
 
 ## Remaining gates and recorded nit
 
-A scoped source-only review, fresh exact policies/installed definitions,
-separate pre-result execution release and actual affected APP proof are
-outstanding. The prior canonical craft NONPASS is not replaced by these
-repository tests. Full craft/architecture/reconciliation and normal lifecycle/
-publication gates still follow. No merge or full-app/Jig completion is claimed.
+Fresh independent `jig:reviewer / 036-03-self-content-source-review` returned
+scoped mechanism/test PASS on source cut `445e69ef...`.
+`A/036-03-self-content-source-review.txt`, SHA256
+`10a0022f6ec43f041015685c5634d366fcb1031270ec41ab00d0934de5a6b3c7`,
+retains its actual verdict and limits. It read source/retained evidence only,
+did not execute tests or independently rehash the supplied set, and explicitly
+did not clear canonical full craft/compliance or staging/execution authority.
+The actual TDD command record has SHA256
+`8a9a6628a0c76700952459806504d76c22b30ecced8b00e218c0626beaaa7374`.
+
+Fresh exact policies/installed definitions, separate pre-result execution
+release and actual affected APP proof remain outstanding. The prior canonical
+craft NONPASS is not replaced by repository tests or a scoped review.
+Full craft/architecture/reconciliation and normal lifecycle/publication gates
+still follow. No merge or full-app/Jig completion is claimed.
 The ordinary `check-reviews --stage REVIEWED` still actually refuses (exit2)
 for craft NONPASS and missing architecture review. No bypass or lifecycle
 transition was used.

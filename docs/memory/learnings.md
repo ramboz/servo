@@ -190,7 +190,10 @@ preserved own-container presence with hidden text, true ancestor suppression,
 independent display/opacity hiding and unsupported-transform UNKNOWN.
 Profile/3 fixes only that distinction. Parent17affda2 suspended prior6ec/D08/M03;
 all34/600/911 outcomes and full compliancePASS remain bounded history, not
-new-source proof or lifecycle clearance. Fresh exact policies/definitions/
+new-source proof or lifecycle clearance. Source cut445e69ef has genuine scoped
+mechanism/test reviewPASS10a0022f, actual61browsercontrols and a separate full
+2570pass16skip316subtests run; none replaces full craft or APP authority.
+Fresh exact policies/definitions/
 release and actual affected proof remain required. Source/C0/family/goals/
 tolerances/native526/Bug006 and Jig's actual format-only NONCLEARANCE stay
 unchanged. See docs/specs/036-deterministic-design-evidence/visibility3-correction-receipt.md.
