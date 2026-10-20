@@ -163,4 +163,18 @@ The 2026-10-20 corrected epoch proves Bug006 on the actual approved20-ID Dashboa
 Fresh final compliance caught real APP visibility false-blocks after a complete native experiment: ancestors visibility:hidden and HTML hidden attributes can be overridden. Old hidden-marker native raw.visible was true/8x8 while the old guard failed it; preserve that invalid negative premise and emitted outcome, never call it correct paint proof. Visibility/2 source-only TDD/review corrects applicable overflow/content boxes, effective fill, unsupported ink before transparency, hard absence versus unsupported geometry and text-fragment order. A pinned Chromium primitive has display:contents opacity0 painted byte-identical to its visible control while native checkOpacity says false: explicitly UNKNOWN/veto on computed contents nondefault opacity, not inferred hidden or PASS. Inline/block opacity0 remains known hidden even with zero client dimensions. Current source2cfe/test57ec has54realbrowserprimitivecases plus full2570pass15skip316subtests; scoped mechanism/control PASS is not final compliance or APP approval. New policies/definitions/releases and actual profile2 outcomes remain required. See docs/specs/036-deterministic-design-evidence/visibility2-correction-receipt.md; old07/02/f0/source authorities remain immutable.
 
 ## Visibility2 actual semantic proof is separate from source-only review
-The released current 036-03 visibility/2 epoch has34actualnativecases/600uniqueapprovedrequireditems and911rawfiles, index visibility2-final-evidence-index.json SHA7bd1f04b. Four same-goal CSSvisibility/HTMLhidden override positives now actuallyretain Dashboard16/4/exit1 and marker15pass/exit0; corrected explicitdisplay:none negatives have nativefalse/zero boxes. Contentsopacity uncertainty produces11PASS/4markerUNKNOWN/exit2 despite actual diagnosticfraction1.0; independenthardhide retains11PASS/4markerFAIL/exit1. These actualAPP-path outcomes are separate from source-only54browserprimitives and scopedreviewPASS. Oldhidden-attribute negative emittedFAIL butwas semanticallyinvalid; preserveit/c2c9/d38/oldreleases unchanged, neverrebind. Sourcepin20originalcauseUNKNOWN+restore, nativequerycountnull, mixed60atomics, ownedreplay/currentness/full-reference-shadow controls andallbaseline definitions restored. Nativefractions are notvisualquality; Source/family/goals/schema unchanged; actualexistingJig0.2pureconsumernegative remainsunexecuted inspectedNONCLEARANCE, notbridgeDONE. Final fullcompliance/craft/arch/reconciliation/publication remain gates.
+The released visibility/2 epoch has 34 actual native cases, 600 unique approved
+required items and 911 raw files, index visibility2-final-evidence-index.json
+SHA7bd1f04b. Same-goal overrides retain Dashboard16/4/exit1 and marker15pass/exit0;
+display:none negatives have nativefalse/zero boxes. Contents uncertainty stays
+11PASS/4UNKNOWN/exit2 despite diagnostic1.0; independent hide stays11PASS/4FAIL/exit1.
+These actual APP outcomes are separate from54browserprimitives/scopedreviewPASS.
+Preserve the old semantically invalid hidden-attribute negative and all old
+epochs. Source pin/query/mixed60/replay/currentness/shadow controls and exact
+restorations are recorded, not visual-quality scores or changed SOURCE goals.
+The parent later executed the unchanged existing Jig pure consumer format
+negative: receipt214a550a refuses new namespaces before file-role/tree/served/
+semantic validation, and its separate version guard refuses the actual envelope
+kind. This is actual bounded PURE-format NONCLEARANCE only, not positive0.2
+bridge, CLI/lifecycle or JigDONE. Full parent proof verification17093475 and
+final reviews remain separate authorities.

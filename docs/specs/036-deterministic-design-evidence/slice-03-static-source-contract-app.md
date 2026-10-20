@@ -291,6 +291,12 @@ its oracle/stdout carrier. All selected baselines and frozen definitions are
 restored. Full compliance must be genuinely re-reviewed on this correction and
 actual evidence before normal craft/architecture/reconciliation/publication;
 source-only mechanism PASS was not substituted for it.
+Parent verification independently checks the complete current 911-file proof.
+It also supplies an actual unchanged existing-Jig PURE consumer format negative
+for source0.2/new-kind evidence (`214a550a...`): unsupported namespaces/kind are
+refused before file-role/tree/served/semantic validation. This closes only the
+earlier unexecuted-negative gap, not positive bridge/CLI/lifecycle integration;
+Jig remains NONCLEARING and no format/allowlist was relabelled.
 
 ### Close-out (post-DONE)
 

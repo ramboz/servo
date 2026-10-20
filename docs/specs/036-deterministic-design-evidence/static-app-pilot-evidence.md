@@ -253,10 +253,10 @@ literally; the actual inputs remain `vellum-confirmed-source/0.2`.
 `80c908b8dbb84a2ec054c68e1081ac6717c80921018087ecaf710182b61aedb1`,
 records exact source/line/hash evidence. No old-format context was manufactured,
 no peer Jig file changed, and no downstream design attestation was run or cleared.
-**Bounded integration gap:** an actual existing Jig pure-consumer negative for
-the 0.2 input/new `static_source_contract_evidence` kind was not executed.
-This is inspected contract NONCLEARANCE only. Native/Generic success does not
-complete or validate that Jig bridge.
+**Earlier bounded integration gap:** at this checkpoint the existing Jig
+pure-consumer negative had not run; only contract inspection was established.
+The later actual bounded format-negative evidence is recorded below.
+Native/Generic success does not complete or validate that Jig bridge.
 
 The parent independently verified the complete index, all 741 file hashes,
 all 28 native/oracle/stdout/return-code carriers, all 500 unique approved items,
@@ -406,7 +406,40 @@ The old invalid hidden-marker negative, every old review NONPASS, old f0
 anomaly and all historical authorities remain preserved. These finite controls
 do not prove universal CSS, full-view quality, actual font face, backend
 authenticity or downstream completion. Existing Jig's old contract still does
-not admit actual 0.2/new-kind evidence: its actual pure-consumer negative was
-not executed, so NONCLEARANCE remains an inspected bounded integration gap,
-never bridge DONE. Final fresh compliance/craft/architecture/reconciliation,
-normal lifecycle gates and publication are still separate.
+not admit actual 0.2/new-kind evidence; the subsequent pure format-negative
+below establishes only that bounded refusal, never positive bridge DONE.
+Final fresh compliance/craft/architecture/reconciliation, normal lifecycle
+gates and publication remain separate.
+
+### Independent full verification and actual existing-Jig format negative
+
+The parent independently verified all 34 native cases, 600 required items and
+911 indexed files (962 checked paths), native/oracle/stdout agreement,
+closed carriers/owned claims, semantic priority controls and restored
+definitions. Its offline record
+`P/complete-visibility2-proof-parent-verification.json` has SHA256
+`1709347594b6981a62dfe3773e634c23b2ee5e2f0ef3dbae15c866a0597a6fad`.
+This is independent raw-evidence verification, not a lifecycle verdict.
+
+The existing unchanged Jig `756f39dc` pure entry point
+`design_bindings.freshness_problem` was actually invoked against explicit
+actual new namespaces, the M03 approved SOURCE0.2 and its unmodified native
+`static_source_contract_evidence` envelope
+`4b62f0a9-daeb-4fe3-8e51-09f7a672239d`. It returned
+`contracts: unsupported namespaced contract`. The separate existing `_version`
+guard applied directly to that actual envelope returned
+`envelope: unsupported record kind/version`.
+`P/existing-jig-finite-refusal-parent-verification.json`, SHA256
+`214a550ab3fcf6793be6af4188b261d14d1a8107fdd4affa774390cd47507170`,
+binds the unchanged consumer (SHA256 `1254f05e...`), actual SOURCE/envelope and
+the selection/context/bindings; raw command/stdout/stderr are retained under
+`P/jig-finite-format-refusal/`.
+
+**Precise limit:** public refusal occurs before file-role, tree, served-record
+or semantic validation. The probe deliberately makes no complete old C0/
+runtime/delivery-wrapper attestation. No allowlist or artifact relabel, APP/
+grader/result-reader/lifecycle command or PASS review was written.
+This replaces the earlier unexecuted-negative gap with an actual existing
+PURE consumer format negative only. Jig integration remains NONCLEARING;
+positive 0.2 integration, CLI/lifecycle acceptance, full quality and Jig DONE
+remain unestablished.

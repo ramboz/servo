@@ -115,10 +115,12 @@ override positives with the same frozen goals. It must receive exact
 policy/control-plan review before any new APP result.
 New 08/03 policy approval, installation and empirical results are not
 established by this source-only receipt.
-The actual existing Jig pure-consumer negative remains unexecuted:
-0.2/new-kind NONCLEARANCE is an explicitly inspected integration gap,
-not bridge DONE. Full-app, face, backend, visual-quality and merge acceptance
-remain outside this correction.
+At this source-only checkpoint the existing Jig pure-consumer negative had
+not run. The subsequent actual bounded format refusal is linked in current
+pilot evidence; it stops before semantic/tree/delivery validation and does not
+establish a positive 0.2 bridge. Jig remains NONCLEARING.
+Full-app, face, backend, visual-quality and merge acceptance remain outside
+this correction.
 
 ### Versioned controller R2 addendum
 
