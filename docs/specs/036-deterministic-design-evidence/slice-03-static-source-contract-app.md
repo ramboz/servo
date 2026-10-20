@@ -207,6 +207,21 @@ was explicitly withdrawn from all staging/execution after the compliance
 findings; it is preserved as historical missed-error-path evidence, not rebound
 to corrected helpers. No APP component staging/install/capture has occurred.
 
+### Released native pilot checkpoint (2026-10-19; partial)
+
+After the historical pre-result checkpoints above, the parent issued genuine
+exact-policy staging approvals and final installed-definition execution release
+`bd524f04...`, bound to checkpoint `352843d0...`. Both real native baselines
+and the invalid-query/mixed-instability controls have now run.
+[The partial pilot evidence](static-app-pilot-evidence.md) records the exact
+authorities, seventy actual required rows across four cases, raw identities and
+independent parent verification. Dashboard has the four planned exact declared
+family-stack/DOM-text nonpasses; the independent marker passes its fifteen
+selected facts. These are finite static measurements, not visual or backend
+proof. Remaining finite controls/restorations, currentness/output checks,
+installation lifecycle coverage, final postreviews/reconciliation and
+publication still prevent slice completion.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and retain precise static-contract-only proof scope.
