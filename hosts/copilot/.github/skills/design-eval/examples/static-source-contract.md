@@ -141,14 +141,17 @@ paint containment. Formatting-only whitespace is not an ink prerequisite but
 remains in raw DOM text. Partial positive-area text can pass this guard: it is
 not OCR, whole-string legibility or occlusion/pixel proof. Unsupported
 descendant transforms/paint refuse.
-Visibility profile `/2` uses effective computed visibility at the bound element
+Visibility profile `/3` uses effective computed visibility at the bound element
 and each actual text-node parent. Descendants can override inherited
 `visibility:hidden`; an HTML `hidden` attribute alone is not proof of no paint
 when CSS overrides its display. Clipping and content visibility require an
 applicable container: `display:contents` and ordinary non-replaced HTML inline
 ancestors do not supply one. Actual `display:none`, opacity zero on painted
-boxes and applicable `content-visibility:hidden` remain absence beside an unrelated
-unsupported transform; unsupported geometry alone cannot establish absence.
+boxes and an applicable ancestor's `content-visibility:hidden` remain absence
+beside an unrelated unsupported transform. Self-applied content visibility
+suppresses contents, not the element's own background/border box: an empty
+geometry role can remain visible while required text inside that box fails.
+Unsupported geometry alone cannot establish absence.
 Inline zero opacity still hides despite a zero-sized client box.
 
 Nondefault opacity on `display:contents` is explicitly unsupported: native
@@ -163,6 +166,9 @@ observation. If text itself is required and its observed DOM value is empty,
 that literal value needs no ghost ink; the binding still requires a unique
 visible nonzero box. Missing visibility/text-paint observation flags are
 unknown, never defaults to success or observed absence.
+Profile `/3` is a repository conformance correction awaiting its own exact
+policy/installed-definition reviews and execution release. Historical profile
+`/2` installs and results cannot be relabelled as its empirical proof.
 Settlement samples approved required properties and correspondence/visibility
 atomically. Unselected counters, pulses and unrequired root height are not
 readiness conditions; changing a required property still refuses after the

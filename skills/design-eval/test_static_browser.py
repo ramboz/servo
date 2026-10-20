@@ -18,6 +18,117 @@ import static_snapshot as snapshot
     "explicit frozen Playwright runtime required",
 )
 class BrowserTests(unittest.TestCase):
+    def test_content_visibility_preserves_own_box_but_suppresses_descendants(self):
+        from playwright.sync_api import sync_playwright
+
+        bindings = {
+            "root": "#scene",
+            "document_witnesses": ["#scene > section"],
+            "elements": {"caption": ".caption", "marker": ".dot"},
+        }
+        constraints = [
+            {"id": "caption-presence", "element": "caption", "property": "presence"},
+            {"id": "caption-text", "element": "caption", "property": "text"},
+            {"id": "marker-presence", "element": "marker", "property": "presence"},
+        ]
+        core = {
+            "inventory": [row["id"] for row in constraints],
+            "policy": [
+                {**row, "comparison": "exact" if row["property"] == "text" else "present",
+                 "tolerance": "0"}
+                for row in constraints
+            ],
+            "facts": [
+                {"id": row["id"], "value": "Visible heading" if row["property"] == "text" else True}
+                for row in constraints
+            ],
+        }
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 200, "height": 100})
+                baseline = None
+                for name in (
+                    "baseline", "self-marker", "self-caption", "ancestor",
+                    "self-marker-display-none", "self-marker-opacity-zero",
+                    "self-marker-transform",
+                ):
+                    with self.subTest(variant=name):
+                        page.set_content(
+                            '<!doctype html><body style="margin:0;background:white">'
+                            '<main id="scene" style="width:200px;height:100px">'
+                            '<section style="width:200px;height:100px">'
+                            '<i class="dot" style="display:block;width:8px;height:8px;'
+                            'background:#f0b24e"></i><div class="caption" '
+                            'style="width:160px;height:24px;background:#eee">'
+                            'Visible heading</div></section></main>'
+                        )
+                        native = page.evaluate(
+                            """name=>{
+                            const marker=document.querySelector('.dot'),
+                              caption=document.querySelector('.caption'),
+                              wrapper=document.querySelector('section');
+                            if(name.startsWith('self-marker')){
+                              marker.style.contentVisibility='hidden';
+                              if(name==='self-marker-display-none')marker.style.display='none';
+                              if(name==='self-marker-opacity-zero')marker.style.opacity='0';
+                              if(name==='self-marker-transform')
+                                marker.style.transform='translateX(1px)';
+                            }else if(name==='self-caption'){
+                              caption.style.contentVisibility='hidden';
+                            }else if(name==='ancestor'){
+                              wrapper.style.contentVisibility='hidden';
+                            }
+                            return {
+                              markerVisible:marker.checkVisibility(
+                                {checkOpacity:true,checkVisibilityCSS:true}),
+                              captionVisible:caption.checkVisibility(
+                                {checkOpacity:true,checkVisibilityCSS:true}),
+                              markerBounds:{width:marker.getBoundingClientRect().width,
+                                height:marker.getBoundingClientRect().height},
+                              markerBackground:getComputedStyle(marker).backgroundColor
+                            };
+                            }""",
+                            name,
+                        )
+                        image = page.screenshot()
+                        if name == "baseline":
+                            baseline = image
+                        elif name == "self-marker":
+                            self.assertEqual(image, baseline)
+                        elif name in ("self-caption", "ancestor"):
+                            self.assertNotEqual(image, baseline)
+                        elements = app.observe_roles(page, bindings, constraints)
+                        rows = {
+                            row["id"]: row["status"]
+                            for row in app.compare(core, {"elements": elements}, None)
+                        }
+                        if name == "ancestor":
+                            self.assertFalse(native["markerVisible"])
+                            self.assertFalse(native["captionVisible"])
+                            expected = {row["id"]: "fail" for row in constraints}
+                        else:
+                            self.assertTrue(native["captionVisible"])
+                            if name not in (
+                                "self-marker-display-none", "self-marker-opacity-zero",
+                            ):
+                                self.assertTrue(native["markerVisible"])
+                                self.assertEqual(native["markerBounds"], {"width": 8, "height": 8})
+                                self.assertEqual(native["markerBackground"], "rgb(240, 178, 78)")
+                            expected = {
+                                "caption-presence": "pass",
+                                "caption-text": "fail" if name == "self-caption" else "pass",
+                                "marker-presence": (
+                                    "unknown" if name == "self-marker-transform" else
+                                    "fail" if name in (
+                                        "self-marker-display-none", "self-marker-opacity-zero",
+                                    ) else "pass"
+                                ),
+                            }
+                        self.assertEqual(rows, expected, {"native": native, "observed": elements})
+            finally:
+                browser.close()
+
     def test_effective_visibility_override_preserves_text_and_geometry(self):
         from playwright.sync_api import sync_playwright
 

@@ -106,7 +106,7 @@ provider-internal attestation, general accuracy or downstream Jig completion.
 Vellum's approved `vellum-confirmed-source/0.2` facts from independently
 acquired APP observations and their explicitly versioned grammar.
 `static_contract.source_at` calls the compatible reader's identity-only
-`inspect`, not source replay (`skills/design-eval/static_contract.py:537`).
+`inspect`, not source replay (`skills/design-eval/static_contract.py:560`).
 `static_snapshot.py:86,124,181` closes finite input/output manifests, independently
 selected delivery and actually loaded read-only loopback response bytes.
 It does not certify a backend, current upstream branch or arbitrary HTTP app.
@@ -115,10 +115,10 @@ The ordinary command/refusal/output-reference and required-policy seams own
 installation and engine results; no new registry or scoring controller is
 introduced. Per-required-ID atomic settlement retains sampled raw evidence:
 stable contradictions survive alongside unknown changing properties
-(`static_contract.py:325,939`). Runtime bytes, current browser membership and
+(`static_contract.py:342,962`). Runtime bytes, current browser membership and
 selected Bash/non-OS linkage are pinned. Pure current verification checks
 identity/inventory and returns the preserved verdict without capture or
-comparison (`:1048`). The
+comparison (`:1071`). The
 [walkthrough](../skills/design-eval/examples/static-source-contract.md)
 documents this bounded experimental path. Each installation requires exact APP
 policy/pre-result authority and sealed ordinary grading identities.
@@ -128,17 +128,24 @@ actual 0/1/2 controls/readbacks; it is not visual quality/full-APP acceptance.
 The generic outer gate reuses its pin authority before interpreting an
 unavailable component, preserving the original refusal cause and exactly-once
 inventory for protected-input drift (`required_runtime.py:903`; Bug 006).
-The APP visibility `/2` profile corrects inherited-visibility and HTML-hidden
+The APP visibility `/3` profile corrects inherited-visibility and HTML-hidden
 overrides at the effective element/text-parent styles; non-overridable
 applicable ancestor effects remain guarded. Its clipping boxes exclude
 `display:contents`/ordinary boxless inline ancestors; effective fill and
 unsupported text effects are distinguished before absence inference.
 Nondefault opacity on `display:contents` remains explicitly UNKNOWN because
 native visibility disagrees with the recorded primitive paint probe.
-Real browser primitive red/green and a separately approved 34-case native epoch
-record the corrected guard, same-goal overrides and required UNKNOWN/hard-hide
-vetoes. The old false-block outcomes remain historical, not relabelled proof;
-the finite pilot does not establish universal CSS correctness.
+Real browser primitive red/green and the historical profile `/2` 34-case native
+epoch record same-goal overrides and required UNKNOWN/hard-hide vetoes.
+Subsequent craft review found that self-applied `content-visibility:hidden`
+retains the element's own painted box while suppressing its contents.
+Profile `/3` distinguishes that box from ancestor suppression; actual browser
+regressions also retain hidden text and independent display/opacity/transform
+boundaries (`static_contract.py:212-213,261-262`). Its new exact policy/
+definition reviews and execution release remain outstanding. The completed
+profile `/2` epoch is suspended and not rebound to this source correction.
+The old false-block outcomes remain historical; the finite pilot does not
+establish universal CSS correctness.
 Existing Jig's old input allowlist does not attest this separate 0.2 experiment.
 
 Ordinary command evidence optionally binds a declared run-scoped output

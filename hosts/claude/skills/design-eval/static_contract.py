@@ -210,7 +210,7 @@ _PAINT = """el => {
      (c.display==='inline'&&p.namespaceURI==='http://www.w3.org/1999/xhtml'&&
        p.clientWidth===0&&p.clientHeight===0);
    hidden ||= c.display==='none'||(c.display!=='contents'&&Number(c.opacity)===0)||
-      (!noClipBox&&c.contentVisibility==='hidden');
+      (p!==el&&!noClipBox&&c.contentVisibility==='hidden');
    unsupported ||= (c.display==='contents'&&Number(c.opacity)!==1)||
       c.clipPath!=='none'||c.clip!=='auto'||c.maskImage!=='none'||
       c.filter!=='none'||c.transform!=='none'||c.scale!=='none'||c.rotate!=='none'||
@@ -542,8 +542,9 @@ NORMALIZERS = {
         "fallback_order": "literal",
         "escapes_nonascii_functions_quoted_commas": "refuse",
     },
-    "visibility": "scoped-dom-text-ancestor-overflow-and-paint-intersection-app/2",
+    "visibility": "scoped-dom-text-ancestor-overflow-and-paint-intersection-app/3",
     "effective_visibility": "computed-at-bound-element-and-each-text-parent-not-hidden-attribute",
+    "content_visibility": "own-box-retained;applicable-container-suppresses-contents-not-own-box",
     "clipping_boxes": "applicable-boxes-not-display-contents-or-boxless-HTML-inline",
     "boxless_opacity": "display-contents-nondefault-opacity-unknown-not-conclusive-hidden",
     "text_ink": "effective-fill;unsupported-shadow-stroke-text-background-clip-before-alpha",

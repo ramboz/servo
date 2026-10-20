@@ -50,6 +50,20 @@ uncertainty/independent-hidden precedence in addition to the earlier finite
 control goals. Fresh full slice reviews and normal lifecycle/publication still
 follow; no old outcome or review is rebound.
 
+### 036-03 self-content conformance recovery (2026-10-20)
+
+Full compliance passed on profile `/2`; subsequent genuine craft found that
+the guard incorrectly hides a bound element's own box for self-applied
+`content-visibility:hidden`. Parent suspension `17affda20...` holds all further
+D08/M03 APP/gate/result-reader execution. Preserve the 34/600/911 proof as
+actual bounded history, not lifecycle clearance.
+Repository-only profile `/3` TDD distinguishes own-box paint from suppressed
+contents, retaining applicable ancestor suppression and all previous guard
+boundaries. A stable tested source cut and exact fresh policy/definition/
+execution authorities are required before new APP proof. No existing frozen
+target, control plan or release is patched/rebound. The pure-reader recurring
+closure-test gap is a nonblocking reconciliation nit.
+
 036-01 closeout selected integration parent
 `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5` and settled executable source
 `44a96d9549cd73f8a8ea3e1307157cb994b138ac` after the separately authorized

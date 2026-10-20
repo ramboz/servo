@@ -432,8 +432,10 @@ guard applied directly to that actual envelope returned
 `P/existing-jig-finite-refusal-parent-verification.json`, SHA256
 `214a550ab3fcf6793be6af4188b261d14d1a8107fdd4affa774390cd47507170`,
 binds the unchanged consumer (SHA256 `1254f05e...`), actual SOURCE/envelope and
-the selection/context/bindings; raw command/stdout/stderr are retained under
-`P/jig-finite-format-refusal/`.
+the selection/context/bindings under `P/jig-finite-format-refusal/`.
+`P/existing-jig-finite-refusal-command.json` retains the actual argv/cwd/return
+code and raw output references: stdout is the receipt above and stderr is
+`P/existing-jig-finite-refusal.stderr`.
 
 **Precise limit:** public refusal occurs before file-role, tree, served-record
 or semantic validation. The probe deliberately makes no complete old C0/
@@ -443,3 +445,31 @@ This replaces the earlier unexecuted-negative gap with an actual existing
 PURE consumer format negative only. Jig integration remains NONCLEARING;
 positive 0.2 integration, CLI/lifecycle acceptance, full quality and Jig DONE
 remain unestablished.
+
+### Subsequent craft blocker: self content visibility (execution suspended)
+
+Fresh full independent compliance passed on the current profile `/2` code and
+34-case evidence. The subsequent actual craft review returned needs-changes:
+the box walker treated self-applied `content-visibility:hidden` as total
+absence, even for an empty 8x8 marker with native visibility true and unchanged
+paint. Contents are suppressed, but the element's own background/border box
+remains painted. The prior matrix covered applicable ancestor suppression,
+not this self-applied distinction; 600 correct selected rows do not prove
+universal CSS conformance.
+
+The parent's actual suspension
+`P/visibility2-self-content-execution-suspension.json`, SHA256
+`17affda20a883cdc293bbef188d6f93aa0096dbf0b63731c4149a110e2aef6a2`,
+holds release `6ecfbf48...` for exact `0feaf3ff...`/D08/M03.
+Those frozen files, all 34/600/911 outcomes, raw verification and the full
+compliance PASS remain immutable historical evidence, not lifecycle clearance.
+No actual APP/gate/result-reader has been executed after the blocker.
+Repository-only profile `/3` correction is recorded in
+[its source TDD receipt](visibility3-correction-receipt.md); new exact policies,
+installed definitions and separate release are still required.
+
+Craft also identified a nonblocking recurring-test gap: the pure-reader
+plumbing test mocks `_existing`, so it does not itself protect actual ownership/
+closure validation. The offline mutation audit remains actual bounded evidence,
+not that recurring regression test. Record the nit for reconciliation; it is
+not promoted to a blocker or folded into the minimal paint recovery.

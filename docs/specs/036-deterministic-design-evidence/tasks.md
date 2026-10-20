@@ -26,6 +26,13 @@
       independent hard-hidden precedence, complete readback/replay/restoration.
 - [ ] Complete independent postreviews/reconciliation, host regeneration,
       lifecycle gates and unmerged stacked PR.
+- [ ] Recover the genuine craft self-content-visibility blocker through
+      repository-only profile `/3` TDD, fresh scoped review and exact new
+      policy/installed-definition review/release before actual APP proof.
+      Preserve full compliance PASS, craft NONPASS and suspended `/2` results.
+- [ ] Reconcile the nonblocking recurring pure-reader ownership/closure
+      regression-test gap without treating retained offline evidence as a
+      replacement for that test or expanding the current recovery.
 
 ## Authoring and readiness
 

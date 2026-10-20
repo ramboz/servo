@@ -18,8 +18,10 @@ This is not a whole-view fidelity or application-completion verdict.
 **Current empirical checkpoint:** the separately approved visibility/2/native526
 finite plan has run: 34 actual gate cases, 600 exact required items and pure readback/
 restoration controls. [The pilot evidence](static-app-pilot-evidence.md) records
-the current exact authorities and immutable raw index. Final independent
-postreviews, reconciliation and publication remain. Earlier implementation
+the exact authorities and immutable raw index. Subsequent craft review found a
+self-content-visibility false-block; the parent suspended that epoch.
+Repository-only profile `/3` recovery and fresh exact authority/proof must
+precede final postreviews, reconciliation and publication. Earlier implementation
 checkpoints below preserve their historical pre-approval state, not current
 claims that approval or APP proof is absent.
 
@@ -297,6 +299,21 @@ for source0.2/new-kind evidence (`214a550a...`): unsupported namespaces/kind are
 refused before file-role/tree/served/semantic validation. This closes only the
 earlier unexecuted-negative gap, not positive bridge/CLI/lifecycle integration;
 Jig remains NONCLEARING and no format/allowlist was relabelled.
+
+**Subsequent craft NONPASS and execution hold (2026-10-20):** genuine full
+compliance passed on the profile `/2` source and complete proof, then fresh
+craft found self-applied `content-visibility:hidden` incorrectly suppresses the
+bound element's own painted box. The parent suspended release `6ecfbf48...`
+for unchanged D08/M03, record `17affda20...`. Neither compliance PASS nor the
+34-case/600-item index clears that blocker or proves universal CSS correctness.
+Repository-only browser TDD reproduced false failures on the empty marker,
+the text container's presence, and an independently unsupported transform.
+Profile `/3` corrects the bound box/contained text distinction without changing
+SOURCE goals or the contents-opacity UNKNOWN boundary. The
+[correction receipt](visibility3-correction-receipt.md) records the red/green
+and current source identities. No new policy, install or actual APP result is
+approved by it. The recurring pure-reader ownership/closure test gap remains
+a recorded nonblocking reconciliation nit, not a new implementation scope.
 
 ### Close-out (post-DONE)
 

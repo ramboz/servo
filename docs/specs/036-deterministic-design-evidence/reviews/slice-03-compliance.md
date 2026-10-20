@@ -1,19 +1,16 @@
 ---
 slice: 036-03 - static-source-contract-app
 pass: compliance
-verdict: needs-changes
-reviewer: jig:reviewer/036-03-final-compliance
-reviewed_at: 2026-10-20T14:35:16Z
-prompt_source: review.py implementation; exact2cd integration-base qualification; actual c2c9 native526 evidence and d38 independent byte audit
+verdict: pass
+reviewer: jig:reviewer / 036-03-visibility2-final-compliance (fresh context)
+reviewed_at: 2026-10-20T17:37:01Z
+prompt_source: review.py implementation; files/036-03-visibility2-final-compliance-prompt.txt plus exact-base test-quality and parent raw receipts17093475/214a550a
 ---
 
-VERDICT: needs-changes
+VERDICT: pass
 
 REASONING:
-AC1-3 and AC5-6 have substantive implementation, test and retained native evidence: Dashboard 16/4, independent control 15/15, Bug006 refusal/restoration, and output/currentness controls. However, AC4's visibility logic can classify a browser-visible binding as a conclusive failure, despite the successful finite controls. AC7's boundaries are honestly disclosed; this review inspected source and selected retained records without rerunning evaluations or treating parent verification as lifecycle approval.
-
-SPECIFIC ISSUES:
-- skills/design-eval/static_contract.py:208,254 - [High confidence] Both visibility walkers reject any ancestor whose computed visibility is hidden. CSS permits a descendant to override this with visibility:visible: a correctly bound visible heading inside a hidden wrapper therefore receives visible:false and conclusive failures at line 135. Check effective visibility at the element/text node rather than treating ancestor visibility as non-overridable; cover this positive case in browser tests.
+Source review, meaningful unit/browser controls and selected raw evidence support all seven 036-03 acceptance criteria and the tightly coupled Bug006 repair. The current installed proof supports finite-contract discrimination, corrected visibility classifications, exactly-once required inventories, independent positive control, immutable output closure and verdict-preserving readback. No concrete implementation/compliance defect was found; this read-only review did not rerun evaluators or independently recompute the complete evidence hash set.
 
 RECONCILIATION NOTES:
-Preserve expected Jig NONCLEARANCE for actual vellum-confirmed-source/0.2 / static_source_contract_evidence: the existing Jig pure-consumer negative remains unexecuted, an integration gap, not bridge DONE. Preserve historical evidence and renew exact helper approvals/evidence after correction rather than rebinding old results. Craft/architecture reviews, reconciliation, lifecycle gates and publication remain; no full-app, visual, backend, actual-face, Jig DONE or merge approval is conveyed.
+Preserve the visibility/2 corrections, invalid historical hidden-attribute negative, Bug006 repair and distinct execution authorities without rebinding old outcomes. AC7 establishes actual unchanged-Jig PURE format-negative/NONCLEARANCE only, before file-role/tree/served/semantic validation—not positive 0.2 bridge, CLI or lifecycle acceptance. This verdict covers finite-static implementation compliance only: no universal CSS/rendering, full-APP, visual-quality, actual-face, backend, Jig DONE or merge acceptance. Remaining craft/architecture reviews, reconciliation, lifecycle gates and publication remain outstanding.
