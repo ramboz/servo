@@ -220,7 +220,7 @@ authorize another APP experiment.
 
 ## Learning
 
-See `docs/memory/learnings.md`, "Bug006 pin refusals need the original
+See `docs/memory/learnings.md`, "Bug 006 pin refusals need the original
 independent authority". A correct refusal exit is insufficient: check the
 complete required inventory and original per-ID causes. When preflight
 prevents component publication, establish the same pin authority before
