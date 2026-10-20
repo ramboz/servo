@@ -91,8 +91,9 @@ The actual TDD command record has SHA256
 Fresh exact policies/installed definitions, separate pre-result execution
 release and actual affected APP proof remain outstanding. The prior canonical
 craft NONPASS is not replaced by repository tests or a scoped review.
-Full craft/architecture/reconciliation and normal lifecycle/publication gates
-still follow. No merge or full-app/Jig completion is claimed.
+Full craft/reconciliation and normal lifecycle/publication gates still follow;
+the separate architecture-only result is recorded below. No merge or
+full-app/Jig completion is claimed.
 The ordinary `check-reviews --stage REVIEWED` still actually refuses (exit2)
 for craft NONPASS and missing architecture review. No bypass or lifecycle
 transition was used.

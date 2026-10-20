@@ -315,6 +315,58 @@ and current source identities. No new policy, install or actual APP result is
 approved by it. The recurring pure-reader ownership/closure test gap remains
 a recorded nonblocking reconciliation nit, not a new implementation scope.
 
+### Deviation log (in progress; not reconciliation clearance)
+
+- The finite observer needed independently versioned computed-family grammar,
+  multi-resource snapshots, actual response-body closure and per-required-ID
+  atomic settlement. These implement the seven original ACs; they do not add
+  a second Dashboard/Card runtime signature, generalized renderer or quality
+  scoring framework. Source meaning and comparison goals remain Vellum-owned.
+- The real protected-SOURCE negative exposed a generic duplicate-inventory
+  defect. Bug006 followed its own standard lifecycle, witnessed qualified
+  stack-target red/green and genuine reviews. Runtime526 is reused without
+  changing the now-closed bug or relabelling the old41-row outcome.
+- Independent compliance and craft exposed incomplete CSS guard semantics.
+  Each NONPASS and suspended epoch is preserved. The old hidden-attribute
+  negative has an invalid absence premise; it is not correct paint proof.
+  Repository-only corrections and separately approved native epochs are
+  distinct evidence. Profile `/3` own-box/contents recovery is implemented
+  and reviewed at source level, but its pending D09/M04 policies and new
+  self-content native outcomes are not yet approved or executed.
+- The actual unchanged-Jig PURE format negative closes only the earlier
+  unexecuted-negative gap. It refuses before semantic/tree/served validation;
+  positive0.2 bridge, CLI/lifecycle and downstream Jig completion remain
+  NONCLEARING. The APP's header/family failures are exact declared contract
+  differences, not actual-face or pixel/visual-defect proof.
+- Craft/architecture retain one nonblocking recurring-test gap: the mocked
+  pure-reader forwarding test does not directly exercise ownership/closure.
+  The actual offline closure-mutation audit is preserved but is not that
+  recurring regression guard. The gap is tracked in this slice's tasks;
+  it is not silently called fixed or folded into the minimal paint correction.
+
+### Reconciliation sweep (in progress; final review still required)
+
+- **Updated:** architecture, public walkthrough and official host projections
+  describe the explicit profile `/3` and pending fresh authority. Source-only,
+  historical actual native and future expected-vector evidence are separated
+  in the pilot/correction receipts and memory. Accepted ADR0045's decision
+  body and the original source/C0 contract are not rewritten.
+- **No-op:** product vision still separates upstream-owned intent from Servo
+  evaluation. No new project convention or local UI/product decision was
+  introduced. This checkout has no conventions/inbox/primer files to edit;
+  none was invented. Spec036 remains open, including untouched regional036-02,
+  so no spec-wide compress-on-close action applies.
+- **Updated:** the derived board was regenerated after recording actual craft
+  NONPASS/architecture PASS; its audit is clean with no slice advancement.
+  Use-case coverage correctly reports no adopted breadth layer. Memory
+  includes actual failure/recovery/authority limits; the user already skipped
+  the optional people-context advisory for this run.
+- **Deferred to actual remaining gates, not waived:** independent exact
+  D09/M04 policy review, staging/installed-definition review, separate execution
+  release, finite actual affected proof, full craft recovery and final
+  reconciliation review. Only then may normal REVIEWED/RECONCILED/DONE and
+  unmerged stacked publication proceed. No merge or full-app/Jig DONE follows.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and retain precise static-contract-only proof scope.
