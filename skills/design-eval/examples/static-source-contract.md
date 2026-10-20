@@ -141,6 +141,23 @@ paint containment. Formatting-only whitespace is not an ink prerequisite but
 remains in raw DOM text. Partial positive-area text can pass this guard: it is
 not OCR, whole-string legibility or occlusion/pixel proof. Unsupported
 descendant transforms/paint refuse.
+Visibility profile `/2` uses effective computed visibility at the bound element
+and each actual text-node parent. Descendants can override inherited
+`visibility:hidden`; an HTML `hidden` attribute alone is not proof of no paint
+when CSS overrides its display. Clipping and content visibility require an
+applicable container: `display:contents` and ordinary non-replaced HTML inline
+ancestors do not supply one. Actual `display:none`, opacity zero on painted
+boxes and applicable `content-visibility:hidden` remain absence beside an unrelated
+unsupported transform; unsupported geometry alone cannot establish absence.
+Inline zero opacity still hides despite a zero-sized client box.
+
+Nondefault opacity on `display:contents` is explicitly unsupported: native
+visibility can disagree with actual paint. Affected required IDs stay UNKNOWN
+and veto completion, never guessed PASS or hidden FAIL. Text ink uses effective
+fill; unsupported shadows, strokes and text-clipped backgrounds refuse before
+zero-fill inference. Independently known missing text fragments remain failures
+regardless of unrelated unsupported-fragment order. This is a bounded guard,
+not a universal CSS renderer, pixel/legibility proof or accessibility assertion.
 Geometry/presence/background-only roles need no contained text or text-paint
 observation. If text itself is required and its observed DOM value is empty,
 that literal value needs no ghost ink; the binding still requires a unique

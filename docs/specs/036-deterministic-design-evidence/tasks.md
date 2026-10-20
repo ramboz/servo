@@ -3,18 +3,23 @@
 ## 036-03
 
 - [x] Independently frame/readiness-review the new APP-side vertical slice.
-- [x] Parent inspects exact normalizer/policy/output/closure before freeze.
+- [ ] Renew exact visibility-profile `/2` normalizer/control/policy/closure
+      review before fresh freeze. Earlier exact approvals remain historical.
 - [x] Witness finite normalization and snapshot/refusal red-to-green tests.
-- [x] Install exact approved10 consumer, measure unchanged Dashboard and retain
+- [ ] Refresh the visibility-profile `/2` approved10 consumer, measure unchanged Dashboard and retain
       all twenty constraints plus full-app/backend/Jig gaps.
-- [x] Parent approves unrelated SOURCE and separate APP policy before results;
+- [ ] Preserve the approved unrelated SOURCE and renew its separate APP policy before results;
       prove actual positive, mutation and restoration controls.
-      Exact source/APP approvals, installed-definition releases and actual
-      native526 proof are recorded in `static-app-pilot-evidence.md`.
-- [x] Exercise real Generic output-reference consumers and pure current readback.
+      Exact earlier source/APP approvals, installed-definition releases and
+      native526 proof remain in `static-app-pilot-evidence.md`; final
+      compliance found an uncovered visibility false-block.
+- [ ] Refresh real Generic output-reference consumers and pure current readback
+      under the corrected exact helper/definition epoch.
 - [x] Complete all 28 finite native cases, 500 exact required rows, protected
       copied-source repair/restoration, query/mixed-instability controls,
       legitimate A/B freshness and full-reference shadow mutation refusals.
+      These are genuine historical outcomes, not current CSS-conformance
+      acceptance; hidden-attribute fixtures need explicit paint semantics.
 - [ ] Complete independent postreviews/reconciliation, host regeneration,
       lifecycle gates and unmerged stacked PR.
 

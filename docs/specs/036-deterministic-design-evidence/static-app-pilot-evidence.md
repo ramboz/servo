@@ -271,3 +271,41 @@ This independent raw-evidence verification is not a slice lifecycle verdict.
 Final independent slice compliance/craft/architecture, reconciliation and
 publication remain. This complete finite experiment is not full-app or
 whole-view acceptance.
+
+## Subsequent visibility conformance NONPASS and hold
+
+Fresh final compliance genuinely returned NEEDS-CHANGES for AC4. A visible
+descendant can override inherited `visibility:hidden`; the old APP walkers
+incorrectly treated any hidden ancestor as conclusive absence. The related
+unconditional HTML `hidden` check also ignored CSS display overrides.
+Real-browser regression `036-03-visibility-override-red.txt` records native
+element/text-parent visibility and positive native `checkVisibility` alongside
+the old false failures. No mocked visibility flags were used.
+
+The historical marker `hidden-marker` run
+`5d13782c-5d72-47ad-a7ab-c0655b6ecbc6` itself retains `raw.visible:true`,
+an 8x8 box and `paint.hidden:true`. Its original emitted failure remains
+immutable, but the hidden-attribute fixture is not evidence of genuinely hidden
+paint because its CSS supplied display. The 28-case index/parent verification
+establish the actual outcomes and byte closures, not universal CSS correctness
+or lifecycle approval.
+
+The parent suspended release `4fb229ad...` for further actual APP/gate/
+result-current-reader experiments. Frozen 07/02 are untouched.
+Repository-only conformance TDD now passes the corrected effective-visibility
+and HTML-hidden-override positives, true hidden element/fragment negatives,
+ancestor opacity/display/content-visibility negatives, existing paint/overflow
+controls and unsupported transforms. Visibility profile `/2` is explicit;
+source facts, C0 primitives, family grammar, zero tolerances, baseline bytes,
+generic native526 and output kind/schema remain unchanged.
+Repaired negative fixtures and additional explicit override positives need a
+new versioned control helper/plan and new exact policies/definitions/release
+before another real APP result. No old approval or outcome is rebound.
+
+The subsequent [supporting visibility/2 correction receipt](visibility2-correction-receipt.md)
+records the batched source-only recovery: four mechanism findings reproduced
+before correction, explicit boxless-opacity UNKNOWN, 37 real-CSS matrix cases
+plus sixteen existing controls and geometry-only control, and a genuine scoped
+mechanism re-review PASS. That PASS is not final slice compliance or APP/policy/
+execution approval. Fresh exact 08/03 definitions and empirical proof remain
+pending; the suspended 07/02 release is not resumed.

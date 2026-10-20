@@ -201,16 +201,21 @@ def compare(core, observation, producer):
 
 _PAINT = """el => {
  const b=el.getBoundingClientRect();
- let left=b.left,right=b.right,top=b.top,bottom=b.bottom,hidden=false,unsupported=false;
+ let left=b.left,right=b.right,top=b.top,bottom=b.bottom,
+   hidden=getComputedStyle(el).visibility!=='visible',unsupported=false;
  for(let p=el;p;p=p.parentElement){
    const c=getComputedStyle(p),r=p.getBoundingClientRect();
    const paint=/(^| )(paint|content|strict)( |$)/.test(c.contain)||c.contentVisibility==='auto';
-   hidden ||= c.display==='none'||c.visibility!=='visible'||Number(c.opacity)===0||
-      c.contentVisibility==='hidden'||p.hidden;
-   unsupported ||= c.clipPath!=='none'||c.clip!=='auto'||c.maskImage!=='none'||
+   const noClipBox=c.display==='contents'||
+     (c.display==='inline'&&p.namespaceURI==='http://www.w3.org/1999/xhtml'&&
+       p.clientWidth===0&&p.clientHeight===0);
+   hidden ||= c.display==='none'||(c.display!=='contents'&&Number(c.opacity)===0)||
+      (!noClipBox&&c.contentVisibility==='hidden');
+   unsupported ||= (c.display==='contents'&&Number(c.opacity)!==1)||
+      c.clipPath!=='none'||c.clip!=='auto'||c.maskImage!=='none'||
       c.filter!=='none'||c.transform!=='none'||c.scale!=='none'||c.rotate!=='none'||
       c.translate!=='none'||c.perspective!=='none'||Number(c.zoom)!==1;
-   if(p!==el){
+   if(p!==el&&!noClipBox){
      if(paint||['hidden','clip','scroll','auto'].includes(c.overflowX)){
        left=Math.max(left,r.left+Math.max(p.clientLeft,parseFloat(c.borderLeftWidth)));
        right=Math.min(right,r.right-parseFloat(c.borderRightWidth),r.left+p.clientLeft+p.clientWidth);
@@ -226,7 +231,7 @@ _PAINT = """el => {
 
 _TEXT_PAINT = """(el,frame) => {
  const walker=document.createTreeWalker(el,NodeFilter.SHOW_TEXT);
- let seen=false,n;
+ let seen=false,missing=false,unavailable=null,n;
  while((n=walker.nextNode())){
    if(!n.textContent.trim())continue;
    seen=true;
@@ -234,7 +239,6 @@ _TEXT_PAINT = """(el,frame) => {
    range.selectNodeContents(n);
    let boxes=[...range.getClientRects()].filter(b=>b.width>0&&b.height>0)
      .map(b=>({left:b.left,right:b.right,top:b.top,bottom:b.bottom}));
-   if(!boxes.length)return false;
    if(frame)boxes=boxes.map(b=>({
      left:Math.max(b.left,Number(frame.x)),top:Math.max(b.top,Number(frame.y)),
      right:Math.min(b.right,Number(frame.x)+Number(frame.width)),
@@ -245,19 +249,24 @@ _TEXT_PAINT = """(el,frame) => {
      if(colour==='transparent')return true;
      const m=colour.match(
        /^rgba?\\(\\s*[0-9.]+,\\s*[0-9.]+,\\s*[0-9.]+(?:,\\s*([0-9.]+))?\\s*\\)$/);
-     if(!m)throw Error('unsupported APP text alpha');
+     if(!m)return null;
      return m[1]!==undefined&&Number(m[1])===0;
    };
-   if(transparent(style.color)||transparent(style.webkitTextFillColor||style.color))return false;
+   let hidden=style.visibility!=='visible',unsupported=false;
    for(let p=parent;p;p=p.parentElement){
      const c=getComputedStyle(p),r=p.getBoundingClientRect();
-     if(c.display==='none'||c.visibility!=='visible'||Number(c.opacity)===0||
-        c.contentVisibility==='hidden'||p.hidden)return false;
-     if(c.clipPath!=='none'||c.clip!=='auto'||c.maskImage!=='none'||c.filter!=='none'||
-        c.textShadow!=='none'||
+     const noClipBox=c.display==='contents'||
+       (c.display==='inline'&&p.namespaceURI==='http://www.w3.org/1999/xhtml'&&
+         p.clientWidth===0&&p.clientHeight===0);
+     hidden ||= c.display==='none'||(c.display!=='contents'&&Number(c.opacity)===0)||
+        (!noClipBox&&c.contentVisibility==='hidden');
+     unsupported ||= (c.display==='contents'&&Number(c.opacity)!==1)||
+        c.clipPath!=='none'||c.clip!=='auto'||c.maskImage!=='none'||c.filter!=='none'||
+        c.textShadow!=='none'||c.webkitTextStrokeWidth!=='0px'||
+        c.backgroundClip.split(',').some(value=>value.trim()==='text')||
         c.transform!=='none'||c.scale!=='none'||c.rotate!=='none'||c.translate!=='none'||
-        c.perspective!=='none'||Number(c.zoom)!==1)throw Error('unsupported APP text paint');
-     if(c.display==='contents')continue;
+        c.perspective!=='none'||Number(c.zoom)!==1;
+     if(noClipBox)continue;
      const paint=/(^| )(paint|content|strict)( |$)/.test(c.contain)||c.contentVisibility==='auto';
      const x=paint||['hidden','clip','scroll','auto'].includes(c.overflowX);
      const y=paint||['hidden','clip','scroll','auto'].includes(c.overflowY);
@@ -270,8 +279,15 @@ _TEXT_PAINT = """(el,frame) => {
          r.top+p.clientTop+p.clientHeight):b.bottom
      }));
    }
-   if(boxes.some(b=>b.right<=b.left||b.bottom<=b.top))return false;
+   if(hidden){missing=true;continue;}
+   if(unsupported){unavailable ||= 'unsupported APP text paint';continue;}
+   if(!boxes.length||boxes.some(b=>b.right<=b.left||b.bottom<=b.top)){missing=true;continue;}
+   const ink=transparent(style.webkitTextFillColor||style.color);
+   if(ink===null){unavailable ||= 'unsupported APP text alpha';continue;}
+   if(ink)missing=true;
  }
+ if(missing)return false;
+ if(unavailable)throw Error(unavailable);
  return seen;
 }"""
 
@@ -311,6 +327,7 @@ def observe_roles(page, bindings, constraints):
             if(selector!==null&&(!root.contains(el)||root===el))
               throw Error('escaping APP binding');
             const p=paint(el),raw=values(el);row.raw=raw;
+            if(p.hidden){row.visible=false;row.paint=p;continue;}
             if(p.unsupported)throw Error('unsupported APP visibility paint effect');
             if(textRoles.includes(role))raw.textVisible=textPaint(el,role==='root'?null:frame);
             row.visible=raw.visible&&!p.hidden&&!p.clipped&&!p.zero;row.paint=p;
@@ -525,7 +542,12 @@ NORMALIZERS = {
         "fallback_order": "literal",
         "escapes_nonascii_functions_quoted_commas": "refuse",
     },
-    "visibility": "scoped-dom-text-ancestor-overflow-and-paint-intersection-app/1",
+    "visibility": "scoped-dom-text-ancestor-overflow-and-paint-intersection-app/2",
+    "effective_visibility": "computed-at-bound-element-and-each-text-parent-not-hidden-attribute",
+    "clipping_boxes": "applicable-boxes-not-display-contents-or-boxless-HTML-inline",
+    "boxless_opacity": "display-contents-nondefault-opacity-unknown-not-conclusive-hidden",
+    "text_ink": "effective-fill;unsupported-shadow-stroke-text-background-clip-before-alpha",
+    "absence_order": "independent-known-absence-before-unrelated-unsupported-effects",
     "raw_dom_text": "literal-including-whitespace",
     "empty_text": "literal-DOM-value-no-ghost-ink-visible-bound-box-still-required",
     "visible_text": "positive-area-per-non-whitespace-range-not-occlusion-or-legibility",
@@ -1133,6 +1155,10 @@ def prepare(target, package, producer_root, bindings_path, browser_root):
         ],
         "residuals": [
             *doc["core"]["manifest"]["coverage"]["residuals"],
+            (
+                "Nondefault opacity on display:contents is unsupported; "
+                "affected required IDs stay UNKNOWN and veto"
+            ),
             "Static snapshot only; backend authenticity/full data identity unproved",
             "No whole-view/pixel/actual-face/interaction quality or full-app/Jig completion",
             "Existing Jig design_bindings allowlist excludes this 0.2 input/output",

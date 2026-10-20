@@ -261,6 +261,25 @@ old A refuses producer currentness under selected B while Generic readback
 retains A's original verdict/path/hash; exact A restoration clears only the
 identity readback, without capture or rescore.
 
+**Genuine final-compliance recovery:** the fresh final review returned
+needs-changes for AC4, not PASS. Its real-browser reproducer confirms that
+effective visible descendants can override inherited `visibility:hidden` and
+CSS display can override HTML `hidden`. The old guard treated those as
+conclusive absence despite native `checkVisibility` reporting visible.
+In particular, the historical marker hidden-attribute control has native raw
+visibility true and an 8x8 box, so its emitted failure is not valid proof of
+hidden paint. The immutable outcome is retained, not regraded.
+Repository-only TDD corrects element/text-parent visibility while retaining
+non-overridable ancestor effects. Visibility profile `/2`, repaired unambiguous
+negative fixtures and explicit override positives require new exact helper/
+policy/definition review and release. Frozen 07/02 and all further actual
+APP/gate/result-current-reader experiments are held; this is open-slice
+conformance recovery, not a source/C0/closed Bug 006 or ADR rewrite.
+The [supporting correction receipt](visibility2-correction-receipt.md) records
+real batched red/green and the scoped mechanism/control review PASS, with exact
+source bytes and limits. This does not overwrite the full compliance NONPASS
+or authorize a new actual APP result before fresh exact reviews/releases.
+
 ### Close-out (post-DONE)
 
 - [ ] Regenerate board and retain precise static-contract-only proof scope.

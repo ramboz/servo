@@ -18,6 +18,267 @@ import static_snapshot as snapshot
     "explicit frozen Playwright runtime required",
 )
 class BrowserTests(unittest.TestCase):
+    def test_effective_visibility_override_preserves_text_and_geometry(self):
+        from playwright.sync_api import sync_playwright
+
+        bindings = {
+            "root": "#scene",
+            "document_witnesses": ["#scene > section"],
+            "elements": {"caption": ".caption", "marker": ".dot"},
+        }
+        constraints = [
+            {"id": "caption-presence", "element": "caption", "property": "presence"},
+            {"id": "caption-text", "element": "caption", "property": "text"},
+            {"id": "marker-presence", "element": "marker", "property": "presence"},
+        ]
+        core = {
+            "inventory": [row["id"] for row in constraints],
+            "policy": [
+                {**row, "comparison": "exact" if row["property"] == "text" else "present",
+                 "tolerance": "0"}
+                for row in constraints
+            ],
+            "facts": [
+                {"id": row["id"], "value": "Visible heading" if row["property"] == "text" else True}
+                for row in constraints
+            ],
+        }
+        variants = (
+            "override",
+            "hidden-attribute-overridden",
+            "hidden-attribute",
+            "true-hidden",
+            "opacity",
+            "nonzero-opacity",
+            "inline-opacity",
+            "boxless-opacity",
+            "boxless-nonzero-opacity",
+            "boxless-opacity-with-independent-hidden",
+            "hidden-text-leaf",
+            "opaque-text-fill",
+            "transparent-text-fill",
+            "transparent-text-colour",
+            "transparent-shadow",
+            "transparent-stroke",
+            "transparent-background-clip",
+            "display",
+            "content-hidden",
+            "boxless-overflow",
+            "inline-overflow",
+            "boxless-content-hidden",
+            "inline-content-hidden",
+            "overflow-clipped-x",
+            "overflow-clipped-y",
+            "paint-contained",
+            "partial-clip",
+            "transform",
+            "transformed-text-leaf",
+            "zero-transformed-text-leaf",
+            "opacity-hidden-text-with-transform",
+            "known-hidden-fragment-before-unsupported",
+            "known-hidden-fragment-after-unsupported",
+            "hidden-with-transform",
+            "opacity-with-transform",
+            "content-hidden-with-transform",
+            "unsupported-zero-geometry",
+        )
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 800, "height": 600})
+                for name in variants:
+                    with self.subTest(variant=name):
+                        page.set_content(
+                            '<!doctype html><main id="scene" style="width:300px;height:180px">'
+                            '<section style="visibility:hidden">'
+                            '<h2 class="caption" style="visibility:visible">Visible '
+                            '<span style="visibility:hidden"><b style="visibility:visible">'
+                            'heading</b></span></h2><i class="dot" style="visibility:visible;'
+                            'display:block;width:8px;height:8px;background:#f0b24e"></i>'
+                            "</section></main>"
+                        )
+                        native = page.evaluate(
+                            """name=>{
+                            const wrapper=document.querySelector('section'),
+                              caption=document.querySelector('.caption'),
+                              leaf=document.querySelector('b'),marker=document.querySelector('.dot');
+                            if(name==='hidden-attribute-overridden'){
+                              wrapper.hidden=caption.hidden=leaf.hidden=marker.hidden=true;
+                              wrapper.style.display=caption.style.display='block';
+                              leaf.style.display='inline';
+                            }else if(name==='hidden-attribute'){wrapper.hidden=true;}
+                            else if(name==='true-hidden'){
+                              caption.style.visibility=leaf.style.visibility=
+                                marker.style.visibility='inherit';
+                            }else if(name==='opacity'){
+                              wrapper.style.opacity='0';
+                              caption.style.opacity=leaf.style.opacity=marker.style.opacity='1';
+                            }else if(name==='nonzero-opacity'){
+                              wrapper.style.opacity='0.5';
+                            }else if(name==='inline-opacity'){
+                              wrapper.style.display='inline';wrapper.style.opacity='0';
+                            }else if(name==='boxless-opacity'||name==='boxless-nonzero-opacity'||
+                                     name==='boxless-opacity-with-independent-hidden'){
+                              wrapper.style.display='contents';
+                              wrapper.style.opacity=name==='boxless-nonzero-opacity'?'0.5':'0';
+                              if(name==='boxless-opacity-with-independent-hidden'){
+                                document.querySelector('#scene').style.opacity='0';
+                              }
+                            }else if(name==='hidden-text-leaf'){leaf.style.visibility='hidden';}
+                            else if(name==='opaque-text-fill'){
+                              caption.style.color='transparent';
+                              caption.style.webkitTextFillColor='black';
+                            }else if(name==='transparent-text-fill'){
+                              caption.style.webkitTextFillColor='transparent';
+                            }else if(name==='transparent-text-colour'){
+                              caption.style.color='transparent';
+                            }else if(name==='transparent-shadow'){
+                              caption.style.color='transparent';
+                              caption.style.textShadow='1px 1px 0 black';
+                            }else if(name==='transparent-stroke'){
+                              caption.style.webkitTextFillColor='transparent';
+                              caption.style.webkitTextStroke='1px black';
+                            }else if(name==='transparent-background-clip'){
+                              caption.style.webkitTextFillColor='transparent';
+                              caption.style.backgroundImage='linear-gradient(black,black)';
+                              caption.style.backgroundClip='text';
+                            }
+                            else if(name==='display'){wrapper.style.display='none';}
+                            else if(name==='content-hidden'){
+                              wrapper.style.contentVisibility='hidden';
+                            }else if(name==='boxless-overflow'){
+                              wrapper.style.display='contents';wrapper.style.overflow='hidden';
+                            }else if(name==='inline-overflow'){
+                              wrapper.style.display='inline';wrapper.style.overflow='hidden';
+                            }else if(name==='boxless-content-hidden'){
+                              wrapper.style.display='contents';
+                              wrapper.style.contentVisibility='hidden';
+                            }else if(name==='inline-content-hidden'){
+                              wrapper.style.display='inline';
+                              wrapper.style.contentVisibility='hidden';
+                            }else if(name==='overflow-clipped-x'){
+                              wrapper.style.width='0';wrapper.style.overflow='hidden';
+                            }else if(name==='overflow-clipped-y'){
+                              wrapper.style.height='0';wrapper.style.overflow='hidden';
+                            }else if(name==='paint-contained'){
+                              wrapper.style.height='0';wrapper.style.contain='paint';
+                            }else if(name==='partial-clip'){
+                              wrapper.style.width='4px';wrapper.style.overflow='hidden';
+                            }else if(name==='transform'){
+                              wrapper.style.transform='translateX(1px)';
+                            }else if(name==='transformed-text-leaf'){
+                              leaf.style.display='inline-block';
+                              leaf.style.transform='translateX(1px)';
+                            }else if(name==='zero-transformed-text-leaf'){
+                              leaf.style.display='inline-block';leaf.style.transform='scale(0)';
+                            }else if(name==='opacity-hidden-text-with-transform'){
+                              leaf.parentElement.style.opacity='0';
+                              leaf.style.display='inline-block';
+                              leaf.style.transform='translateX(1px)';
+                            }else if(name==='known-hidden-fragment-before-unsupported'||
+                                     name==='known-hidden-fragment-after-unsupported'){
+                              const prefix=caption.firstChild,span=document.createElement('span');
+                              caption.insertBefore(span,prefix);span.append(prefix);
+                              if(name==='known-hidden-fragment-before-unsupported'){
+                                span.style.opacity='0';leaf.style.display='inline-block';
+                                leaf.style.transform='translateX(1px)';
+                              }else{
+                                span.style.display='inline-block';
+                                span.style.transform='translateX(1px)';
+                                leaf.parentElement.style.opacity='0';
+                              }
+                            }else if(name==='hidden-with-transform'){
+                              wrapper.style.display='none';
+                              wrapper.style.transform='translateX(1px)';
+                            }else if(name==='opacity-with-transform'){
+                              wrapper.style.opacity='0';
+                              wrapper.style.transform='translateX(1px)';
+                            }else if(name==='content-hidden-with-transform'){
+                              wrapper.style.contentVisibility='hidden';
+                              wrapper.style.transform='translateX(1px)';
+                            }else if(name==='unsupported-zero-geometry'){
+                              wrapper.style.transform='scale(0)';
+                            }
+                            const visible=el=>el.checkVisibility(
+                              {checkOpacity:true,checkVisibilityCSS:true});
+                            return {wrapper:getComputedStyle(wrapper).visibility,
+                              caption:getComputedStyle(caption).visibility,
+                              leaf:getComputedStyle(leaf).visibility,
+                              wrapperDisplay:getComputedStyle(wrapper).display,
+                              wrapperClientWidth:wrapper.clientWidth,
+                              wrapperClientHeight:wrapper.clientHeight,
+                              captionColour:getComputedStyle(caption).color,
+                              captionFill:getComputedStyle(caption).webkitTextFillColor,
+                              captionShadow:getComputedStyle(caption).textShadow,
+                              captionStroke:getComputedStyle(caption).webkitTextStrokeWidth,
+                              captionBackgroundClip:getComputedStyle(caption).backgroundClip,
+                              wrapperHidden:wrapper.hidden,captionHidden:caption.hidden,
+                              leafHidden:leaf.hidden,markerHidden:marker.hidden,
+                              captionVisible:visible(caption),markerVisible:visible(marker)};
+                            }""",
+                            name,
+                        )
+                        elements = app.observe_roles(page, bindings, constraints)
+                        rows = {
+                            row["id"]: row["status"]
+                            for row in app.compare(core, {"elements": elements}, None)
+                        }
+                        if name in (
+                            "override", "hidden-attribute-overridden", "hidden-text-leaf",
+                            "nonzero-opacity", "partial-clip",
+                            "boxless-overflow", "inline-overflow", "opaque-text-fill",
+                            "boxless-content-hidden", "inline-content-hidden",
+                            "transparent-text-fill", "transparent-text-colour",
+                            "opacity-hidden-text-with-transform",
+                            "known-hidden-fragment-before-unsupported",
+                            "known-hidden-fragment-after-unsupported",
+                        ):
+                            self.assertEqual(native["wrapper"], "hidden")
+                            self.assertEqual(native["caption"], "visible")
+                            self.assertTrue(native["captionVisible"])
+                            self.assertTrue(native["markerVisible"])
+                            if name == "hidden-attribute-overridden":
+                                self.assertEqual(native["wrapperDisplay"], "block")
+                                self.assertTrue(all(native[key] for key in (
+                                    "wrapperHidden", "captionHidden", "leafHidden", "markerHidden",
+                                )))
+                            self.assertEqual(
+                                rows,
+                                {"caption-presence": "pass",
+                                 "caption-text": "fail" if name in (
+                                     "hidden-text-leaf", "transparent-text-fill",
+                                     "transparent-text-colour",
+                                     "opacity-hidden-text-with-transform",
+                                     "known-hidden-fragment-before-unsupported",
+                                     "known-hidden-fragment-after-unsupported",
+                                 ) else "pass",
+                                 "marker-presence": "pass"},
+                                {"native": native, "observed": elements},
+                            )
+                        elif name in (
+                            "transformed-text-leaf", "zero-transformed-text-leaf",
+                            "transparent-shadow", "transparent-stroke",
+                            "transparent-background-clip",
+                        ):
+                            self.assertEqual(
+                                rows,
+                                {"caption-presence": "unknown", "caption-text": "unknown",
+                                 "marker-presence": "pass"},
+                                elements,
+                            )
+                        else:
+                            expected = (
+                                "unknown"
+                                if name in (
+                                    "transform", "unsupported-zero-geometry", "boxless-opacity",
+                                    "boxless-nonzero-opacity",
+                                )
+                                else "fail"
+                            )
+                            self.assertEqual(set(rows.values()), {expected}, elements)
+            finally:
+                browser.close()
+
     def test_geometry_only_empty_role_does_not_request_text_paint(self):
         from playwright.sync_api import sync_playwright
 
