@@ -1,5 +1,5 @@
 ---
-status: REVIEWED
+status: DONE
 tier: standard
 severity: medium
 claimed_by: real-source-static-app-gate
