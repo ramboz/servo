@@ -117,9 +117,95 @@ The board now checks clean. Use-case coverage reports its documented no-op:
 the product vision has no `## Use cases` section. The ordinary review-evidence
 gate now refuses only canonical craft NONPASS; no transition or bypass occurred.
 
-Fresh D09/M04 metadata/control preparation has been proposed to the parent, not
-executed or approved by this record. No new APP subjects, policies, controller,
-plan, installed definition or pre-result execution authority exists yet.
+At this architecture checkpoint, fresh D09/M04 metadata/control preparation
+was proposed but not executed. The separately authorized preparation below
+does not grant staging or execution authority.
+
+### Separately authorized pending-policy/control preparation
+
+The parent re-confirmed exact metadata-only preparation authority:
+`P/visibility3-pure-preparation-authority.json`, SHA256
+`849f5017d593cd6bb7de0986882d0584608a3ab0b76edcecc87e9c460461abab`.
+Fresh `A/dashboard-static-09` and `A/independent-marker-static-04` now exist
+with pending policies, copied helpers and closed baseline metadata only.
+Neither is approved, frozen, installed or a source of an APP result.
+
+| Pending policy | Domain identity (`servo-static-app-policy-v1`) | Raw file SHA256 |
+| --- | --- | --- |
+| D09 | `a5bbf3ffb04d8d5753f43958e085f37b632fcead2de5bc5c0b4268c45f27b853` | `ce2d08d75635e3ab8ca73508c00d938fbed9d13369a4c4f0fe6fcd2f885623db` |
+| M04 | `de9571324f06be2b768aeb4a71c16e0a8116896d09c8ce6a808d3c985ef6307a` | `e60ea79ee0b5c718db24fa4ebe7df6ef3852994036163b01acee79f41a2f404b` |
+
+Each policy is at `spec/oracle/static/app-policy.json` under its new target.
+`A/visibility3-preparation/receipt.json`, SHA256
+`324af3d3646474ffb298a0eeed98a197f551234251fe0e585957ddee1512b4d7`,
+retains all eight actual command/return-code/stdout/stderr records:
+ordinary scaffold, public APP prepare, copied TARGET snapshot build and pure
+isolated TARGET pending-source/runtime/current-binding preflight per root.
+All eight returned0; no preparation refusal occurred. Public preparation
+collected runtime/browser version identity but acquired no APP page.
+The metadata harness calls identity-only source `inspect`, not producer
+`verify`, APP evaluation or a result-current reader.
+
+The bundle closes all 12 helper files per root, 3886 runtime files/710 browser
+members, 24/11 SOURCE files, baseline candidate inputs, outputs and independent
+delivery. New pending targets contain 91/39 files and no gate/output-run
+directories. Baseline input/output rows match the old targets exactly, and
+old D08/M03/plan/controller/index/installation bytes rehash unchanged.
+Complete parsed-policy comparison after path relocation and approval
+neutralization permits only APP-helper identity, visibility `/3` and the
+explicit content-visibility semantic; all other policy fields match.
+
+The stable exact review handoff is
+`A/visibility3-policy-control-review-checkpoint.json`, SHA256
+`f5cd254030184b0e81569d8bb54ae4537ed57287f5bd8c7c2bb3c05ad305c261`.
+Its new finite plan
+`A/static-app-control-plan-visibility3-01.json`, SHA256
+`4b5332445c2df4f78aecbb29f2604884afeb082607ee896d3d7decc67a7c5bab`,
+binds R3 controller
+`A/static-candidate-control-visibility3-r3.py`, SHA256
+`6e2d07c110d90c590941d84c3731307636785e462360bcb55f7f12fb50df30d6`.
+Every prior control object/AST is preserved except the two named additions
+and control-profile metadata. New control candidates were not constructed;
+in-memory byte previews declare future input/output closures, not observations.
+
+Full required-ID vectors are declared before any freeze in that plan.
+The own-marker positive and each restoration expect all15PASS/exit0.
+The self-caption discriminator expects only `caption-text` FAIL/exit1:
+
+| Required ID | Self-marker expectation | Self-caption expectation |
+| --- | --- | --- |
+| caption-color | PASS | PASS |
+| caption-font-family | PASS | PASS |
+| caption-font-size | PASS | PASS |
+| caption-font-weight | PASS | PASS |
+| caption-presence | PASS | PASS |
+| caption-text | PASS | FAIL |
+| connection-color | PASS | PASS |
+| connection-presence | PASS | PASS |
+| connection-text | PASS | PASS |
+| marker-background | PASS | PASS |
+| marker-height | PASS | PASS |
+| marker-presence | PASS | PASS |
+| marker-width | PASS | PASS |
+| panel-background | PASS | PASS |
+| panel-width | PASS | PASS |
+
+The caption mutation explicitly supplies unselected height24px to prevent
+skipped-content auto-height collapse. Its unchanged literal DOM text must lack
+paint while the own positive-area native box remains visible. SOURCE goals,
+bindings, environment, family grammar, tolerances, output kind/schema,
+native526 and driver5bbb remain unchanged. These are expectations, not claimed
+new native outcomes.
+
+A fresh read-only scoped pending-control review returned PASS:
+`A/036-03-visibility3-pending-controls-review.txt`, SHA256
+`08fce9d500143c00db4728fff63330d86271ee69920684c08cec5587bd2e1ff8`.
+It inspected static consistency without independently recomputing hashes or
+executing commands; it is not canonical craft/compliance or policy approval.
+The exact bundle was sent to the parent for ordinary independent policy-only
+review. No approval/freeze/generate/install/seal/reapprove, APP request/gate/
+accept/read, result-current reader or source recapture has occurred.
+Canonical craft NONPASS and suspension17aff remain in force.
 
 The craft pure-reader ownership/closure recurring-test gap is a recorded
 nonblocking reconciliation nit. The existing mocked forwarding test and actual

@@ -197,3 +197,11 @@ Fresh exact policies/definitions/
 release and actual affected proof remain required. Source/C0/family/goals/
 tolerances/native526/Bug006 and Jig's actual format-only NONCLEARANCE stay
 unchanged. See docs/specs/036-deterministic-design-evidence/visibility3-correction-receipt.md.
+Later pure-preparation authority849f5017 permits only pendingD09/M04 and R3
+metadata. Exact bundlef5cd2540/plan4b533244/controller6e2d07c1 preserves old
+controls and explicitly declares all15 expected statuses: self-marker allPASS;
+self-caption with unselected explicit24px height has onlycaption-textFAIL,
+ownpresence/stylePASS; both restorations allPASS. Eight actual public
+preparation/metadata commands returned0, no APPcapture/resultreader executed.
+Scoped controlsPASS08fce9d5 is not independent policy approval or release;
+canonicalcraftNONPASS and17aff remain until fresh exact authority/proof.

@@ -32,6 +32,11 @@
       repository-only profile `/3` TDD, fresh scoped review and exact new
       policy/installed-definition review/release before actual APP proof.
       Preserve full compliance PASS, craft NONPASS and suspended `/2` results.
+- [x] Under separate pure-preparation authority849f5017, prepare pending
+      D09/M04 policies and R3 finite plan with complete mandatory-ID vectors,
+      baseline/resource/runtime closures and all eight actual metadata receipts.
+      Submit exact bundlef5cd2540 for independent policy-only review; no staging
+      or APP execution is authorized by preparation/scoped-control PASS.
 - [ ] Reconcile the nonblocking recurring pure-reader ownership/closure
       regression-test gap without treating retained offline evidence as a
       replacement for that test or expanding the current recovery.
