@@ -309,3 +309,104 @@ plus sixteen existing controls and geometry-only control, and a genuine scoped
 mechanism re-review PASS. That PASS is not final slice compliance or APP/policy/
 execution approval. Fresh exact 08/03 definitions and empirical proof remain
 pending; the suspended 07/02 release is not resumed.
+
+## Current visibility/2 native epoch: complete finite proof
+
+Fresh exact policy reviews and ordinary installation/sealing were followed by
+the separate actual execution release
+`P/visibility2-final-pre-result-release.json`, SHA256
+`6ecfbf48c30b8d914f7b7d6400ab23b790c705a6ebc02f866c54bc4d2a4f0c68`,
+for installed checkpoint `A/visibility2-final-staging-checkpoint.json`, SHA256
+`0feaf3ff745ff615d2de78629553bc2c3643d6530ff2c0265e4962a8a2169e70`.
+This is a new epoch, not resumption or relabelling of suspended 07/02.
+APP helper `2cfe1022...`, generic native `526039f3...`, actual SOURCE20/15
+authorities, unchanged source goals/family grammar/zero tolerances, and the
+separate APP baseline bytes remain bound.
+
+All 34 preselected native cases completed with 600 exact approved required
+items and no duplicate inventory. Native distribution is five exits 0,
+sixteen exits 1 and thirteen exits 2. Every gate equals its oracle/raw-stdout
+carrier; actual claims/nonces, complete output references and loaded-response
+body hashes are retained. The complete immutable index
+`A/visibility2-final-evidence-index.json`, SHA256
+`7bd1f04b8f171ce9b9024472b25f2bfc1f8207d24424cd811fe3ba522348187e`,
+binds 911 distinct raw files. Both selected baselines and all frozen grading/
+policy/helper definitions are byte-exactly restored.
+
+### Actual corrected semantic witnesses
+
+These ten first-priority cases have 170 approved required rows. Their compact
+raw witness index is `A/visibility2-priority-actual-proof-index.json`, SHA256
+`f4123f6c0463532b4294e7220ceab4804118b6d55d584462284774d9144477bc`.
+The table gives native diagnostic counts, never a visual-quality score.
+
+| Actual case | Native UUID | Exit | Pass / fail / unknown |
+| --- | --- | --- | --- |
+| Dashboard08 baseline | `2a1b6bdb-cc7c-4498-b1e3-6c870acf9845` | 1 | 16 / 4 / 0 |
+| Heading overrides inherited hidden wrapper | `79c483cc-2b2f-46f4-8dfe-51f41ce51dab` | 1 | 16 / 4 / 0 |
+| Heading HTML-hidden with explicit visible display | `b479ff6c-1e31-4486-9ab1-b28ec6cc2215` | 1 | 16 / 4 / 0 |
+| Corrected actual display-none heading | `826a9881-06a6-4b49-bba8-8093531de641` | 1 | 11 / 9 / 0 |
+| Independent marker03 baseline | `4b62f0a9-daeb-4fe3-8e51-09f7a672239d` | 0 | 15 / 0 / 0 |
+| Marker overrides inherited hidden wrapper | `2427bb77-6b18-443b-ab20-96570d8071b3` | 0 | 15 / 0 / 0 |
+| Marker HTML-hidden with explicit visible display | `915e3989-35da-48d5-8aeb-8f9e5adbe975` | 0 | 15 / 0 / 0 |
+| Corrected actual display-none marker | `482416a2-31b9-4cd3-85aa-89ce6906e48a` | 1 | 11 / 4 / 0 |
+| Contents/nondefault-opacity uncertainty | `e4a6b942-7401-4240-b9a0-0ca5463c49cd` | 2 | 11 / 0 / 4 |
+| Independent hard hide under that uncertain ancestor | `3880cd06-b4af-4e8d-8ff1-e5ffe8ffdc17` | 1 | 11 / 4 / 0 |
+
+The four override positives have valid four-/two-response transport and actual
+native/raw/final visibility. Heading literal text and text-paint witnesses
+remain valid; only the same four declared-stack/DOM-text facts fail, not
+invented face or visual defects. Marker facts remain exactly presence, width8,
+height8 and background; no empty-APP-text, shape, meaning or accessibility
+condition was added. Genuine hidden negatives now have native invisibility,
+zero bounding boxes and hard-hidden paint, not an attribute shortcut.
+
+The opacity uncertainty case publishes four marker UNKNOWN items and no
+FAIL despite the component's actual diagnostic fraction being 1.0.
+Required UNKNOWN still yields native refusal 2 at threshold zero.
+Independent actual `display:none` retains all four marker failures and no
+UNKNOWN under the same uncertain ancestor, yielding native failure 1.
+No unknown was waived or supplied as an author-owned score.
+
+### Remaining actual controls and preserved readback
+
+Protected copied SOURCE drift
+`d589504e-bd10-4f0c-a1b0-a6c47340dc23` retains exactly twenty original-cause
+UNKNOWN items with no APP acquisition, no duplicate/`NoneType`/`<gate>`, then
+byte-exact SOURCE restoration and actual
+`054fd87d-0609-43a2-9100-365011f9a7f0` restore the 16/4 Dashboard outcome.
+Native invalid query `ee5bc6c1-bc16-4ec4-970f-c39caedb0530` has four valid
+responses, native `[` error, `count:null` and six heading UNKNOWN rows.
+Mixed case `2e4ce7d3-366f-4995-b4d9-294cfc83b1d6` retains all sixty atomic
+samples, stable error-free marker absence FAIL and sixty changing caption
+sizes UNKNOWN without a stable four-frame tail or arbitrary last-value FAIL.
+Literal text, absence, clipping, ambiguity, unsupported grammar, wrong lens,
+unlisted request/input and delivery drift follow the exact finite plan.
+
+Replay `b220aa6f-ec5f-4311-8ed9-72115d5789e4` reaches the new owned native
+context and full fifteen-ID component, refusing old observer manifest/run and
+missing current acquisition provenance. No old native invocation directory
+or claims were copied. Fresh
+`ca9603c9-f592-4372-b150-157ca3d07a62` restores actual 15/15 with a fresh nonce.
+
+Legitimate build B `de2ee3da-c7a4-4d4d-8f28-62859d0e7c19` receives its own
+actual 16/4 result. A's producer-current readback refuses while B is selected;
+B's identity readback succeeds, Generic retains A's original failure/path/hash,
+and exact A selection restoration restores only A's identity readback without
+capture or rescore. Marker baseline/restoration have actual producer-current
+readbacks too.
+The new complete-frozen-check/native-reference shadow audit
+`A/visibility2-native-proof/pure-readback-audit/audit.json`, SHA256
+`26c2571a28c07db52cc4e2aaa32dc7a06f95025322e3c8186402d7a0983c64bf`,
+retains repeated Generic verdicts and refuses changed PNG, unlisted member,
+deleted response and symlink; unchanged closure validates and original outputs
+remain unchanged.
+
+The old invalid hidden-marker negative, every old review NONPASS, old f0
+anomaly and all historical authorities remain preserved. These finite controls
+do not prove universal CSS, full-view quality, actual font face, backend
+authenticity or downstream completion. Existing Jig's old contract still does
+not admit actual 0.2/new-kind evidence: its actual pure-consumer negative was
+not executed, so NONCLEARANCE remains an inspected bounded integration gap,
+never bridge DONE. Final fresh compliance/craft/architecture/reconciliation,
+normal lifecycle gates and publication are still separate.

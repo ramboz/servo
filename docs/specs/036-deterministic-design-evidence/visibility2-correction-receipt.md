@@ -2,9 +2,11 @@
 
 This corrects the finite APP guard's CSS classifications without changing
 SOURCE facts or adding rendering support. Real browser primitives and a scoped
-independent mechanism review are complete. Fresh exact APP policies, installed
-definitions, native experiments and final slice compliance remain required.
-This receipt is neither an APP approval nor a lifecycle PASS.
+independent mechanism review were complete at this source-only checkpoint.
+Fresh exact policies, definitions and native experiments were then required;
+their subsequent separate authorities/results are recorded in the
+[current pilot evidence](static-app-pilot-evidence.md). This source-only receipt
+itself is neither an APP approval nor a lifecycle PASS.
 
 ## Preserved failure and scope
 

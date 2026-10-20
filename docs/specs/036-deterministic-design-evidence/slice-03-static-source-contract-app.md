@@ -15,8 +15,8 @@ source package, measures a separate unchanged application snapshot, and receives
 named static-contract failures/refusals through the ordinary required gate.
 This is not a whole-view fidelity or application-completion verdict.
 
-**Current empirical checkpoint:** the complete approved native526 finite plan
-has run: 28 actual gate cases, 500 exact required items and pure readback/
+**Current empirical checkpoint:** the separately approved visibility/2/native526
+finite plan has run: 34 actual gate cases, 600 exact required items and pure readback/
 restoration controls. [The pilot evidence](static-app-pilot-evidence.md) records
 the current exact authorities and immutable raw index. Final independent
 postreviews, reconciliation and publication remain. Earlier implementation
@@ -279,6 +279,18 @@ The [supporting correction receipt](visibility2-correction-receipt.md) records
 real batched red/green and the scoped mechanism/control review PASS, with exact
 source bytes and limits. This does not overwrite the full compliance NONPASS
 or authorize a new actual APP result before fresh exact reviews/releases.
+
+**Current visibility/2 actual proof (2026-10-20):** fresh policies and installed
+definitions received distinct exact authority, including execution release
+`6ecfbf48...` for checkpoint `0feaf3ff...`. All four same-goal CSS override
+positives, corrected display-none negatives and contents-opacity UNKNOWN/hard
+hidden boundaries now have real native evidence. The complete 34-case/600-item
+index, SHA256 `7bd1f04b8f171ce9b9024472b25f2bfc1f8207d24424cd811fe3ba522348187e`,
+binds 911 raw files; every approved inventory is unique and every gate equals
+its oracle/stdout carrier. All selected baselines and frozen definitions are
+restored. Full compliance must be genuinely re-reviewed on this correction and
+actual evidence before normal craft/architecture/reconciliation/publication;
+source-only mechanism PASS was not substituted for it.
 
 ### Close-out (post-DONE)
 

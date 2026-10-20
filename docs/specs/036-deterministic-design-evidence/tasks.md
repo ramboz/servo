@@ -3,23 +3,27 @@
 ## 036-03
 
 - [x] Independently frame/readiness-review the new APP-side vertical slice.
-- [ ] Renew exact visibility-profile `/2` normalizer/control/policy/closure
+- [x] Renew exact visibility-profile `/2` normalizer/control/policy/closure
       review before fresh freeze. Earlier exact approvals remain historical.
 - [x] Witness finite normalization and snapshot/refusal red-to-green tests.
-- [ ] Refresh the visibility-profile `/2` approved10 consumer, measure unchanged Dashboard and retain
+- [x] Refresh the visibility-profile `/2` approved10 consumer, measure unchanged Dashboard and retain
       all twenty constraints plus full-app/backend/Jig gaps.
-- [ ] Preserve the approved unrelated SOURCE and renew its separate APP policy before results;
+- [x] Preserve the approved unrelated SOURCE and renew its separate APP policy before results;
       prove actual positive, mutation and restoration controls.
       Exact earlier source/APP approvals, installed-definition releases and
       native526 proof remain in `static-app-pilot-evidence.md`; final
       compliance found an uncovered visibility false-block.
-- [ ] Refresh real Generic output-reference consumers and pure current readback
+- [x] Refresh real Generic output-reference consumers and pure current readback
       under the corrected exact helper/definition epoch.
-- [x] Complete all 28 finite native cases, 500 exact required rows, protected
+- [x] Preserve all historical 28 finite native cases, 500 exact required rows, protected
       copied-source repair/restoration, query/mixed-instability controls,
       legitimate A/B freshness and full-reference shadow mutation refusals.
       These are genuine historical outcomes, not current CSS-conformance
       acceptance; hidden-attribute fixtures need explicit paint semantics.
+- [x] Complete the separately released visibility/2 epoch: 34 actual native
+      cases, 600 unique required items, all four same-goal override positives,
+      genuine display-none negatives, required opacity UNKNOWN veto and
+      independent hard-hidden precedence, complete readback/replay/restoration.
 - [ ] Complete independent postreviews/reconciliation, host regeneration,
       lifecycle gates and unmerged stacked PR.
 

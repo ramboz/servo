@@ -23,7 +23,7 @@ The parent proposal is preserved in this session's delivered message; exact
 approved policy bytes and immutable command/evidence indexes supersede the
 proposal only after real independent review. No model calls are authorized.
 
-### 036-03 empirical checkpoint (2026-10-20)
+### 036-03 prior native526/profile1 checkpoint (2026-10-20)
 
 Steps 1-5, through actual finite controls/readbacks, are complete before final
 slice reviews. The current native526 epoch has 28 genuine gate
@@ -37,6 +37,18 @@ Bug 006 is independently reviewed and normally DONE; no closed 035/036-01 record
 source goal, source writer authority or peer producer was rewritten.
 This establishes finite static-contract discrimination only. Final
 compliance/craft/architecture, reconciliation and publication remain.
+
+### 036-03 current visibility/2 checkpoint (2026-10-20)
+
+Genuine final compliance exposed CSS false-blocks after that historical
+experiment. The open slice recovered through actual browser red/green and a
+scoped source/control review, then received new exact policy/staging/installed
+execution authority. Current visibility/2 proof has 34 native cases, 600 exact
+required items and a 911-file immutable index in the pilot evidence. It proves
+four same-goal overrides, corrected hidden negatives and required opacity
+uncertainty/independent-hidden precedence in addition to the earlier finite
+control goals. Fresh full slice reviews and normal lifecycle/publication still
+follow; no old outcome or review is rebound.
 
 036-01 closeout selected integration parent
 `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5` and settled executable source

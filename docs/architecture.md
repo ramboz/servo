@@ -135,8 +135,10 @@ applicable ancestor effects remain guarded. Its clipping boxes exclude
 unsupported text effects are distinguished before absence inference.
 Nondefault opacity on `display:contents` remains explicitly UNKNOWN because
 native visibility disagrees with the recorded primitive paint probe.
-Real browser primitive red/green is recorded, but fresh exact APP definition/
-empirical proof is still pending after final review found the older false-block.
+Real browser primitive red/green and a separately approved 34-case native epoch
+record the corrected guard, same-goal overrides and required UNKNOWN/hard-hide
+vetoes. The old false-block outcomes remain historical, not relabelled proof;
+the finite pilot does not establish universal CSS correctness.
 Existing Jig's old input allowlist does not attest this separate 0.2 experiment.
 
 Ordinary command evidence optionally binds a declared run-scoped output
