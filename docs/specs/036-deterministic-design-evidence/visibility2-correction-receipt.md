@@ -80,7 +80,10 @@ actual browser APIs are used, not mocked visibility flags.
 Raw result: `A/036-03-visibility2-final-mechanism-green.txt`.
 The pure observer suite passed ten tests plus 26 subtests; package/pure-surface
 checks passed 83 tests plus 78 subtests. Full current-suite validation is a
-separate checkpoint, not inferred from these focused runs.
+separate checkpoint, not inferred from these focused runs:
+`A/visibility2-full-pytest.stdout` records 2570 passed, fifteen skipped and
+316 subtests passed in 386.96 seconds. The three opt-in browser methods above
+were executed separately, not counted as passing because of their skips.
 
 The opacity diagnostic is
 `A/visibility2-boxless-opacity-primitive/native.json` plus its six PNGs:
@@ -108,8 +111,26 @@ The new controller repairs intended hidden negatives with explicit
 `display:none` and preselects real inherited-visibility/hidden-attribute
 override positives with the same frozen goals. It must receive exact
 policy/control-plan review before any new APP result.
-New 08/03 targets and their exact policies are not established by this receipt.
+New 08/03 policy approval, installation and empirical results are not
+established by this source-only receipt.
 The actual existing Jig pure-consumer negative remains unexecuted:
 0.2/new-kind NONCLEARANCE is an explicitly inspected integration gap,
 not bridge DONE. Full-app, face, backend, visual-quality and merge acceptance
 remain outside this correction.
+
+### Versioned controller R2 addendum
+
+The first source-only controller `38b7dc0e...` remains unchanged.
+`A/static-candidate-control-visibility2-r2.py`, SHA256
+`0f6bbbf5b1cd350b194b28ddb0d3f7205ed400a8c89fa2c5dff46aad9145a7bc`,
+adds only two proposed native marker controls and provenance:
+contents/nondefault-opacity UNKNOWN must veto even if all eleven other facts
+pass; adding actual `display:none` must retain the four known marker failures
+instead of erasing them with contents uncertainty. The fifteen SOURCE goals
+and comparison policy are unchanged.
+
+The same independent reviewer returned a scoped controls-only PASS at
+`A/036-03-visibility2-controls-r2-pass.txt`; it did not recompute the supplied
+SHA or execute either candidate. Expected vectors are exactly 11 PASS/4 UNKNOWN
+with exit 2, then 11 PASS/4 FAIL with exit 1. These are pre-result expectations,
+not new empirical outcomes or approval to execute.
