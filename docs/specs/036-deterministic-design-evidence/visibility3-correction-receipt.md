@@ -387,8 +387,16 @@ Independent parent priority verification
 `88d731935138148ea0664f791b1721402226877694f0cda9193fe30e80e9878b`,
 already verifies the actual six priority cases without rerunning APP/readers.
 Its scope intentionally did not attest mutable selection state while remaining
-controls ran. The complete restored index has now been sent for full parent
-offline verification. Fresh full compliance/craft/architecture/reconciliation,
+controls ran. The complete restored index subsequently received full parent
+offline verification:
+`P/complete-visibility3-proof-parent-verification.json`, SHA256
+`ca9d83ee71fcb751e65aeca1d945f0f08ca111f2cd5fbd4ee2e38e8a7cf9958d`.
+It verifies38 native cases/660 rows/2121 regular indexed files/2184 paths,
+the separately declared self-symlink without following it, all owned carrier/
+nonce distinctions, exact142-pin and selection restoration, currentness/
+shadow controls and preserved old subjects. The parent ran no APP/browser/
+grader/gate/result reader. Its verdict clears the finite evidence obligation,
+not lifecycle or quality. Fresh full compliance/craft/architecture/reconciliation,
 ordinary gates and unmerged publication remain separate obligations.
 Existing Jig's actual PURE format negative remains before semantic/tree/served
 validation and NONCLEARING, not positive0.2 integration or Jig DONE.

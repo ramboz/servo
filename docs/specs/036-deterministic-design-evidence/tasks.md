@@ -48,6 +48,8 @@
 - [x] Complete all38 new native cases/660 rows and pure controls, retain full
       raw index466e61d0/2121files and exact final restoration; submit for parent
       offline verification before closing through normal full reviews/gates.
+- [x] Retain actual parent full offline verificationca9d83ee of38cases/660rows/
+      2184checkedpaths as raw-evidence support, not lifecycle/quality clearance.
 - [ ] Reconcile the nonblocking recurring pure-reader ownership/closure
       regression-test gap without treating retained offline evidence as a
       replacement for that test or expanding the current recovery.

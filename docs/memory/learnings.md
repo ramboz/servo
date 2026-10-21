@@ -232,4 +232,5 @@ are newactualproof. Contentsdiagnostic is COMPONENT1.0 with nativeOVERALLnull/
 exit2, neverfallbacksuccess. An offlineassembler initially confused those
 fields; failedsource4996623f and correctedread-onlyharnesslimits are retained
 without changing/rerunningAPP/grading. Parentpriority88d73193 is bounded;
-fullparentverification and genuinefullfinalreviews/lifecyclestillrequired.
+fullparentverification subsequently passedca9d83ee (2184checkedpaths/noAPP/
+grader/gate/reader rerun). Genuinefullfinalreviews/lifecyclestillrequired.

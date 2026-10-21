@@ -21,8 +21,8 @@ That epoch remains suspended. Separately reviewed/released profile `/3`
 checkpoint1b830519 now has38 actual native cases/660 required rows, including
 both self-content discriminators and complete exact restorations. The
 [correction receipt](visibility3-correction-receipt.md) records their exact
-authorities and immutable raw index466e61d0. Full parent offline verification,
-postreviews, reconciliation and publication stay open. Earlier implementation
+authorities and immutable raw index466e61d0. Full parent offline verification
+ca9d83ee is complete; postreviews, reconciliation and publication stay open. Earlier implementation
 checkpoints below preserve their historical pre-approval state, not current
 claims that approval or APP proof is absent.
 
@@ -336,7 +336,8 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   staging-only selection and ordinary sealed installation, then separate final
   installed review/release588b6746. The actual complete38-case/660-row proof now
   includes both self-content controls/restorations and all unchanged finite
-  controls. Full offline verification and final lifecycle reviews remain.
+  controls. Parent full offline verificationca9d83ee is complete; final
+  lifecycle reviews remain separate.
 - The actual unchanged-Jig PURE format negative closes only the earlier
   unexecuted-negative gap. It refuses before semantic/tree/served validation;
   positive0.2 bridge, CLI/lifecycle and downstream Jig completion remain
@@ -374,8 +375,11 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   native cases/95 rows and semantic witnesses; completeindex466e61d0 now closes
   all38/660 cases/rows and exact restorations. Offline index-harness failures
   are disclosed separately from unchanged actual APP outcomes.
-- **Deferred to actual remaining gates, not waived:** parent full offline
-  verification, fresh full compliance/craft/architecture review and final
+- **Updated:** parent full offline verificationca9d83ee confirms all38/660,
+  2184 checked paths, ownership/carriers and exact restoration without APP/
+  grader/gate/reader reruns. This is finite evidence verification only.
+- **Deferred to actual remaining gates, not waived:** fresh full
+  compliance/craft/architecture review and final
   reconciliation review. Only then may normal REVIEWED/RECONCILED/DONE and
   unmerged stacked publication proceed. No merge or full-app/Jig DONE follows.
 

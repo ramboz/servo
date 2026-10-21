@@ -492,8 +492,9 @@ box/presence/declarations remain supported. Both restorations are fresh native
 complete-reference shadow controls have actual new-epoch evidence.
 Contents-opacity has component diagnostic1.0 but native overall:null/exit2;
 UNKNOWN is not converted into numeric success.
-The parent has independently verified the six priority cases (`88d73193...`);
-full restored-index verification and genuine final lifecycle reviews remain
-separate. All old epochs, invalid negative premises and NONPASS history stay
+The parent independently verified the six priority cases (`88d73193...`) and
+the complete restored index (`ca9d83ee...`:38cases/660rows/2184checkedpaths).
+Those are offline raw-evidence verifications without APP/grading/reader reruns,
+not genuine final lifecycle reviews. All old epochs, invalid negative premises and NONPASS history stay
 unchanged. No full quality, face/backend truth, positive Jig integration or
 merge is claimed.

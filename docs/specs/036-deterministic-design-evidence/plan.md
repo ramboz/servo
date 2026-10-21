@@ -71,8 +71,9 @@ separate installed release588b6746 precede all new outcomes. Exact complete
 index466e61d0 records38nativecases/660requiredrows/2121files, all planned
 controls/currentness/readbacks/restorations and unchanged frozen definitions.
 New self-marker15P0 and self-caption14P1Fonlytext are actual owned native
-observations, not expected/synthetic vectors. The parent has verified the six
-priority cases under88d73193; full restored-index verification and fresh full
+observations, not expected/synthetic vectors. The parent verified the six
+priority cases under88d73193 and complete restored index underca9d83ee, with
+no APP/grading/reader reruns. Fresh full
 compliance/craft/architecture/reconciliation/publication still follow.
 No helper/goal/grading change or old epoch rebind occurred during this proof.
 
