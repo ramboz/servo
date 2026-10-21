@@ -156,7 +156,7 @@
 | [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-02 - required-verdict-consumers | **DONE** |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 - bound-card-evidence | **DONE** |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-02 - regional-image-evidence | DRAFT |  |
-| [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-03 - static-source-contract-app | REVIEWED (real-source-static-app-gate) |  |
+| [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-03 - static-source-contract-app | RECONCILED (real-source-static-app-gate) |  |
 
 ## Deferred slices
 

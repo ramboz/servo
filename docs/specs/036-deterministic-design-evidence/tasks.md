@@ -28,10 +28,11 @@
       lifecycle gates and unmerged stacked PR.
 - [x] Record the genuine architecture-only PASS on the repository visibility/3
       correction; preserve canonical craft NONPASS and separate APP authority.
-- [ ] Recover the genuine craft self-content-visibility blocker through
+- [x] Recover the genuine craft self-content-visibility blocker through
       repository-only profile `/3` TDD, fresh scoped review and exact new
       policy/installed-definition review/release before actual APP proof.
-      Preserve full compliance PASS, craft NONPASS and suspended `/2` results.
+      Preserve historical `/2` full-compliance PASS, craft NONPASS and suspended
+      results separately from the genuine current `/3` full review passes.
 - [x] Under separate pure-preparation authority849f5017, prepare pending
       D09/M04 policies and R3 finite plan with complete mandatory-ID vectors,
       baseline/resource/runtime closures and all eight actual metadata receipts.
@@ -50,12 +51,16 @@
       offline verification before closing through normal full reviews/gates.
 - [x] Retain actual parent full offline verificationca9d83ee of38cases/660rows/
       2184checkedpaths as raw-evidence support, not lifecycle/quality clearance.
-- [ ] Reconcile the nonblocking recurring pure-reader ownership/closure
-      regression-test gap without treating retained offline evidence as a
-      replacement for that test or expanding the current recovery.
+- [x] Record the nonblocking recurring pure-reader ownership/closure test gap
+      in the deviation log and refinement follow-up. The actual recurring
+      test remains deferred; offline evidence is not relabelled as that test,
+      and no implementation scope is added.
 - [x] Obtain and record fresh full post-proof compliance/craft/architecture
       PASS, clear normal REVIEWED gate, and track the unchanged nonblocking
       reader-test follow-up in refinement without adding implementation scope.
+- [x] Preserve genuine reconciliation NONPASS4fbb0bb, correct stale task/plan
+      state, obtain fresh independent reconciliation R2 PASS and clear normal
+      RECONCILED gate without source/frozen-subject changes or bypasses.
 
 ## Authoring and readiness
 

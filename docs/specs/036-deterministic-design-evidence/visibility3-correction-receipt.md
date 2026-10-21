@@ -419,6 +419,16 @@ Independent reconciliation, ordinary RECONCILED/DONE gates and unmerged stacked
 publication still remain. No full-app/Jig integration, quality or merge
 clearance is inferred from these review passes.
 
+The first independent reconciliation pass returned needs-changes for two
+live bookkeeping inconsistencies: completed recovery remained unchecked and
+the latest plan still described completed full reviews as pending.
+Commit4fbb0bb preserves that actual NONPASS before correction. The task/plan
+states are now corrected without source, frozen subject, evidence or authority
+changes. Fresh independent reconciliation R2 genuinely verified both fixes and
+returned PASS. Ordinary `record-review` and RECONCILED gate/transition then
+cleared, preserving NONPASS4fbb0bb in history. DONE closeout and unmerged
+publication remain separate actual steps, not inferred from that review.
+
 The craft pure-reader ownership/closure recurring-test gap is a recorded
 nonblocking reconciliation nit. The existing mocked forwarding test and actual
 offline closure mutation audit are different evidence; neither is relabelled

@@ -73,8 +73,10 @@ controls/currentness/readbacks/restorations and unchanged frozen definitions.
 New self-marker15P0 and self-caption14P1Fonlytext are actual owned native
 observations, not expected/synthetic vectors. The parent verified the six
 priority cases under88d73193 and complete restored index underca9d83ee, with
-no APP/grading/reader reruns. Fresh full
-compliance/craft/architecture/reconciliation/publication still follow.
+no APP/grading/reader reruns. Fresh full compliance/craft/architecture have
+passed and the normal REVIEWED gate cleared. Independent reconciliation R2
+subsequently verified documentary corrections and passed; normal RECONCILED
+cleared. DONE closeout and unmerged stacked publication remain pending.
 No helper/goal/grading change or old epoch rebind occurred during this proof.
 
 036-01 closeout selected integration parent

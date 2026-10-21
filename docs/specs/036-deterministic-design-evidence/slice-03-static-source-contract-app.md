@@ -1,8 +1,8 @@
 ---
-status: REVIEWED
+status: RECONCILED
 kind: feature
 dependencies: [036-01, adr-0044, adr-0045]
-last_verified:
+last_verified: 2026-10-20
 frame_review: true
 arch_review: true
 claimed_by: real-source-static-app-gate
@@ -23,7 +23,8 @@ both self-content discriminators and complete exact restorations. The
 [correction receipt](visibility3-correction-receipt.md) records their exact
 authorities and immutable raw index466e61d0. Full parent offline verification
 ca9d83ee and fresh full compliance/craft/architecture have passed.
-Reconciliation, lifecycle closeout and publication stay open. Earlier implementation
+Independent reconciliation and the normal RECONCILED gate have now passed.
+DONE closeout and publication stay open. Earlier implementation
 checkpoints below preserve their historical pre-approval state, not current
 claims that approval or APP proof is absent.
 
@@ -103,7 +104,7 @@ claims that approval or APP proof is absent.
 - [x] Witnessed focused red/green and actual installed 0/1/2 controls.
 - [x] Exact immutable evidence index and command receipts, with real
       Dashboard nonpasses and separately approved independent positive control.
-- [ ] Required independent reviews and reconciliation pass; current docs,
+- [x] Required independent reviews and reconciliation pass; current docs,
       packages and status board agree without amending closed records.
 - [ ] Publish an unmerged ready-for-review PR on `servo-card-slice-closeout`.
 
@@ -355,6 +356,11 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   now genuinely resolved; prior NONPASS remains in git history. No source-only,
   policy-only, installed or parent verification record was substituted for
   these lifecycle passes.
+- Independent reconciliation then returned needs-changes for stale task/plan
+  bookkeeping, not implementation or proof. That actual verdict is preserved
+  in commit4fbb0bb/raw history. Completed recovery/review steps are now marked
+  complete. Fresh independent reconciliation R2 then passed and the normal
+  RECONCILED gate cleared; DONE/publication still require their actual steps.
 
 ### Reconciliation sweep
 
@@ -398,8 +404,10 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   ownership/closure test is recorded in refinement tracking with a future
   maintenance trigger. Actual offline mutation proof is not presented as that
   recurring test. No source-goal, architecture or authority relaxation follows.
-- **Deferred to actual remaining gates, not waived:** independent final
-  reconciliation review and normal RECONCILED/DONE gates, followed by
+- **Updated:** independent reconciliation R2 verified both documentary fixes,
+  returned PASS, and normal RECONCILED gate/transition cleared. Prior actual
+  NONPASS4fbb0bb remains in history; no source or frozen-subject change occurred.
+- **Deferred to actual remaining gates, not waived:** normal DONE closeout and
   unmerged stacked publication. No merge or full-app/Jig DONE follows.
 
 ### Close-out (post-DONE)
