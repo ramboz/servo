@@ -1432,3 +1432,13 @@ relabel), which extends the same rc=2 behavior to `run_goal_loop` — the natura
 point to audit both drivers' exit-code contract against dispatch together.
 
 **Surfaced by:** spec 031-01 arch + craft reviews (2026-09-01).
+
+---
+
+## Static APP pure reader needs a recurring direct ownership/closure regression
+
+**Deferred:** The 036-03 forwarding test mocks `_existing`, so it does not directly guard real acquisition-claim, receipt and output-closure checks. The complete actual native proof and full frozen-check/published-output shadow audit cover this behavior offline, but are not a recurring temporary-filesystem unit test. Fresh full compliance, craft and architecture retain this as an explicitly nonblocking test-coverage nit; no implementation or authority change is implied.
+
+**Resolution trigger:** Next focused maintenance of the static APP pure reader, or a dedicated test-only follow-up, adds a temporary-filesystem regression exercising real `_existing` ownership and closure checks without mocking that helper. Preserve no-capture/no-compare/no-rescore behavior and do not change accepted SOURCE goals, policies or output meanings.
+
+**Surfaced by:** [036-03](specs/036-deterministic-design-evidence/slice-03-static-source-contract-app.md), its full craft/architecture reviews and [visibility3 receipt](specs/036-deterministic-design-evidence/visibility3-correction-receipt.md). This tracks the existing user-directed nonblocking nit, not new slice scope.

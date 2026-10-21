@@ -1,5 +1,5 @@
 ---
-status: IN_PROGRESS
+status: REVIEWED
 kind: feature
 dependencies: [036-01, adr-0044, adr-0045]
 last_verified:
@@ -22,7 +22,8 @@ checkpoint1b830519 now has38 actual native cases/660 required rows, including
 both self-content discriminators and complete exact restorations. The
 [correction receipt](visibility3-correction-receipt.md) records their exact
 authorities and immutable raw index466e61d0. Full parent offline verification
-ca9d83ee is complete; postreviews, reconciliation and publication stay open. Earlier implementation
+ca9d83ee and fresh full compliance/craft/architecture have passed.
+Reconciliation, lifecycle closeout and publication stay open. Earlier implementation
 checkpoints below preserve their historical pre-approval state, not current
 claims that approval or APP proof is absent.
 
@@ -316,7 +317,7 @@ and current source identities. No new policy, install or actual APP result is
 approved by it. The recurring pure-reader ownership/closure test gap remains
 a recorded nonblocking reconciliation nit, not a new implementation scope.
 
-### Deviation log (in progress; not reconciliation clearance)
+### Deviation log
 
 - The finite observer needed independently versioned computed-family grammar,
   multi-resource snapshots, actual response-body closure and per-required-ID
@@ -346,10 +347,16 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
 - Craft/architecture retain one nonblocking recurring-test gap: the mocked
   pure-reader forwarding test does not directly exercise ownership/closure.
   The actual offline closure-mutation audit is preserved but is not that
-  recurring regression guard. The gap is tracked in this slice's tasks;
+  recurring regression guard.   The gap is tracked in this slice's tasks and
+  [refinement follow-up](../../refinement-todo.md#static-app-pure-reader-needs-a-recurring-direct-ownershipclosure-regression);
   it is not silently called fixed or folded into the minimal paint correction.
+- Fresh post-proof full compliance, craft and architecture independently pass
+  on helper90e2 and completeindex466e61d0/parentca9d83ee. The craft blocker is
+  now genuinely resolved; prior NONPASS remains in git history. No source-only,
+  policy-only, installed or parent verification record was substituted for
+  these lifecycle passes.
 
-### Reconciliation sweep (in progress; final review still required)
+### Reconciliation sweep
 
 - **Updated:** architecture, public walkthrough and official host projections
   describe the explicit profile `/3` and pending fresh authority. Source-only,
@@ -378,10 +385,22 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
 - **Updated:** parent full offline verificationca9d83ee confirms all38/660,
   2184 checked paths, ownership/carriers and exact restoration without APP/
   grader/gate/reader reruns. This is finite evidence verification only.
-- **Deferred to actual remaining gates, not waived:** fresh full
-  compliance/craft/architecture review and final
-  reconciliation review. Only then may normal REVIEWED/RECONCILED/DONE and
-  unmerged stacked publication proceed. No merge or full-app/Jig DONE follows.
+- **Updated:** the required fresh full compliance/craft/architecture passes
+  are recorded through ordinary helpers, and normal REVIEWED gate/transition
+  cleared. Queried optional code-health/design-review flags are false; no
+  required pass was silently skipped. Repository lint/install/package gates
+  and actual browser/unit evidence remain distinct from APP proof.
+- **No-op:** leanness and lightweight-decision sweep finds no generalized CSS
+  renderer, new evaluation controller/registry, speculative extension point or
+  out-of-spec shipped UI/product decision. Shared helpers and existing generic
+  seams are reused; one-off retained evidence auditors do not install graders.
+- **Deferred nonblocking follow-up:** the direct recurring pure-reader
+  ownership/closure test is recorded in refinement tracking with a future
+  maintenance trigger. Actual offline mutation proof is not presented as that
+  recurring test. No source-goal, architecture or authority relaxation follows.
+- **Deferred to actual remaining gates, not waived:** independent final
+  reconciliation review and normal RECONCILED/DONE gates, followed by
+  unmerged stacked publication. No merge or full-app/Jig DONE follows.
 
 ### Close-out (post-DONE)
 

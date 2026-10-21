@@ -53,6 +53,9 @@
 - [ ] Reconcile the nonblocking recurring pure-reader ownership/closure
       regression-test gap without treating retained offline evidence as a
       replacement for that test or expanding the current recovery.
+- [x] Obtain and record fresh full post-proof compliance/craft/architecture
+      PASS, clear normal REVIEWED gate, and track the unchanged nonblocking
+      reader-test follow-up in refinement without adding implementation scope.
 
 ## Authoring and readiness
 

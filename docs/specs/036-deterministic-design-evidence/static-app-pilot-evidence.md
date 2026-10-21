@@ -463,10 +463,11 @@ The parent's actual suspension
 holds release `6ecfbf48...` for exact `0feaf3ff...`/D08/M03.
 Those frozen files, all 34/600/911 outcomes, raw verification and the full
 compliance PASS remain immutable historical evidence, not lifecycle clearance.
-No actual APP/gate/result-reader has been executed after the blocker.
-Repository-only profile `/3` correction is recorded in
+At that hold checkpoint, no actual APP/gate/result-reader had been executed
+after the blocker. Repository-only profile `/3` correction is recorded in
 [its source TDD receipt](visibility3-correction-receipt.md); new exact policies,
-installed definitions and separate release are still required.
+installed definitions and separate release were still required then. The
+subsequent separately authorized epoch below does not resume old08/03.
 
 Craft also identified a nonblocking recurring-test gap: the pure-reader
 plumbing test mocks `_existing`, so it does not itself protect actual ownership/

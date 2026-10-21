@@ -88,10 +88,10 @@ did not clear canonical full craft/compliance or staging/execution authority.
 The actual TDD command record has SHA256
 `8a9a6628a0c76700952459806504d76c22b30ecced8b00e218c0626beaaa7374`.
 
-Fresh exact policies/installed definitions, separate pre-result execution
-release and actual affected APP proof remain outstanding. The prior canonical
-craft NONPASS is not replaced by repository tests or a scoped review.
-Full craft/reconciliation and normal lifecycle/publication gates still follow;
+At that source-only checkpoint, fresh exact policies/installed definitions,
+separate pre-result release and affected APP proof remained outstanding.
+Repository tests or a scoped review did not replace canonical craft NONPASS.
+Full craft/reconciliation and normal lifecycle/publication gates still followed;
 the separate architecture-only result is recorded below. No merge or
 full-app/Jig completion is claimed.
 The ordinary `check-reviews --stage REVIEWED` still actually refuses (exit2)
@@ -400,6 +400,24 @@ not lifecycle or quality. Fresh full compliance/craft/architecture/reconciliatio
 ordinary gates and unmerged publication remain separate obligations.
 Existing Jig's actual PURE format negative remains before semantic/tree/served
 validation and NONCLEARING, not positive0.2 integration or Jig DONE.
+
+### Fresh full post-proof reviews
+
+After complete proof and independent parent verification, fresh full
+[compliance](reviews/slice-03-compliance.md),
+[craft](reviews/slice-03-craft.md) and
+[architecture](reviews/slice-03-arch.md) passes genuinely returned PASS on
+source90e2/index466e61d0/parentca9d83ee against exact base2cd33a4a.
+Ordinary `record-review` recorded each actual verdict, and the normal
+REVIEWED gate/transition cleared without bypasses. Prior NONPASS is retained
+in git/raw history, not rebound to these subjects.
+
+The recurring direct pure-reader ownership/closure test remains the expressly
+nonblocking reconciliation follow-up, now tracked in
+`docs/refinement-todo.md`; offline mutation evidence is not that test.
+Independent reconciliation, ordinary RECONCILED/DONE gates and unmerged stacked
+publication still remain. No full-app/Jig integration, quality or merge
+clearance is inferred from these review passes.
 
 The craft pure-reader ownership/closure recurring-test gap is a recorded
 nonblocking reconciliation nit. The existing mocked forwarding test and actual
