@@ -24,8 +24,8 @@
       cases, 600 unique required items, all four same-goal override positives,
       genuine display-none negatives, required opacity UNKNOWN veto and
       independent hard-hidden precedence, complete readback/replay/restoration.
-- [ ] Complete independent postreviews/reconciliation, host regeneration,
-      lifecycle gates and unmerged stacked PR.
+- [x] Complete independent postreviews/reconciliation, host regeneration,
+      lifecycle gates and [ready/unmerged stacked delivery](https://github.com/ramboz/servo/pull/47).
 - [x] Record the genuine architecture-only PASS on the repository visibility/3
       correction; preserve canonical craft NONPASS and separate APP authority.
 - [x] Recover the genuine craft self-content-visibility blocker through

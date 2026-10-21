@@ -235,3 +235,9 @@ without changing/rerunningAPP/grading. Parentpriority88d73193 is bounded;
 fullparentverification subsequently passedca9d83ee (2184checkedpaths/noAPP/
 grader/gate/reader rerun). Full reviews and normal lifecycle gates are separate
 completion authority, never inferred from these raw-evidence verifications.
+Fresh full compliance/craft/architecture and reconciliation R2 subsequently
+passed; normal committed REVIEWED/RECONCILED/DONE gates cleared for Servo036-03
+and its ready/unmerged stacked delivery is recorded in the slice/receipt.
+That closure does not claim full APP/quality/positive Jig integration or merge.
+The direct recurring reader ownership/closure test remains an expressly
+nonblocking refinement follow-up, not silently implemented.

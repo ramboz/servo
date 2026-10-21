@@ -426,8 +426,13 @@ Commit4fbb0bb preserves that actual NONPASS before correction. The task/plan
 states are now corrected without source, frozen subject, evidence or authority
 changes. Fresh independent reconciliation R2 genuinely verified both fixes and
 returned PASS. Ordinary `record-review` and RECONCILED gate/transition then
-cleared, preserving NONPASS4fbb0bb in history. DONE closeout and unmerged
-publication remain separate actual steps, not inferred from that review.
+cleared, preserving NONPASS4fbb0bb in history. After committing that work,
+ordinary DONE dependency/review gates cleared and the actual
+[ready-for-review delivery](https://github.com/ramboz/servo/pull/47) was created
+on exact `servo-card-slice-closeout@2cd33a4a...`. It remains unmerged.
+These are actual subsequent operator steps, not inferred review authority.
+Only Servo036-03 is closed; the recorded downstream/quality limits and
+nonblocking recurring-reader test follow-up remain unchanged.
 
 The craft pure-reader ownership/closure recurring-test gap is a recorded
 nonblocking reconciliation nit. The existing mocked forwarding test and actual

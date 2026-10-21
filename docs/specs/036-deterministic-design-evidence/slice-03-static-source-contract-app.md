@@ -22,8 +22,8 @@ both self-content discriminators and complete exact restorations. The
 [correction receipt](visibility3-correction-receipt.md) records their exact
 authorities and immutable raw index466e61d0. Full parent offline verification
 ca9d83ee and fresh full compliance/craft/architecture have passed.
-Independent reconciliation and the normal RECONCILED gate have now passed.
-DONE closeout and publication stay open. Earlier implementation
+Independent reconciliation and normal REVIEWED/RECONCILED/DONE gates passed.
+The ready-for-review stacked PR is published and unmerged. Earlier implementation
 checkpoints below preserve their historical pre-approval state, not current
 claims that approval or APP proof is absent.
 
@@ -105,7 +105,8 @@ claims that approval or APP proof is absent.
       Dashboard nonpasses and separately approved independent positive control.
 - [x] Required independent reviews and reconciliation pass; current docs,
       packages and status board agree without amending closed records.
-- [ ] Publish an unmerged ready-for-review PR on `servo-card-slice-closeout`.
+- [x] Publish an unmerged ready-for-review PR on `servo-card-slice-closeout`:
+      [delivery PR](https://github.com/ramboz/servo/pull/47), based on exact2cd33a4a.
 
 ## Assumptions
 
@@ -359,7 +360,8 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   bookkeeping, not implementation or proof. That actual verdict is preserved
   in commit4fbb0bb/raw history. Completed recovery/review steps are now marked
   complete. Fresh independent reconciliation R2 then passed and the normal
-  RECONCILED gate cleared; DONE/publication still require their actual steps.
+  RECONCILED gate cleared. Normal committed DONE closeout and ready/unmerged
+  publication subsequently completed; no acceptance criterion was revised.
 
 ### Reconciliation sweep
 
@@ -406,10 +408,15 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
 - **Updated:** independent reconciliation R2 verified both documentary fixes,
   returned PASS, and normal RECONCILED gate/transition cleared. Prior actual
   NONPASS4fbb0bb remains in history; no source or frozen-subject change occurred.
-- **Deferred to actual remaining gates, not waived:** normal DONE closeout and
-  unmerged stacked publication. No merge or full-app/Jig DONE follows.
+- **Updated:** after committing reconciled work, normal DONE dependency/review
+  gates cleared. The actual ready/unmerged PR targets the verified exact
+  `servo-card-slice-closeout` base. No merge or full-app/Jig DONE follows.
 
 ### Close-out (post-DONE)
 
-- [ ] Regenerate board and retain precise static-contract-only proof scope.
-- [ ] Preserve full-app/Jig compatibility gaps and immutable evidence locations.
+- [x] Regenerate/check the board and retain static-contract-only proof scope.
+- [x] Preserve full-app/Jig compatibility gaps and immutable evidence locations.
+
+Publication bookkeeping above records the actual requested post-DONE delivery;
+it changes no accepted criteria, decision, source policy or immutable outcome.
+Spec036 remains open through its untouched regional036-02 scope.

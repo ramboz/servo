@@ -499,3 +499,11 @@ Those are offline raw-evidence verifications without APP/grading/reader reruns,
 not genuine final lifecycle reviews. All old epochs, invalid negative premises and NONPASS history stay
 unchanged. No full quality, face/backend truth, positive Jig integration or
 merge is claimed.
+
+The completed finite Servo036-03 consumer subsequently passed fresh full
+compliance/craft/architecture and reconciliation R2, then normal committed
+REVIEWED/RECONCILED/DONE gates. The requested
+[ready-for-review stacked delivery](https://github.com/ramboz/servo/pull/47)
+is published on exact2cd `servo-card-slice-closeout` and remains unmerged.
+This is local slice/publication completion only; all broader limits above and
+the explicitly deferred direct-reader unit-test follow-up remain in force.
