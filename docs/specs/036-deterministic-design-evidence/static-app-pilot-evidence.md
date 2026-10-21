@@ -473,3 +473,27 @@ plumbing test mocks `_existing`, so it does not itself protect actual ownership/
 closure validation. The offline mutation audit remains actual bounded evidence,
 not that recurring regression test. Record the nit for reconciliation; it is
 not promoted to a blocker or folded into the minimal paint recovery.
+
+### Complete separately released visibility/3 epoch
+
+The own-box/contents correction received fresh independent policy selection,
+ordinary sealed staging and separate exact installed pre-result release.
+The [visibility/3 receipt](visibility3-correction-receipt.md) records all
+authorities, semantic witnesses and harness limits.
+Current complete index `A/visibility3-final-evidence-index.json`, SHA256
+`466e61d0fd6c2170f5d1824a1283c07c5e0b388c68a6c6de0c4a35dfb17df7a5`,
+has38 real native cases/660 unique-per-case required rows/2121 indexed files,
+with8exit0/17exit1/13exit2 and exact final baseline/definition restoration.
+This larger index also retains every candidate/build/delivery file.
+Self-marker genuinely passes15 with native-visible8x8/emptyDOM/background and
+unchanged PNG; self-caption has only required text FAIL while its positive24px
+box/presence/declarations remain supported. Both restorations are fresh native
+15PASS runs. Query/mixed60/unknown-veto/original-cause pin/replay/currentness and
+complete-reference shadow controls have actual new-epoch evidence.
+Contents-opacity has component diagnostic1.0 but native overall:null/exit2;
+UNKNOWN is not converted into numeric success.
+The parent has independently verified the six priority cases (`88d73193...`);
+full restored-index verification and genuine final lifecycle reviews remain
+separate. All old epochs, invalid negative premises and NONPASS history stay
+unchanged. No full quality, face/backend truth, positive Jig integration or
+merge is claimed.

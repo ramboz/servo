@@ -259,11 +259,12 @@ Their output domains remain `fdf50720...` and `56351edc...`.
 The independent reviewer recomputed this domain distinction; its static
 inspection is not fresh browser/runtime/APP proof.
 
-This checkpoint has been handed to the parent for separate actual installed
+At the staging handoff, this checkpoint was sent for separate actual installed
 definition review and explicit pre-result execution release. No new native
-outcome is claimed: all self-content and other finite vectors remain
-unexecuted expectations. Staging does not clear canonical craft NONPASS,
-old suspension17aff, full quality/Jig integration or merge gates.
+outcome was claimed: all vectors were still unexecuted expectations.
+Staging did not clear canonical craft NONPASS, old suspension17aff,
+full quality/Jig integration or merge gates. The subsequent release and actual
+proof are recorded below.
 
 ### Released actual priority proof (partial finite plan)
 
@@ -307,6 +308,90 @@ of the bounded own-box/contents correction, separate from source tests and
 synthetic review. The remaining unchanged finite controls/readbacks/restores,
 parent offline verification and normal final lifecycle reviews remain open.
 No full-app/pixel/face/backend/Jig completion or merge follows.
+
+### Complete visibility/3 finite proof and exact restoration
+
+The released plan is now complete: 38 actual native cases, 660 exact mandatory
+rows, 2121 indexed files, and exits8x0/17x1/13x2. The immutable index is
+`A/visibility3-final-evidence-index.json`, SHA256
+`466e61d0fd6c2170f5d1824a1283c07c5e0b388c68a6c6de0c4a35dfb17df7a5`.
+It includes all candidate/build/delivery bytes as well as native/observer/raw
+command records, hence its larger file count than the historical index.
+All38 owned native UUIDs are distinct; 34 fresh APP acquisition nonces are
+distinct. Three pre-acquisition identity negatives and the deliberately copied
+output replay do not claim fresh APP observations.
+
+All native gates equal oracle carriers, rawstdout and command return codes;
+actual Generic accept/read retains each original gate path/hash/verdict.
+Every required inventory matches exactly once. Actual observer envelopes,
+owned claims/receipts, loaded response bodies and closed artifact membership
+are checked. The copied replay is explicitly rejected foreign output, never
+relabelled as its new invocation's genuine observation.
+
+The remaining unchanged controls confirm the priority proof's boundaries:
+
+- Native query5ae47776 retains four valid responses, count:null, the native
+  invalid-selector `[` exception and exactly six heading UNKNOWN items.
+- Mixed-instability dcd1c74e retains all60 atomic samples and60 distinct caption
+  sizes, with error-free marker count0 throughout. Four known marker failures
+  remain FAIL; changing caption-size is UNKNOWN, not failed from its last value.
+- Contents-opacity9bef2a53 is11PASS/4UNKNOWN/exit2. The published component
+  measurement diagnostic is1.0, while the native overall composite is:null.
+  Neither value is converted to success or a visual-quality score.
+  Independent hard-hide6f7fbbbc is11PASS/4FAIL/exit1 despite contents uncertainty.
+- Protected copied-SOURCE a7da93fe publishes twenty UNKNOWN items once, each
+  exactly `approved artifact modified: design-input/input.json`, with null
+  component reference, no APP claim/output, no NoneType or `<gate>` surrogate.
+  Exact SOURCE385 restoration then fresh460e42ba returns16PASS/4FAIL/exit1.
+  Deliveryd4c62ce1 and candidate981eaf87 retain their original closure-refusal
+  causes and no APP acquisition claim.
+- Replayc9ba1bdf has a genuinely created new native invocation and published
+  component reference. All15 items refuse with the actual manifest/run
+  mismatch; no native invocation or claim was copied/preseeded. Fresh35991864
+  restores15PASS/exit0, rather than reusing the rejected output.
+- Real comment-only Bc5939228 has a changed observed output hash and16/4/exit1.
+  OldA currentness under B refuses2, B currentness succeeds0, and Generic
+  preserves originalA1 with the same gate path/hash. Exact A selection restore
+  clears only identity readback0, without capture/rescore. Fresh Dashboard
+  restorationcdd96616 separately returns16/4/exit1.
+
+The full-frozen-check/actual-published-evidence pure shadow audit is
+`A/visibility3-native-proof/pure-readback-audit/audit.json`, SHA256
+`537c94aa454138c9dccb03ddc0cbe95466e93dcacf7c3db309fc6e812379ad4d`.
+It accepts unchanged closure and refuses changed PNG, extra output, deleted
+response and self-symlink. The deliberate isolated shadow symlink is separately
+declared in the index, not presented as a hashable original artifact.
+Original outputs remain unchanged; repeated Generic baseline reads preserve
+1/0, and actual marker baseline/fresh-restoration currentness reads return0.
+The browser-membership added-file regression ran separately in an isolated
+unit tree, not against or by changing the frozen browser runtime.
+
+All142 frozen definition file pins and both exact baseline selections are
+restored; canonical SOURCE385 and every old08/03/controller/plan/index
+preservation check match. This does not heal or relabel intentionally invalid
+unselected negative fixture copies. No source goal, tolerance, family grammar,
+APP helper, grader, native runtime or R3/receipt driver changed during proof.
+
+Two offline harness assumptions are explicitly retained in
+`A/visibility3-metadata-harness-notes.json`: an initial historical-path lookup
+incorrectly treated relative paths as absolute; an initial index assembler
+incorrectly checked overall composite1.0 instead of the separate component
+diagnostic. Reading both old/current raw records established the actual
+component1.0/overallnull/exit2 distinction. Failed assembler source
+`4996623f...` is preserved, and no index had been published before that failure.
+Only the offline field assertion was corrected; no APP, grader, controller,
+reader or frozen definition was rerun/changed to make an outcome pass.
+
+Independent parent priority verification
+`P/visibility3-priority-parent-verification.json`, SHA256
+`88d731935138148ea0664f791b1721402226877694f0cda9193fe30e80e9878b`,
+already verifies the actual six priority cases without rerunning APP/readers.
+Its scope intentionally did not attest mutable selection state while remaining
+controls ran. The complete restored index has now been sent for full parent
+offline verification. Fresh full compliance/craft/architecture/reconciliation,
+ordinary gates and unmerged publication remain separate obligations.
+Existing Jig's actual PURE format negative remains before semantic/tree/served
+validation and NONCLEARING, not positive0.2 integration or Jig DONE.
 
 The craft pure-reader ownership/closure recurring-test gap is a recorded
 nonblocking reconciliation nit. The existing mocked forwarding test and actual

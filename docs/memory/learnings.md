@@ -221,3 +221,15 @@ with ownvisible24pxbox/unchangedDOM/textVisiblefalse, bothfreshrestores15P0.
 All142frozenpins/baseline selections remain exact. This actual APP-path correction
 proof is separate from61primitivecases/syntheticreviews; remainingfiniteplan
 and normalfullreviews stillblocklifecycle/fullAPP/Jig/merge claims.
+The unchanged released visibility3 plan is now actually complete:
+index466e61d0 has38nativecases/660rows/2121files (allcandidate/build/delivery
+bytes included),8exit0/17exit1/13exit2,38ownedUUIDs/34freshAPPnonces.
+All142frozenpins/selectedbaselines/canonicalSOURCE385 and oldepochs remain
+exact. Querynative'['countnull/6U, mixed60knownmarkerF+changingfontU,
+originalcause20sourceU/noAPP+restore, ownedcomponentreplay15U+freshrestore,
+realB/Aidentity-vs-Generic readback and fullfrozencheck outputshadow controls
+are newactualproof. Contentsdiagnostic is COMPONENT1.0 with nativeOVERALLnull/
+exit2, neverfallbacksuccess. An offlineassembler initially confused those
+fields; failedsource4996623f and correctedread-onlyharnesslimits are retained
+without changing/rerunningAPP/grading. Parentpriority88d73193 is bounded;
+fullparentverification and genuinefullfinalreviews/lifecyclestillrequired.

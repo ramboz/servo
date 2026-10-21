@@ -45,6 +45,9 @@
       both self-content controls with exact full vectors/semantic witnesses,
       then fresh byte-exact restorations: priorityindexa51b8689/6cases/95rows.
       Remaining finite controls/readbacks/restores and full postreviews stay open.
+- [x] Complete all38 new native cases/660 rows and pure controls, retain full
+      raw index466e61d0/2121files and exact final restoration; submit for parent
+      offline verification before closing through normal full reviews/gates.
 - [ ] Reconcile the nonblocking recurring pure-reader ownership/closure
       regression-test gap without treating retained offline evidence as a
       replacement for that test or expanding the current recovery.

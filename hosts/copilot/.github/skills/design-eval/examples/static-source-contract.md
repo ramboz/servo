@@ -166,9 +166,9 @@ observation. If text itself is required and its observed DOM value is empty,
 that literal value needs no ghost ink; the binding still requires a unique
 visible nonzero box. Missing visibility/text-paint observation flags are
 unknown, never defaults to success or observed absence.
-Profile `/3` is a repository conformance correction awaiting its own exact
-policy/installed-definition reviews and execution release. Historical profile
-`/2` installs and results cannot be relabelled as its empirical proof.
+Profile `/3` requires fresh exact policy/installed-definition reviews and
+pre-result execution release for each target. Historical profile `/2` installs,
+reviews and results cannot approve a `/3` run or be relabelled as its proof.
 Settlement samples approved required properties and correspondence/visibility
 atomically. Unselected counters, pulses and unrequired root height are not
 readiness conditions; changing a required property still refuses after the

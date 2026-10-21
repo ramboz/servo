@@ -141,9 +141,11 @@ Subsequent craft review found that self-applied `content-visibility:hidden`
 retains the element's own painted box while suppressing its contents.
 Profile `/3` distinguishes that box from ancestor suppression; actual browser
 regressions also retain hidden text and independent display/opacity/transform
-boundaries (`static_contract.py:212-213,261-262`). Its new exact policy/
-definition reviews and execution release remain outstanding. The completed
-profile `/2` epoch is suspended and not rebound to this source correction.
+boundaries (`static_contract.py:212-213,261-262`). Fresh exact policies,
+installed-definition review and separate release precede the actual profile
+`/3` 38-case/660-row proof and exact final restorations recorded in the pilot.
+This empirical proof does not clear normal final lifecycle reviews.
+The completed profile `/2` epoch remains suspended and is not rebound.
 The old false-block outcomes remain historical; the finite pilot does not
 establish universal CSS correctness.
 Existing Jig's old input allowlist does not attest this separate 0.2 experiment.

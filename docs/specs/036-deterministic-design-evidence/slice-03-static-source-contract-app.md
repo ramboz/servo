@@ -18,10 +18,10 @@ This is not a whole-view fidelity or application-completion verdict.
 **Current empirical checkpoint:** historical visibility/2/native526 completed
 34 gate cases/600 items before craft found the self-content false-block.
 That epoch remains suspended. Separately reviewed/released profile `/3`
-checkpoint1b830519 now has six actual priority cases/95 required rows, including
-both self-content discriminators and fresh exact restorations. The
+checkpoint1b830519 now has38 actual native cases/660 required rows, including
+both self-content discriminators and complete exact restorations. The
 [correction receipt](visibility3-correction-receipt.md) records their exact
-authorities and immutable raw index. The remaining finite plan, full
+authorities and immutable raw index466e61d0. Full parent offline verification,
 postreviews, reconciliation and publication stay open. Earlier implementation
 checkpoints below preserve their historical pre-approval state, not current
 claims that approval or APP proof is absent.
@@ -334,9 +334,9 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   distinct evidence. Profile `/3` own-box/contents recovery is implemented
   and reviewed at source level. D09/M04 policies subsequently received exact
   staging-only selection and ordinary sealed installation, then separate final
-  installed review/release588b6746. Six actual priority cases now prove both
-  self-content controls/restorations; the remaining finite plan and final
-  lifecycle reviews are still outstanding.
+  installed review/release588b6746. The actual complete38-case/660-row proof now
+  includes both self-content controls/restorations and all unchanged finite
+  controls. Full offline verification and final lifecycle reviews remain.
 - The actual unchanged-Jig PURE format negative closes only the earlier
   unexecuted-negative gap. It refuses before semantic/tree/served validation;
   positive0.2 bridge, CLI/lifecycle and downstream Jig completion remain
@@ -371,9 +371,11 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   not an APP result or execution release.
 - **Updated:** separate final installed review/release588b6746 authorized only
   the pinned new finite epoch. Priorityindexa51b8689 records six actual fresh
-  native cases/95 rows and semantic witnesses, not merely expected vectors.
-- **Deferred to actual remaining gates, not waived:** completion of the
-  unchanged remaining finite plan, parent offline verification, full craft recovery and final
+  native cases/95 rows and semantic witnesses; completeindex466e61d0 now closes
+  all38/660 cases/rows and exact restorations. Offline index-harness failures
+  are disclosed separately from unchanged actual APP outcomes.
+- **Deferred to actual remaining gates, not waived:** parent full offline
+  verification, fresh full compliance/craft/architecture review and final
   reconciliation review. Only then may normal REVIEWED/RECONCILED/DONE and
   unmerged stacked publication proceed. No merge or full-app/Jig DONE follows.
 

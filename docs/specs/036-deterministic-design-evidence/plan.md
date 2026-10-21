@@ -64,6 +64,18 @@ execution authorities are required before new APP proof. No existing frozen
 target, control plan or release is patched/rebound. The pure-reader recurring
 closure-test gap is a nonblocking reconciliation nit.
 
+### 036-03 completed released visibility/3 proof (2026-10-20)
+
+Fresh D09/M04 policy selectionc614, ordinary sealed checkpoint1b830519 and
+separate installed release588b6746 precede all new outcomes. Exact complete
+index466e61d0 records38nativecases/660requiredrows/2121files, all planned
+controls/currentness/readbacks/restorations and unchanged frozen definitions.
+New self-marker15P0 and self-caption14P1Fonlytext are actual owned native
+observations, not expected/synthetic vectors. The parent has verified the six
+priority cases under88d73193; full restored-index verification and fresh full
+compliance/craft/architecture/reconciliation/publication still follow.
+No helper/goal/grading change or old epoch rebind occurred during this proof.
+
 036-01 closeout selected integration parent
 `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5` and settled executable source
 `44a96d9549cd73f8a8ea3e1307157cb994b138ac` after the separately authorized
