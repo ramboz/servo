@@ -213,3 +213,11 @@ APP90e2/oraclea57. Input-domain differences are solely absolute recipe-path
 relocation, not changed input/output rows or goals. No APP/R3/gate/resultreader
 ran. Separate finalinstalledreview/executionrelease and newactualproof remain
 required; policy/staging PASS does not clear craftNONPASS or suspension17aff.
+Separate exact final release588b6746 then authorized the new finite epoch.
+Actual priorityindexa51b8689 has6freshnativecases/95rows/164rawfiles:
+Dashboard16P4F1, marker15P0, self-contentmarker15P0 with nativevisible8x8/
+emptyDOM/background and PNGidenticalbaseline, self-caption14P1F1 onlytext
+with ownvisible24pxbox/unchangedDOM/textVisiblefalse, bothfreshrestores15P0.
+All142frozenpins/baseline selections remain exact. This actual APP-path correction
+proof is separate from61primitivecases/syntheticreviews; remainingfiniteplan
+and normalfullreviews stillblocklifecycle/fullAPP/Jig/merge claims.

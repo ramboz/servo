@@ -265,6 +265,49 @@ outcome is claimed: all self-content and other finite vectors remain
 unexecuted expectations. Staging does not clear canonical craft NONPASS,
 old suspension17aff, full quality/Jig integration or merge gates.
 
+### Released actual priority proof (partial finite plan)
+
+The parent subsequently granted exact pre-result release
+`P/visibility3-final-pre-result-release.json`, SHA256
+`588b6746f59394181c97bc3634f8b6071de7554741cab7b21f7f79c34ff6627f`,
+for installed checkpoint1b830519/newD09/M04 only. Fresh independent installed
+auditb5194d13 and parent repeated4175-path/runtime/24-receipt closure7ba5fd4a
+support that release. Their synthetic probes and corrected reviewer-harness
+failures remain supporting non-APP evidence, not actual outcomes.
+
+The six priority native cases have now genuinely run under that release:
+
+| Case | Actual UUID | Required result | Native exit |
+| --- | --- | --- | --- |
+| Dashboard baseline | `77cd54b0-543d-4e68-af41-ea7785332fbb` | 16 PASS / 4 FAIL | 1 |
+| Independent marker baseline | `41a3554e-8fd3-4d14-a59c-e7b8f2ec7593` | 15 PASS | 0 |
+| Self content-hidden marker | `e490193c-4b07-4a70-bd24-306a1bc262d2` | 15 PASS | 0 |
+| Fresh marker restoration | `0637d5e0-2959-4fb0-ad39-64772dabf57c` | 15 PASS | 0 |
+| Self content-hidden caption | `b41b43bc-6c91-49a7-8b78-560a7eb94276` | 14 PASS / caption-text FAIL | 1 |
+| Fresh caption restoration | `dfe87a1c-f7df-4f15-af4d-8263fe824c21` | 15 PASS | 0 |
+
+Every predeclared mandatory-ID vector matches, not only the exits.
+Self-marker has native visible=true, empty literal DOM, width/height8,
+background `rgb(240, 178, 78)` and no hidden/clipped/unsupported/zero flags.
+Its actual served HTML contains the exact self-hidden mutation, response/build
+domains match the pre-result preview, and its actual PNG is byte-identical
+to baseline (`7d4bfbf5...`). Self-caption preserves native box visibility,
+unchanged literal `Connector inventory`, height24 and all five selected
+presence/style facts while `textVisible=false`; only the required text fails.
+Both restorations are fresh owned runs with distinct nonces and exact baseline
+body/PNG, not reused evidence or rescoring.
+
+`A/visibility3-priority-actual-proof-index.json`, SHA256
+`a51b8689dbdecba958d75d3135626a2f04af79f713c322b2ad5053503966b093`,
+binds all six cases/95 required rows/164 distinct raw files, owned UUID/nonce
+claims, actual responses, complete output membership and matching native gate/
+oracle/rawstdout/Generic original references. All142 frozen staged file pins
+and both exact baseline selections still match. This is real APP-path proof
+of the bounded own-box/contents correction, separate from source tests and
+synthetic review. The remaining unchanged finite controls/readbacks/restores,
+parent offline verification and normal final lifecycle reviews remain open.
+No full-app/pixel/face/backend/Jig completion or merge follows.
+
 The craft pure-reader ownership/closure recurring-test gap is a recorded
 nonblocking reconciliation nit. The existing mocked forwarding test and actual
 offline closure mutation audit are different evidence; neither is relabelled

@@ -41,6 +41,10 @@
       ordinary public sealed staging; retain all fourteen stage/two pure
       metadata commands0 and final exact checkpoint1b830519. Hand it back for
       separate installed review/release; no new APP/native outcome exists yet.
+- [x] Under separate final release588b6746, prove actual fresh baselines and
+      both self-content controls with exact full vectors/semantic witnesses,
+      then fresh byte-exact restorations: priorityindexa51b8689/6cases/95rows.
+      Remaining finite controls/readbacks/restores and full postreviews stay open.
 - [ ] Reconcile the nonblocking recurring pure-reader ownership/closure
       regression-test gap without treating retained offline evidence as a
       replacement for that test or expanding the current recovery.

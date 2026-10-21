@@ -15,13 +15,14 @@ source package, measures a separate unchanged application snapshot, and receives
 named static-contract failures/refusals through the ordinary required gate.
 This is not a whole-view fidelity or application-completion verdict.
 
-**Current empirical checkpoint:** the separately approved visibility/2/native526
-finite plan has run: 34 actual gate cases, 600 exact required items and pure readback/
-restoration controls. [The pilot evidence](static-app-pilot-evidence.md) records
-the exact authorities and immutable raw index. Subsequent craft review found a
-self-content-visibility false-block; the parent suspended that epoch.
-Repository-only profile `/3` recovery and fresh exact authority/proof must
-precede final postreviews, reconciliation and publication. Earlier implementation
+**Current empirical checkpoint:** historical visibility/2/native526 completed
+34 gate cases/600 items before craft found the self-content false-block.
+That epoch remains suspended. Separately reviewed/released profile `/3`
+checkpoint1b830519 now has six actual priority cases/95 required rows, including
+both self-content discriminators and fresh exact restorations. The
+[correction receipt](visibility3-correction-receipt.md) records their exact
+authorities and immutable raw index. The remaining finite plan, full
+postreviews, reconciliation and publication stay open. Earlier implementation
 checkpoints below preserve their historical pre-approval state, not current
 claims that approval or APP proof is absent.
 
@@ -332,8 +333,10 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   Repository-only corrections and separately approved native epochs are
   distinct evidence. Profile `/3` own-box/contents recovery is implemented
   and reviewed at source level. D09/M04 policies subsequently received exact
-  staging-only selection and ordinary sealed installation; final installed
-  review/release and new self-content native outcomes remain outstanding.
+  staging-only selection and ordinary sealed installation, then separate final
+  installed review/release588b6746. Six actual priority cases now prove both
+  self-content controls/restorations; the remaining finite plan and final
+  lifecycle reviews are still outstanding.
 - The actual unchanged-Jig PURE format negative closes only the earlier
   unexecuted-negative gap. It refuses before semantic/tree/served validation;
   positive0.2 bridge, CLI/lifecycle and downstream Jig completion remain
@@ -366,8 +369,11 @@ a recorded nonblocking reconciliation nit, not a new implementation scope.
   c614498f authorized ordinary sealed staging only. Exact installed checkpoint
   1b830519 binds fourteen public staging/two pure metadata command successes,
   not an APP result or execution release.
-- **Deferred to actual remaining gates, not waived:** final installed-definition
-  review, separate execution release, finite actual affected proof, full craft recovery and final
+- **Updated:** separate final installed review/release588b6746 authorized only
+  the pinned new finite epoch. Priorityindexa51b8689 records six actual fresh
+  native cases/95 rows and semantic witnesses, not merely expected vectors.
+- **Deferred to actual remaining gates, not waived:** completion of the
+  unchanged remaining finite plan, parent offline verification, full craft recovery and final
   reconciliation review. Only then may normal REVIEWED/RECONCILED/DONE and
   unmerged stacked publication proceed. No merge or full-app/Jig DONE follows.
 
