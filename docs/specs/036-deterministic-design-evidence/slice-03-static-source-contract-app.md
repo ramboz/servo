@@ -1,11 +1,10 @@
 ---
-status: RECONCILED
+status: DONE
 kind: feature
 dependencies: [036-01, adr-0044, adr-0045]
 last_verified: 2026-10-20
 frame_review: true
 arch_review: true
-claimed_by: real-source-static-app-gate
 ---
 
 ## Slice 036-03 - static-source-contract-app
