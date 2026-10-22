@@ -23,3 +23,10 @@ Provenance: genuine jig:reviewer/static-adr-final-frame, agent 5c65498b-0425-43b
 - Protocol SHA256 067dab49b553e71af3f01d7facf8610d365edcc17f2d8aa894006b9d28ae6e85.
 
 Hash-bound HUMAN acceptance remains outstanding. No approval or actual APP result is inferred from this frame review.
+
+## Publication cleanup (2026-10-22)
+
+The protocol and ADR context later had application-specific examples removed
+at the owner's request. The hashes above identify only privately archived
+historical originals, not the edited current documents. This historical review
+is not a new acceptance or a rebinding of those hashes to reduced exports.

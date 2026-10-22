@@ -28,8 +28,9 @@ Genuine fresh-context read-only task `static-contract-readiness` returned:
 > compliance/craft, full-app acceptance, Jig completion, or exact-policy
 > approval is asserted.
 
-Own executed prerequisite probes accepted approved10's exact twenty-fact
-identity through producer `inspect()` and launched Chromium156.0.8078.4 in
-the unchanged supplied Python3.14/Playwright1.64 runtime. Source rerender,
-APP matching, exact-policy approval and installed gate success were not
-inferred from those probes.
+## Publication cleanup (2026-10-22)
+
+The application-specific prerequisite probe paragraph was removed at the
+owner's request. Exact original bytes remain archived privately. The historical
+readiness verdict above is not a new approval of this edited export, and no
+selected hash or experiment is renamed, rebound or rerun.

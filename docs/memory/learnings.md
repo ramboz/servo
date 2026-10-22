@@ -151,93 +151,43 @@ Small implementation size does not waive servo's expected jig ceremony; do not s
 036-01 repeat-proof required explicitly approved whole eight-judgment batches under one frozen definition, not a new freeze after every run. Keep default8 and per-run8, freeze the total cap/purpose, and preserve imported history. Mutable consumed-highwater accounting belongs beside claims, with in-run prefix checks, locked next-number/cap enforcement and atomic synchronized persistence; missing/corrupt initialized state refuses rather than refunding attempts. This remains same-trust local durability, not independent authority against a writer replacing both records. See docs/specs/036-deterministic-design-evidence/multi-run-allowance-receipt.md; source review is not actual-quality or whole-slice acceptance.
 
 ## Static APP pilot is not visual or application completion
-The genuine 2026-10-19 native pilot is recorded in docs/specs/036-deterministic-design-evidence/static-app-pilot-evidence.md. Dashboard20 produced16pass/4fail/0unknown at threshold0; independent marker15 produced15pass. SOURCE and APP family declarations both name IBM Plex first: failures are exact ordered fallback/quoted-generic declaration differences, not actual-face or visual-defect proof. Header failure is exact DOM text including whitespace/case/copy. The marker PASS covers only fifteen selected facts and nontext geometry, not empty APP text, icon meaning, backend truth or full UI quality. Native query exception retained count:null/all six heading UNKNOWN. Mixed instability retained all60 atomics, known marker absence FAIL and changing caption-size UNKNOWN. Source approval, user ADR acceptance, exact APP policy review and sealed pre-result release are separate authorities. Remaining controls/restorations/postreviews and existing Jig0.2 nonclearance stay explicit; never convert this pilot into full-app/Jig DONE. Exact source/policy/raw carrier and independent parent-verification hashes are in the evidence record.
+Source integrity, APP policy approval, observations and completion authority are
+separate. Exact declared family stacks are not actual-face proof, and literal
+DOM text is not pixel fidelity. Unknown selector count is null, not observed
+absence; changing required values stay UNKNOWN beside independently stable
+contradictions. A measurement fraction is not full application or Jig success.
 
 ## Bug 006 pin refusals need the original independent authority
-An actual native copied-source integrity negative refused2 yet published41rows for20approvedIDs, with secondary NoneType causes hiding the original artifact-modified cause. Reuse the existing check_pins authority before outer component validation; do not posthoc-deduplicate diagnostics or treat valid pins as valid result evidence. Bug006 native temporary-target regressions cover protected artifact/evaluator/runtime drift, exact approved IDs once, original causes, no assertion execution, exactrestorePASS and genuinely missing/malformed component refusals with current pins. Fresh origin/main dc56bd33 lacks the unmerged owning feature; qualified reproduction refers ONLY to exact integrationbase2cd33a4a/runtimef0, not plain-main reproduction or resolution. Raw41row anomaly, actual base red, normal lifecycle red/green and independent bug/craft reviews remain recorded. Existing APP pilot installs/releases are not rebound to fixedruntime526; fresh installed-definition review/release is required.
-
-## Actual native526 APP-path integrity recovery in 036-03
-The 2026-10-20 corrected epoch proves Bug006 on the actual approved20-ID Dashboard07 APP installation, separately from six generic two-ID fixture gates. Native baseline96507236 is1/16pass4fail; original protected copied-SOURCE drift1b8ce7bb is2/exact20approvedUNKNOWN IDs once, each original artifact-modified cause, noNoneType/<gate>/APPobservation/acquisitionclaim; byteexactSOURCE385restore then freshAPPf61c7ea0 returns1/16pass4fail. Independent marker02 baseline5a213752 passes only15selectedfacts. Actual immutable repair audit a6367b93 and parent75-row verification0a424673 are linked in docs/specs/036-deterministic-design-evidence/static-app-pilot-evidence.md. Old41row anomaly24a10dd7 and oldf0epoch are preserved, not rewritten. Fresh sealednative526 c664 checkpoint/newpolicy approvals/separate4fb release are distinct authorities. Declaredfamily-stack/DOMtext failures are not actual-face or pixel proof; markergeometry is not emptyAPPtext/iconmeaning/backendtruth/fullappJigDONE. Remaining finitecontrols/readbacks/postreviews govern only the Servo consumer slice.
+Reuse the existing check_pins authority before outer component validation; do
+not posthoc-deduplicate diagnostics or treat valid pins as valid evidence.
+Bug006's native temporary-target regressions cover protected artifact/evaluator/
+runtime drift, exact approved IDs once, original causes, no assertion execution,
+restoration PASS and genuinely missing/malformed results with current pins.
+Qualified reproduction on an integration base is not reproduction on fresh
+main when the feature is absent there.
 
 ## CSS paint guards need applicable boxes and explicit uncertainty (036-03)
-Fresh final compliance caught real APP visibility false-blocks after a complete native experiment: ancestors visibility:hidden and HTML hidden attributes can be overridden. Old hidden-marker native raw.visible was true/8x8 while the old guard failed it; preserve that invalid negative premise and emitted outcome, never call it correct paint proof. Visibility/2 source-only TDD/review corrected applicable overflow/content boxes, effective fill, unsupported ink before transparency, hard absence versus unsupported geometry and text-fragment order. A pinned Chromium primitive has display:contents opacity0 painted byte-identical to its visible control while native checkOpacity says false: explicitly UNKNOWN/veto on computed contents nondefault opacity, not inferred hidden or PASS. Inline/block opacity0 remains known hidden even with zero client dimensions. At that source-only checkpoint, source2cfe/test57ec had54realbrowserprimitivecases plus full2570pass15skip316subtests; scoped mechanism/control PASS was not final compliance or APP approval. New policies/definitions/releases and actual profile2 outcomes were still required then; subsequent profile2 proof and the separate profile3 correction are recorded below. See docs/specs/036-deterministic-design-evidence/visibility2-correction-receipt.md; old07/02/f0/source authorities remain immutable.
-
-## Visibility2 actual semantic proof is separate from source-only review
-The released visibility/2 epoch has 34 actual native cases, 600 unique approved
-required items and 911 raw files, index visibility2-final-evidence-index.json
-SHA7bd1f04b. Same-goal overrides retain Dashboard16/4/exit1 and marker15pass/exit0;
-display:none negatives have nativefalse/zero boxes. Contents uncertainty stays
-11PASS/4UNKNOWN/exit2 despite diagnostic1.0; independent hide stays11PASS/4FAIL/exit1.
-These actual APP outcomes are separate from54browserprimitives/scopedreviewPASS.
-Preserve the old semantically invalid hidden-attribute negative and all old
-epochs. Source pin/query/mixed60/replay/currentness/shadow controls and exact
-restorations are recorded, not visual-quality scores or changed SOURCE goals.
-The parent later executed the unchanged existing Jig pure consumer format
-negative: receipt214a550a refuses new namespaces before file-role/tree/served/
-semantic validation, and its separate version guard refuses the actual envelope
-kind. This is actual bounded PURE-format NONCLEARANCE only, not positive0.2
-bridge, CLI/lifecycle or JigDONE. Full parent proof verification17093475 and
-final reviews remain separate authorities.
+Descendants can override inherited visibility:hidden and CSS display can
+override HTML hidden. Use effective element/text-parent styles and applicable
+clip boxes, not attributes or zero-sized client geometry alone. Nondefault
+opacity on display:contents remains explicitly unsupported/UNKNOWN, while
+ordinary inline/block zero opacity remains known hidden. Keep unsupported
+paint distinct from independently known absence; never erase stable failures.
+Independent browser controls are in skills/design-eval/test_static_browser.py.
 
 ## Content visibility distinguishes a box from its contents
-036-03 fresh full compliance passed on the complete visibility/2 pilot, then
-genuine craft found a remaining false block: self-applied
-content-visibility:hidden leaves an explicitly sized empty element's own
-background/border painted while hiding its contents. Ancestor suppression and
-the actual text-node parent's suppression are different checks. Repository-only
-browser TDD witnesses native-visible8x8 and byte-identical marker paint,
-preserved own-container presence with hidden text, true ancestor suppression,
-independent display/opacity hiding and unsupported-transform UNKNOWN.
-Profile/3 fixes only that distinction. Parent17affda2 suspended prior6ec/D08/M03;
-all34/600/911 outcomes and full compliancePASS remain bounded history, not
-new-source proof or lifecycle clearance. Source cut445e69ef has genuine scoped
-mechanism/test reviewPASS10a0022f, actual61browsercontrols and a separate full
-2570pass16skip316subtests run; none replaces full craft or APP authority.
-Fresh exact policies/definitions/
-release and actual affected proof remain required. Source/C0/family/goals/
-tolerances/native526/Bug006 and Jig's actual format-only NONCLEARANCE stay
-unchanged. See docs/specs/036-deterministic-design-evidence/visibility3-correction-receipt.md.
-Later pure-preparation authority849f5017 permits only pendingD09/M04 and R3
-metadata. Exact bundlef5cd2540/plan4b533244/controller6e2d07c1 preserves old
-controls and explicitly declares all15 expected statuses: self-marker allPASS;
-self-caption with unselected explicit24px height has onlycaption-textFAIL,
-ownpresence/stylePASS; both restorations allPASS. Eight actual public
-preparation/metadata commands returned0, no APPcapture/resultreader executed.
-Scoped controlsPASS08fce9d5 is not independent policy approval or release;
-canonicalcraftNONPASS and17aff remain until fresh exact authority/proof.
-The parent subsequently selected actual independent policy reviews16e221a2/
-6eccf7b9 under staging-only authorityc614498f. Ordinary public sealed staging
-and pure installed metadata passed14+2commands; exact checkpoint1b830519 binds
-newgrades423fe7b9/df94de55 and requiredpoliciesc82743aa/109cf802, native526/
-APP90e2/oraclea57. Input-domain differences are solely absolute recipe-path
-relocation, not changed input/output rows or goals. No APP/R3/gate/resultreader
-ran. Separate finalinstalledreview/executionrelease and newactualproof remain
-required; policy/staging PASS does not clear craftNONPASS or suspension17aff.
-Separate exact final release588b6746 then authorized the new finite epoch.
-Actual priorityindexa51b8689 has6freshnativecases/95rows/164rawfiles:
-Dashboard16P4F1, marker15P0, self-contentmarker15P0 with nativevisible8x8/
-emptyDOM/background and PNGidenticalbaseline, self-caption14P1F1 onlytext
-with ownvisible24pxbox/unchangedDOM/textVisiblefalse, bothfreshrestores15P0.
-All142frozenpins/baseline selections remain exact. This actual APP-path correction
-proof is separate from61primitivecases/syntheticreviews; remainingfiniteplan
-and normalfullreviews stillblocklifecycle/fullAPP/Jig/merge claims.
-The unchanged released visibility3 plan is now actually complete:
-index466e61d0 has38nativecases/660rows/2121files (allcandidate/build/delivery
-bytes included),8exit0/17exit1/13exit2,38ownedUUIDs/34freshAPPnonces.
-All142frozenpins/selectedbaselines/canonicalSOURCE385 and oldepochs remain
-exact. Querynative'['countnull/6U, mixed60knownmarkerF+changingfontU,
-originalcause20sourceU/noAPP+restore, ownedcomponentreplay15U+freshrestore,
-realB/Aidentity-vs-Generic readback and fullfrozencheck outputshadow controls
-are newactualproof. Contentsdiagnostic is COMPONENT1.0 with nativeOVERALLnull/
-exit2, neverfallbacksuccess. An offlineassembler initially confused those
-fields; failedsource4996623f and correctedread-onlyharnesslimits are retained
-without changing/rerunningAPP/grading. Parentpriority88d73193 is bounded;
-fullparentverification subsequently passedca9d83ee (2184checkedpaths/noAPP/
-grader/gate/reader rerun). Full reviews and normal lifecycle gates are separate
-completion authority, never inferred from these raw-evidence verifications.
-Fresh full compliance/craft/architecture and reconciliation R2 subsequently
-passed; normal committed REVIEWED/RECONCILED/DONE gates cleared for Servo036-03
-and its ready/unmerged stacked delivery is recorded in the slice/receipt.
-That closure does not claim full APP/quality/positive Jig integration or merge.
-The direct recurring reader ownership/closure test remains an expressly
-nonblocking refinement follow-up, not silently implemented.
+Self-applied content-visibility:hidden suppresses contents, not the element's
+own background/border box. Ancestor suppression and the actual text-node
+parent's suppression are separate checks. Profile/3 preserves that distinction
+without adding a general CSS renderer. Direct reader ownership/closure unit
+coverage remains an explicitly nonblocking refinement follow-up.
+
+## Publication cleanup preserves historical epochs without rebinding
+At the owner's request, application-specific examples and proof exports were
+removed from current publication, not replaced with pseudonymous evidence.
+Exact original PR heads, files and editable text were archived privately first.
+Runtime/source/document paths can be historical machine-bound inputs: edited
+current files no longer claim those old selected byte identities. Do not rename
+hashes, rebind approvals, rerun a pilot to replace history, or remove private
+runtime/pilot/worktree data. Generic code, policies and independent controls
+remain unchanged.

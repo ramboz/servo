@@ -10,9 +10,14 @@ prompt_source: review.py frame-critique spec.md 036-03 slice-03-static-source-co
 VERDICT: pass
 
 REASONING:
-The strongest assumption is that a closed snapshot can repeatably measure the unchanged Dashboard rather than a substituted fixture. Dashboard renders after /api/data, then fetches /api/prs and renders again, so freezing only the first response would not establish that claim. The frame survives because it requires actual response-byte closure and acquisition provenance, explicitly excludes backend authenticity, and stops capture claims if preservation cannot be demonstrated; neither successful capture nor APP-policy approval is asserted as already established.
-
-SPECIFIC ISSUES:
-- Residual snapshot-fidelity risk: Dashboard public/index.html:350,374,383 initiates the second fetch and subsequent rerender. The reviewed closure/settlement policy must account for both API responses, or the gate could measure a transient first-render state while claiming closed acquisition. The kill criterion contains this risk; it is not a blocking frame defect.
+The application-specific framing discussion has been removed at the owner's
+request. Its exact original is archived privately rather than replaced with
+an anonymized example.
 
 Provenance: genuine synchronous jig:reviewer task static-app-frame, generated frame prompt 036-03-frame-prompt.txt. No implementation existed.
+
+## Publication cleanup (2026-10-22)
+
+Verdict metadata describes the historical review, not a fresh judgment of this
+edited export. This file no longer has its original selected byte identity;
+no hash or approval is rebound and no review or experiment was rerun.

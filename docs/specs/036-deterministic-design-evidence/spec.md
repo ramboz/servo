@@ -347,9 +347,14 @@ change. The useful result is a named static-contract mismatch/refusal on an
 independent unchanged real APP, plus an unrelated independent positive control.
 It does not expand the first pilot's claims to real-app acceptance.
 
-The initial twenty-fact package covers selected root/heading/breadcrumb/static
-header declarations only. Dynamic rows/counts/content, whole-view height,
-interactions, pixels and actual font face remain residuals. Snapshot-only
+Dynamic rows/counts/content, whole-view height, interactions, pixels and actual
+font face remain residuals. Snapshot-only
 loopback delivery does not certify a backend or arbitrary HTTP app. Existing
 Jig `design_bindings` compatibility is a separately owned limitation, not
 permission to relabel 0.2 as 0.1 or manufacture an application-DONE attestation.
+
+At the owner's request (2026-10-22), application-specific examples and proof
+exports were removed after exact originals were archived privately. Generic
+contracts, functionality and independent synthetic/control tests are unchanged.
+Edited current records are reduced publication exports, not original selected
+evidence or new approvals under historical hashes.

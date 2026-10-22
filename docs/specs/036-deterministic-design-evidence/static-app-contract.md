@@ -86,9 +86,8 @@ substituted for byte identity.
 Read-only loopback serves sealed bodies only. The browser must complete every
 declared GET response with exact body/content-type/status, no redirects or
 service workers, and no extra resource, websocket, popup or download.
-Response bodies are retained as hashed output artifacts. Both real API routes
-must complete before Dashboard settlement; first-render-only closure is not
-sufficient. Fonts-ready and four equal animation-frame snapshots of the
+Response bodies are retained as hashed output artifacts. Fonts-ready and four
+equal animation-frame snapshots of the
 **approved required raw properties plus correspondence/visibility** give
 bounded settlement, not whole-view determinism. Each DOM snapshot reads the
 bound roles atomically. Unselected descendants, counters, pulses and root
@@ -138,3 +137,12 @@ producer verdict. It must not launch browser, call `compare()` or source
 
 Existing Jig 0.1 input allowlist does not clear this separate 0.2 component.
 No relabel, Jig edit, full-view waiver or downstream-DONE claim is permitted.
+
+## Publication cleanup (2026-10-22)
+
+The owner requested removal of application-specific examples and proof exports.
+The dedicated example clause was removed from this mixed protocol document;
+generic response closure and all runtime requirements above are unchanged.
+Exact original bytes remain archived privately. This edited publication is
+not the originally selected hash-bound protocol, and no historical approval
+is rebound to it. No capture, oracle or model was rerun for this cleanup.

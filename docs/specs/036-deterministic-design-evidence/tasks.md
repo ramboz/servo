@@ -3,64 +3,22 @@
 ## 036-03
 
 - [x] Independently frame/readiness-review the new APP-side vertical slice.
-- [x] Renew exact visibility-profile `/2` normalizer/control/policy/closure
-      review before fresh freeze. Earlier exact approvals remain historical.
 - [x] Witness finite normalization and snapshot/refusal red-to-green tests.
-- [x] Refresh the visibility-profile `/2` approved10 consumer, measure unchanged Dashboard and retain
-      all twenty constraints plus full-app/backend/Jig gaps.
-- [x] Preserve the approved unrelated SOURCE and renew its separate APP policy before results;
-      prove actual positive, mutation and restoration controls.
-      Exact earlier source/APP approvals, installed-definition releases and
-      native526 proof remain in `static-app-pilot-evidence.md`; final
-      compliance found an uncovered visibility false-block.
-- [x] Refresh real Generic output-reference consumers and pure current readback
-      under the corrected exact helper/definition epoch.
-- [x] Preserve all historical 28 finite native cases, 500 exact required rows, protected
-      copied-source repair/restoration, query/mixed-instability controls,
-      legitimate A/B freshness and full-reference shadow mutation refusals.
-      These are genuine historical outcomes, not current CSS-conformance
-      acceptance; hidden-attribute fixtures need explicit paint semantics.
-- [x] Complete the separately released visibility/2 epoch: 34 actual native
-      cases, 600 unique required items, all four same-goal override positives,
-      genuine display-none negatives, required opacity UNKNOWN veto and
-      independent hard-hidden precedence, complete readback/replay/restoration.
+- [x] Keep source facts and policy authority separate from APP observations.
+- [x] Implement immutable snapshot, required-gate and pure readback seams.
+- [x] Preserve independent synthetic/control coverage for visibility, typed
+      failures/refusals, snapshot closure and restoration.
 - [x] Complete independent postreviews/reconciliation, host regeneration,
       lifecycle gates and [ready/unmerged stacked delivery](https://github.com/ramboz/servo/pull/47).
-- [x] Record the genuine architecture-only PASS on the repository visibility/3
-      correction; preserve canonical craft NONPASS and separate APP authority.
-- [x] Recover the genuine craft self-content-visibility blocker through
-      repository-only profile `/3` TDD, fresh scoped review and exact new
-      policy/installed-definition review/release before actual APP proof.
-      Preserve historical `/2` full-compliance PASS, craft NONPASS and suspended
-      results separately from the genuine current `/3` full review passes.
-- [x] Under separate pure-preparation authority849f5017, prepare pending
-      D09/M04 policies and R3 finite plan with complete mandatory-ID vectors,
-      baseline/resource/runtime closures and all eight actual metadata receipts.
-      Submit exact bundlef5cd2540 for independent policy-only review; no staging
-      or APP execution is authorized by preparation/scoped-control PASS.
-- [x] Apply separately selected actual policy reviews under c614498f through
-      ordinary public sealed staging; retain all fourteen stage/two pure
-      metadata commands0 and final exact checkpoint1b830519. Hand it back for
-      separate installed review/release; no new APP/native outcome exists yet.
-- [x] Under separate final release588b6746, prove actual fresh baselines and
-      both self-content controls with exact full vectors/semantic witnesses,
-      then fresh byte-exact restorations: priorityindexa51b8689/6cases/95rows.
-      Remaining finite controls/readbacks/restores and full postreviews stay open.
-- [x] Complete all38 new native cases/660 rows and pure controls, retain full
-      raw index466e61d0/2121files and exact final restoration; submit for parent
-      offline verification before closing through normal full reviews/gates.
-- [x] Retain actual parent full offline verificationca9d83ee of38cases/660rows/
-      2184checkedpaths as raw-evidence support, not lifecycle/quality clearance.
 - [x] Record the nonblocking recurring pure-reader ownership/closure test gap
       in the deviation log and refinement follow-up. The actual recurring
       test remains deferred; offline evidence is not relabelled as that test,
       and no implementation scope is added.
-- [x] Obtain and record fresh full post-proof compliance/craft/architecture
-      PASS, clear normal REVIEWED gate, and track the unchanged nonblocking
-      reader-test follow-up in refinement without adding implementation scope.
-- [x] Preserve genuine reconciliation NONPASS4fbb0bb, correct stale task/plan
-      state, obtain fresh independent reconciliation R2 PASS and clear normal
-      RECONCILED gate without source/frozen-subject changes or bypasses.
+
+Application-specific task/proof history was removed at the owner's request
+(2026-10-22). Exact originals are archived privately; these reduced records do
+not preserve original hash identity or confer new approval. Implementation,
+oracles, source policies and independent synthetic/control tests are unchanged.
 
 ## Authoring and readiness
 

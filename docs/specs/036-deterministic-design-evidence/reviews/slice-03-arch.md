@@ -4,7 +4,7 @@ pass: arch
 verdict: pass
 reviewer: jig:reviewer / 036-03-visibility3-full-architecture (fresh context, richer arch-review)
 reviewed_at: 2026-10-21T01:06:05Z
-prompt_source: review.py arch-review; files/036-03-visibility3-full-arch-prompt.txt; current90e2/full466e proof/parentca9d post-proof review
+prompt_source: review.py arch-review; original exact prompt archived privately before publication cleanup
 substrate: shown
 applied_skill: arch-review
 shown_candidates: [arch-review:high-confidence, access:speculative, agent-development:speculative, build-mcp-app:speculative, build-mcp-server:speculative, build-mcpb:speculative, cardputer-buddy:speculative, claude-automation-recommender:speculative, claude-md-improver:speculative, command-development:speculative, configure:speculative, example-command:speculative, example-skill:speculative, frontend-design:speculative, hook-development:speculative, m5-onboard:speculative, math-olympiad:speculative, mcp-integration:speculative, playground:speculative, plugin-settings:speculative, plugin-structure:speculative, pr-review:speculative, project-artifact:speculative, scout-autotune:speculative, scout-bench-create:speculative, scout-memory-init:speculative, scout-pr-review:speculative, scout-scrum-master:speculative, session-report:speculative, skill-creator:speculative, skill-development:speculative, writing-hookify-rules:speculative]
@@ -23,4 +23,12 @@ SPECIFIC ISSUES:
 - [nit][impl] skills/design-eval/test_static_contract.py:375 — Mocking `_existing` leaves direct ownership/output-closure behavior without a recurring regression here. This remains the explicitly nonblocking follow-up; retained offline mutation evidence does not replace it.
 
 RECONCILIATION NOTES:
-Record this as the completed post-proof full architecture pass. Preserve suspended epochs, genuine NONPASS history, the invalid historical hidden-attribute premise and disclosed offline harness failures. Jig evidence remains the earlier M03 format-only refusal before semantic validation, with no M04 reprobe or positive 0.2 bridge. Keep same-trust local/static limits and the remaining reconciliation, lifecycle and publication gates explicit; do not amend accepted decision records.
+Keep same-trust local/static limits explicit. Unsupported downstream integration
+is not established by an architecture pass.
+
+## Publication cleanup (2026-10-22)
+
+The application-specific reconciliation discussion was removed at the owner's
+request. Exact original review/prompt bytes remain archived privately. The
+historical verdict and generic findings are not a fresh judgment of this edited
+export, and no selected hash or approval is renamed or rebound.

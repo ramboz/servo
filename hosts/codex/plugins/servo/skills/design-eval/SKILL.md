@@ -323,9 +323,8 @@ the separately versioned, manifest-driven APP observer for approved
 `vellum-confirmed-source/0.2` inputs. It uses the ordinary required command and
 output-reference seams, not the card signature or a visual-quality score.
 Each installation needs its own exact policy/pre-result approval and sealed
-ordinary required plan. The bounded pilot exercises a real twenty-fact
-Dashboard and an independently authored fifteen-fact control, including a
-textless geometry role. Do not treat source-only integrity acceptance, a
+ordinary required plan. Independently authored controls include a textless
+geometry role. Do not treat source-only integrity acceptance, a
 measurement fraction or this documentation as APP success, whole-view fidelity
 or Jig completion. This consumer uses no model calls.
 

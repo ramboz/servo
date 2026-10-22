@@ -1441,4 +1441,4 @@ point to audit both drivers' exit-code contract against dispatch together.
 
 **Resolution trigger:** Next focused maintenance of the static APP pure reader, or a dedicated test-only follow-up, adds a temporary-filesystem regression exercising real `_existing` ownership and closure checks without mocking that helper. Preserve no-capture/no-compare/no-rescore behavior and do not change accepted SOURCE goals, policies or output meanings.
 
-**Surfaced by:** [036-03](specs/036-deterministic-design-evidence/slice-03-static-source-contract-app.md), its full craft/architecture reviews and [visibility3 receipt](specs/036-deterministic-design-evidence/visibility3-correction-receipt.md). This tracks the existing user-directed nonblocking nit, not new slice scope.
+**Surfaced by:** [036-03](specs/036-deterministic-design-evidence/slice-03-static-source-contract-app.md) and its historical full craft/architecture reviews. Application-specific proof exports were removed at the owner's request; exact originals remain privately archived. This tracks the existing user-directed nonblocking nit, not new slice scope or a new approval of edited exports.

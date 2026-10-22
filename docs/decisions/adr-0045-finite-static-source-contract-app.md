@@ -14,19 +14,14 @@ Accepted (2026-10-19)
 ## Context
 
 Real design inputs need application observations without pretending a small
-static contract proves visual quality. Approved10 carries twenty source facts
-under `vellum-confirmed-source/0.2`, while the closed card pilot consumes
+static contract proves visual quality. `vellum-confirmed-source/0.2` is
+separate from the closed card pilot's
 `vellum-design-input/0.1-pilot`. Changing that pilot or silently widening its
 normalizer would change an accepted contract.
 
-An executed 2026-10-19 identity-only `confirmed_source.inspect()` probe accepted
-approved10 input SHA-256
-`385f73c2d2736c316d170b1b74eeb23ad891d1556745c3e3e0df7ecaded52eef`
-and all twenty IDs. A separate frozen-runtime probe launched Chromium
-156.0.8078.4 without changing its environment. These establish prerequisite
-identity/availability, not APP matching. `confirmed_source.py:415-473` checks
-identity/closure; `:512-515` additionally rerenders source and therefore is not
-a pure consumer readback API.
+Identity-only source inspection is separate from source verification that
+rerenders a reference. Availability or source integrity does not establish
+application matching.
 
 ## Decision Options Considered
 
@@ -106,3 +101,12 @@ Engineering direction approval is not exact-policy/pre-result approval.
 Exact-policy acceptance, approved independent positive-control inputs and
 downstream Jig compatibility remain separate gates. No pixel engine or
 model-quality policy is selected here.
+
+## Publication cleanup (2026-10-22)
+
+At the owner's explicit request, application-specific prerequisite examples
+and identities were removed from this export. Exact original bytes were
+archived privately before editing. The accepted architectural choice,
+alternatives, required policy and source/APP ownership remain unchanged.
+This reduced export is not the original hash-bound acceptance subject; no
+hash or approval is renamed/rebound and no new acceptance is claimed.

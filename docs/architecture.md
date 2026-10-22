@@ -122,9 +122,6 @@ comparison (`:1071`). The
 [walkthrough](../skills/design-eval/examples/static-source-contract.md)
 documents this bounded experimental path. Each installation requires exact APP
 policy/pre-result authority and sealed ordinary grading identities.
-The [recorded pilot](specs/036-deterministic-design-evidence/static-app-pilot-evidence.md)
-has twenty-fact Dashboard nonpasses, an independent fifteen-fact positive and
-actual 0/1/2 controls/readbacks; it is not visual quality/full-APP acceptance.
 The generic outer gate reuses its pin authority before interpreting an
 unavailable component, preserving the original refusal cause and exactly-once
 inventory for protected-input drift (`required_runtime.py:903`; Bug 006).
@@ -133,22 +130,19 @@ overrides at the effective element/text-parent styles; non-overridable
 applicable ancestor effects remain guarded. Its clipping boxes exclude
 `display:contents`/ordinary boxless inline ancestors; effective fill and
 unsupported text effects are distinguished before absence inference.
-Nondefault opacity on `display:contents` remains explicitly UNKNOWN because
-native visibility disagrees with the recorded primitive paint probe.
-Real browser primitive red/green and the historical profile `/2` 34-case native
-epoch record same-goal overrides and required UNKNOWN/hard-hide vetoes.
-Subsequent craft review found that self-applied `content-visibility:hidden`
-retains the element's own painted box while suppressing its contents.
-Profile `/3` distinguishes that box from ancestor suppression; actual browser
-regressions also retain hidden text and independent display/opacity/transform
-boundaries (`static_contract.py:212-213,261-262`). Fresh exact policies,
-installed-definition review and separate release precede the actual profile
-`/3` 38-case/660-row proof and exact final restorations recorded in the pilot.
-This empirical proof does not clear normal final lifecycle reviews.
-The completed profile `/2` epoch remains suspended and is not rebound.
-The old false-block outcomes remain historical; the finite pilot does not
-establish universal CSS correctness.
+Nondefault opacity on `display:contents` remains explicitly UNKNOWN.
+Self-applied `content-visibility:hidden` suppresses contents, not the
+element's own painted box. Profile `/3` distinguishes that box from ancestor
+suppression and the actual text-parent guard
+(`static_contract.py:212-213,261-262`). Independent browser controls in
+`skills/design-eval/test_static_browser.py` cover those distinctions without
+establishing universal CSS correctness.
 Existing Jig's old input allowlist does not attest this separate 0.2 experiment.
+
+Application-specific proof exports were removed at the owner's request.
+Exact historical source/document bytes were archived privately first; edited
+current files are not asserted to retain historical selected hashes or approvals.
+This publication cleanup changes no runtime, policy or evaluation behavior.
 
 Ordinary command evidence optionally binds a declared run-scoped output
 manifest/capture closure, separate from immutable evaluator input artifacts.

@@ -21,10 +21,7 @@ closure_schema: 1
 
 An installed required gate correctly refuses changed approved input, but its
 overall carrier duplicates every required ID and replaces the leading cause
-with a secondary `NoneType` error. During the separately authorized finite
-[036-03 APP pilot](../specs/036-deterministic-design-evidence/static-app-pilot-evidence.md),
-native run `24a10dd7-c782-41db-9727-3213e4e381ca` published 41 UNKNOWN items:
-two copies of each approved twenty IDs plus `<gate>`. This is a defect in the
+with a secondary `NoneType` error. This is a defect in the
 generic runtime introduced with the unmerged 035 implementation, not a new
 design interpretation or a source-producer defect. Closed 035/036-01 records
 are linked, not amended.
@@ -40,18 +37,6 @@ Before the fix, the focused regression observes
 Exact input restoration must restore an actual native PASS.
 
 ## Evidence
-
-Retained artifact root:
-`/Users/ramboz/.copilot/session-state/43b73062-3958-42e3-879f-4f588494ff00/files`.
-`static-native-proof/dashboard/mutated-copied-source-input/` contains actual
-argv/stdout/stderr, engine carriers, Generic acceptance/readback and exact
-restoration. `unexpected-duplicate-required-inventory.json` SHA256 is
-`ca47f603f92f240892bd14f475eb99ee5daa25d7ddb926662441b430c24b236b`.
-The original gate SHA256 is
-`18fb70fe4fec1259f5f62d47ede631b5ef3173014d4131eab9a1b9ef93fb4cf9`.
-The copied and read-only original SOURCE input both retain SHA256
-`385f73c2d2736c316d170b1b74eeb23ad891d1556745c3e3e0df7ecaded52eef`
-after exact restoration; no APP observation was acquired for this control.
 
 `static-generic-pin-drift-red-unittest.txt` witnesses the first isolated native
 regression fail. `static-generic-pin-drift-green-unittest.txt` records the
@@ -175,11 +160,6 @@ No experimental installed definition is updated in place.
 
 ## Already tried
 
-The installed APP experiment is hard-held after the unexpected carrier.
-All original installs, exact checkpoint/release, successful pilot cases,
-NONPROOF replay setup and source-restoration records remain immutable.
-No vendored experiment helper or old approval is edited in place.
-
 The default and selected observer Python lacked pytest. The first helper
 attempt returned environment exit 2, not a red test. Standard-library unittest
 witnessed the real red/green; related pytest suites use a separate existing
@@ -215,8 +195,7 @@ Fresh independent [bug-review](reviews/bug-006-bug-review.md) and
 read-only/provenance limits retained. The normal `REVIEWED` transition ran
 the same named regression green, stamped `green_confirmed_at` and validated
 both actual review artifacts without a bypass.
-Existing APP execution authority is suspended; this repair does not itself
-authorize another APP experiment.
+This generic repair does not itself authorize application experiments.
 
 ## Learning
 
@@ -231,3 +210,12 @@ stack-target qualification when the owning feature is absent from fresh main.
 ## Main recheck
 
 - 2026-10-19 - `servo-card-slice-closeout@2cd33a4a08dea72a961662e24b5f11da5e7bdeb0` -> reproduces: Qualified STACK target only: exact archived2cd runtimef0f9 matches affected epoch; expanded native regression RED for protectedinput/evaluator/runtime with duplicateIDs. Retained files/bug006-qualified-reproduction/{qualification.json,native-base-red/{command.json,stdout,stderr},result.json}; resultSHA241d8be87b4ffe9e92683b6e0a3904663e0fa3fce719b099d467390203d6fdfb. Fresh fetched origin/main@dc56bd3397c21224866cba639adb7c5a334bcec0 has no required_runtime.py: featureabsent/notrunnable, NOT plain-main reproduces and NOT resolved-on-main. Parent explicitly approved truthful stack-target qualification, no bypass.
+
+## Publication cleanup (2026-10-22)
+
+Application-specific incident examples and proof references were removed at the
+owner's request. The generic defect, qualified reproduction, native temporary-
+target regression and repair are retained. Exact original document/source
+bytes were archived privately first. This edited export is not the original
+selected evidence or a new lifecycle verdict; old hashes and approvals are
+not renamed or rebound. No runtime or assertion changed.

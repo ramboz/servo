@@ -4,9 +4,8 @@
 application-success receipt. ADR-0045 accepts the bounded approach, not a
 new target's APP policy, result or merge. Each installation requires genuine
 source authority and a separate exact APP-policy/pre-result review.
-Never fabricate approval files from these instructions. The repository's
-`docs/specs/036-deterministic-design-evidence/static-app-pilot-evidence.md`
-records the independently approved, actually executed bounded pilot.
+Never fabricate approval files from these instructions. Application-specific
+examples and proof exports are not part of this generic walkthrough.
 
 This observer compares a finite approved source inventory with a separate
 application snapshot. It does not measure pixels, actual font face, dynamic

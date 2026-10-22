@@ -1,6 +1,6 @@
 # Plan: deterministic design-evidence component
 
-## 036-03: finite real-source APP consumer (2026-10-19)
+## 036-03: finite static-source APP consumer
 
 This additive slice starts at exact `servo-card-slice-closeout`
 `2cd33a4a08dea72a961662e24b5f11da5e7bdeb0`. It does not reopen 036-01 or
@@ -10,8 +10,8 @@ APP policy/normalizer/output/closure plan before freeze/install.
 1. Frame all seven 036-03 criteria and obtain independent framing/readiness.
 2. TDD an explicit finite APP normalizer and multi-resource immutable snapshot,
    retaining old source primitives, exact inventory and generic gate seams.
-3. Acquire real unchanged Dashboard static declarations from approved10 plus
-   actual frozen fixture-backed API bodies; retain all failures and gaps.
+3. Keep independently observed APP values separate from source facts and
+   preserve complete snapshot/response closure.
 4. Independently approve an unrelated SOURCE and separate APP pre-result, then
    prove bounded positive/negative/restoration behavior through the same gate.
 5. Exercise pure current readback and existing generic consumers; retain
@@ -19,68 +19,16 @@ APP policy/normalizer/output/closure plan before freeze/install.
 6. Run genuine independent postreviews/reconciliation and ordinary gates,
    publish an unmerged ready-for-review PR stacked on the selected base.
 
-The parent proposal is preserved in this session's delivered message; exact
-approved policy bytes and immutable command/evidence indexes supersede the
-proposal only after real independent review. No model calls are authorized.
+### Publication cleanup (2026-10-22)
 
-### 036-03 prior native526/profile1 checkpoint (2026-10-20)
-
-Steps 1-5, through actual finite controls/readbacks, are complete before final
-slice reviews. The current native526 epoch has 28 genuine gate
-cases and 500 published required items, each matching its approved inventory
-exactly once. The [pilot evidence](static-app-pilot-evidence.md) links the
-immutable 741-file index, fresh policy/release authorities, actual protected
-source refusal and byte-exact restoration, native query error, sixty atomic
-mixed-instability samples, legitimate A/B currentness and pure readback.
-Old f0 outcomes, the 41-row defect and replay-setup NONPROOF remain historical.
-Bug 006 is independently reviewed and normally DONE; no closed 035/036-01 record,
-source goal, source writer authority or peer producer was rewritten.
-This establishes finite static-contract discrimination only. Final
-compliance/craft/architecture, reconciliation and publication remain.
-
-### 036-03 current visibility/2 checkpoint (2026-10-20)
-
-Genuine final compliance exposed CSS false-blocks after that historical
-experiment. The open slice recovered through actual browser red/green and a
-scoped source/control review, then received new exact policy/staging/installed
-execution authority. Current visibility/2 proof has 34 native cases, 600 exact
-required items and a 911-file immutable index in the pilot evidence. It proves
-four same-goal overrides, corrected hidden negatives and required opacity
-uncertainty/independent-hidden precedence in addition to the earlier finite
-control goals. Fresh full slice reviews and normal lifecycle/publication still
-follow; no old outcome or review is rebound.
-
-### 036-03 self-content conformance recovery (2026-10-20)
-
-Full compliance passed on profile `/2`; subsequent genuine craft found that
-the guard incorrectly hides a bound element's own box for self-applied
-`content-visibility:hidden`. Parent suspension `17affda20...` holds all further
-D08/M03 APP/gate/result-reader execution. Preserve the 34/600/911 proof as
-actual bounded history, not lifecycle clearance.
-Repository-only profile `/3` TDD distinguishes own-box paint from suppressed
-contents, retaining applicable ancestor suppression and all previous guard
-boundaries. A stable tested source cut and exact fresh policy/definition/
-execution authorities are required before new APP proof. No existing frozen
-target, control plan or release is patched/rebound. The pure-reader recurring
-closure-test gap is a nonblocking reconciliation nit.
-
-### 036-03 completed released visibility/3 proof (2026-10-20)
-
-Fresh D09/M04 policy selectionc614, ordinary sealed checkpoint1b830519 and
-separate installed release588b6746 precede all new outcomes. Exact complete
-index466e61d0 records38nativecases/660requiredrows/2121files, all planned
-controls/currentness/readbacks/restorations and unchanged frozen definitions.
-New self-marker15P0 and self-caption14P1Fonlytext are actual owned native
-observations, not expected/synthetic vectors. The parent verified the six
-priority cases under88d73193 and complete restored index underca9d83ee, with
-no APP/grading/reader reruns. Fresh full compliance/craft/architecture have
-passed and the normal REVIEWED gate cleared. Independent reconciliation R2
-subsequently verified documentary corrections and passed; normal RECONCILED
-cleared. After committing reconciliation, normal DONE gates cleared and the
-[ready-for-review delivery](https://github.com/ramboz/servo/pull/47) was published
-on the verified exact2cd `servo-card-slice-closeout` base. It remains unmerged;
-broader full-app/quality/positive-Jig obligations are not claimed complete.
-No helper/goal/grading change or old epoch rebind occurred during this proof.
+Application-specific preparation, experiment and proof sections were removed
+at the owner's request, rather than replaced with anonymized claims.
+Exact original bytes remain archived privately. Generic functionality and
+independent synthetic/control tests are retained unchanged. The original
+historical lifecycle and [unmerged delivery](https://github.com/ramboz/servo/pull/47)
+are not new approval or evaluation authority for this edited export.
+The recurring direct-reader regression remains a nonblocking refinement
+follow-up; broader quality and unsupported downstream integration stay open.
 
 036-01 closeout selected integration parent
 `6d5e5b66c7f3ed796c7cbbbafdb84012e2e29cb5` and settled executable source
