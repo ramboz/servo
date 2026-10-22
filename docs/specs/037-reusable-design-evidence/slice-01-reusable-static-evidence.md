@@ -1,9 +1,8 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [adr-0046]
 last_verified: 2026-10-22
 arch_review: true
-claimed_by: generic-design-evaluator
 ---
 
 ## Slice 037-01 - reusable static evidence
@@ -88,8 +87,8 @@ a pilot-specific runtime.
 
 ### Close-out (post-DONE)
 
-- [ ] Status board regenerated and checked.
-- [ ] Primer surfaces checked; no stale active-spec detail retained.
+- [x] Status board regenerated and checked.
+- [x] Primer surfaces checked; no stale active-spec detail retained.
 
 ### Deviation log (after reconciliation)
 

@@ -154,7 +154,7 @@
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | **DONE** |  |
 | [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-01 — tbd | DRAFT |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 — tbd | DRAFT |  |
-| [037-reusable-design-evidence](037-reusable-design-evidence/spec.md) | 037-01 - reusable static evidence | RECONCILED (generic-design-evaluator) |  |
+| [037-reusable-design-evidence](037-reusable-design-evidence/spec.md) | 037-01 - reusable static evidence | **DONE** |  |
 
 ## Deferred slices
 
