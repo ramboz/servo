@@ -56,12 +56,29 @@ The installed `meta-judge.sh` is a thin, deterministic decision table over `gate
 | `stop_hook_active` is true (or stdin is unparseable) | exit 0, silent — gate never runs | Already nudged this stop sequence; an indeterminate guard biases toward never trapping the session |
 | oracle **passes** (`gate.py` exit 0) | exit 0, silent | Work clears the bar; let the turn stop |
 | oracle **below threshold** (`gate.py` exit 1) | **block** with a structured `reason` hint naming composite + threshold (+ any `missing`) | The meta-judge's whole point — keep working with real evidence |
+| enabled v2 overall **fail** (`gate.py` exit 1) | **block** naming policy reason, required IDs/evidence and exact overall gate path/hash | A high score or component pass cannot waive a required veto or failed quality threshold |
 | oracle **env-error** (`gate.py` exit 2), or an uninvocable / unparseable gate | exit 0 + a one-line `systemMessage` warning to the **user** | **Fail open** — a broken oracle must never trap a live session |
 
 Two consequences worth stating up front:
 
 - **Fail open.** Unlike `/servo:agent-loop`'s fail-closed brakes, a misconfigured or slow oracle here **never blocks** — it warns the user and lets the stop proceed. A `Stop` hook that can deadlock a human's session is worse than no hook at all.
 - **At most one nudge per stop sequence.** The hook respects `stop_hook_active`, so it blocks **once** then lets the next stop through — well inside Claude Code's consecutive-block cap. (Aggressive block-until-pass is a documented project customization, not the default.)
+
+V2 advice inspects the original overall gate, fresh invocation and byte-bound
+component references, not a trusted scalar or latest ledger. Contradictions
+require implementation repair and rerun; `required_evidence_unavailable`
+requires acquisition/binding repair. Unknown versions refuse. A turn allowed
+through fail-open is **not completion attestation**; known contradictions and
+raw evidence remain visible. Policy changes require explicit reviewed reapproval;
+`source_identity` is approved provenance, not served-build identity.
+
+**Existing/customized script migration:** reinstall never silently replaces
+`meta-judge.sh`. A differing script gets an explicit migration warning. Back it
+up, compare against the current template, and port the validation/advice; or,
+after reviewing local changes, remove the backed-up script and reinstall.
+Update the portable `gate.py` / `required_runtime.py` / `gate_consumer.py`
+closure through the normal runtime installer as well. Copilot's adapter remains
+advisory; static hook output is not proof of native unattended autonomy.
 
 ## Block vs soft-context (a project-owned knob)
 

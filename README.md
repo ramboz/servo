@@ -130,6 +130,32 @@ have unknown USD cost: standalone attended scoring works, but registered
 unpriced components refuse USD-bounded loops/heartbeats. See the
 [current decisions](https://github.com/ramboz/servo/blob/main/docs/decisions/README.md).
 
+## Required evidence beside quality (explicit opt-in)
+
+Scalar projects keep gate JSON v1 and existing threshold behavior. Projects
+can generate, independently review, approve and explicitly install required
+command assertions with `oracle_overlay.py install … --enable-required`.
+Required contradictions veto even perfect quality, zero weight or
+`THRESHOLD=0`; unavailable evidence refuses with exit 2. The opt-in v2 gate
+preserves immutable run-bound component and declared-output references.
+Only the overall gate verdict is authority, never a component pass alone.
+See the [required-policy walkthrough](skills/spec-oracle/examples/required-policy.md).
+
+The [bounded reusable static observer](skills/design-eval/examples/static-source-contract.md)
+compares a project-owned approved source inventory against an independently
+selected closed static snapshot. Manifests define roles, bindings, resources
+and environment; no component implementation or model judge is bundled.
+It is static measurement, not visual quality, backend authenticity or
+application completion. The actual clean six-helper producer closure is
+byte-pinned against its reviewed source cut. Changed helper bytes refuse and
+require a new approval epoch; approvals are never silently migrated.
+
+Supported loop/checkpoint, hook-advice and heartbeat/report paths retain the
+native overall payload and exact artifact hashes. Pure readers never recapture
+or rescore. Repair implementation after FAIL, acquisition/bindings after
+UNKNOWN, and obtain new reviewed approvals for policy changes. Customized
+hooks require explicit migration; native Copilot autonomy remains unavailable.
+
 ## Repository structure (for contributors)
 
 Canonical source at the repository root generates committed, drift-guarded

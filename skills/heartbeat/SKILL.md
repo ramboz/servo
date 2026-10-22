@@ -78,7 +78,10 @@ Human output includes recorded outcomes: the oracle status and composite score,
 the loop's `terminal_reason`, and its `terminal_breadcrumb` fix hint when
 present. This reads the latest dispatch result immediately; the generated
 `inbox.md` includes the same details when the next discovery pass refreshes it.
-`status --json` retains its existing counts-and-candidates shape.
+`status --json` retains counts/candidates and adds `outcomes` for evidence-bearing
+records, including the original overall `oracle` and exact `gate_ref` path/hash.
+Readback revalidates these immutable bindings without rerunning/rescoring. A
+missing, mutated, stale or unsupported carrier is unavailable, never `passed`.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/heartbeat.py" status /path/to/repo --json
@@ -95,6 +98,27 @@ It records the portable loop's last history score or the goal driver's direct
 `oracle_composite`, including zero. These fields explain the result; they do not
 change dispatch eligibility, retry budgets, or the `oracle_plateau` quarantine
 trigger. Findings without diagnostics retain the original outcome fields.
+
+Enabled v2 policy, approved sidecars and target-relative evaluator artifacts
+are provisioned with their installed identities unchanged; old gate/component
+run directories are excluded. Absolute external component sidecars cannot be
+isolated safely: explicitly migrate/reapprove rather than silently rewriting
+approved paths. Verification refusal retains any published oracle evidence.
+Preflight refusal prints an additive `oracle_preflight` JSON record with the
+same evidence, while leaving candidates open and the inbox unchanged.
+Overall required fail or quality fail cannot dispatch as `passed`, even when a
+deterministic component passed. `oracle_reason` carries the policy cause
+separately from existing caps, cost accounting and quarantine reasons.
+If a later invocation fails or is interrupted,
+the final unavailable status survives; a retained earlier `oracle`/`gate_ref`
+is diagnostic evidence, not the current completion verdict.
+
+Inspect `outcome.oracle.required.items` and `outcome.gate_ref`, repair the
+implementation on contradiction, then rerun. On `required_evidence_unavailable`,
+repair acquisition/bindings before retrying. Changing policy is an explicit
+review/reapproval, never the default correction. Raw evidence is preserved;
+approved source provenance is not served-build attestation. Native Copilot
+unattended execution remains unsupported.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/heartbeat.py" dispatch /path/to/repo \

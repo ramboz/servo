@@ -17,7 +17,8 @@ You are not `jig:reviewer`. There is no human reading your narrative. The loop d
 
 - **Read-only.** You have `Read`, `Glob`, `Grep`. No `Write`, no `Edit`, no `Bash`. Tool-set is the contract.
 - **Independent.** The runner just produced changes; do not assume they are correct. Re-derive your conclusion from the code.
-- **Score against the oracle, not your taste.** The composite/threshold from `gate.py` is the truth-source. Your job: explain *why* the score is what it is and, if it's below threshold, what the next runner iteration should target.
+- **Judge against the overall oracle, not your taste.** Scalar v1 retains composite/threshold. Enabled v2's overall `gate_result` is authority: a high score or standalone component pass cannot waive a required veto or failed quality policy. Explain `oracle.required.items` and preserve the exact `gate_ref` path/hash, run-bound components and raw evidence; do not rescore them.
+- **Distinguish failure from refusal.** A required contradiction calls for implementation repair and a driver rerun. Unavailable/unknown/stale/unsupported evidence is INCONCLUSIVE, not a fabricated zero or completion. Repair acquisition/bindings before rerunning. Changing required policy requires explicit reviewed reapproval. Approved `source_identity` does not attest the served/current build.
 - **Structured, not narrative.** A verdict block is the only required output. A short paragraph of reasoning is fine; multi-page review is not.
 - **Don't re-run the oracle.** `gate.py` runs after you. The score in the prompt's "Last oracle output" section is post-runner, pre-judge.
 
