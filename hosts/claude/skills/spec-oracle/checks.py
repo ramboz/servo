@@ -92,6 +92,19 @@ from typing import Optional
 EVIDENCE_SCHEMA_VERSION = 1
 RUNNER_VERSION = "0.1.0"
 
+
+def _required_runtime():
+    import importlib.util
+    sibling = Path(__file__).resolve().parent / "required_runtime.py"
+    path = sibling if sibling.is_file() else (
+        Path(__file__).resolve().parent.parent / "quality-gate/required_runtime.py")
+    if not path.is_file():
+        path = Path(__file__).resolve().parent.parent / "servo-quality-gate/required_runtime.py"
+    spec = importlib.util.spec_from_file_location("required_runtime", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
 STATUS_ENV_ERROR = "env_error"
@@ -251,7 +264,43 @@ def _stderr_tail(text: str, limit: int = 200) -> str:
 # The dispatcher frames it with schema_version/check_id/ac_id/family/kind.
 # ---------------------------------------------------------------------------
 
+def _command_option_error(check):
+    """Validate opt-ins before either the build or the assertion can run."""
+    try:
+        if "refusal_exit_codes" in check:
+            codes = check["refusal_exit_codes"]
+            if (not isinstance(codes, list)
+                    or any(type(code) is not int for code in codes)
+                    or len(codes) != len(set(codes))
+                    or 0 in codes or _expected_exit_code(check) in codes):
+                raise ValueError("invalid refusal_exit_codes")
+        if "result_artifact" in check:
+            _required_runtime()._output_contract(check, os.environ.get("SERVO_GATE_RUN_ID"))
+    except (ValueError, TypeError) as exc:
+        return {"status": STATUS_ENV_ERROR, "message": str(exc)}
+    return None
+
+
+def _command_output(check, evidence, base_dir):
+    """Carry exact published bytes, rooted at the target, never command cwd."""
+    if evidence.get("exit_code") in check.get("refusal_exit_codes", []):
+        evidence = {**evidence, "status": STATUS_ENV_ERROR,
+                    "message": evidence["message"] + " (configured refusal exit code)"}
+    if "result_artifact" in check:
+        try:
+            reference = _required_runtime()._result_artifact_reference(
+                check, os.environ.get("SERVO_GATE_RUN_ID"), base_dir)
+            evidence = {**evidence, "result_artifact": reference}
+        except (OSError, ValueError, TypeError) as exc:
+            evidence = {**evidence, "status": STATUS_ENV_ERROR,
+                        "message": evidence["message"] + "; result_artifact: " + str(exc)}
+    return evidence
+
+
 def _check_command(check: dict, base_dir: Path) -> dict:
+    invalid = _command_option_error(check)
+    if invalid:
+        return invalid
     argv = _as_argv(check.get("command"))
     if not argv:
         return {"status": STATUS_ENV_ERROR,
@@ -270,24 +319,28 @@ def _check_command(check: dict, base_dir: Path) -> dict:
     result = _run_bounded(argv, cwd, timeout)
 
     if result.not_found:
-        return {"status": STATUS_ENV_ERROR,
-                "message": f"command not found: {argv[0]}",
-                "command": argv}
+        return _command_output(check, {
+            "status": STATUS_ENV_ERROR,
+            "message": f"command not found: {argv[0]}",
+            "command": argv}, base_dir)
     if result.timed_out:
-        return {"status": STATUS_ENV_ERROR,
-                "message": f"command exceeded timeout of {timeout}s: {argv}",
-                "command": argv}
+        return _command_output(check, {
+            "status": STATUS_ENV_ERROR,
+            "message": f"command exceeded timeout of {timeout}s: {argv}",
+            "command": argv,
+            **({"exit_code": result.returncode}
+               if "result_artifact" in check or "refusal_exit_codes" in check else {})}, base_dir)
     if result.returncode == expected:
-        return {"status": STATUS_PASS,
+        return _command_output(check, {"status": STATUS_PASS,
                 "message": f"command exited {result.returncode} as expected",
-                "command": argv, "exit_code": result.returncode}
+                "command": argv, "exit_code": result.returncode}, base_dir)
     tail = _stderr_tail(result.stderr)
     msg = (f"command exited with code {result.returncode} "
            f"(expected {expected}): {argv}")
     if tail:
         msg += f" — stderr: {tail}"
-    return {"status": STATUS_FAIL, "message": msg,
-            "command": argv, "exit_code": result.returncode}
+    return _command_output(check, {"status": STATUS_FAIL, "message": msg,
+            "command": argv, "exit_code": result.returncode}, base_dir)
 
 
 def _check_file_presence(check: dict, base_dir: Path) -> dict:
@@ -562,6 +615,9 @@ def _substitute(argv: list, mapping: dict) -> list:
 
 
 def _check_generated_artifact_command(check: dict, base_dir: Path) -> dict:
+    invalid = _command_option_error(check)
+    if invalid:
+        return invalid
     argv = _as_argv(check.get("command"))
     if not argv:
         return {"status": STATUS_ENV_ERROR,
@@ -617,25 +673,28 @@ def _check_generated_artifact_command(check: dict, base_dir: Path) -> dict:
         run_argv = _substitute(argv, placeholders)
         r = _run_bounded(run_argv, workdir, timeout)
         if r.not_found:
-            return {"status": STATUS_ENV_ERROR,
+            return _command_output(check, {"status": STATUS_ENV_ERROR,
                     "message": f"command not found: {run_argv[0]}",
-                    "command": run_argv}
+                    "command": run_argv}, base_dir)
         if r.timed_out:
-            return {"status": STATUS_ENV_ERROR,
+            return _command_output(check, {"status": STATUS_ENV_ERROR,
                     "message": f"command exceeded timeout of {timeout}s",
-                    "command": run_argv}
+                    "command": run_argv,
+                    **({"exit_code": r.returncode}
+                       if "result_artifact" in check or "refusal_exit_codes" in check else {})},
+                                   base_dir)
         if r.returncode == expected:
-            return {"status": STATUS_PASS,
+            return _command_output(check, {"status": STATUS_PASS,
                     "message": ("command succeeded from generated artifact "
                                 f"(exit {r.returncode})"),
-                    "command": run_argv, "exit_code": r.returncode}
+                    "command": run_argv, "exit_code": r.returncode}, base_dir)
         tail = _stderr_tail(r.stderr)
         msg = (f"command from generated artifact exited {r.returncode} "
                f"(expected {expected}): {run_argv}")
         if tail:
             msg += f" — stderr: {tail}"
-        return {"status": STATUS_FAIL, "message": msg,
-                "command": run_argv, "exit_code": r.returncode}
+        return _command_output(check, {"status": STATUS_FAIL, "message": msg,
+                "command": run_argv, "exit_code": r.returncode}, base_dir)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -858,9 +917,12 @@ def plan_content_hash(plan: dict) -> str:
     residual = sorted(
         (_canonicalize_ac_item(r) for r in plan.get("residual_judgment", [])),
         key=_ac_sort_key)
-    payload = json.dumps(
-        {"checks": checks, "residual_judgment": residual},
-        sort_keys=True, separators=(",", ":"))
+    content = {"checks": checks, "residual_judgment": residual}
+    if "required_policy" in plan:
+        content.update(required_policy=plan["required_policy"],
+                       schema_version=1, kind="required_plan_content")
+    payload = json.dumps(content, sort_keys=True, separators=(",", ":"),
+                         allow_nan="required_policy" not in plan)
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -963,6 +1025,23 @@ def main(argv: Optional[list] = None) -> int:
     else:
         base_dir = _derive_base_dir(checks_path)
 
+    required = None
+    if ("required_policy" in plan or any(
+            "required" in c and c["required"] is not False
+            for c in plan.get("checks", [])
+            + plan.get("residual_judgment", []))):
+        try:
+            required = _required_runtime()
+            plan = required.load(checks_path)
+            required.policy_mode(plan)
+            if args.enforce_freeze:
+                required.validate_binding(
+                    plan["approved_required_binding"], plan,
+                    plan_content_hash(plan), base_dir)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"required policy refused: {exc}", file=sys.stderr)
+            return 2
+
     # Freeze gate (006-04): an unapproved / stale / tampered overlay is refused
     # before any check runs, so the loop can never satisfy a self-invented or
     # quietly-modified oracle.
@@ -974,6 +1053,12 @@ def main(argv: Optional[list] = None) -> int:
             return 2
 
     result = run_checks(plan, base_dir)
+    if required and os.environ.get("SERVO_REQUIRED_RESULT"):
+        try:
+            required.component_result(plan, result, checks_path, Path(__file__))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"required result refused: {exc}", file=sys.stderr)
+            return 2
     evidence = result["evidence"]
     summary_line = {"kind": "summary",
                     "schema_version": EVIDENCE_SCHEMA_VERSION,
@@ -988,7 +1073,9 @@ def main(argv: Optional[list] = None) -> int:
         try:
             with open(args.ledger, "a", encoding="utf-8") as fh:
                 for ev in evidence:
-                    fh.write(json.dumps({**ev, "ts": ts}) + "\n")
+                    context = ({"run_id": os.environ["SERVO_GATE_RUN_ID"]}
+                               if required and os.environ.get("SERVO_GATE_RUN_ID") else {})
+                    fh.write(json.dumps({**ev, "ts": ts, **context}) + "\n")
         except OSError as exc:
             print(f"error: cannot write ledger: {exc}", file=sys.stderr)
             return 2

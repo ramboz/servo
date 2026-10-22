@@ -2,7 +2,7 @@
 
 name: design-eval
 description: >-
-  Author a frozen UI design-fidelity eval component for a project — the non-deterministic sibling of servo's deterministic component templates. Use when a project must be built to match a design mockup ("does the UI match the design?") and that fidelity should drive or gate the loop. Captures app vs reference screenshots, judges fidelity with a pinned vision model (n-sampled, lower-bound), freezes the definition, and installs a `score_design_fidelity` component into the project's `oracle.sh`. Do not use for deterministic checks (use scaffold-init / spec-oracle) or for the per-iteration judge agent.
+  Author a frozen UI design-fidelity eval component for a project — the non-deterministic sibling of servo's deterministic component templates. Use when a project must be built to match a design mockup ("does the UI match the design?") and that fidelity should drive or gate the loop. Captures app vs reference screenshots, judges fidelity with a pinned vision model (n-sampled, lower-bound), freezes the definition, and installs a `score_design_fidelity` component into the project's `oracle.sh`. Also provides a separate bounded static-source-contract observer without a model judge. Do not use for ordinary deterministic checks (use scaffold-init / spec-oracle) or the per-iteration judge agent.
 ---
 
 # /servo:design-eval — UI design-fidelity eval recipe
@@ -57,6 +57,31 @@ silent `0.0`; a changed policy/dataset/model refuses as stale.
     ledger, never attestation), and every run prints a loud `SUBAGENT JUDGE …`
     stderr advisory. Use it to *steer authoring/iteration*, not to gate — a gating
     fidelity score still needs `api`/`cli`.
+
+## Finite static source contracts (separate from visual quality)
+
+For a project-owned finite approved source inventory, use the
+[reusable static-contract workflow](examples/static-source-contract.md), not
+`score_design_fidelity`. This path compiles approved IDs into ordinary required
+commands and compares a closed local snapshot using project-defined CSS-only
+role bindings and environment. It has no model, batch or quality-threshold
+policy; the general quality engine described elsewhere in this skill is unchanged.
+
+Only `static_contract.py`, `static_snapshot.py`, `evidence_io.py` and
+`evidence_runtime.py` are copied as evaluator helpers. Source authority belongs
+to the exact six pinned clean producer helpers and a new independent source
+approval. The clean reviewed source cut is byte-pinned;
+`prepare` refuses changed/unverified tools.
+Runtime closure is bounded to the selected isolated
+macOS Python/Playwright/browser/Bash environment, not arbitrary portability.
+
+Required FAIL vetoes the native gate independently of quality; UNKNOWN refuses.
+Preserve native gate/component/output references. Native `gate_consumer.read`
+is subprocess-free/hash-read-only. Auxiliary `verify-current` retains bounded
+local OS/interpreter and source-Git HEAD metadata queries, but never acquires,
+evaluates, compares or rescores. Static measurement does not
+establish whole-view fidelity, actual font face, backend authenticity, deployed
+delivery identity or lifecycle completion.
 
 ## Flow
 

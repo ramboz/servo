@@ -317,7 +317,92 @@ Spec 002 shipped `/servo:quality-gate` — the runtime wrapper around `<target>/
 
 **Timeout machinery** — default 300s (5 min), overridable via `--timeout <seconds>` flag or `SERVO_GATE_TIMEOUT` env var. Flag wins on conflict. `--timeout 0` disables the bound. Kill sequence: `SIGTERM` → 5s grace → `SIGKILL`, applied to the oracle's process group (`os.killpg`) so any backgrounded subprocesses are killed too.
 
-**Stateless** — the gate writes nothing to disk. Per-iteration / per-variant persistence is the caller's responsibility (specs 003 / 005).
+**Legacy no-opt-in path** - the v1 gate writes nothing to disk. Per-iteration /
+per-variant persistence is the caller's responsibility (specs 003 / 005).
+The required-evidence path below has explicit immutable run artifacts.
+
+## Required evidence and reusable static observations (spec 037)
+
+Required constraints and weighted quality answer different questions. A
+project opts in through ordinary `checks.json.required_policy` and overlay
+installation with `--enable-required`; projects without that opt-in keep the
+v1 path above. Required FAIL vetoes success even when quality passes or its
+threshold is zero. Unknown, stale, incomplete or unavailable required evidence
+refuses with exit 2. A deterministic measurement fraction is diagnostic, not
+visual/model quality (`skills/quality-gate/required_runtime.py:704-723`).
+
+The generic layer is `skills/quality-gate/required_runtime.py`, used by
+`gate.py` and the ordinary `skills/spec-oracle/{checks,oracle_overlay}.py`
+pipeline. It freezes the check inventory, command/argument/refusal contract,
+policy and evaluator artifacts; declared result artifacts add a closed
+file/hash inventory and gate-run ownership. The gate publishes native
+overall status, required inventory, quality composite/threshold and component
+references beneath
+`<target>/.servo/gate-runs/<uuid>/`. It does not dispatch by component name or
+recompute a domain-specific verdict.
+
+`gate_consumer.request -> gate.py -> gate_consumer.accept/read` is the shared
+consumer seam. Live acceptance claims one invocation; later reads preserve
+that immutable native result and validate current pins and declared output
+references. Loop/checkpoint/resume, hooks, planner and heartbeat/triage use
+native overall authority rather than treating a high score as completion.
+Pure readback is read/hash-only, not a new subprocess, capture, comparison
+or score (`skills/quality-gate/gate_consumer.py:175-221`).
+These required-evidence changes do not lift Copilot's separate
+autonomy/cost/continuation limitations recorded below.
+
+### Bounded static design profile
+
+`skills/design-eval/static_contract.py` consumes an approved
+`vellum-confirmed-source/0.2` package under `static-css-subset/1`.
+Manifest data determines constraint IDs, roles, CSS-only application bindings,
+the resource inventory and capture environment. Vellum owns source
+interpretation, approval and live original-source freshness. Its actual clean
+producer closure is pinned and copied as six real modules:
+`confirmed_source.py`, `capture_confirmed.py`, `design_input.py`,
+`redline_intake.py`, `resolve_redline.py`, `validate_redline.py`.
+Changed helper bytes require a new approval epoch, not rebinding an old
+approval to new code.
+
+Static preparation copies exactly four evaluator helpers into
+`<target>/tools/static/`: `static_contract.py`, `static_snapshot.py`,
+`evidence_io.py` and `evidence_runtime.py`. The latter two contain only the
+used strict I/O/hash/no-follow/path/inventory primitives and
+startup/native-link/invocation/summary primitives respectively.
+The supported runtime remains the bounded macOS native-link profile and an
+explicit existing isolated Playwright/browser installation. Runtime files,
+browser membership, package origins and native resolutions are enumerated
+and hashed (`skills/design-eval/static_contract.py:657-805`). This is not
+arbitrary-platform or arbitrary-framework support.
+
+`static_snapshot.py` builds a closed, explicit resource copy and checks the
+selected source/build/output against a separate current delivery directory.
+The observer uses the existing finite color/scalar/family/text/visibility and
+settlement rules. Unsupported acquisition remains unknown rather than
+guessing success. This checks bounded static measurements, not pixels,
+actual font-face identity, backend authenticity, interactions, whole-view
+quality or application completion.
+
+The public path is prepare -> independent exact-policy review/approve ->
+ordinary overlay generate/approve/install with the final driver sealed ->
+native gate evaluate -> accept/read. Policy lives at
+`spec/oracle/static/app-policy.json`; each gate-owned acquisition publishes
+`spec/oracle/static/runs/<uuid>/observed/evidence.json` plus closed observation
+artifacts. Producer `verify-current` additionally checks the selected current
+source/build/delivery and preserves the old summary without reacquiring or
+rescoring. It remains read-only, not subprocess-free: existing bounded local
+OS/interpreter metadata and fixed source-Git HEAD queries are retained through
+the pinned helpers. The native `gate_consumer.read` boundary remains strictly
+subprocess-free. Generic native readback alone is not a claim that a particular
+static snapshot remains selected.
+
+The prospective boundary decision is
+[ADR-0046](decisions/adr-0046-component-agnostic-static-evidence.md).
+The reusable walkthrough is
+[`static-source-contract.md`](../skills/design-eval/examples/static-source-contract.md).
+Test-only non-card approvals validate the product path, not a real application
+or an old pilot run. The existing general frozen-quality engine remains
+separate and unchanged.
 
 ## Agent-loop guardrails
 

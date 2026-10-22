@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import shutil
 import stat
 import sys
@@ -103,7 +104,26 @@ def _resolve_gate_py(target: Path) -> str:
     vendored = target / ".claude" / "skills" / "servo-quality-gate" / "gate.py"
     if vendored.is_file():
         return '"$CLAUDE_PROJECT_DIR"/.claude/skills/servo-quality-gate/gate.py'
-    return str(_servo_gate_py())
+    return shlex.quote(str(_servo_gate_py()))
+
+
+def _render_meta_judge(target: Path) -> str:
+    vendored = target / ".claude/skills/servo-quality-gate/gate_consumer.py"
+    consumer = ('"$CLAUDE_PROJECT_DIR"/.claude/skills/servo-quality-gate/gate_consumer.py'
+                if vendored.is_file()
+                else shlex.quote(str(_servo_gate_py().with_name("gate_consumer.py"))))
+    return ((_templates_root() / "meta-judge.sh.template").read_text()
+            .replace("__GATE_PY__", _resolve_gate_py(target))
+            .replace("__CONSUMER_PY__", consumer))
+
+
+def _migration_hint(script: Path, body: str) -> None:
+    if script.exists() and script.read_text() != body:
+        sys.stderr.write(
+            f"oracle-hook: migration required for existing/customized {script}; "
+            "not replaced. Back it up, compare with the current meta-judge template, "
+            "port required-verdict validation/advice explicitly (or remove the backed-up "
+            "script and reinstall). Turn fail-open is not completion attestation.\n")
 
 
 def _refuse(msg: str, *, reason: str) -> int:
@@ -200,8 +220,7 @@ def cmd_install(target: Path, *, timeout: int = DEFAULT_TIMEOUT) -> int:
     except _SettingsRefusal as e:
         return _refuse(f"{e.msg}; refusing to overwrite", reason=e.reason)
 
-    template = _templates_root() / "meta-judge.sh.template"
-    body = template.read_text().replace("__GATE_PY__", _resolve_gate_py(target))
+    body = _render_meta_judge(target)
 
     # --- writes ------------------------------------------------------------ #
     # Place the meta-judge script, but never clobber a user-customized one: write
@@ -210,6 +229,7 @@ def cmd_install(target: Path, *, timeout: int = DEFAULT_TIMEOUT) -> int:
     hooks_dir = target / ".servo" / "hooks"
     hooks_dir.mkdir(parents=True, exist_ok=True)
     script = hooks_dir / "meta-judge.sh"
+    _migration_hint(script, body)
     if not script.exists():
         script.write_text(body)
         script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -389,9 +409,9 @@ def _place_copilot_scripts(target: Path) -> Path:
     hooks_dir.mkdir(parents=True, exist_ok=True)
 
     script = hooks_dir / "meta-judge.sh"
+    body = _render_meta_judge(target)
+    _migration_hint(script, body)
     if not script.exists():
-        template = _templates_root() / "meta-judge.sh.template"
-        body = template.read_text().replace("__GATE_PY__", _resolve_gate_py(target))
         script.write_text(body)
         script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 

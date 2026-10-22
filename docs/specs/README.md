@@ -152,6 +152,9 @@
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-06 - native-visual-judge | **DONE** |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-07 - native-stop-continuation | DEFERRED |  |
 | [034-copilot-installed-runtime](034-copilot-installed-runtime/spec.md) | 034-08 - unpriced-oracle-budget | **DONE** |  |
+| [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-01 — tbd | DRAFT |  |
+| [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 — tbd | DRAFT |  |
+| [037-reusable-design-evidence](037-reusable-design-evidence/spec.md) | 037-01 - reusable static evidence | **DONE** |  |
 
 ## Deferred slices
 
@@ -182,7 +185,7 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
 
 - **4** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
 - **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **7** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+- **8** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
   - `034-copilot-installed-runtime/slice-04-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
@@ -190,3 +193,4 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
   - `034-copilot-installed-runtime/slice-06-arch.md` — applied `unknown`; declined: arch-review
   - `034-copilot-installed-runtime/slice-06-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
   - `034-copilot-installed-runtime/slice-08-craft.md` — applied `pr-review`; declined: scout-pr-review
+  - `037-reusable-design-evidence/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review

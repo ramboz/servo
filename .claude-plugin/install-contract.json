@@ -10,7 +10,7 @@
       },
       {
         "name": "quality-gate",
-        "files": ["SKILL.md", "gate.py"]
+        "files": ["SKILL.md", "gate.py", "required_runtime.py", "gate_consumer.py"]
       },
       {
         "name": "agent-loop",
