@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.12.0](https://github.com/ramboz/servo/compare/v0.11.0...v0.12.0) (2026-10-22)
+
+
+### Features
+
+* **evidence:** add reusable required gates and static design checks ([#48](https://github.com/ramboz/servo/issues/48)) ([7d5ec5f](https://github.com/ramboz/servo/commit/7d5ec5f6714f65a4587b21dc063f70296c6cb3f0))
+
+
+### Documentation
+
+* **decisions:** reserve adr-0044-required-constraints-cannot-be-averaged-away ([b44cc7d](https://github.com/ramboz/servo/commit/b44cc7d05e7acaf6d614bab51871ea8b62799bdb))
+* **specs:** reserve 035-required-evidence-alongside-quality-scores ([4b2a70b](https://github.com/ramboz/servo/commit/4b2a70b989f7e51516ec1645907199bb72d9e5f9))
+* **specs:** reserve 036-deterministic-design-evidence ([dc56bd3](https://github.com/ramboz/servo/commit/dc56bd3397c21224866cba639adb7c5a334bcec0))
+
 ## [0.11.0](https://github.com/ramboz/servo/compare/v0.10.0...v0.11.0) (2026-10-12)
 
 
