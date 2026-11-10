@@ -1,5 +1,5 @@
 ---
-status: FIXING
+status: DONE
 tier: standard
 severity: medium
 claimed_by: claude/model-tiering
