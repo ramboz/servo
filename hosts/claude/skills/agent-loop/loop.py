@@ -58,6 +58,7 @@ Summary line: one JSON line on stdout after the last iteration (or refusal).
 import argparse
 import importlib.util
 import json
+import math
 import os
 import platform
 import re
@@ -1771,6 +1772,195 @@ def _compute_per_iter_budget(cost_ceiling: float, cumulative: float) -> float:
     return max(cost_ceiling - cumulative, MIN_BUDGET_FLOOR_USD)
 
 
+# ---------------------------------------------------------------------------
+# Spec 038-01 — per-iteration accounting (model, usage, cost basis)
+# ---------------------------------------------------------------------------
+
+COST_BASIS_REPORTED = "reported"
+COST_BASIS_SESSION_DELTA = "session_delta"
+_USAGE_TOKEN_KEYS = (
+    "input_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens", "output_tokens",
+)
+# modelUsage field -> normalized key (cost is handled separately).
+_MODEL_USAGE_TOKEN_FIELDS = (
+    ("inputTokens", "input_tokens"),
+    ("outputTokens", "output_tokens"),
+    ("cacheReadInputTokens", "cache_read_input_tokens"),
+    ("cacheCreationInputTokens", "cache_creation_input_tokens"),
+)
+_NULL_REQUESTED = {"model": None, "effort": None, "advisor": None}
+
+
+def _as_number(value) -> float:
+    """`value` as a float when it is a finite real number, else 0.0.
+
+    `bool`, non-numbers, NaN and +/-inf all count as absent so malformed
+    accounting can never crash an iteration.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    number = float(value)
+    return number if math.isfinite(number) else 0.0
+
+
+def _normalize_model_usage(claude_data: dict) -> dict:
+    """Claude's `modelUsage` as `{id: {cost_usd, <4 token counts>}}`.
+
+    Non-dict `modelUsage` (or a non-dict entry) yields `{}` (or zeros): the
+    accounting is best-effort and never fails an iteration.
+    """
+    raw = (claude_data or {}).get("modelUsage")
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for model_id, entry in raw.items():
+        entry = entry if isinstance(entry, dict) else {}
+        record = {"cost_usd": _as_number(entry.get("costUSD"))}
+        for src, dst in _MODEL_USAGE_TOKEN_FIELDS:
+            record[dst] = int(_as_number(entry.get(src)))
+        out[str(model_id)] = record
+    return out
+
+
+def _advisor_model_ids(claude_data: dict) -> set:
+    """Models of `usage.iterations[]` elements typed `advisor_message`."""
+    usage = (claude_data or {}).get("usage")
+    iterations = usage.get("iterations") if isinstance(usage, dict) else None
+    ids = set()
+    if isinstance(iterations, list):
+        for element in iterations:
+            if (isinstance(element, dict)
+                    and element.get("type") == "advisor_message"
+                    and element.get("model")):
+                ids.add(str(element["model"]))
+    return ids
+
+
+def _usage_record(claude_data: dict) -> dict:
+    """Top-level (per-invocation) `usage` as four ints (bad/absent -> 0)."""
+    usage = (claude_data or {}).get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    return {k: int(_as_number(usage.get(k))) for k in _USAGE_TOKEN_KEYS}
+
+
+def _reported_total_cost(claude_data: dict) -> float:
+    try:
+        return float((claude_data or {}).get("total_cost_usd", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _session_id_of(claude_data: dict) -> str:
+    """The reported `session_id` as a string; absent/null gives ""."""
+    value = (claude_data or {}).get("session_id")
+    return "" if value is None else str(value)
+
+
+def _sum_tokens(model_usage: dict) -> int:
+    return sum(
+        entry[dst] for entry in model_usage.values()
+        for _src, dst in _MODEL_USAGE_TOKEN_FIELDS
+    )
+
+
+def _iteration_cost_delta(
+    claude_data: dict, *, resumed_session_id: Optional[str],
+    snapshot: Optional[dict],
+) -> "tuple[float, dict, str]":
+    """`(cost_usd, per_model_usage, cost_basis)` for one invocation (bug 007).
+
+    On `--resume`, Claude reports the SESSION's running `total_cost_usd` /
+    `modelUsage`, while top-level `usage` is this invocation only. The delta
+    against the last snapshot is used only when that is proven: the
+    iteration resumed `S`, Claude returned `S`, a snapshot for `S` exists, the
+    summed `modelUsage` tokens are >= snapshot tokens + this invocation's
+    `usage` tokens, and the reported cost is >= the snapshot's. Models this
+    invocation did not use (all-zero delta) are dropped. Anything else falls back to the reported
+    values, which can only over-count (fail-safe for the cost brake), and says so in `cost_basis`.
+    """
+    reported_cost = _reported_total_cost(claude_data)
+    reported_mu = _normalize_model_usage(claude_data)
+    returned_id = _session_id_of(claude_data)
+    if (
+        resumed_session_id
+        and returned_id == resumed_session_id
+        and isinstance(snapshot, dict)
+        and snapshot.get("session_id") == resumed_session_id
+    ):
+        snap_mu = _normalize_model_usage(
+            {"modelUsage": snapshot.get("model_usage")})
+        snap_cost = _as_number(snapshot.get("total_cost_usd"))
+        this_tokens = sum(_usage_record(claude_data).values())
+        if (
+            _sum_tokens(reported_mu) >= _sum_tokens(snap_mu) + this_tokens
+            and reported_cost >= snap_cost
+        ):
+            delta_mu = {}
+            for model_id, entry in reported_mu.items():
+                before = snap_mu.get(model_id, {})
+                delta = {
+                    k: max(v - before.get(k, 0), 0) for k, v in entry.items()}
+                if any(delta.values()):
+                    delta_mu[model_id] = delta
+            return (
+                reported_cost - snap_cost, delta_mu, COST_BASIS_SESSION_DELTA,
+            )
+    return reported_cost, reported_mu, COST_BASIS_REPORTED
+
+
+def _warn_reported_fallback(
+    resumed_session_id: Optional[str], cost_basis: str, host: str,
+) -> bool:
+    """True when a resumed iteration fell back to the reported total.
+
+    Suppressed off the Claude host: Copilot reports no `modelUsage`, so the
+    fallback would fire on every resumed iteration there and mean nothing.
+    """
+    return bool(
+        resumed_session_id and cost_basis == COST_BASIS_REPORTED
+        and host == HOST_CLAUDE
+    )
+
+
+def _iteration_accounting(
+    claude_data: dict, *, agent: Optional[str], cost_usd: Optional[float],
+    cost_basis: str, model_usage: dict, requested: dict,
+) -> dict:
+    """Accounting keys for a history entry / stdout line / goal summary.
+
+    `agent` / `cost_usd` of None are omitted (the goal driver has neither: its
+    cost is already `cumulative_cost_usd`). Advisor-consult models get
+    `"advisor": true` (best-effort); `model` is the highest-cost non-advisor
+    model (first on a tie), else None.
+    """
+    advisors = _advisor_model_ids(claude_data)
+    marked = {}
+    for model_id, entry in model_usage.items():
+        marked[model_id] = (
+            {**entry, "advisor": True} if model_id in advisors else dict(entry))
+    primary, best = None, None
+    for model_id, entry in marked.items():
+        if entry.get("advisor"):
+            continue
+        if best is None or entry["cost_usd"] > best:
+            primary, best = model_id, entry["cost_usd"]
+    record = {}
+    if agent is not None:
+        record["agent"] = agent
+    record["session_id"] = _session_id_of(claude_data)
+    if cost_usd is not None:
+        record["cost_usd"] = cost_usd
+    record.update({
+        "cost_basis": cost_basis,
+        "usage": _usage_record(claude_data),
+        "model_usage": marked,
+        "model": primary,
+        "requested": dict(requested),
+    })
+    return record
+
+
 def _extract_context_fill_ratio(
     claude_data: dict,
 ) -> tuple[Optional[float], Optional[str]]:
@@ -2928,33 +3118,47 @@ def run_loop(
             return EXIT_ENV_ERROR
 
         # Extract iteration data.
-        session_id = str(claude_data.get("session_id", ""))
-        try:
-            cost_usd = float(claude_data.get("total_cost_usd", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            cost_usd = 0.0
+        session_id = _session_id_of(claude_data)
+        # Bug 007 / spec 038-01: the invocation's OWN cost, not the session
+        # running total Claude reports on `--resume`.
+        snapshot = state.get("current_session_usage_snapshot")
+        cost_usd, iter_model_usage, cost_basis = _iteration_cost_delta(
+            claude_data, resumed_session_id=session_id_arg, snapshot=snapshot,
+        )
+        if _warn_reported_fallback(session_id_arg, cost_basis, host):
+            sys.stderr.write(
+                f"loop: iteration {iteration}: cost basis fell back to the "
+                "reported session total (resumed-session running-total "
+                "semantics unproven) - cost may be over-counted\n"
+            )
+        accounting = _iteration_accounting(
+            claude_data, agent=agent_name, cost_usd=cost_usd,
+            cost_basis=cost_basis, model_usage=iter_model_usage,
+            requested=_NULL_REQUESTED,
+        )
         claude_terminal_reason = str(claude_data.get("terminal_reason", ""))
 
         # Token tallies for AC2's cumulative_input_tokens / cumulative_output_tokens.
-        usage = claude_data.get("usage") or {}
-        if not isinstance(usage, dict):
-            usage = {}
-        try:
-            iter_input_tokens = (
-                int(usage.get("input_tokens", 0) or 0)
-                + int(usage.get("cache_read_input_tokens", 0) or 0)
-                + int(usage.get("cache_creation_input_tokens", 0) or 0)
-            )
-            iter_output_tokens = int(usage.get("output_tokens", 0) or 0)
-        except (TypeError, ValueError):
-            iter_input_tokens = 0
-            iter_output_tokens = 0
+        # Same helper as the recorded `usage`, so the two cannot disagree.
+        iter_usage = accounting["usage"]
+        iter_input_tokens = (
+            iter_usage["input_tokens"]
+            + iter_usage["cache_read_input_tokens"]
+            + iter_usage["cache_creation_input_tokens"]
+        )
+        iter_output_tokens = iter_usage["output_tokens"]
 
         state["cumulative_cost_usd"] += cost_usd
         state["cumulative_input_tokens"] += iter_input_tokens
         state["cumulative_output_tokens"] += iter_output_tokens
         if session_id:
             state["current_session_id"] = session_id
+            raw_mu = claude_data.get("modelUsage")
+            state["current_session_usage_snapshot"] = {
+                "session_id": session_id,
+                "total_cost_usd": _reported_total_cost(claude_data),
+                "model_usage": raw_mu if isinstance(raw_mu, dict) else {},
+            }
 
         # Slice 032-05 (AC2/AC4): under `--host copilot` surface the native cost
         # (premium-requests / nano-AIU — NOT USD; the USD `--cost-ceiling` does
@@ -3051,6 +3255,7 @@ def run_loop(
             "composite": oracle_composite,
             "threshold": oracle_threshold,
             "status": oracle_status,
+            **accounting,
             **gate_consumer.fields(gate_data),
         })
         state.update(gate_consumer.fields(gate_data))
@@ -3063,9 +3268,7 @@ def run_loop(
         # so a downstream consumer can group per-iter lines by role.
         _emit_json({
             "iteration": iteration,
-            "agent": agent_name,
-            "session_id": session_id,
-            "cost_usd": cost_usd,
+            **accounting,
             "cumulative_cost_usd": state["cumulative_cost_usd"],
             "context_fill_ratio": context_fill_ratio,
             "verdict": verdict_fields,
@@ -3376,6 +3579,7 @@ def _goal_summary(
     composite, threshold, subtype, claude_terminal_reason,
     num_turns: int, transcript_showed_pass: bool,
     terminal_breadcrumb: Optional[str] = None,
+    accounting: Optional[dict] = None,
 ) -> dict:
     """Single source for the goal-mode summary line (every halt path uses it).
 
@@ -3401,6 +3605,10 @@ def _goal_summary(
     }
     if terminal_breadcrumb is not None:
         payload["terminal_breadcrumb"] = terminal_breadcrumb
+    if accounting:
+        # Spec 038-01 AC4: only after a parsed result event; refusal paths that
+        # never invoke Claude keep today's shape.
+        payload.update(accounting)
     return payload
 
 
@@ -3539,6 +3747,8 @@ def run_goal_loop(
         state["detached"] = True  # slice 003-08: a `--background` child run
     _atomic_write_state(state, state_path)
 
+    goal_accounting: dict = {}  # filled once a result event is parsed (038-01)
+
     def _finalize(terminal_reason, *, cumulative_cost_usd, final_oracle_status,
                   composite=None, threshold=None, subtype=None,
                   claude_terminal_reason=None, num_turns=0,
@@ -3574,6 +3784,7 @@ def run_goal_loop(
             claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
             transcript_showed_pass=transcript_showed_pass,
             terminal_breadcrumb=terminal_breadcrumb,
+            accounting=goal_accounting,
         )
         summary.update(gate_consumer.fields(state))
         _emit_json(summary)
@@ -3622,10 +3833,20 @@ def run_goal_loop(
     # exit path (interrupt, goal_unavailable, the normal verdict) reports the
     # real spend, not a hardcoded $0, even when the run was cut short.
     _rev = result_event or {}
-    try:
-        result_cost = float(_rev.get("total_cost_usd", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        result_cost = 0.0
+    result_cost = _reported_total_cost(_rev)
+    if isinstance(result_event, dict):
+        # Spec 038-01 AC4: the goal invocation is fresh, so its cost is the
+        # reported total (== cumulative_cost_usd). Built as soon as a result
+        # event exists so EVERY later exit (interrupt, goal_unavailable, gate
+        # paths) carries the accounting; `_finalize` copies it into the summary
+        # and persists `state`.
+        goal_accounting.update(_iteration_accounting(
+            result_event, agent=None, cost_usd=None,
+            cost_basis=COST_BASIS_REPORTED,
+            model_usage=_normalize_model_usage(result_event),
+            requested=_NULL_REQUESTED,
+        ))
+        state.update(goal_accounting)
     try:
         result_num_turns = int(_rev.get("num_turns", 0) or 0)
     except (TypeError, ValueError):

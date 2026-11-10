@@ -1,20 +1,26 @@
 ---
 slice: 038-01 — per-iteration accounting
 pass: compliance
-verdict: needs-changes
+verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-11-10T20:13:07Z
-prompt_source: review.py implementation docs/specs/038-per-node-model-tiering/spec.md 038-01 <deliverables>
+reviewed_at: 2026-11-10T20:26:44Z
+prompt_source: review.py implementation docs/specs/038-per-node-model-tiering/spec.md 038-01 <deliverables> (round 2)
 ---
 
-VERDICT: needs-changes
+VERDICT: pass
 
 REASONING:
-Round 1. Loop driver satisfies AC1/AC2/AC3/AC5/AC6 (delta proof, snapshot persistence, corrected --max-budget-usd, old-state fallback). AC4 partially met: goal-driver interrupt and goal_unavailable exits occur after a parsed result event but finalize without accounting keys. One AC3 conjunct (returned id == resumed id) has no isolating test.
+Round 2. All five round-1 findings resolved: goal accounting built as soon as a result event exists (interrupt / goal_unavailable / gate exits all carry it, tested); the returned-id conjunct is isolated by test_returned_session_id_must_match_resumed_id; zero-delta models dropped; non-finite numbers rejected; refusal-shape test runs end-to-end. All six ACs satisfied; new tests are mutation-capable except three honestly-labelled negative guards.
 
 SPECIFIC ISSUES:
-- [impl] Goal accounting missing on post-parse interrupt / goal_unavailable exits (High).
-- [impl] No test isolates the returned_id == resumed_session_id conjunct (Medium).
-- [impl] Refusal-shape test calls _goal_summary directly; negative guards cannot satisfy the feature-removal DoD item (Medium).
-- [impl] Delta-mode model_usage keeps zero-delta entries for unused models (Low/Medium).
-- [impl] _as_number passes NaN/inf -> int() raises (Low).
+None blocking.
+
+RECONCILIATION NOTES:
+- Fifth proof conjunct reported_cost >= snapshot cost (falls back to reported) — record.
+- Zero-delta models omitted from model_usage in delta mode — record.
+- Copilot breadcrumb suppression (documented, unit-tested) — record.
+- DoD feature-removal exception for three negative guards — record.
+- Token tallies now via _usage_record (numeric strings/bools -> 0; a bad field zeroes only itself) — record.
+- session_id null -> "" (was "None", which would have resumed "None") — record.
+- Bug 007 to be advanced to DONE.
+- Goal-driver state now carries flat accounting keys — note in sweep.

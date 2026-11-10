@@ -1,14 +1,14 @@
 ---
-status: ROOT_CAUSED
+status: FIXING
 tier: standard
 severity: medium
 claimed_by: claude/model-tiering
-regression_test:
+regression_test: skills/agent-loop/test_loop.py::ResumedSessionCostDeltaTests
 main_repro_checked_at: 2026-11-10
 main_repro_ref: origin/main@4cd95ca
 main_repro_result: reproduces
-red_confirmed_at:
-green_confirmed_at:
+red_confirmed_at: 2026-11-10
+green_confirmed_at: 2026-11-10
 fix_class: local_patch
 security_surface: false
 escalated_to:
@@ -126,7 +126,20 @@ Otherwise it is `total_cost_usd`. The unproven case therefore over-counts
 
 ## Call-site closure
 
-**Disposition per affected site:** filled at FIXING.
+**Disposition per affected site:**
+- `run_loop` cost extraction — **changed**: cost comes from
+  `_iteration_cost_delta` (`skills/agent-loop/loop.py:1867`); `cumulative_cost_usd`
+  sums the per-invocation costs (`:3151`); the session snapshot is refreshed
+  with `current_session_id` (`:3157`). Tested by `ResumedSessionCostDeltaTests`,
+  `ResumedSessionFailSafeTests`, `SnapshotResumeTests`, `OldStateResumeTests`.
+- Per-iteration stdout `cost_usd` — **changed** (now the invocation's own cost);
+  tested in `ResumedSessionCostDeltaTests`.
+- Goal driver result-cost read — **left alone**: one fresh invocation, so
+  `total_cost_usd` is already its own cost (`cost_basis: "reported"`).
+- Copilot normalization (hard-coded 0.0) — **left alone**: no USD cost exists
+  (ADR-0043); the fallback breadcrumb is suppressed off the Claude host.
+- Heartbeat `_outcome_from_summary` / `_spent_cost_usd` — **left alone**: they
+  read the loop summary's `cumulative_cost_usd`, which is now correct.
 
 ## Already tried
 
@@ -134,11 +147,32 @@ None.
 
 ## Regression test
 
-Filled at FIXING (slice 038-01 test class).
+`skills/agent-loop/test_loop.py::ResumedSessionCostDeltaTests` — a mock `claude`
+that keeps per-session running totals across `--resume` (the real semantics in
+the Evidence table) asserts each resumed iteration costs the delta, the state
+cumulative equals the sum of per-iteration costs, and the iteration-3
+`--max-budget-usd` uses the corrected cumulative.
 
 ## Proof
 
+- Red (2026-11-10): before the slice 038-01 implementation, 22 of its 25 new
+  tests failed, including all of `ResumedSessionCostDeltaTests`.
+- Green (2026-11-10): `python3.13 scripts/run_tests.py` 2567 passed / 10
+  skipped; 3.9.6 run green except two `test_gate_output_readback.py [forged]`
+  cases that fail identically on an `origin/main` baseline (macOS bytecode-cache
+  path; unrelated).
+- Mutation: disabling the delta proof turns 4/6 `ResumedSessionCostDeltaTests`
+  red; deleting the returned-id conjunct turns
+  `test_returned_session_id_must_match_resumed_id` red.
+
 ## Learning
+
+On `claude -p --resume`, `total_cost_usd` and `modelUsage` are session running
+totals while top-level `usage` is per invocation. Any consumer that sums
+`total_cost_usd` across resumed calls over-counts; compute a delta against the
+last reported total for the same session, and fall back to the reported value
+(over-count, never under-count) when the running-total identity
+`modelUsage_now = modelUsage_prev + usage` does not hold.
 
 ## Main recheck
 

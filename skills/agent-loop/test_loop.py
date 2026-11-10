@@ -8878,5 +8878,578 @@ class GoalBookkeepingAndNonGitTests(_GoalGitTargetMixin, unittest.TestCase):
         self.assertFalse(state["runner_ever_edited"])
 
 
+# ============================================================================
+# Slice 038-01 — per-iteration accounting + bug 007 (resumed-session cost)
+# ============================================================================
+
+_RT_MOCK_PY = r'''
+import json, os, sys
+d = os.path.dirname(os.path.abspath(__file__))
+plan = json.load(open(os.path.join(d, "plan.json")))
+sf = os.path.join(d, "mockstate.json")
+st = json.load(open(sf)) if os.path.exists(sf) else {"n": 0, "sessions": {}}
+n = st["n"]
+call = plan["calls"][min(n, len(plan["calls"]) - 1)]
+st["n"] = n + 1
+argv = sys.argv[1:]
+with open(os.path.join(d, "args.log"), "a") as fh:
+    for a in argv:
+        fh.write(a + "\x1f")
+    fh.write("\x1e")
+resumed = argv[argv.index("--resume") + 1] if "--resume" in argv else None
+sid = call.get("session_id") or resumed or "sess-%d" % (n + 1)
+sess = st["sessions"].setdefault(sid, {"cost": 0.0, "models": {}})
+call_cost = 0.0
+usage = {"input_tokens": 0, "output_tokens": 0,
+         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+this_models = {}
+for model, spec in call["models"].items():
+    cost, (i, o, cr, cc) = spec["cost"], spec["tokens"]
+    call_cost += cost
+    usage["input_tokens"] += i
+    usage["output_tokens"] += o
+    usage["cache_read_input_tokens"] += cr
+    usage["cache_creation_input_tokens"] += cc
+    for bucket in (sess["models"], this_models):
+        m = bucket.setdefault(model, {"costUSD": 0.0, "inputTokens": 0,
+            "outputTokens": 0, "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0, "contextWindow": 1000000})
+        m["costUSD"] += cost
+        m["inputTokens"] += i
+        m["outputTokens"] += o
+        m["cacheReadInputTokens"] += cr
+        m["cacheCreationInputTokens"] += cc
+sess["cost"] += call_cost
+if plan.get("mode") == "per_call":
+    total, mu = call_cost, this_models
+else:
+    total, mu = sess["cost"], sess["models"]
+if call.get("advisor"):
+    usage["iterations"] = [{"type": "message"},
+        {"type": "advisor_message", "model": call["advisor"]}, {"type": "message"}]
+payload = {"type": "result", "subtype": "success", "is_error": False,
+    "session_id": sid, "total_cost_usd": total, "terminal_reason": "completed",
+    "stop_reason": "end_turn", "num_turns": 1, "result": "ok", "usage": usage,
+    "modelUsage": mu}
+if plan.get("drop_model_usage"):
+    del payload["modelUsage"]
+json.dump(st, open(sf, "w"))
+print(json.dumps(payload))
+'''
+
+
+def _mock_claude_running_total(
+    bindir: Path, calls: list, *, mode: str = "running",
+    drop_model_usage: bool = False,
+) -> Path:
+    """Mock `claude` keeping per-session running totals across `--resume`.
+
+    Each invocation n emits `usage` = THIS call only and `modelUsage` /
+    `total_cost_usd` = the session RUNNING TOTAL (what `claude -p` really does,
+    bug 007). A call may force `session_id` (different-id case) or name an
+    `advisor` model (adds an `advisor_message` iteration). `mode="per_call"`
+    breaks the running-total identity (reports this call only). Each call is
+    `{"models": {id: {"cost": f, "tokens": [in, out, cache_read, cache_create]}}}`.
+    """
+    bindir.mkdir(parents=True, exist_ok=True)
+    (bindir / "plan.json").write_text(json.dumps(
+        {"calls": calls, "mode": mode, "drop_model_usage": drop_model_usage}))
+    (bindir / "mock_rt.py").write_text(_RT_MOCK_PY)
+    body = f"#!/usr/bin/env bash\nexec '{sys.executable}' '{bindir / 'mock_rt.py'}' \"$@\"\n"
+    return _make_mock_claude(bindir, body)
+
+
+HAIKU = "claude-haiku-5-5"
+OPUS = "claude-opus-5-5"
+
+
+def _rt_call(cost: float, tokens=(2, 4, 100, 50), model: str = HAIKU, **extra) -> dict:
+    return {"models": {model: {"cost": cost, "tokens": list(tokens)}}, **extra}
+
+
+class _AccountingTarget:
+    def _setup_acct(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-acct-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _iters(self, result):
+        return [ln for ln in _stdout_json_lines(result.stdout) if "iteration" in ln]
+
+    def _run(self, n: int, *extra):
+        return _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", str(n),
+            "--cost-ceiling", "10.00", *extra, mock_bindir=self.bindir)
+
+
+class ResumedSessionCostDeltaTests(_AccountingTarget, unittest.TestCase):
+    """Bug 007 / 038-01 AC3, AC5 — a resumed iteration costs its own delta."""
+
+    def setUp(self):
+        self._setup_acct()
+
+    def test_resumed_iterations_cost_the_delta_not_the_running_total(self):
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.10), _rt_call(0.20), _rt_call(0.30)])
+        result = self._run(3)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        it = self._iters(result)
+        self.assertEqual([round(i["cost_usd"], 6) for i in it], [0.10, 0.20, 0.30])
+        self.assertEqual(
+            [i["cost_basis"] for i in it],
+            ["reported", "session_delta", "session_delta"])
+        # Pre-fix this was 0.1 + 0.3 + 0.6 = 1.0.
+        self.assertAlmostEqual(it[-1]["cumulative_cost_usd"], 0.60, places=6)
+
+    def test_state_cumulative_is_sum_of_per_iteration_costs(self):
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.10), _rt_call(0.20), _rt_call(0.30)])
+        self._run(3)
+        state = _read_state(self.target, _find_only_run_id(self.target))
+        hist = state["oracle_score_history"]
+        self.assertAlmostEqual(
+            state["cumulative_cost_usd"], sum(h["cost_usd"] for h in hist), places=6)
+        self.assertAlmostEqual(state["cumulative_cost_usd"], 0.60, places=6)
+
+    def test_model_usage_is_per_invocation_on_resumed_session(self):
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.10, (2, 4, 100, 50)), _rt_call(0.20, (3, 5, 200, 60))])
+        result = self._run(2)
+        second = self._iters(result)[1]
+        got = dict(second["model_usage"][HAIKU])
+        self.assertAlmostEqual(got.pop("cost_usd"), 0.20, places=6)
+        self.assertEqual(got, {
+            "input_tokens": 3, "output_tokens": 5,
+            "cache_read_input_tokens": 200, "cache_creation_input_tokens": 60})
+        self.assertEqual(second["usage"]["input_tokens"], 3)
+
+    def test_max_budget_uses_corrected_cumulative(self):
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.10), _rt_call(0.20), _rt_call(0.30)])
+        self._run(3)
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(len(argvs), 3)
+        # Before iteration 3 the true spend is 0.10 + 0.20 (pre-fix: 0.4).
+        self.assertAlmostEqual(
+            float(_find_flag_value(argvs[2], "--max-budget-usd")), 10.0 - 0.30, places=6)
+
+    def test_no_new_flags_added_to_argv(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10), _rt_call(0.20)])
+        self._run(2)
+        for argv in _read_args_log(self.bindir / "args.log"):
+            for flag in ("--model", "--effort", "--advisor"):
+                self.assertNotIn(flag, argv)
+
+    def test_snapshot_persisted_for_current_session(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10), _rt_call(0.20)])
+        self._run(2)
+        state = _read_state(self.target, _find_only_run_id(self.target))
+        snap = state["current_session_usage_snapshot"]
+        self.assertEqual(snap["session_id"], state["current_session_id"])
+        self.assertAlmostEqual(snap["total_cost_usd"], 0.30, places=6)
+        self.assertEqual(snap["model_usage"][HAIKU]["inputTokens"], 4)
+
+
+class ResumedSessionFailSafeTests(_AccountingTarget, unittest.TestCase):
+    """AC3 BR-2 — unproven running-total semantics over-count, visibly."""
+
+    def setUp(self):
+        self._setup_acct()
+
+    def test_different_session_id_returned_falls_back_to_reported(self):
+        _mock_claude_running_total(self.bindir, [
+            _rt_call(0.10), _rt_call(0.20, session_id="sess-other")])
+        result = self._run(2)
+        second = self._iters(result)[1]
+        self.assertEqual(second["cost_basis"], "reported")
+        self.assertAlmostEqual(second["cost_usd"], 0.20, places=6)
+        self.assertIn("loop: ", result.stderr)
+
+    def test_failed_identity_proof_falls_back_to_reported(self):
+        # per_call mode reports only this call, so modelUsage tokens are below
+        # snapshot + usage tokens: the proof fails and cost is the reported total.
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.10), _rt_call(0.20), _rt_call(0.30)],
+            mode="per_call")
+        result = self._run(3)
+        it = self._iters(result)
+        self.assertEqual([i["cost_basis"] for i in it], ["reported"] * 3)
+        self.assertAlmostEqual(it[-1]["cumulative_cost_usd"], 0.60, places=6)
+
+    def test_resumed_reported_fallback_prints_one_breadcrumb_per_resumed_iteration(self):
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.10), _rt_call(0.20), _rt_call(0.30)],
+            mode="per_call")
+        result = self._run(3)
+        lines = [ln for ln in result.stderr.splitlines()
+                 if ln.startswith("loop: iteration ")
+                 and "cost basis fell back to the reported session total" in ln]
+        # Iteration 1 is fresh (no --resume): breadcrumbs for iterations 2 and 3.
+        self.assertEqual(len(lines), 2, msg=result.stderr)
+        self.assertIn("iteration 2:", lines[0])
+        self.assertIn("iteration 3:", lines[1])
+
+    def test_reported_cost_below_snapshot_falls_back_to_reported(self):
+        # Token identity holds (running mode) but the reported total is below
+        # the snapshot: fail-safe to reported, never a clamped-to-zero delta.
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.30), _rt_call(0.05)])
+        # Rewrite the plan so the running cost dips: second call costs negative.
+        plan = json.loads((self.bindir / "plan.json").read_text())
+        plan["calls"][1]["models"][HAIKU]["cost"] = -0.10
+        (self.bindir / "plan.json").write_text(json.dumps(plan))
+        result = self._run(2)
+        second = self._iters(result)[1]
+        self.assertEqual(second["cost_basis"], "reported")
+        self.assertAlmostEqual(second["cost_usd"], 0.20, places=6)
+
+    def test_fresh_first_iteration_prints_no_breadcrumb(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+        result = self._run(1)
+        self.assertNotIn("cost basis fell back", result.stderr)
+
+
+class OldStateResumeTests(_AccountingTarget, unittest.TestCase):
+    """AC6 — a pre-038 state.json (no snapshot, bare history) resumes."""
+
+    def setUp(self):
+        self._setup_acct()
+
+    def test_old_state_resumes_with_reported_first_iteration(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10), _rt_call(0.20)])
+        self._run(1)
+        run_id = _find_only_run_id(self.target)
+        sp = _state_path(self.target, run_id)
+        state = json.loads(sp.read_text())
+        state.pop("current_session_usage_snapshot", None)
+        keep = ("iteration", "composite", "threshold", "status")
+        state["oracle_score_history"] = [
+            {k: h[k] for k in keep if k in h} for h in state["oracle_score_history"]]
+        old_entry = dict(state["oracle_score_history"][0])
+        sp.write_text(json.dumps(state))
+        result = _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "2",
+            "--cost-ceiling", "10.00", mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        it = self._iters(result)
+        self.assertEqual(it[0]["cost_basis"], "reported")
+        self.assertAlmostEqual(it[0]["cost_usd"], 0.30, places=6)  # running total
+        new = _read_state(self.target, run_id)
+        self.assertEqual(new["state_schema_version"], 1)
+        self.assertEqual(new["oracle_score_history"][0], old_entry)
+        self.assertIn("cost_basis", new["oracle_score_history"][1])
+        self.assertIn("loop: ", result.stderr)
+
+
+class SnapshotResumeTests(_AccountingTarget, unittest.TestCase):
+    """AC3 — a 038-era snapshot survives `--resume <run-id>`."""
+
+    def setUp(self):
+        self._setup_acct()
+
+    def test_snapshot_survives_resume_and_gives_session_delta(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10), _rt_call(0.20)])
+        self._run(1)
+        run_id = _find_only_run_id(self.target)
+        self.assertIn(
+            "current_session_usage_snapshot", _read_state(self.target, run_id))
+        result = _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "2",
+            "--cost-ceiling", "10.00", mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        first = self._iters(result)[0]
+        self.assertEqual(first["cost_basis"], "session_delta")
+        self.assertAlmostEqual(first["cost_usd"], 0.20, places=6)
+        self.assertNotIn("cost basis fell back", result.stderr)
+
+
+class IterationAccountingRecordTests(_AccountingTarget, unittest.TestCase):
+    """AC1, AC2, BR-3 — accounting keys on history entries and stdout lines."""
+
+    def setUp(self):
+        self._setup_acct()
+
+    def test_history_and_stdout_carry_accounting_keys(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10), _rt_call(0.20)])
+        result = self._run(2)
+        state = _read_state(self.target, _find_only_run_id(self.target))
+        keys = ("agent", "session_id", "cost_usd", "cost_basis", "usage",
+                "model_usage", "model", "requested")
+        for h in state["oracle_score_history"]:
+            for k in ("iteration", "composite", "threshold", "status", *keys):
+                self.assertIn(k, h)
+        for ln in self._iters(result):
+            for k in keys:
+                self.assertIn(k, ln)
+        hist = state["oracle_score_history"]
+        self.assertEqual([h["agent"] for h in hist], ["runner", "judge"])
+        self.assertEqual(hist[0]["session_id"], "sess-1")
+        self.assertEqual(hist[0]["usage"], {
+            "input_tokens": 2, "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 50, "output_tokens": 4})
+        self.assertEqual(
+            hist[0]["requested"], {"model": None, "effort": None, "advisor": None})
+        self.assertEqual(hist[0]["model"], HAIKU)
+        self.assertNotIn("advisor", hist[0]["model_usage"][HAIKU])
+
+    def test_advisor_attribution_and_primary_model(self):
+        call = {"models": {
+            HAIKU: {"cost": 0.01, "tokens": [2, 4, 100, 50]},
+            OPUS: {"cost": 0.50, "tokens": [500, 20, 0, 0]}}, "advisor": OPUS}
+        # Advisor out-costs the executor; primary `model` must be the executor.
+        _mock_claude_running_total(self.bindir, [call])
+        result = self._run(1)
+        rec = self._iters(result)[0]
+        self.assertTrue(rec["model_usage"][OPUS]["advisor"])
+        self.assertNotIn("advisor", rec["model_usage"][HAIKU])
+        self.assertEqual(rec["model"], HAIKU)
+        self.assertAlmostEqual(rec["model_usage"][OPUS]["cost_usd"], 0.50, places=6)
+
+    def test_missing_model_usage_does_not_fail_iteration(self):
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.10)], drop_model_usage=True)
+        result = self._run(1)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        rec = self._iters(result)[0]
+        self.assertEqual(rec["model_usage"], {})
+        self.assertIsNone(rec["model"])
+        self.assertAlmostEqual(rec["cost_usd"], 0.10, places=6)
+
+
+class GoalDriverAccountingTests(_GoalTargetMixin, unittest.TestCase):
+    """AC4 — the goal driver records its single invocation."""
+
+    def setUp(self):
+        self._setup_target(_passing_oracle())
+
+    def _event(self):
+        ev = _goal_result_event(subtype="success", cost=0.40, session_id="goal-s")
+        ev["usage"] = {
+            "input_tokens": 2, "output_tokens": 4,
+            "cache_read_input_tokens": 100, "cache_creation_input_tokens": 50,
+            "iterations": [{"type": "advisor_message", "model": OPUS}]}
+        ev["modelUsage"] = {
+            HAIKU: {"costUSD": 0.10, "inputTokens": 2, "outputTokens": 4,
+                    "cacheReadInputTokens": 100, "cacheCreationInputTokens": 50},
+            OPUS: {"costUSD": 0.30, "inputTokens": 9, "outputTokens": 1}}
+        return ev
+
+    def test_state_and_summary_gain_accounting(self):
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text=GOAL_PASS_SENTINEL, result_event=self._event()))
+        result = _run_goal(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        for blob in (self._summary(result), self._state()):
+            self.assertEqual(blob["session_id"], "goal-s")
+            self.assertEqual(blob["cost_basis"], "reported")
+            self.assertEqual(blob["usage"]["cache_read_input_tokens"], 100)
+            self.assertEqual(blob["model"], HAIKU)
+            self.assertTrue(blob["model_usage"][OPUS]["advisor"])
+            self.assertEqual(
+                blob["requested"], {"model": None, "effort": None, "advisor": None})
+            self.assertAlmostEqual(blob["cumulative_cost_usd"], 0.40, places=6)
+            self.assertNotIn("agent", blob)
+
+    _ACCT_KEYS = ("session_id", "usage", "model_usage", "model", "requested",
+                  "cost_basis")
+
+    def test_goal_unavailable_exit_carries_accounting(self):
+        ev = self._event()
+        ev["num_turns"] = 0
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text=GOAL_HOOK_REFUSAL, result_event=ev))
+        result = _run_goal(self.target, "--prompt", "x", mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(
+            self._summary(result)["terminal_reason"], "goal_unavailable",
+            msg=result.stdout)
+        for blob in (self._summary(result), self._state()):
+            for k in self._ACCT_KEYS:
+                self.assertIn(k, blob)
+            self.assertEqual(blob["session_id"], "goal-s")
+            self.assertEqual(blob["cost_basis"], "reported")
+
+    def test_refusal_before_invoke_has_no_accounting_keys(self):
+        # Negative guard (cannot fail when the feature is removed): a path that
+        # never invokes Claude keeps today's summary shape.
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(result_event=self._event()))
+        result = _run_goal(
+            self.target, "--prompt", "x", "--resume", "20260101T000000-abcd",
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "goal_resume_unsupported")
+        for k in self._ACCT_KEYS:
+            self.assertNotIn(k, summary)
+
+
+class AccountingHelperUnitTests(unittest.TestCase):
+    """Pure helpers: `_normalize_model_usage`, `_advisor_model_ids`,
+    `_iteration_cost_delta`, `_iteration_accounting`."""
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("loop", LOOP)
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+
+    def _mu(self, cost, i=2, o=4, cr=100, cc=50):
+        return {"costUSD": cost, "inputTokens": i, "outputTokens": o,
+                "cacheReadInputTokens": cr, "cacheCreationInputTokens": cc}
+
+    def test_normalize_maps_and_zeroes_bad_values(self):
+        out = self.m._normalize_model_usage({"modelUsage": {
+            "a": {"costUSD": "x", "inputTokens": True, "outputTokens": 7},
+            "b": "junk"}})
+        self.assertEqual(out["a"], {
+            "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 7,
+            "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})
+        self.assertEqual(out["b"]["output_tokens"], 0)
+
+    def test_normalize_non_dict_is_empty(self):
+        self.assertEqual(self.m._normalize_model_usage({"modelUsage": [1]}), {})
+        self.assertEqual(self.m._normalize_model_usage({}), {})
+
+    def test_advisor_ids(self):
+        data = {"usage": {"iterations": [
+            {"type": "message"},
+            {"type": "advisor_message", "model": OPUS},
+            {"type": "advisor_message"}, "junk"]}}
+        self.assertEqual(self.m._advisor_model_ids(data), {OPUS})
+        self.assertEqual(self.m._advisor_model_ids({"usage": 3}), set())
+
+    def _data(self, total, mu, usage):
+        return {"session_id": "S", "total_cost_usd": total,
+                "modelUsage": mu, "usage": usage}
+
+    _USAGE = {"input_tokens": 3, "output_tokens": 5,
+              "cache_read_input_tokens": 200, "cache_creation_input_tokens": 60}
+
+    def _snap(self):
+        return {"session_id": "S", "total_cost_usd": 0.10,
+                "model_usage": {HAIKU: self._mu(0.10)}}
+
+    def test_delta_proven(self):
+        data = self._data(0.30, {HAIKU: self._mu(0.30, 5, 9, 300, 110)}, self._USAGE)
+        cost, mu, basis = self.m._iteration_cost_delta(
+            data, resumed_session_id="S", snapshot=self._snap())
+        self.assertEqual(basis, "session_delta")
+        self.assertAlmostEqual(cost, 0.20, places=6)
+        self.assertEqual(mu[HAIKU]["input_tokens"], 3)
+        self.assertAlmostEqual(mu[HAIKU]["cost_usd"], 0.20, places=6)
+
+    def test_delta_drops_models_not_used_this_invocation(self):
+        data = self._data(0.30, {HAIKU: self._mu(0.30, 5, 9, 300, 110),
+                                 OPUS: self._mu(0.05, 7, 7, 7, 7)}, self._USAGE)
+        snap = self._snap()
+        snap["model_usage"][OPUS] = self._mu(0.05, 7, 7, 7, 7)
+        _, mu, basis = self.m._iteration_cost_delta(
+            data, resumed_session_id="S", snapshot=snap)
+        self.assertEqual(basis, "session_delta")
+        self.assertEqual(list(mu), [HAIKU])
+
+    def test_returned_session_id_must_match_resumed_id(self):
+        # Isolates the `returned_id == resumed_session_id` conjunct: resumed S,
+        # snapshot for S, token identity satisfied, but Claude returned T.
+        data = self._data(0.30, {HAIKU: self._mu(0.30, 5, 9, 300, 110)}, self._USAGE)
+        data["session_id"] = "T"
+        cost, _, basis = self.m._iteration_cost_delta(
+            data, resumed_session_id="S", snapshot=self._snap())
+        self.assertEqual(basis, "reported")
+        self.assertAlmostEqual(cost, 0.30, places=6)
+
+    def test_cost_below_snapshot_falls_back_to_reported(self):
+        data = self._data(0.05, {HAIKU: self._mu(0.05, 5, 9, 300, 110)}, self._USAGE)
+        cost, _, basis = self.m._iteration_cost_delta(
+            data, resumed_session_id="S", snapshot=self._snap())
+        self.assertEqual(basis, "reported")
+        self.assertAlmostEqual(cost, 0.05, places=6)
+
+    def test_non_finite_numbers_count_as_absent(self):
+        nan, inf = float("nan"), float("inf")
+        out = self.m._normalize_model_usage({"modelUsage": {
+            "a": {"costUSD": nan, "inputTokens": inf, "outputTokens": -inf,
+                  "cacheReadInputTokens": 3}}})
+        self.assertEqual(out["a"], {
+            "cost_usd": 0.0, "input_tokens": 0, "output_tokens": 0,
+            "cache_read_input_tokens": 3, "cache_creation_input_tokens": 0})
+        rec = self.m._iteration_accounting(
+            {"usage": {"input_tokens": nan, "output_tokens": inf}},
+            agent="runner", cost_usd=0.0, cost_basis="reported",
+            model_usage={}, requested={})
+        self.assertEqual(rec["usage"]["input_tokens"], 0)
+        self.assertEqual(rec["usage"]["output_tokens"], 0)
+
+    def test_null_session_id_is_empty_string(self):
+        rec = self.m._iteration_accounting(
+            {"session_id": None}, agent="runner", cost_usd=0.0,
+            cost_basis="reported", model_usage={}, requested={})
+        self.assertEqual(rec["session_id"], "")
+
+    def test_breadcrumb_suppressed_off_claude_host(self):
+        w = self.m._warn_reported_fallback
+        self.assertTrue(w("S", "reported", self.m.HOST_CLAUDE))
+        self.assertFalse(w("S", "reported", "copilot"))
+        self.assertFalse(w("S", "session_delta", self.m.HOST_CLAUDE))
+        self.assertFalse(w(None, "reported", self.m.HOST_CLAUDE))
+
+    def test_fallbacks_are_reported(self):
+        data = self._data(0.30, {HAIKU: self._mu(0.30, 5, 9, 300, 110)}, self._USAGE)
+        for kwargs in (
+            {"resumed_session_id": None, "snapshot": self._snap()},
+            {"resumed_session_id": "S", "snapshot": None},
+            {"resumed_session_id": "T", "snapshot": self._snap()},
+            {"resumed_session_id": "S",
+             "snapshot": {**self._snap(), "session_id": "T"}},
+        ):
+            cost, mu, basis = self.m._iteration_cost_delta(data, **kwargs)
+            self.assertEqual(basis, "reported", msg=kwargs)
+            self.assertAlmostEqual(cost, 0.30, places=6)
+            self.assertEqual(mu[HAIKU]["input_tokens"], 5)
+
+    def test_unproven_when_tokens_below_identity(self):
+        data = self._data(0.30, {HAIKU: self._mu(0.30, 3, 5, 200, 60)}, self._USAGE)
+        _, _, basis = self.m._iteration_cost_delta(
+            data, resumed_session_id="S", snapshot=self._snap())
+        self.assertEqual(basis, "reported")
+
+    def test_accounting_record_shape(self):
+        data = self._data(0.30, {
+            HAIKU: self._mu(0.10), OPUS: self._mu(0.10)},
+            {**self._USAGE, "iterations": [
+                {"type": "advisor_message", "model": OPUS}]})
+        mu = self.m._normalize_model_usage(data)
+        req = {"model": None, "effort": None, "advisor": None}
+        rec = self.m._iteration_accounting(
+            data, agent="runner", cost_usd=0.2, cost_basis="session_delta",
+            model_usage=mu, requested=req)
+        self.assertEqual(rec["cost_basis"], "session_delta")
+        self.assertEqual(rec["agent"], "runner")
+        self.assertEqual(rec["session_id"], "S")
+        self.assertEqual(rec["model"], HAIKU)  # tie -> first non-advisor entry
+        self.assertTrue(rec["model_usage"][OPUS]["advisor"])
+        goal = self.m._iteration_accounting(
+            data, agent=None, cost_usd=None, cost_basis="reported",
+            model_usage=mu, requested=req)
+        self.assertNotIn("agent", goal)
+        self.assertNotIn("cost_usd", goal)
+
+    def test_model_null_when_only_advisor(self):
+        data = self._data(0.1, {OPUS: self._mu(0.1)}, {
+            "iterations": [{"type": "advisor_message", "model": OPUS}]})
+        rec = self.m._iteration_accounting(
+            data, agent="runner", cost_usd=0.1, cost_basis="reported",
+            model_usage=self.m._normalize_model_usage(data), requested={})
+        self.assertIsNone(rec["model"])
+
+
 if __name__ == "__main__":
     unittest.main()
