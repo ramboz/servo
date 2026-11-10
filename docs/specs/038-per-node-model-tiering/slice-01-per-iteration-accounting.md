@@ -1,8 +1,8 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 kind: feature
 dependencies: []
-last_verified:
+last_verified: 2026-11-10
 frame_review: true
 claimed_by: claude/model-tiering
 ---
@@ -104,16 +104,23 @@ part of this, the loop's running cost becomes accurate on resumed sessions
 | BR-3 | primary `model` | loop + goal driver | advisor consult present | the non-advisor model with highest cost | the advisor's uncached read can out-cost the executor | AC2 |
 
 **DoD:**
-- [ ] All ACs pass; full test suite green (no regressions).
-- [ ] Tests use a mock `claude` that emits session-running-total payloads
+- [x] All ACs pass; full test suite green (no regressions). 3.13: 2567 passed,
+      10 skipped. The 3.9.6 run is green except two
+      `test_gate_output_readback.py [forged]` cases, which fail identically on an
+      `origin/main` baseline (deviation 7).
+- [x] Tests use a mock `claude` that emits session-running-total payloads
       across `--resume`d iterations, plus one with an `advisor_message` iteration.
-- [ ] Each new test shown to fail when its feature is removed.
+- [x] Each new test shown to fail when its feature is removed, with two
+      exception classes (deviation 6): three negative guards, which cannot fail
+      by design, and six round-2 tests whose red was not independently
+      witnessed.
 - [ ] Bug 007 record advanced to DONE, with this slice's test class as its
-      regression test.
-- [ ] `skills/agent-loop/SKILL.md` and `docs/architecture.md` (state.json fields)
+      regression test. It went through its own lifecycle; FIXING witnessed red
+      on the pre-fix `loop.py`.
+- [x] `skills/agent-loop/SKILL.md` and `docs/architecture.md` (state.json fields)
       updated; host packages regenerated (`scripts/build_host_packages.py`).
-- [ ] Reviewed (compliance + craft); deviation log + reconciliation sweep;
-      reconciliation review passed.
+- [ ] Reviewed (compliance pass in round 2, craft pass); deviation log +
+      reconciliation sweep; reconciliation review passed.
 
 **Anti-horizontal-phasing check:** After this slice, a person reading
 `state.json` or the loop's stdout can see, per iteration, which model ran and
@@ -121,8 +128,99 @@ what it cost, and the loop's cost brake reflects real spend.
 
 ### Deviation log (after reconciliation)
 
-_Filled at reconciliation._
+The original ACs are preserved above. What changed during implementation and
+review:
+
+1. **A fifth proof condition (AC3).** The proof also requires
+   `reported total_cost_usd ≥ snapshot total_cost_usd`. If the token identity
+   holds but the reported cost went down, the iteration falls back to
+   `"reported"` rather than clamping the delta to 0, which would under-count.
+   This came from a craft review note and is fail-safe in the AC's own
+   direction.
+2. **Zero-delta models dropped (AC2/AC3).** In delta mode, `model_usage` leaves
+   out models whose per-field deltas are all zero: models this invocation did
+   not use, which AC2 says to exclude.
+3. **Breadcrumb suppressed under `--host copilot` (AC3).** Copilot reports no
+   `modelUsage` and a USD cost of 0.0, so every resumed Copilot iteration
+   would print the fallback breadcrumb. `_warn_reported_fallback` suppresses
+   it off the Claude host; SKILL.md documents this and a unit test pins it. The
+   Copilot loop is refused today (ADR-0043), so this cannot be exercised end to
+   end.
+4. **Goal-driver accounting covers every exit after the result is parsed
+   (AC4).** Round 1 attached the keys only on the final-verdict path. Round 2
+   builds them as soon as a result event exists, so the interrupt and
+   `goal_unavailable` exits carry them too. Refusals that happen before
+   invocation keep their shape.
+5. **Small consolidations beyond the ACs.**
+   - `cumulative_input_tokens` / `cumulative_output_tokens` now come from the
+     same `_usage_record` helper as `usage`, so the two cannot disagree.
+     Numeric strings and bools now count as 0, and a bad field zeroes only
+     itself instead of the whole tally.
+   - A `null` `session_id` now normalizes to `""` (`_session_id_of`). The old
+     code produced `"None"`, which would have been persisted and passed as
+     `--resume None`.
+   - Non-finite numbers (NaN/inf) in `usage` / `modelUsage` count as absent.
+     The top-level `total_cost_usd` still goes through the pre-existing bare
+     `float()` in `_reported_total_cost`, so a NaN/inf cost there would still
+     propagate. That behaviour predates this slice; hardening is folded into
+     038-02's review round together with deviation 9.
+6. **DoD exceptions: negative guards and unwitnessed round-2 reds.** `test_no_new_flags_added_to_argv`,
+   `test_fresh_first_iteration_prints_no_breadcrumb` and
+   `test_refusal_before_invoke_has_no_accounting_keys` check that behaviour is
+   preserved, so they cannot fail when the feature is removed. The slice's test
+   block now holds 33 tests: 25 from round 1, of which 22 were witnessed red
+   before implementation, plus 8 added with the round-2 review fixes. Two of
+   the 8, `test_returned_session_id_must_match_resumed_id` and
+   `test_goal_unavailable_exit_carries_accounting`, were witnessed red by
+   mutation. Red was witnessed for the following:
+   - disabling the delta proof turns 4 of the 6 `ResumedSessionCostDeltaTests`
+     red;
+   - deleting the returned-id condition turns
+     `test_returned_session_id_must_match_resumed_id` red;
+   - turning the goal accounting off turns the two goal accounting tests red.
+
+   The other round-2 tests were written with their fixes, and red was not
+   independently witnessed for each:
+   - `test_reported_cost_below_snapshot_falls_back_to_reported`;
+   - `test_cost_below_snapshot_falls_back_to_reported`;
+   - `test_delta_drops_models_not_used_this_invocation`;
+   - `test_non_finite_numbers_count_as_absent`;
+   - `test_null_session_id_is_empty_string`;
+   - `test_breadcrumb_suppressed_off_claude_host`. Its Copilot case tests the
+     deviation-3 suppression, which round 1 did not have. Its `session_delta`
+     and no-resume cases are negative guards. Its Claude-host case expects a
+     warning that round 1 already printed.
+
+   Each asserts behaviour that the round-1 code did not have, as the round-1
+   compliance and craft findings record.
+7. **Pre-existing 3.9 failures.** Two `skills/quality-gate/test_gate_output_readback.py`
+   `[forged]` cases fail under the macOS 3.9.6 interpreter
+   (`~/Library/Caches/com.apple.python` bytecode-cache prefix). They fail
+   identically on an `origin/main` baseline worktree, so they are unrelated to
+   this slice.
+8. **Per-iteration stdout key order.** The accounting keys sit between
+   `cost_usd` and `cumulative_cost_usd`. This is additive; no key was renamed.
+9. **Residual: an empty snapshot weakens the token check.** The bug-007 review
+   found that when the previous response carried no `modelUsage`, the snapshot
+   has no tokens. The identity check then passes trivially, and only the
+   `reported ≥ snapshot cost` condition still guards. Under the evidenced
+   semantics the result is still correct. Hardening, which requires snapshot
+   tokens > 0, is folded into 038-02's review round, so `loop.py` has a single
+   writer at a time.
 
 ### Reconciliation sweep
 
-_Filled at reconciliation._
+| Artifact | Disposition | Rationale |
+|----------|-------------|-----------|
+| `README.md` | `no-op` | The front door does not describe state.json fields; no user-facing claim changed. |
+| `docs/specs/README.md` | `deferred` | Regenerated by `workflow.py status-board` at close, before DONE. |
+| `docs/product-vision.md` | `no-op` | Checked; no scope or positioning change. |
+| `docs/architecture.md` | `updated` | State.json accounting fields, the cost-basis rule, goal-driver flat accounting keys, and `agent` added to the stdout key list. |
+| Primer surfaces: `CLAUDE.md` / `AGENTS.md` / scaffold templates | `no-op` | servo has no root primer; scaffold templates don't describe loop state. |
+| `docs/inbox.md` | `no-op` | servo has no inbox file. |
+| `docs/refinement-todo.md` | `updated` | Spike Q5 annotated: `--max-budget-usd` scope verified per-invocation (halt granularity still open). New entry "Spec 038-01 hardening carried into 038-02's review round" tracks deviations 5 and 9. |
+| `docs/memory/**` | `updated` | `learnings.md`: resumed-session running totals and the delta rule (bug 007). |
+| `docs/decisions/README.md` / ADR index | `no-op` | This slice adds no ADR; ADR-0047's index entry landed with its acceptance. |
+| `docs/bugs/007-…` + bug board | `deferred` | The record is updated (Fix, closure, proof, learning). The bug is at FIXING with bug-review and craft evidence recorded. REVIEWED → DONE and `bug.py status-board` run at close, before 038-01 is marked DONE (the DoD item stays unticked until then). |
+| `skills/agent-loop/SKILL.md` + generated `hosts/**` | `updated` | Output-shape docs; hosts regenerated and drift-checked. |
+| Slice file set | `no-op` | Commit 44b72f5 touches `skills/agent-loop/{loop.py,test_loop.py,SKILL.md}`, `docs/architecture.md`, generated `hosts/**`, bug 007 and review evidence. `agents/runner.md` / `agents/judge.md` are unchanged; a stale local `main` makes `git diff main...HEAD` unusable for this check. |

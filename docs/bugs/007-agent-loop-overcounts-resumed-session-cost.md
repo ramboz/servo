@@ -21,6 +21,10 @@ closure_schema: 1
 > (per-iteration cost accounting). Fixed by slice 038-01, whose per-iteration
 > `cost_usd` delta *is* the fix; this record carries the diagnosis.
 
+> **Line references:** Symptom, Evidence, Root cause and the inventory cite
+> pre-fix `origin/main@4cd95ca`. Call-site closure cites the post-fix tree
+> (commit 44b72f5).
+
 ## Symptom
 
 The loop driver's `cumulative_cost_usd` grows faster than real spend. Every
@@ -65,6 +69,12 @@ is returned (`session_id` unchanged), which is the loop driver's normal path.
 Current code therefore sums 0.0016728 + 0.0028942 = 0.0045670 for a real
 spend of 0.0028942.
 
+A follow-up probe (spec 038 grounding) checked whether the per-invocation
+`--max-budget-usd` is itself session-scoped. A two-turn resumed call under
+`--max-budget-usd 0.0025` succeeded on a session whose running total was
+already $0.0032, so the cap applies per invocation. Passing `ceiling −
+corrected cumulative` is therefore correct.
+
 `cumulative_input_tokens` / `cumulative_output_tokens` read top-level `usage`
 (`loop.py:2939-2955`) and are correct. The goal driver issues one fresh
 invocation (`loop.py:3599-3626`), so its `total_cost_usd` is that run's cost and
@@ -107,7 +117,14 @@ sum was written for one-shot invocations and never revisited.
 per-iteration stdout `cost_usd` (`loop.py:3068`).
 
 **Reuse decision:** no existing helper computes an invocation delta. Slice
-038-01 adds one, `_iteration_cost_delta`, used by both drivers' accounting.
+038-01 adds one, `_iteration_cost_delta`, called only from `run_loop`. The goal
+driver's single fresh invocation uses `_reported_total_cost` with
+`cost_basis: "reported"`.
+
+**Search scope:** `skills/` + `scripts/` Python, tests excluded.
+`docs/decisions/adr-0008-experiments/analyze.py` also reads `total_cost_usd`.
+It is an offline experiment analyser that never passes `--resume`, so it is
+unaffected.
 
 ## Fix class
 
@@ -115,14 +132,27 @@ local_patch
 
 ## Fix
 
-Slice 038-01. The loop keeps `current_session_cost_usd` and
-`current_session_tokens` (the session running totals last reported for
-`current_session_id`). When an invocation resumed that session and returned
-the same id, and `modelUsage`'s token total is at least the stored total plus
-this invocation's `usage` tokens (positive evidence of running-total
-semantics), the iteration's cost is `total_cost_usd − current_session_cost_usd`.
-Otherwise it is `total_cost_usd`. The unproven case therefore over-counts
-(fail-safe) rather than under-counts. `cumulative_cost_usd` sums these deltas.
+Slice 038-01 fixes this in `_iteration_cost_delta` (`skills/agent-loop/loop.py`).
+The loop persists one dict in `state.json`,
+`current_session_usage_snapshot = {session_id, total_cost_usd, model_usage}`:
+the raw running totals Claude last reported for `current_session_id`. It is
+replaced after every invocation that sets that id.
+
+An iteration's cost is the delta `total_cost_usd − snapshot.total_cost_usd`
+only when all of the following hold:
+- the iteration passed `--resume S`;
+- Claude returned the same `S`;
+- `snapshot.session_id == S`;
+- Σ `modelUsage` tokens ≥ the snapshot's Σ tokens + this invocation's `usage`
+  tokens. This is ≥ rather than =, so advisor and subagent tokens that are
+  absent from `usage` still pass;
+- the reported cost did not go down (≥ the snapshot's).
+
+In that case `model_usage` is the per-model, per-field difference from the
+snapshot, floored at 0, with all-zero models dropped, and `cost_basis` is
+`"session_delta"`. In every other case cost and `model_usage` are the
+reported values with `cost_basis: "reported"`: over-count, never under-count.
+`cumulative_cost_usd` sums the per-invocation costs.
 
 ## Call-site closure
 
@@ -155,8 +185,10 @@ cumulative equals the sum of per-iteration costs, and the iteration-3
 
 ## Proof
 
-- Red (2026-11-10): before the slice 038-01 implementation, 22 of its 25 new
-  tests failed, including all of `ResumedSessionCostDeltaTests`.
+- Red (2026-11-10): before the slice 038-01 implementation, 22 of its first 25
+  new tests failed, including all of `ResumedSessionCostDeltaTests`. The bug.py
+  FIXING gate independently re-ran `ResumedSessionCostDeltaTests` against the
+  pre-fix `loop.py` and confirmed RED.
 - Green (2026-11-10): `python3.13 scripts/run_tests.py` 2567 passed / 10
   skipped; 3.9.6 run green except two `test_gate_output_readback.py [forged]`
   cases that fail identically on an `origin/main` baseline (macOS bytecode-cache
@@ -172,7 +204,8 @@ totals while top-level `usage` is per invocation. Any consumer that sums
 `total_cost_usd` across resumed calls over-counts; compute a delta against the
 last reported total for the same session, and fall back to the reported value
 (over-count, never under-count) when the running-total identity
-`modelUsage_now = modelUsage_prev + usage` does not hold.
+`Σ modelUsage_now ≥ Σ modelUsage_prev + Σ usage` (≥, so advisor and subagent tokens
+missing from `usage` still pass), with a non-decreasing cost, does not hold.
 
 ## Main recheck
 

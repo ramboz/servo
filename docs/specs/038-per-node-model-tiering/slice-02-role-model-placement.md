@@ -1,10 +1,11 @@
 ---
-status: READY_FOR_IMPLEMENTATION
+status: IN_PROGRESS
 kind: feature
 dependencies: [038-01, adr-0047]
 last_verified:
 arch_review: true
 frame_review: true
+claimed_by: claude/model-tiering
 ---
 
 ## Slice 038-02 — role model placement
