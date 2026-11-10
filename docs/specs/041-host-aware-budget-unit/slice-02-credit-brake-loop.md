@@ -50,6 +50,12 @@ ceiling, it refuses as today.
    - Context is recorded as unavailable (`null`).
 5. **No USD mixing.** The USD flags (`--cost-ceiling`) are refused under
    `--host copilot`, and `--credit-ceiling` is refused under `--host claude`.
+6. **Single-threaded worker, uncovered oracle spend refused.**
+   - The Copilot worker invocation never passes `--fleet`, and it denies
+     subagent spawning where 041-01 showed that is possible (ADR-0048 part 2).
+   - Under `--host copilot`, a target whose oracle has USD-priced components
+     is refused before any model call (ADR-0048 part 5), unless the owner
+     approved a USD oracle ceiling.
 
 **DoD:** ACs pass with a mock `copilot` fed 041-01's real usage files; full CI
 gate; docs (agent-loop SKILL.md, architecture, Copilot host README) updated;

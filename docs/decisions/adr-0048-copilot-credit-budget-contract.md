@@ -27,22 +27,26 @@ Option B). Its kill criterion: revisit "when an executed native contract proves
 the requested guarantees, or the owner accepts a separately recorded budget
 policy". Spec 034-03 (native loop, DEFERRED) carries the same trigger: "an
 explicit owner-approved replacement monetary/credit policy recorded in a new
-ADR".
+ADR, followed by positive native invocation/tool/context/resume evidence".
 
 What the CLI documents (`copilot` 1.0.109-1; spec 041 grounding has the
 captures):
 
 - **Unit:** usage is measured in **AI credits**, or in premium requests on the
   legacy billing platform. Each model call costs its tokens at the model's
-  per-token price.
+  per-token price; `/model` lists "Credits Per 1M Tokens".
+- **Context growth:** every call resends the conversation, so input "can reach
+  millions" of tokens.
 - **Report:** `--usage-output-file` writes final usage as JSON, including
   `totalNanoAiu` (10^9 nano AIU = 1 AI credit), `totalPremiumRequestCost`,
   `modelMetrics` and `agentMetrics`, when the session ends, also for `-p` runs.
 - **Cap:** `--max-ai-credits <credits>` caps "this session", with a minimum of
   30. It is a soft cap: "usage is known only after a response returns, so one
   response can go past the limit; the next model call is then blocked. Hidden
-  work such as compaction counts too." Usage accumulates across the whole
-  session, including subagents.
+  work such as compaction counts too." Subagents share the session's limit,
+  and the CLI ships parallel subagent work (`--fleet`).
+- **Partial reports:** `/usage` can say "Reported AI credits … (partial)",
+  meaning some calls reported no cost.
 
 servo today stores no credit spend. It reads a missing usage file as zero
 (`skills/agent-loop/loop.py` `_parse_copilot_usage`), and the heartbeat turns a
@@ -64,16 +68,11 @@ cumulative credit total from each invocation's reported `totalNanoAiu`:
 - **Missing or partial usage report:** halt `credit_usage_unavailable`. It is
   never zero.
 
-**Overrun policy, stated for the owner to accept:** total spend can exceed the
-ceiling by the overrun of the last invocation, meaning its over-cap model
-call(s) and any compaction. The CLI documents this overrun but gives no bound
-for it. The USD brake has the same between-invocation shape. The context brake
-is **unavailable** under Copilot (no context window is reported), so it is
-recorded as `null`, and a Copilot run must set an explicit `--max-iterations`.
-
 - **Pros:** honest, since it is the host's own unit; enforceable at the
-  granularity servo already uses; and it unblocks 034-03's budget condition.
-- **Cons:** the overrun has no documented numeric bound; no context brake.
+  granularity servo already uses for USD; and it unblocks 034-03's budget
+  condition.
+- **Cons:** within an invocation the cap is soft, so the overrun policy below
+  is what the owner actually accepts. There is no context brake.
 
 ### Option B: premium requests as the unit (the first spec 041 sketch)
 
@@ -94,27 +93,58 @@ Rejected by ADR-0043 Option B. Nothing new justifies revisiting it.
 ## Recommended Decision
 
 Option A, effective only once the owner explicitly accepts this ADR. The
-contract has five parts:
+contract has six parts:
 
 1. **Unit:** AI credits (`totalNanoAiu / 1e9`), held in its own fields
    (`cumulative_credits`, `credit_ceiling`), never mixed with USD fields.
    038-01's per-iteration accounting gains `cost_native: {unit: "ai_credits",
    value}`.
-2. **Hard between invocations, soft within:** the brakes are as in Option A,
-   and the overrun policy is as stated.
-3. **Fail closed on missing telemetry.** A missing, unreadable or partial usage
-   report halts the run, and spend is reported as `null`, not 0. A timed-out or
-   killed invocation whose usage file was not written is treated the same way.
+2. **Hard between invocations, soft within, with a stated overrun bound.**
+   - Total spend can exceed the ceiling by at most the overrun of the last
+     invocation.
+   - That overrun is **k × the per-call maximum**:
+     - *k* is the number of model calls in flight when the cap is crossed;
+     - the per-call maximum is about the model's context window × its input
+       price, plus maximum output × output price, all from `/model`'s
+       "Credits Per 1M Tokens".
+   - servo's Copilot worker runs **single-threaded**: no `--fleet`, and
+     subagent spawning denied where the CLI allows it. That makes *k* = 1. If
+     041-01 shows spawning cannot be denied, the bound is restated with the
+     observed *k*.
+   - With no context brake (part 4), the call that crosses the cap is also the
+     run's largest. So the overrun bound and the missing context brake are one
+     acceptance (Open question 1).
+3. **Fail closed on missing or partial telemetry.**
+   - A missing or unreadable usage report halts the run, and spend is reported
+     as `null`, not 0. So does a timed-out or killed invocation whose usage
+     file was not written.
+   - A report that is partial halts the run the same way. Partial means either
+     an explicit marker or a derived check: `modelMetrics` shows tokens for a
+     call or model that has zero credits.
 4. **Explicit bounds required.** `--host copilot` runs only with a credit
    ceiling and an explicit `--max-iterations`. Context is recorded as
    unavailable (`null`).
-5. **Heartbeat keeps units apart.** A heartbeat pass uses one unit. A whole-pass
+5. **Oracle spend is not covered by the credit ceiling.** The ceiling bounds the
+   worker's Copilot session only. Under `--host copilot`, an oracle whose
+   components spend USD, such as API-priced eval judges, is **refused** unless
+   the owner approves a separate USD oracle ceiling (Open question 5). This
+   keeps ADR-0041's rule: no unbounded spend, and no priced component without
+   an approved accounting policy.
+6. **Heartbeat keeps units apart.** A heartbeat pass uses one unit. A whole-pass
    credit ceiling sums credit outcomes only, and mixing USD and credit outcomes
    in one ceiling refuses.
 
-ADR-0043's refusal is lifted for the **loop driver** only, once the contract is
-implemented (spec 041-02) and 034-03's remaining native invocation, tool and
-resume evidence is in place. The goal driver stays refused (034-07).
+**What accepting this relaxes, explicitly.** ADR-0043's refusal is lifted for
+the **loop driver** only, once the contract is implemented (spec 041-02) and
+034-03's invocation, tool and resume evidence is in place. Accepting this ADR
+also **relaxes two of 034-03's conditions**:
+
+- its "context" evidence: context stays unavailable, replaced by an explicit
+  `--max-iterations` (part 4);
+- its "hard in-flight bounds": the in-flight bound is part 2's stated overrun,
+  not a hard cap.
+
+The goal driver stays refused (034-07).
 
 ## Consequences
 
@@ -128,39 +158,58 @@ resume evidence is in place. The goal driver stays refused (034-07).
 
 - Two budget units exist, so every budget surface must keep them apart.
 - A ceiling below 30 credits can never run.
+- Copilot targets with USD-priced oracle components stay refused until Open
+  question 5 is answered.
 
 ## Assumptions
 
-All five come from the CLI documentation alone; spec 041-01's billed probe
+All six come from the CLI documentation alone; spec 041-01's billed probe
 settles them.
 
-- **A1:** per-invocation `totalNanoAiu` is written for `-p` runs and covers
-  subagents and compaction.
+- **A1:** per-invocation `totalNanoAiu` is written for completed `-p` runs and
+  covers subagents and compaction.
 - **A2:** whether `--max-ai-credits` and `totalNanoAiu` count the whole session
   on `--resume=<sid>` or only the invocation. This is the Copilot analogue of
   Claude's bug 007. It decides whether the per-invocation cap and the
   per-iteration cost are computed directly or as a difference from a session
-  snapshot.
-- **A3:** whether a usage file is written after a timeout or kill.
+  snapshot. Either answer is workable.
+- **A3:** whether a usage file is written after a timeout or kill. Either answer
+  is workable, because part 3 fails closed.
 - **A4:** whether legacy-billing accounts populate `totalNanoAiu` at all.
-- **A5:** whether a partial report is marked as partial in the usage file.
+- **A5:** whether the JSON report marks partial cost, or whether part 3's
+  derived check can detect it.
+- **A6 (the overrun bound):**
+  - the overrun past a cap is at most *k* × the per-call maximum;
+  - subagent spawning can be denied, so *k* = 1;
+  - one response past the cap is the common case.
 
 ## Kill criteria
 
-- If 041-01 shows `totalNanoAiu` is not reported per invocation, or not after
-  an interrupted invocation, the brake cannot fail closed reliably. Keep
-  refusing (Option D).
-- If observed overruns past the cap routinely exceed a stated multiple of the
-  cap, the "one response" policy is not a budget. Revisit.
+- **No usable report.** If 041-01 shows no usage report for *completed* `-p`
+  runs, or a report that leaves out subagent or compaction spend, keep
+  refusing (Option D). The brake would undercount.
+- **Partial cost undetectable.** If A5 is negative (no partial marker, and the
+  derived check cannot detect partial cost), keep refusing. A subtotal read as
+  a total fails open.
+- **Overrun larger than the cap.** If any observed invocation's overrun past its
+  `--max-ai-credits` exceeds **1× that cap** (spend above twice the cap), part
+  2's bound does not hold. Revisit before relying on it. This applies to the
+  041-01 probe or to later recorded runs.
 
 ## Open questions (owner)
 
-1. Is Option A's overrun policy acceptable as ADR-0043's "separately recorded
-   budget policy"? Its only bound is one over-cap response plus compaction,
-   with no numeric limit.
-2. Legacy-billing accounts: refuse, or brake on premium requests as a second
-   unit?
-3. Is "context unavailable, explicit `--max-iterations` required" acceptable in
-   place of a context brake?
-4. Authorize spec 041-01's billed live probe (about 60 AI credits across a fresh
-   run, a resumed run and a timed-out run)?
+1. **Overrun and context, one decision.** Is part 2's overrun bound
+   acceptable as ADR-0043's "separately recorded budget policy", given that
+   the context brake is unavailable so the crossing call is the run's largest?
+   The bound is *k* = 1 single-threaded × the per-call maximum, measured by
+   041-01.
+2. **Legacy-billing accounts:** refuse, or brake on premium requests as a
+   second unit?
+3. **Single-threaded worker:** is denying subagent spawning acceptable, given
+   it may reduce what the Copilot worker can do?
+4. **Billed probe:** authorize spec 041-01's probe, capped at **150 AI
+   credits**? Run 1 needs to spend past the 30-credit minimum cap so the
+   resume test means something (about 40–60). The resumed run (about 30–40)
+   and the timed-out run (about 30) come on top, plus margin.
+5. **USD-priced oracle components under Copilot:** keep refusing them (the
+   default), or approve a separate USD oracle ceiling?

@@ -18,7 +18,8 @@ credits (`totalNanoAiu`)? Specifically:
   the invocation;
 - does a report mark itself partial?
 
-**Time-box:** 2 hours, and at most about 60 AI credits of billed usage.
+**Time-box:** 2 hours, and at most 150 AI credits of billed usage (ADR-0048
+open question 4 shows the arithmetic).
 
 **DoR:**
 - The owner authorizes the billed probe (ADR-0048 open question 4).
@@ -38,8 +39,18 @@ credits (`totalNanoAiu`)? Specifically:
    (A3).
 4. Subagent and compaction usage appear in `agentMetrics` / `totalNanoAiu` (A1),
    or are recorded as unobserved.
-5. Legacy-billing behaviour (A4) and partial marking (A5) are recorded as
-   observed, or as unobservable on this account.
+5. Legacy-billing behaviour (A4) is recorded as observed, or as unobservable on
+   this account. For partial cost (A5), the probe records whether the JSON
+   carries a partial marker, and whether ADR-0048's derived check can be
+   computed from `modelMetrics` (tokens present with zero credits). If neither
+   is possible, ADR-0048's partial-cost kill criterion fires, and 041-02 stays
+   blocked.
+6. **Overrun (A6).** On the run whose spend crosses its `--max-ai-credits` cap,
+   record `spend − cap` and how many model calls were in flight at the
+   crossing, from `agentMetrics` and the timeline. Also record whether subagent
+   spawning can be denied for the worker invocation, so *k* = 1. Compare the
+   overrun against the per-call maximum computed from `/model`'s "Credits Per 1M
+   Tokens" and the model's context window.
 
 **Findings:** _Filled during IN_PROGRESS._
 
