@@ -32,8 +32,10 @@ Two modes:
 - **host-driven**: servo emits the plan plus one kickoff brief per item, and
   the host spawns the children.
   - The **verified-wrapped** tier: the worker runs its item under `loop.py`.
-    `campaign record` accepts the line only if its run id and worktree tree
-    fingerprint match the loop's halt state. The worker session's own spend
+    `campaign record` accepts the item only if its run id and the worktree's
+    content fingerprint (HEAD plus diff plus untracked contents) match the
+    loop's halt state. Recording must happen before any commit, and the
+    outcome is re-rendered from the loop's own state. The worker session's own spend
     stays outside every ceiling. On Copilot this tier comes after ADR-0048
     and spec 041.
   - The **advisory** tier enforces only verified passes and a ledger; its
@@ -69,11 +71,12 @@ Two modes:
 
 ## Assumptions
 
-ADR-0049 A1–A4:
+ADR-0049 A1–A5:
 - adoption: a host coordinator actually calls servo;
 - parallel worktrees don't contend on shared resources;
 - the integration review works as an emitted brief;
-- campaign items can be oracle-gated.
+- campaign items can be oracle-gated;
+- worker compliance: wrapped workers stay inside `loop.py`.
 
 ## Decomposition (SPIDR)
 
@@ -92,8 +95,9 @@ ADR-0049 A1–A4:
   batches escalations by scope.
 - 042-03 — host-driven mode: kickoff briefs plus `campaign record`. The
   advisory tier gets oracle re-checks of passes and `self_reported` fields.
-  The verified-wrapped tier checks the run id and tree fingerprint, which
-  needs `loop.py` to record a tree fingerprint at halt.
+  The verified-wrapped tier checks the run id and content fingerprint, which
+  needs `loop.py` to record that fingerprint at halt, and re-renders the
+  outcome from the loop's state.
 - 042-04 — servo-driven bounded parallel dispatch (`max_parallel`, aggregate
   ceiling with reservations).
 - 042-05 — wave integration-review brief (one fresh-context review over the

@@ -83,13 +83,26 @@ below:
         it makes. They do not bind the worker session above it. That session's
         own spend, and any edits it makes after the loop halts, fall
         **outside every ceiling**.
-      - So wrapped is **verified, not declared**. `campaign record` accepts a
-        line as wrapped only if both hold:
-        - its `run_id` matches the `loop.py` state in that item's worktree;
-        - the worktree's tree fingerprint equals the one `loop.py` recorded
-          when it halted. `loop.py` records a hash of its existing
-          `_tree_snapshot` at halt; no git operations are needed.
-      - Anything else is downgraded to advisory (`self_reported`).
+      - So wrapped is **verified, not declared**. `campaign record` accepts an
+        item as wrapped only if both hold:
+        - a `loop.py` state with that `run_id` exists in the item's worktree;
+        - the worktree's **content fingerprint** equals the one `loop.py`
+          recorded when it halted.
+      - **The fingerprint covers content, not status lines.** It is the HEAD
+        sha at halt, plus a hash of the working-tree diff against that HEAD,
+        plus the contents of untracked, non-ignored files. Bookkeeping paths
+        (`.servo/`, caches) are excluded. All of it comes from read-only git
+        queries. A post-halt edit to a file the loop already changed therefore
+        alters the fingerprint, unlike a `git status` porcelain set.
+      - **Order: record before commit.** `campaign record` must run before the
+        worker commits. If HEAD has moved since the halt, the item cannot be
+        verified, and it is recorded as advisory. The kickoff brief says so.
+      - **The record is re-rendered from the loop's state.** For a verified
+        item, `campaign record` takes result, rung, iterations and cost from
+        that run's `state.json`. The forwarded line is used only to locate the
+        run; its own field values are never trusted.
+      - Anything that fails verification is downgraded to advisory
+        (`self_reported`).
       - On Copilot this tier needs ADR-0048's credit brake and spec 041,
         because ADR-0043 refuses `loop.py --host copilot` until then.
     - **advisory**: the worker does not run `loop.py`, so budget, model tier,
@@ -112,8 +125,9 @@ below:
 **Cons:**
 - Parallelism brings concurrency into a codebase built serial: ledger
   locking, worktree contention, an aggregate budget across live workers.
-- Host-driven mode trusts the host to forward outcomes faithfully. The oracle
-  re-check (below) bounds that trust.
+- Host-driven mode trusts the host to forward outcomes faithfully. Two checks
+  bound that trust: verification of wrapped items, and the oracle re-check of
+  every claimed pass (below).
 
 ### Option B: leave campaigns to the host and jig, steered by always-loaded instructions
 
@@ -212,20 +226,20 @@ Option A. The three boundary lines are handled as follows:
   - the kickoff briefs themselves.
 
   Unverified for any host.
-- **A5 (worker compliance):** a host-spawned worker actually runs its item
-  under `loop.py`, stops when the loop halts, and forwards the loop's line
-  unchanged. Verification detects non-compliance after the fact; it cannot
-  prevent it.
-- **A4 (oracle coverage):** a campaign's work items can be expressed as
-  oracle-gated items, with a `gate.py`-scorable `oracle_ref` each. The
-  motivating run's items were audit-remediation PRs, plus fixes driven by
-  external review, in a repo with no `.servo/`. If most such items can't carry
-  an oracle, campaigns don't cover the run that motivates them.
 - **A2:** worktree-per-worker parallelism on one machine doesn't contend on
   shared resources (ports, caches, the target's own build directories) for
   typical targets. Unverified. `max_parallel` defaults to 1.
 - **A3:** the integration review is useful as a step servo emits, a brief, not
   one it runs. Running a reviewer is the host's or jig's job.
+- **A4 (oracle coverage):** a campaign's work items can be expressed as
+  oracle-gated items, with a `gate.py`-scorable `oracle_ref` each. The
+  motivating run's items were audit-remediation PRs, plus fixes driven by
+  external review, in a repo with no `.servo/`. If most such items can't carry
+  an oracle, campaigns don't cover the run that motivates them.
+- **A5 (worker compliance):** a host-spawned worker actually runs its item
+  under `loop.py`, stops when the loop halts, and forwards the loop's line
+  unchanged. Verification detects non-compliance after the fact; it cannot
+  prevent it.
 
 ## Kill criteria
 
@@ -255,8 +269,10 @@ Option A. The three boundary lines are handled as follows:
    - Verified-wrapped Copilot after ADR-0048 and spec 041.
 
    Wrapped mode on Claude Code adds a token-billed wrapper session and the
-   compliance gap of A5. It has no observed case of its own, so it is not
-   prioritized there. Neither advisory mode nor Option B would have stopped
+   compliance gap of A5, so it is not prioritized there. Servo-driven Claude
+   Code has no observed campaign case either: the one recorded run was on
+   Copilot. It ships first as a cheap, enforced **baseline** that needs no
+   boundary change while it runs serially, not as the motivating case. Neither advisory mode nor Option B would have stopped
    the recorded runaway. Verified-wrapped Copilot workers would have bounded
    the loop's own spend, but only to the extent the worker stayed inside
    `loop.py` (A5).
