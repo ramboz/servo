@@ -13,8 +13,9 @@ file only fixes names and hook points so the three slices compose.
   - `_advisor_model_ids(claude_data) -> set[str]`: the models of
     `usage.iterations[]` elements whose `type == "advisor_message"`.
   - `_iteration_cost_delta(claude_data, *, resumed_session_id, snapshot)
-    -> tuple[float, dict]`: returns `(cost_usd, per_model_usage)` applying
-    spec 038-01 AC3 (running-total proof, else the reported values).
+    -> tuple[float, dict, str]`: returns `(cost_usd, per_model_usage,
+    cost_basis)` applying spec 038-01 AC3 (running-total proof gives
+    `"session_delta"`, otherwise the reported values with `"reported"`).
   - `_iteration_accounting(claude_data, *, agent, cost_usd, model_usage,
     requested) -> dict`: builds the record keys `agent, session_id, cost_usd,
     usage, model_usage, model, requested` (AC1/AC2). The goal driver omits
@@ -56,13 +57,14 @@ file only fixes names and hook points so the three slices compose.
   `--model`, `--effort`, `--advisor`. Pass the result into `_invoke_claude`
   and `_invoke_claude_goal` as `role_args`, inserted before `--settings`.
   An empty list keeps argv identical.
-- **Session**: in run_loop, compute `shared = runner.model == judge.model`.
-  For a judge in split mode, pass `session_id=None` and skip the
+- **Session**: in run_loop, `split = bool(resolved models block)`, meaning
+  any field set. For a judge in split mode, pass `session_id=None` and skip the
   `current_session_id` / snapshot update; the delta helper gets
-  `resumed_session_id=None`, so cost = total. For a runner whose
-  `current_session_model` (default `"inherit"`) differs from its configured
-  model, pass `session_id=None`. Record `current_session_model` whenever a
-  runner (or shared-lane) result sets `current_session_id`.
+  `resumed_session_id=None`, so cost = total (`cost_basis: "reported"`).
+  Runners always resume `current_session_id` when it is set.
+- **Advisor second signal**: `_mark_requested_advisor(model_usage, advisor,
+  model)` flags ids equal to the requested advisor, or containing it as a
+  `-`-delimited token, unless the id also matches the requested model.
 - **main()**: resolve `--models` (argparse, default None) > plan `models`;
   validate before routing; thread the result into `run_loop` /
   `run_goal_loop` / `run_goal_loop_background`. The background child argv
@@ -79,12 +81,19 @@ file only fixes names and hook points so the three slices compose.
 - `_runner_config_at_rung(models, rung)` folds the base runner config with
   rungs 1..rung.
 - State keys: `escalation_rung`, `escalation_events`,
-  `escalation_baseline_composite`, `escalation_history_start` (the history
-  length at escalation).
+  `escalation_baseline_composite`, `escalation_history_start` (the index of
+  the rung's first runner entry; `None` until that entry is appended).
 - Plateau check:
   `_check_plateau(([{"composite": baseline}] if baseline is not None else [])
   + history[start:], window, noise_floor)`. At rung 0, start = 0 and there is
-  no baseline, which matches today.
+  no baseline, which matches today. Before the rung's first runner entry
+  exists, the check is skipped.
+- Fair-window guard: `needed = window + (1 if _agent_for_iteration(i + 1) ==
+  AGENT_JUDGE else 0)`. Escalate iff `max_iterations − i ≥ needed`.
+- Escalation resets `current_session_id = ""` and the cost snapshot.
+- Heartbeat quarantine predicate: `terminal_reason == oracle_plateau`, or
+  (`escalation_rung ≥ 1` and not passed and `terminal_reason in
+  {max_iterations_reached, cost_ceiling_reached, context_full}`).
 - Heartbeat: add `--models` to `run` / `dispatch`, thread it into `_run_loop`
   argv, check it up front with `json.loads` (or a readable file),
   pass-through in `_outcome_from_summary`, and handle `models_invalid` in

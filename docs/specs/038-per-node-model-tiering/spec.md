@@ -25,11 +25,13 @@ slices, in dependency order:
    This also fixes [bug 007](../../bugs/007-agent-loop-overcounts-resumed-session-cost.md),
    which over-counts resumed-session cost.
 2. **038-02 role placement.** An optional `models` block (plan.json or
-   `--models`) sets `--model` / `--effort` / `--advisor` per role. When the
-   runner and judge models differ, the judge runs in its own fresh session.
+   `--models`) sets `--model` / `--effort` / `--advisor` per role. Whenever a
+   block is in effect, the judge runs in its own fresh session.
 3. **038-03 escalation ladder.** A plateau climbs configured rungs (raise
    effort, then raise model) inside the same run before the loop reports
-   `oracle_plateau`. The heartbeat records the rung reached.
+   `oracle_plateau`, but only when a rung's fair window still fits the budget.
+   Each rung starts a fresh runner session. The heartbeat records the rung
+   reached and quarantines a run that escalated and did not pass.
 
 The design decision behind slices 02-03 (role placement, the session split, and
 where the ladder lives) is [ADR-0047](../../decisions/adr-0047-per-node-model-tiering-and-escalation-ladder.md).
@@ -81,7 +83,27 @@ Research input: jig research note R-003 "advisor-style model tiering"
   - `--advisor` reaches an `--agent` whose `tools:` is `[Read, Glob, Grep]`.
   - Changing `--effort` on `--resume` keeps the same session id and its cache.
   - On `--resume`, `total_cost_usd` and `modelUsage` are session running
-    totals, while `usage` is per-invocation (bug 007).
+    totals, while top-level `usage` is per-invocation (bug 007). On a
+    two-turn resumed invocation (a `Read` tool call), top-level `usage` summed
+    both turns, and `modelUsage` equalled the previous snapshot plus `usage`
+    exactly (94,070 + 63,629 = 157,699 tokens). `usage.iterations` listed only
+    the final API call.
+  - `--max-budget-usd` caps the invocation, not the session: a two-turn
+    resumed call with `--max-budget-usd 0.0025` succeeded on a session whose
+    running total was already $0.0032.
+  - **Cache across the shared lane** (same model, `--agents` runner/judge pair
+    with different tool lists and prompts):
+
+    | Call | `cache_read_input_tokens` |
+    |---|---|
+    | runner fresh | 0 |
+    | judge `--resume` (agent switch) | **0** |
+    | runner `--resume` after the judge | 3,460 (partial) |
+    | runner `--resume` again (same agent) | 5,901 (warm; 197 created) |
+    | `--resume` with a model switch | 0 |
+
+    Today's shared session therefore already misses the cache on every judge
+    turn, and the judge re-reads the runner's whole transcript uncached.
   - The stream-json `result` event carries the same
     `total_cost_usd`/`usage`/`modelUsage` fields.
 
@@ -99,18 +121,22 @@ Research input: jig research note R-003 "advisor-style model tiering"
 - **The loop stays trigger-agnostic.** All behaviour is configured through
   plan/flags that any trigger (human, heartbeat, a host campaign) can pass.
   servo never depends on jig internals.
-- **Default is today.** With no `models` configuration the argv, session
+- **Default is today.** With no `models` configuration the argv flags, session
   handling and halt behaviour are unchanged. The one deliberate exception is
   bug 007's cost fix: reported cost becomes accurate, so on multi-iteration
-  runs `cost_ceiling_reached` now fires later than before.
+  runs the `--max-budget-usd` value and the moment `cost_ceiling_reached`
+  fires both move later than before.
 
 ## Assumptions
 
-- **A1: the subset of `modelUsage` that is a subagent's model is not
-  identified.** 038-01's `model` field picks the non-advisor `modelUsage`
-  entry with the highest `costUSD`. If a runner spawns subagents on another
-  model, the per-model breakdown stays exact but `model` may name the subagent
-  model. Not probed. The breakdown (`model_usage`) is the authoritative record.
+- **A1: advisor and subagent models are only partly identified.** 038-01's
+  `model` field picks the non-advisor `modelUsage` entry with the highest
+  `costUSD`. Advisor entries are recognised from `usage.iterations`
+  (`advisor_message`), which lists only the invocation's final API call, and,
+  from 038-02 on, from servo's own requested advisor. A consult in an earlier
+  turn under an inherited advisor, or a subagent on another model, can
+  therefore be mislabelled. Neither is probed. The per-model breakdown
+  (`model_usage`) is exact either way and is the authoritative record.
 - **A2: Anthropic's "re-run failures at higher effort" figure (equal pass rate
   at "a little over half the cost") is vendor-reported**, on Anthropic's
   benchmark, not servo's. 038-03 makes the ladder measurable (rung reached +

@@ -20,13 +20,15 @@ part of this, the loop's running cost becomes accurate on resumed sessions
   on `--resume`; advisor consults visible as `usage.iterations[].type ==
   "advisor_message"` with a `model`.
 - ✅ Bug 007 diagnosed (root cause + closure inventory recorded).
+- ✅ `--max-budget-usd` probed as per-invocation on a resumed session, and the
+  running-total identity probed on a two-turn invocation (spec 038 grounding).
 
 **Acceptance Criteria:**
 
 1. **History entries carry accounting.** Each `oracle_score_history` entry the
    loop driver appends after a scored iteration keeps its existing keys and
-   adds `agent` (`runner`|`judge`), `session_id`, `cost_usd`, `usage`,
-   `model_usage`, `model` and `requested`. `usage` is
+   adds `agent` (`runner`|`judge`), `session_id`, `cost_usd`, `cost_basis`,
+   `usage`, `model_usage`, `model` and `requested`. `usage` is
    `{input_tokens, cache_read_input_tokens, cache_creation_input_tokens,
    output_tokens}` read from the invocation's top-level `usage` (ints;
    absent/non-numeric → 0). `requested` is `{model, effort, advisor}` naming
@@ -40,7 +42,9 @@ part of this, the loop's running cost becomes accurate on resumed sessions
    per-invocation: on a resumed session it is the difference from the previous
    snapshot (AC3). An entry whose id appears as the `model` of a
    `usage.iterations[]` element with `type == "advisor_message"` also carries
-   `"advisor": true`. `model` is the non-advisor entry with the highest
+   `"advisor": true`. `usage.iterations` covers only the final API call of the
+   invocation, so this flag is best-effort (spec 038 A1); 038-02 adds servo's
+   requested advisor as a second signal. `model` is the non-advisor entry with the highest
    `cost_usd` (first in `modelUsage` order on a tie), or `null` when there is
    none. A missing or malformed `modelUsage` gives `model_usage: {}` and
    `model: null`, and never fails the iteration.
@@ -56,21 +60,28 @@ part of this, the loop's running cost becomes accurate on resumed sessions
 
    When proven, `cost_usd` is `total_cost_usd − snapshot total_cost_usd`, and
    each `model_usage` value is the per-field difference from the snapshot
-   (floored at 0). Otherwise `cost_usd` is the reported `total_cost_usd` and
-   `model_usage` is `modelUsage` as reported, so the unproven case over-counts
-   and never under-counts. `cumulative_cost_usd` is the sum of the
+   (floored at 0), and `cost_basis` is `"session_delta"`. Otherwise `cost_usd`
+   is the reported `total_cost_usd`, `model_usage` is `modelUsage` as
+   reported, and `cost_basis` is `"reported"`. The unproven case therefore
+   over-counts, never under-counts, and is visible in the record. A resumed
+   iteration that falls back to `"reported"` also prints one stderr breadcrumb.
+   `cumulative_cost_usd` is the sum of the
    per-iteration `cost_usd` values, and that sum also feeds the cost-ceiling
    brake and the per-iteration `--max-budget-usd`. The snapshot is
    replaced after every invocation that sets `current_session_id`.
 4. **Goal driver records its invocation.** After the goal driver parses a
    `result` event, its `state.json` and summary line gain `session_id`, `usage`,
-   `model_usage`, `model` and `requested`, with the same shapes and rules as AC1-2.
+   `model_usage`, `model`, `requested` and `cost_basis: "reported"`, with the
+   same shapes and rules as AC1-2.
    The invocation is fresh, so cost is the reported total and the
    existing `cumulative_cost_usd` is unchanged. Refusal paths that never invoke
    Claude keep their current summary shape.
-5. **No argv or halt change.** For every iteration, the `claude` argv is
-   byte-identical to today's (no new flags). Apart from cost accuracy (AC3), the
-   halt reasons, exit codes and per-iteration ordering are unchanged.
+5. **No new flags, no halt change.** No iteration's `claude` argv gains a flag.
+   The one value that changes is `--max-budget-usd`: it is computed from the
+   corrected cumulative (AC3), so from the first resumed iteration onward it is
+   larger than before. `--max-budget-usd` was probed as a per-invocation cap,
+   so this is the intended correction. Apart from cost accuracy, the halt
+   reasons, exit codes and per-iteration ordering are unchanged.
 6. **Old state resumes.** A `state.json` written before this slice (history
    entries without accounting, no snapshot) resumes without error. Its entries
    are left as they were, and the first resumed iteration's `cost_usd` is the
