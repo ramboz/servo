@@ -52,6 +52,7 @@
 - [ADR-0043: Copilot capability boundaries preserve Servo guarantees](adr-0043-copilot-capability-boundaries.md) — Installing Servo must not silently remove its execution safeguards. (2026-10-12, Accepted)
 - [ADR-0044: Required constraints cannot be averaged away](adr-0044-required-constraints-cannot-be-averaged-away.md) — (no description) (2026-10-14, Proposed)
 - [ADR-0046: Component-agnostic static evidence with native required verdicts](adr-0046-component-agnostic-static-evidence.md) — Reusable design evidence must not ship a component-specific evaluator. (2026-10-22, Accepted)
+- [ADR-0047: Per-node model tiering and the plateau escalation ladder](adr-0047-per-node-model-tiering-and-escalation-ladder.md) — servo's loop runs one node at a time: a `runner` that edits and a read-only `judge`, alternating through `claude -p`, scored by `gate.py` after every iteration. (2026-11-10, Accepted)
 
 ## Pending
 

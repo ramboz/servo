@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: READY_FOR_IMPLEMENTATION
 kind: feature
 dependencies: [038-01, adr-0047]
 last_verified:
@@ -16,7 +16,7 @@ configuration, behaviour is unchanged.
 
 **DoR:**
 - 038-01 DONE (`requested` field exists, accounting proves what ran).
-- ADR-0047 Accepted (role placement + session split decision). This is a gate
+- ✅ ADR-0047 Accepted 2026-11-10 (role placement + session split decision). This was a gate
   before `READY_FOR_IMPLEMENTATION`; the ADR is Proposed while under
   frame-critique.
 - ✅ `claude -p` accepts `--model`, `--effort`, `--advisor` (probed, spec 038).
