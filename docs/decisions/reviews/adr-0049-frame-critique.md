@@ -3,16 +3,16 @@ adr: 0049
 pass: frame-critique
 verdict: needs-changes
 reviewer: jig:reviewer
-reviewed_at: 2026-11-10T22:32:13Z
-prompt_source: review.py frame-critique docs/decisions/adr-0049-campaign-orchestration.md (round 2)
+reviewed_at: 2026-11-10T22:33:58Z
+prompt_source: review.py frame-critique docs/decisions/adr-0049-campaign-orchestration.md (round 3)
 ---
 
 VERDICT: needs-changes
 
 REASONING:
-Round 2. Round-1 findings resolved (honest advisory tier; no "attended" route around ADR-0043; ADR-0048 consistent; Option B real; A1 adoption; A4 oracle coverage). The highest-risk assumption moved into the wrapped tier: brakes bind only the loop.py subprocess a host-spawned (unbraked) worker chooses to start, and campaign record could not tell a real loop line from a hand-written one.
+Round 3. Round-2 findings fixed; the frame (Option A, three tiers, ordering) survives. One load-bearing claim exposed: the named verification mechanism (a hash of _tree_snapshot, a git-status porcelain set) does not check what the ADR claims — it misses post-halt edits to already-modified files and fails compliant workers who commit.
 
 SPECIFIC ISSUES:
-- [spec] Wrapped must be verified, not declared (run_id + tree fingerprint at halt); wrapper-session spend and post-halt edits fall outside every ceiling; add A5 worker compliance + kill criterion; soften OQ3.
-- [spec] Wrapped-on-Claude likely dominated by servo-driven mode on the same host — order servo-driven first.
-- [spec] Stale lines: Consequences tierless claim; spec 042 "unattended" wording; slice 042-01 AC2 ledger lacks tier/self_reported.
+- [spec] Fingerprint must cover content + base (HEAD at halt + diff hash + untracked contents); record-before-commit ordering; re-render outcome fields from loop state by run_id; drop "no git operations".
+- [spec] OQ3: servo-driven Claude first is a baseline, not the motivating case — say so.
+- [spec] Minor: spec 042 lists A1-A4 (missing A5); Cons line omits wrapped verification; assumption order.
