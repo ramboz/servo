@@ -16,8 +16,8 @@ budget before it reports `oracle_plateau`. The rung reached is recorded in
 quarantines a finding only after the whole ladder failed.
 
 **DoR:**
-- ✅ 038-02 DONE (role config, configured-run judge split).
-- ✅ ADR-0047 Accepted, including its amendment of ADR-0010's single-attempt rule.
+- 038-02 DONE (role config, configured-run judge split).
+- ADR-0047 Accepted, including its amendment of ADR-0010's single-attempt rule.
 
 **Acceptance Criteria:**
 
@@ -37,9 +37,15 @@ quarantines a finding only after the whole ladder failed.
      the rung-window entries, with the run's `plateau_window` /
      `plateau_noise_floor`. Rung 0 keeps today's check unchanged.
    - **Fair-window guard.** When the check fires, the run escalates only if
-     the iterations left (`max_iterations − current iteration`) are at least
-     the iterations the next rung needs for one full window. That is
-     `plateau_window`, plus 1 when the next iteration is a judge iteration.
+     the next rung can afford one full window on both budgets:
+     - **iterations:** the iterations left (`max_iterations − current
+       iteration`) must be at least `needed`. `needed` is `plateau_window`,
+       plus 1 when the next iteration is a judge iteration;
+     - **cost:** when a cost ceiling is set (`cost_ceiling_usd > 0`), the cost
+       left (`cost_ceiling_usd − cumulative_cost_usd`) must be at least
+       `needed × max_iter_cost`. `max_iter_cost` is the largest per-iteration
+       `cost_usd` recorded so far (038-01). This is a lower bound: a raised
+       rung usually costs more.
    - **Escalating.** The run does not halt:
      - the rung advances;
      - the runner config becomes that rung's;
@@ -47,7 +53,12 @@ quarantines a finding only after the whole ladder failed.
      - the next iteration proceeds.
    - **Halting.** On the last rung, with no ladder, or when the guard fails,
      the run halts with `oracle_plateau` exactly as today. A guard failure
-     adds one stderr breadcrumb naming the iterations left and needed.
+     adds one stderr breadcrumb naming the budget left and needed (iterations
+     and/or USD).
+   - **A rung that fails at invocation stops the ladder.** If the invocation
+     ends `claude_invocation_failed`, for example because a rung's
+     model/advisor pairing is refused, the run halts with that reason as
+     today, and the breadcrumb also names the rung and its runner config.
 
    Under the defaults (5 iterations, window 3) the guard always fails, so a
    configured ladder never turns a plateau into `max_iterations_reached`.
@@ -91,14 +102,20 @@ quarantines a finding only after the whole ladder failed.
    - A finding is quarantined when either holds:
      - the summary's `terminal_reason` is `oracle_plateau` (today's trigger:
        the ladder was exhausted, or never started);
-     - the run escalated (`escalation_rung ≥ 1`), did not pass, and ended on a
-       budget brake (`max_iterations_reached`, `cost_ceiling_reached` or
-       `context_full`). Such a run plateaued at least once before the brake
-       cut its ladder short.
+     - the run escalated (`escalation_rung ≥ 1`), did not pass, and ended on
+       `max_iterations_reached`, `cost_ceiling_reached`, `context_full`,
+       `claude_invocation_failed` or `verdict_schema_mismatch`. Such a run
+       plateaued at least once before its ladder was cut short.
 
      Both cases write the same quarantine record
      (`failure_signature: oracle_plateau`), so ADR-0030's evidence-gated
      re-admission applies.
+   - When the escalated run ended `claude_invocation_failed` or
+     `verdict_schema_mismatch`, a rung config is likely broken. The heartbeat
+     records that finding's outcome and quarantine (its spend counts), then
+     stops the pass with rc=2 and a breadcrumb naming the rung. The remaining
+     candidates stay `open`, so one bad `--models` ladder cannot burn every
+     stuck finding in the pass.
 9. **ADR-0010 amended.** ADR-0010's single-attempt rule carries a dated
    amendment pointing to ADR-0047: one dispatch per finding still holds, and one
    dispatch may now span the configured rungs.
@@ -109,7 +126,9 @@ quarantines a finding only after the whole ladder failed.
 |------|-------------------|-------|--------------------|---------|-----------|----|
 | BR-1 | plateau detected | loop driver | rung < ladder length and the next rung's window fits the iterations left | escalate, fresh runner session, continue | try more capability before giving up, with a fair window | AC2, AC4 |
 | BR-2 | plateau detected | loop driver | last rung, no ladder, or window does not fit | halt `oracle_plateau` | a ladder never turns a plateau into a budget halt | AC2, AC8 |
-| BR-6 | outcome recorded | heartbeat | escalated, not passed, ended on a budget brake | quarantine (signature `oracle_plateau`) | the finding plateaued; a cut-short ladder must not fall to sticky `tried` | AC8 |
+| BR-6 | outcome recorded | heartbeat | escalated, not passed, ended on a budget brake / invocation failure / verdict mismatch | quarantine (signature `oracle_plateau`) | the finding plateaued; a cut-short ladder must not fall to sticky `tried` | AC8 |
+| BR-7 | outcome recorded | heartbeat | escalated run ended `claude_invocation_failed` / `verdict_schema_mismatch` | quarantine that finding, stop the pass rc=2, rest stay `open` | a broken rung config must not burn every stuck finding | AC8 |
+| BR-8 | plateau detected | loop driver | cost left < needed × largest per-iteration cost | halt `oracle_plateau` (no escalation) | a rung must not start without the money for a full window | AC2 |
 | BR-3 | any brake | loop driver | any rung | brake fires as today | rungs never loosen a brake | AC3 |
 | BR-4 | `--models` value | heartbeat | not JSON / unreadable | pass refused rc=2, nothing dispatched | don't burn findings on a config typo | AC8 |
 | BR-5 | loop refuses `models_invalid` | heartbeat | mid-pass | finding left `open`, pass rc=2 | same | AC8 |
@@ -126,8 +145,9 @@ quarantines a finding only after the whole ladder failed.
 Sonnet/medium retries at Sonnet/high, then Opus/high, each in a fresh runner
 session, within the caps it was given. A ladder needs room: at window 3 with
 nothing improving, rung 0 plateaus at iteration 4, rung 1 at 7 and rung 2 at
-11, so a two-rung ladder needs `--max-iterations 11` or more. Any improvement
-pushes those points later. The inbox shows which rung passed, or that the
+11, so a two-rung ladder needs `--max-iterations 11` or more, and a
+`--cost-ceiling` covering about 11 iterations at the top rung's price. Any
+improvement pushes those points later. The inbox shows which rung passed, or that the
 finding was quarantined after plateauing.
 
 ### Deviation log (after reconciliation)

@@ -1,12 +1,12 @@
 ---
-status: REPORTED
+status: ROOT_CAUSED
 tier: standard
 severity: medium
 claimed_by: claude/model-tiering
 regression_test:
-main_repro_checked_at:
-main_repro_ref:
-main_repro_result:
+main_repro_checked_at: 2026-11-10
+main_repro_ref: origin/main@4cd95ca
+main_repro_result: reproduces
 red_confirmed_at:
 green_confirmed_at:
 fix_class: local_patch
@@ -139,3 +139,7 @@ Filled at FIXING (slice 038-01 test class).
 ## Proof
 
 ## Learning
+
+## Main recheck
+
+- 2026-11-10 - `origin/main@4cd95ca` -> reproduces: origin/main loop.py still sums the session-cumulative total_cost_usd per resumed iteration (cost_usd = float(total_cost_usd) at :2933, cumulative += cost_usd at :2953); live probe p1/p5 (claude 2.1.321) shows total_cost_usd is a session running total on --resume

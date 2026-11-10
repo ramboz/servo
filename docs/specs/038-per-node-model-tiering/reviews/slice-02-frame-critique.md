@@ -1,18 +1,17 @@
 ---
 slice: 038-02 — role model placement
 pass: frame-critique
-verdict: needs-changes
+verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-11-10T19:38:34Z
-prompt_source: review.py frame-critique docs/specs/038-per-node-model-tiering/spec.md 038-02
+reviewed_at: 2026-11-10T19:46:32Z
+prompt_source: review.py frame-critique docs/specs/038-per-node-model-tiering/spec.md 038-02 (round 2)
 ---
 
-VERDICT: needs-changes
+VERDICT: pass
 
 REASONING:
-Round 1. The split rule keys on model equality because "caches are model-scoped", but the shared lane already alternates `--agent runner`/`--agent judge` on every --resume with different tool lists and prompts; if that already breaks the cache, model equality is the wrong variable. Unprobed.
+Round 2. The split is no longer keyed on model equality; it is probe-grounded and applies whenever a models block is in effect, with the DoR now honest about ADR-0047's status. Remaining risk (the shared-lane judge gets no cache on every turn) was observed only for the judge's first turn; D2-A also rests on independence, an unchanged default and a cost-measuring kill criterion, so the work is not misdirected.
 
 SPECIFIC ISSUES:
-- [spec] Probe cache_read across an --agent switch on --resume at equal model; re-base the split trigger and A3/kill criteria on the result.
-- [spec] "thinking blocks don't carry across models" is unprobed.
-- [spec] DoR claims ADR-0047 Accepted while it is Proposed.
+- [spec] Cache claim narrowed to the first judge turn; later judge turns re-read interleaved runner turns uncached; cache lifetime across real iterations not modelled (folded into spec/ADR/BR-2).
+- [spec] Split is confounded with tiering for measurement — a block naming the default model explicitly gives a split-only baseline; documented in ADR kill criteria and the slice DoD (SKILL.md).

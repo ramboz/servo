@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 skill: agent-loop
 use_cases: []
 ---
@@ -102,8 +102,12 @@ Research input: jig research note R-003 "advisor-style model tiering"
     | runner `--resume` again (same agent) | 5,901 (warm; 197 created) |
     | `--resume` with a model switch | 0 |
 
-    Today's shared session therefore already misses the cache on every judge
-    turn, and the judge re-reads the runner's whole transcript uncached.
+    So in today's shared session the judge's first turn reads nothing from
+    cache, and it reads the runner's whole transcript uncached. Later judge
+    turns can at best reuse their own earlier prefix, and still re-read the
+    runner turns interleaved since then uncached. The probe ran calls back to
+    back; cache lifetime across real iterations (two `gate.py` runs between
+    same-role turns) is not modelled.
   - The stream-json `result` event carries the same
     `total_cost_usd`/`usage`/`modelUsage` fields.
 
@@ -116,7 +120,8 @@ Research input: jig research note R-003 "advisor-style model tiering"
   threshold, the required gate or any brake.
 - **Never loosen a brake.** Rungs share the run's existing `max_iterations` and
   `cost_ceiling`. No rung grants extra iterations or spend
-  (ADR-0016 clamp-never-loosen; spec 017 "spend smarter, never more").
+  (rungs spend inside existing caps; ADR-0016's code rule is
+  clamp-never-disable; spec 017 "spend smarter, never more").
 - **servo never merges and the runner does no git operations.** Unchanged.
 - **The loop stays trigger-agnostic.** All behaviour is configured through
   plan/flags that any trigger (human, heartbeat, a host campaign) can pass.

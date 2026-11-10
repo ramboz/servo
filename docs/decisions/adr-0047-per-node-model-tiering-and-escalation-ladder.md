@@ -50,8 +50,11 @@ Three forces push on this:
    | runner `--resume` again (same agent) | 5,901 (warm) |
    | `--resume` with a model switch | 0 |
 
-   So today every judge iteration re-reads the runner's whole transcript
-   uncached, and each runner turn re-writes the interleaved judge turn.
+   So the judge's first shared-lane turn reads the runner's whole transcript
+   uncached. Later judge turns can at best reuse their own earlier prefix, and
+   still re-read the interleaved runner turns uncached. Each runner turn
+   re-writes the interleaved judge turn. The probe ran calls back to back;
+   cache lifetime across real iterations is not modelled.
 
 Spec 038 slice 01 adds the measurement substrate: per-iteration model usage,
 requested effort, cost delta and tokens. This ADR decides the placement and
@@ -90,8 +93,8 @@ escalation policy built on it.
   self-contained prompt (seed + last oracle JSON + last runner verdict, per
   `agents/judge.md`). Untiered runs keep today's shared session byte for byte.
   - **Pros:**
-    - Force 3 shows the shared lane gives the judge no cache, so a fresh judge
-      loses nothing on cache and skips the uncached transcript read.
+    - Force 3 shows the shared lane gives the judge little or no cache, so a
+      fresh judge loses little and skips the uncached transcript read.
     - Consecutive runner turns keep a warm cache.
     - Independence improves exactly when tiering is in play.
     - The default does not change.
@@ -119,8 +122,10 @@ escalation policy built on it.
   is an ordered, cumulative list of runner overrides.
   - **Mechanism:**
     - When the plateau check fires and a rung remains whose fair window fits
-      the iterations left, the run escalates and continues in the same
-      worktree under the same caps.
+      what is left of the budget, the run escalates and continues in the same
+      worktree under the same caps. The fit is checked on iterations left
+      against the window, and on cost left against the window × the largest
+      per-iteration cost so far.
     - Every rung starts a **fresh runner session**: the code progress is kept,
       the stuck transcript is not.
     - A rung's window starts at its first runner iteration, from a baseline
@@ -170,14 +175,30 @@ a brake off.
 
 ### D5: how the heartbeat files a laddered run
 
-A brake can still cut a rung short, through cost or context, or through
-`max_iterations` when an earlier rung improved and so plateaued later. The
-heartbeat therefore quarantines on `terminal_reason == oracle_plateau`, **or**
-when `escalation_rung ≥ 1`, the run did not pass, and it ended on a budget
-brake (`max_iterations_reached` / `cost_ceiling_reached` / `context_full`).
-Such a run plateaued at least once. Filing it as sticky `tried` would silently
-drop ADR-0030's durable record and evidence-gated re-admission. Both cases
-write the same record (`failure_signature: oracle_plateau`).
+The guard is a lower bound, so a rung can still be cut short. Four ways:
+
+- **Cost:** the raised rung costs more than earlier iterations did.
+- **Context:** the context-fill brake fires.
+- **`max_iterations`:** an earlier rung improved and so plateaued later.
+- **Invocation:** the rung's own config fails, for example a refused
+  model/advisor pairing (`claude_invocation_failed`) or a malformed verdict
+  from the new model (`verdict_schema_mismatch`).
+
+The heartbeat therefore quarantines on `terminal_reason == oracle_plateau`,
+**or** when `escalation_rung ≥ 1`, the run did not pass, and it ended on
+`max_iterations_reached`, `cost_ceiling_reached`, `context_full`,
+`claude_invocation_failed` or `verdict_schema_mismatch`. Such a run plateaued
+at least once. Filing it as sticky `tried` would silently drop ADR-0030's
+durable record and evidence-gated re-admission. Both cases write the same
+record (`failure_signature: oracle_plateau`).
+
+`interrupted` and the oracle-environment refusals keep today's filing. They
+say nothing about the finding.
+
+An escalated run that ended on an invocation failure or a verdict mismatch
+also **stops the heartbeat pass** with rc=2. The likely cause is a broken rung
+config, and continuing would burn every remaining stuck finding on it; those
+findings stay `open`.
 
 ## Recommended Decision
 
@@ -231,7 +252,9 @@ Adopt D1-A, D2-A, D3-A, D4 and D5. Concretely:
 
 - **A1 (vendor evidence):** escalating effort before model is cheaper for an
   equal pass rate. That rests on Anthropic's own benchmark of fresh re-runs,
-  which D3-A mirrors by starting each rung fresh. servo does not assume it
+  which D3-A only partly mirrors. Each rung starts a fresh transcript, but from
+  the stuck attempt's tree, which may be worse than the best-so-far baseline
+  it must beat. The runner can inspect and revert that tree. servo does not assume it
   holds for its targets; 038-01's accounting plus `escalation_rung` makes it
   measurable per target.
 - **A2 (experimental flag):** `--advisor` is accepted by claude 2.1.321 but is
@@ -246,13 +269,24 @@ Adopt D1-A, D2-A, D3-A, D4 and D5. Concretely:
 
 ## Kill criteria
 
-- **Ladder.** Among runs that **escalated** (`escalation_rung ≥ 1`), count how
-  many ended in a pass. After ≥ 20 such runs across real targets, if fewer
-  than ~10% passed, stop recommending the ladder. It would be spending without
-  moving outcomes, so the default posture reverts to "plateau ⇒ quarantine".
+- **Ladder.** Bucket the runs that **escalated** (`escalation_rung ≥ 1`) by
+  how they ended:
+  - **converted:** they passed;
+  - **fair failure:** they ended `oracle_plateau`, so the ladder ran out or the
+    guard declined;
+  - **cut short:** a budget brake or invocation failure. Report these
+    separately; they are excluded from the rate.
+
+  After ≥ 20 converted-plus-fair-failure runs across real targets, if fewer
+  than ~10% converted, stop recommending the ladder. It would be spending
+  without moving outcomes, so the default posture reverts to
+  "plateau ⇒ quarantine".
 - **D2-A.** If 038-01 accounting shows split-judge iterations cost more than
   shared ones on comparable runs, or that split-judge verdicts flip more often
-  against the oracle (A3), revisit D2-A.
+  against the oracle (A3), revisit D2-A. A split-only baseline, untiered but
+  split, comes from a `models` block that names the default model explicitly.
+  Compare tiered runs against that baseline, not against block-less runs, so
+  the tier is not credited with the split's effect.
 
 ## Open questions
 

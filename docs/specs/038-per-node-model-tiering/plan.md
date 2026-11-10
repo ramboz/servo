@@ -89,11 +89,15 @@ file only fixes names and hook points so the three slices compose.
   no baseline, which matches today. Before the rung's first runner entry
   exists, the check is skipped.
 - Fair-window guard: `needed = window + (1 if _agent_for_iteration(i + 1) ==
-  AGENT_JUDGE else 0)`. Escalate iff `max_iterations − i ≥ needed`.
+  AGENT_JUDGE else 0)`. Escalate iff `max_iterations − i ≥ needed` and, when
+  `cost_ceiling_usd > 0`, `cost_ceiling_usd − cumulative_cost_usd ≥ needed ×
+  max(history cost_usd)`. Missing `cost_usd` on old entries counts as 0.
 - Escalation resets `current_session_id = ""` and the cost snapshot.
 - Heartbeat quarantine predicate: `terminal_reason == oracle_plateau`, or
   (`escalation_rung ≥ 1` and not passed and `terminal_reason in
-  {max_iterations_reached, cost_ceiling_reached, context_full}`).
+  {max_iterations_reached, cost_ceiling_reached, context_full,
+  claude_invocation_failed, verdict_schema_mismatch}`). The last two also
+  stop the pass with rc=2 after the outcome and quarantine are written.
 - Heartbeat: add `--models` to `run` / `dispatch`, thread it into `_run_loop`
   argv, check it up front with `json.loads` (or a readable file),
   pass-through in `_outcome_from_summary`, and handle `models_invalid` in

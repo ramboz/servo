@@ -15,7 +15,7 @@ run gives the judge its own fresh session every judge iteration. With no
 configuration, behaviour is unchanged.
 
 **DoR:**
-- ✅ 038-01 DONE (`requested` field exists, accounting proves what ran).
+- 038-01 DONE (`requested` field exists, accounting proves what ran).
 - ADR-0047 Accepted (role placement + session split decision). This is a gate
   before `READY_FOR_IMPLEMENTATION`; the ADR is Proposed while under
   frame-critique.
@@ -91,7 +91,7 @@ configuration, behaviour is unchanged.
 | Rule | Operation/control | Actor | State/precondition | Outcome | Rationale | AC |
 |------|-------------------|-------|--------------------|---------|-----------|----|
 | BR-1 | judge invocation | loop driver | no `models` block in effect | `--resume <current_session_id>` (shared lane) | default unchanged | AC4 |
-| BR-2 | judge invocation | loop driver | a `models` block in effect | fresh session; no session/snapshot update | probe: an agent-switched resume reads 0 cached tokens, so the shared lane gives the judge no cache and makes it re-read the runner transcript uncached; a fresh judge reads only its self-contained prompt (`agents/judge.md`) and stays independent | AC4 |
+| BR-2 | judge invocation | loop driver | a `models` block in effect | fresh session; no session/snapshot update | probe: the judge's first agent-switched resume reads 0 cached tokens, and later ones still re-read interleaved runner turns uncached; a fresh judge reads only its self-contained prompt (`agents/judge.md`) and stays independent | AC4 |
 | BR-3 | judge config | goal driver | judge non-inherit | ignored + stderr note | the goal driver has no judge role | AC6 |
 
 **DoD:**
@@ -99,8 +99,10 @@ configuration, behaviour is unchanged.
 - [ ] No `model:`/`effort:` added to `agents/*.md`; the 032-03 Copilot
       model-neutrality tests stay green.
 - [ ] `skills/agent-loop/SKILL.md`, `skills/execution-planner/SKILL.md` and
-      `docs/architecture.md` (plan.json `models`, state `models`) updated;
-      host packages regenerated.
+      `docs/architecture.md` (plan.json `models`, state `models`) updated.
+      The SKILL.md names the split-only measurement baseline: a block that
+      sets the default model explicitly gives the split without a tier.
+      Host packages regenerated.
 - [ ] Reviewed (compliance + craft + arch); deviation log + reconciliation
       sweep; reconciliation review passed.
 

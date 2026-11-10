@@ -1,9 +1,10 @@
 ---
-status: DRAFT
+status: IN_PROGRESS
 kind: feature
 dependencies: []
 last_verified:
 frame_review: true
+claimed_by: claude/model-tiering
 ---
 
 ## Slice 038-01 — per-iteration accounting
@@ -48,9 +49,10 @@ part of this, the loop's running cost becomes accurate on resumed sessions
    `cost_usd` (first in `modelUsage` order on a tie), or `null` when there is
    none. A missing or malformed `modelUsage` gives `model_usage: {}` and
    `model: null`, and never fails the iteration.
-3. **Cost is the invocation's own cost (bug 007).** The loop keeps a snapshot
-   of the last running totals Claude reported for `current_session_id`
-   (`total_cost_usd` + per-model `modelUsage`). Running-total semantics are
+3. **Cost is the invocation's own cost (bug 007).** The loop persists, in
+   `state.json` as `current_session_usage_snapshot`, a snapshot of the last
+   running totals Claude reported for `current_session_id` (`total_cost_usd` +
+   per-model `modelUsage`), so it survives `--resume <run-id>`. Running-total semantics are
    proven when all of these hold:
    - the iteration passed `--resume S`;
    - Claude returned the same id `S`;
@@ -62,8 +64,12 @@ part of this, the loop's running cost becomes accurate on resumed sessions
    each `model_usage` value is the per-field difference from the snapshot
    (floored at 0), and `cost_basis` is `"session_delta"`. Otherwise `cost_usd`
    is the reported `total_cost_usd`, `model_usage` is `modelUsage` as
-   reported, and `cost_basis` is `"reported"`. The unproven case therefore
-   over-counts, never under-counts, and is visible in the record. A resumed
+   reported, and `cost_basis` is `"reported"`. Under the probed resume
+   semantics the unproven case therefore over-counts, never under-counts, and
+   is visible in the record. One residual remains, never observed: a same-id
+   resume whose totals were *not* reloaded, while `modelUsage` carries
+   advisor/subagent tokens absent from `usage` that are at least the
+   snapshot's token total. That case could pass the proof and under-count. A resumed
    iteration that falls back to `"reported"` also prints one stderr breadcrumb.
    `cumulative_cost_usd` is the sum of the
    per-iteration `cost_usd` values, and that sum also feeds the cost-ceiling
@@ -78,8 +84,9 @@ part of this, the loop's running cost becomes accurate on resumed sessions
    Claude keep their current summary shape.
 5. **No new flags, no halt change.** No iteration's `claude` argv gains a flag.
    The one value that changes is `--max-budget-usd`: it is computed from the
-   corrected cumulative (AC3), so from the first resumed iteration onward it is
-   larger than before. `--max-budget-usd` was probed as a per-invocation cap,
+   corrected cumulative (AC3). Iteration 2's value comes from iteration 1's
+   fresh cost and is unchanged, so the value first differs at iteration 3 and
+   is larger than before from there on. `--max-budget-usd` was probed as a per-invocation cap,
    so this is the intended correction. Apart from cost accuracy, the halt
    reasons, exit codes and per-iteration ordering are unchanged.
 6. **Old state resumes.** A `state.json` written before this slice (history
