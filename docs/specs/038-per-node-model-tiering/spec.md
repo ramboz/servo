@@ -179,5 +179,6 @@ Research input: jig research note R-003 "advisor-style model tiering"
 - **040 servo-wrapped worker outcome line** for host-orchestrated campaigns:
   one typed line (passed / plateau@rung / blocked + cost), with no crew and a
   trigger-agnostic loop.
-- **041 host-aware budget unit** (USD vs Copilot premium requests × multiplier).
-  Low priority while Copilot unattended stays refused (ADR-0043).
+- **041 Copilot AI-credit budget**, the next spec after 038 by owner priority.
+  It provides a credit-denominated brake (no USD conversion) so servo's loop
+  can run on Copilot. Its ADR-0048 stays Proposed until the owner accepts it.
