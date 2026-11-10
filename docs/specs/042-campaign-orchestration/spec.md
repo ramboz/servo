@@ -1,27 +1,88 @@
 ---
 status: DRAFT
-skill:
+skill: heartbeat
 use_cases: []
 ---
 
-<!-- jig self-defining vocabulary (soft, forward-only): expand each acronym on first use and link the term to docs/memory/glossary.md (or jig's lexicon). See docs/workflow.md "Self-defining vocabulary". -->
-
 # Spec 042: Campaign orchestration
 
-> Reserved on 2026-11-10 via `workflow.py new`. Body to be drafted in a feature branch.
+> **Status: DRAFT, scope capture.** Gated on the owner explicitly accepting
+> [ADR-0049](../../decisions/adr-0049-campaign-orchestration.md), which stays
+> Proposed until then. No slice is implemented before that.
 
 ## Overview
 
-_TBD_
+A **campaign** is heartbeat-style dispatch over a **planned** work list, not a
+free-form crew (ADR-0049). The plan supplies independent, oracle-gated work
+items. servo runs each one, or gates each one the host runs, under its
+per-node discipline:
+- oracle and budget;
+- the plateau ladder (038-03);
+- role placement (038-02).
+
+It records each item's typed outcome (spec 040) in a file ledger. An episodic
+`campaign next` step reads the ledger, decides and exits. There is no daemon.
+
+Two modes:
+- **servo-driven** (Claude Code, headless): servo runs up to `max_parallel`
+  `loop.py` workers itself, default 1.
+- **host-driven** (attended; Copilot or Claude Code sessions): servo emits
+  the plan plus one kickoff brief per item, with the worker contract built
+  in. The host spawns the children, and servo re-checks each claimed pass with
+  the item's oracle before recording it.
+
+### Grounded starting point
+
+- **What can be reused from the heartbeat (spec 011):**
+  - the worktree per item and its provisioning (`_dispatch_one`,
+    `skills/heartbeat/heartbeat.py:2420-2510`);
+  - the locked, atomic inbox ledger (`_inbox_lock`, `_atomic_write`);
+  - whole-pass ceilings (ADR-0012), quarantine (ADR-0030), and the outcome
+    shape (`_outcome_from_summary`).
+
+  Dispatch is serial (`heartbeat.py:53`).
+- **Spec 038** adds per-iteration accounting, role placement and the ladder.
+  Spec 040 drafts the typed outcome line. Spec 041 drafts the Copilot credit
+  budget (ADR-0048, Proposed).
+- **Boundary lines and their treatment:** listed in ADR-0049 with sources.
+  They are: "serial in v1" (superseded for campaigns only), "no crew"
+  (reinterpreted) and "not a queue or long-lived process" (kept).
+
+### Boundaries
+
+- servo never merges, and the runner does no git operations. Landing goes
+  through jig `slice-land --mode pr` or the host.
+- The oracle is authoritative. In host-driven mode a host's claim of "passed"
+  is re-checked with `gate.py` before it enters the ledger.
+- servo doesn't decide what to build. No merge-conflict AI, no cloud fan-out.
+  servo never depends on jig: the plan is servo's own schema.
 
 ## Assumptions
 
-_TBD — list load-bearing assumptions about runnable surfaces (library/API capability, version/perf behavior, behavior of existing code); probe-back (run it / cite source) or mark explicitly here. Risk-gated: omit (or write "None") when there are no unverified load-bearing assumptions — do not pad with boilerplate._
+ADR-0049 A1–A3:
+- a host can forward outcomes;
+- parallel worktrees don't contend on shared resources;
+- the integration review works as an emitted brief.
 
-## Decomposition
+## Decomposition (SPIDR)
 
-_TBD — SPIDR analysis. See SKILL.md for the five axes (Spike / Paths / Interfaces / Data / Rules)._
+- **Interface:** host-driven mode comes before servo-driven parallelism.
+  Host-driven mode is the one that would have changed the recorded Copilot
+  run, and it needs no concurrency in servo.
+- **Data:** the plan and ledger come first, since every mode depends on them.
+- **Rules:** parallelism and the integration review come last.
 
-## Slices
+## Slices (sketch; ACs to sharpen after ADR-0049 is accepted)
 
-- [042-01 — tbd](slice-01-tbd.md)
+- [042-01 — plan and ledger](slice-01-plan-and-ledger.md)
+- 042-02 — kickoff briefs + `campaign record` (host-driven mode; uses spec
+  040's outcome line; re-checks passes with the oracle).
+- 042-03 — `campaign next` (episodic coordinator: reads the ledger, picks the
+  next items, batches escalations by scope).
+- 042-04 — servo-driven bounded parallel dispatch (`max_parallel`, aggregate
+  ceiling with reservations).
+- 042-05 — wave integration-review brief (one fresh-context review over the
+  wave's diffs before PRs are published).
+
+Dependencies: 038 (DONE when this lands), 040 (outcome line), 041 (Copilot
+budget unit, only for unattended Copilot workers).
