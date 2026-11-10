@@ -1,11 +1,10 @@
 ---
-status: RECONCILED
+status: DONE
 kind: feature
 dependencies: [038-02, adr-0047]
 last_verified: 2026-11-10
 arch_review: true
 frame_review: true
-claimed_by: claude/model-tiering
 ---
 
 ## Slice 038-03 — plateau escalation ladder
