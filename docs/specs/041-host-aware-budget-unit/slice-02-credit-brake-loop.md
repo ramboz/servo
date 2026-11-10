@@ -44,6 +44,11 @@ ceiling, it refuses as today.
 4. **Recorded.**
    - State and summary carry `credit_ceiling`, `cumulative_credits` and the
      overrun (`max(0, cumulative − ceiling)`).
+   - Each invocation that ran past its `--max-ai-credits` records its overrun
+     next to ADR-0048's bound. When the bound is broken, it sets
+     `overrun_exceeds_bound: true` and prints a stderr breadcrumb; this is the
+     trigger for the ADR's kill criterion.
+   - Partial detection uses per-call OpenTelemetry cost (ADR-0048 part 3).
    - 038-01's per-iteration record gains `cost_native: {unit: "ai_credits",
      value}`.
    - USD fields stay `null` under Copilot.
@@ -52,7 +57,8 @@ ceiling, it refuses as today.
    `--host copilot`, and `--credit-ceiling` is refused under `--host claude`.
 6. **Single-threaded worker, uncovered oracle spend refused.**
    - The Copilot worker invocation never passes `--fleet`, and it denies
-     subagent spawning where 041-01 showed that is possible (ADR-0048 part 2).
+     subagent spawning with the tool-denial flag 041-01 verified (ADR-0048
+     part 2).
    - Under `--host copilot`, a target whose oracle has USD-priced components
      is refused before any model call (ADR-0048 part 5), unless the owner
      approved a USD oracle ceiling.

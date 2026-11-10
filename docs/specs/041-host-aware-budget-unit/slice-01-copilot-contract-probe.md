@@ -40,17 +40,21 @@ open question 4 shows the arithmetic).
 4. Subagent and compaction usage appear in `agentMetrics` / `totalNanoAiu` (A1),
    or are recorded as unobserved.
 5. Legacy-billing behaviour (A4) is recorded as observed, or as unobservable on
-   this account. For partial cost (A5), the probe records whether the JSON
-   carries a partial marker, and whether ADR-0048's derived check can be
-   computed from `modelMetrics` (tokens present with zero credits). If neither
-   is possible, ADR-0048's partial-cost kill criterion fires, and 041-02 stays
-   blocked.
-6. **Overrun (A6).** On the run whose spend crosses its `--max-ai-credits` cap,
-   record `spend − cap` and how many model calls were in flight at the
-   crossing, from `agentMetrics` and the timeline. Also record whether subagent
-   spawning can be denied for the worker invocation, so *k* = 1. Compare the
-   overrun against the per-call maximum computed from `/model`'s "Credits Per 1M
-   Tokens" and the model's context window.
+   this account. For partial cost (A5), the probe records whether the
+   OpenTelemetry file export gives per-call `github.copilot.nano_aiu` and token
+   counts for a `-p` run. If it does not, ADR-0048's partial-cost kill
+   criterion fires and 041-02 stays blocked.
+6. **Overrun (A6).**
+   - On the run whose spend crosses its `--max-ai-credits` cap, record
+     `spend − cap`, and the calls in flight at the crossing from the
+     OpenTelemetry span timings.
+   - Record whether a tool-denial flag stops subagent spawning in the worker
+     invocation.
+   - Compute the per-call maximum from `/model`'s "Credits Per 1M Tokens"
+     (max of input and cache-write × context window, plus max output × output
+     price), and compare the overrun with (1 + c) × that maximum.
+   - A compaction crossing is expensive to force, so if it is not observed,
+     record *c* as unobserved and keep the conservative *c* = 1.
 
 **Findings:** _Filled during IN_PROGRESS._
 

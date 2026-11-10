@@ -102,15 +102,19 @@ contract has six parts:
 2. **Hard between invocations, soft within, with a stated overrun bound.**
    - Total spend can exceed the ceiling by at most the overrun of the last
      invocation.
-   - That overrun is **k × the per-call maximum**:
-     - *k* is the number of model calls in flight when the cap is crossed;
-     - the per-call maximum is about the model's context window × its input
-       price, plus maximum output × output price, all from `/model`'s
-       "Credits Per 1M Tokens".
-   - servo's Copilot worker runs **single-threaded**: no `--fleet`, and
-     subagent spawning denied where the CLI allows it. That makes *k* = 1. If
-     041-01 shows spawning cannot be denied, the bound is restated with the
-     observed *k*.
+   - That overrun is **(1 + c) × the per-call maximum**:
+     - *1* is the main model call that crosses the cap;
+     - *c* is the number of background calls that can be in flight with it.
+       Compaction cannot be denied, and it fires near full context, which is
+       exactly when the crossing call is largest. So *c* = 1 unless 041-01
+       observes a compaction crossing and shows otherwise.
+     - The per-call maximum is the model's context window × max(input price,
+       cache-write price), plus maximum output × output price, all from
+       `/model`'s "Credits Per 1M Tokens".
+   - servo's Copilot worker runs with **no subagents**: no `--fleet`, and
+     subagent spawning denied via the CLI's tool-denial flags. If 041-01 shows
+     spawning cannot be denied, the native loop **stays refused**; the bound is
+     not weakened to an observed sample.
    - With no context brake (part 4), the call that crosses the cap is also the
      run's largest. So the overrun bound and the missing context brake are one
      acceptance (Open question 1).
@@ -118,9 +122,14 @@ contract has six parts:
    - A missing or unreadable usage report halts the run, and spend is reported
      as `null`, not 0. So does a timed-out or killed invocation whose usage
      file was not written.
-   - A report that is partial halts the run the same way. Partial means either
-     an explicit marker or a derived check: `modelMetrics` shows tokens for a
-     call or model that has zero credits.
+   - A report that is partial halts the run the same way. The CLI defines
+     partial as "some calls reported no cost", which is a per-call property.
+     The usage JSON is per model and per agent, so it cannot detect a mixed
+     partial. servo therefore reads **per-call** cost from the CLI's
+     OpenTelemetry file export, which carries `github.copilot.nano_aiu` and
+     token counts per call. Any call with tokens and no cost means the report
+     is partial. If per-call telemetry is unavailable for `-p` runs, the A5
+     kill criterion fires.
 4. **Explicit bounds required.** `--host copilot` runs only with a credit
    ceiling and an explicit `--max-iterations`. Context is recorded as
    unavailable (`null`).
@@ -176,33 +185,38 @@ settles them.
 - **A3:** whether a usage file is written after a timeout or kill. Either answer
   is workable, because part 3 fails closed.
 - **A4:** whether legacy-billing accounts populate `totalNanoAiu` at all.
-- **A5:** whether the JSON report marks partial cost, or whether part 3's
-  derived check can detect it.
+- **A5:** whether the OpenTelemetry file export gives per-call cost and tokens
+  for `-p` runs, so that part 3's per-call partial check can run.
 - **A6 (the overrun bound):**
-  - the overrun past a cap is at most *k* × the per-call maximum;
-  - subagent spawning can be denied, so *k* = 1;
-  - one response past the cap is the common case.
+  - the overrun past a cap is at most (1 + c) × the per-call maximum, with
+    *c* = 1 for compaction;
+  - subagent spawning can be denied;
+  - no other background model work runs concurrently.
 
 ## Kill criteria
 
 - **No usable report.** If 041-01 shows no usage report for *completed* `-p`
   runs, or a report that leaves out subagent or compaction spend, keep
   refusing (Option D). The brake would undercount.
-- **Partial cost undetectable.** If A5 is negative (no partial marker, and the
-  derived check cannot detect partial cost), keep refusing. A subtotal read as
-  a total fails open.
-- **Overrun larger than the cap.** If any observed invocation's overrun past its
-  `--max-ai-credits` exceeds **1× that cap** (spend above twice the cap), part
-  2's bound does not hold. Revisit before relying on it. This applies to the
-  041-01 probe or to later recorded runs.
+- **Partial cost undetectable.** If A5 is negative (no per-call cost telemetry
+  for `-p` runs), keep refusing. A subtotal read as a total fails open.
+- **Overrun beyond the stated bound.** Part 2's bound does not hold if any
+  observed invocation's overrun past its `--max-ai-credits` exceeds part 2's
+  (1 + c) × the per-call maximum. That maximum is computed for the model that
+  ran, from `/model` prices and its context window. Revisit before relying on
+  the bound. The comparison runs in the 041-01 probe and in every later run:
+  041-02 records the overrun next to the bound and emits
+  `overrun_exceeds_bound` when the bound is broken.
+- **Subagent spawning cannot be denied.** Keep refusing (part 2).
 
 ## Open questions (owner)
 
 1. **Overrun and context, one decision.** Is part 2's overrun bound
    acceptable as ADR-0043's "separately recorded budget policy", given that
    the context brake is unavailable so the crossing call is the run's largest?
-   The bound is *k* = 1 single-threaded × the per-call maximum, measured by
-   041-01.
+   The bound is (1 + c) × the per-call maximum, with *c* = 1 for compaction;
+   for a large model this can be a large number of credits. It is checked by
+   041-01 and on every later run.
 2. **Legacy-billing accounts:** refuse, or brake on premium requests as a
    second unit?
 3. **Single-threaded worker:** is denying subagent spawning acceptable, given
