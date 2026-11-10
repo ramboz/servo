@@ -14,11 +14,13 @@ use_cases: []
 
 A **campaign** is heartbeat-style dispatch over a **planned** work list, not a
 free-form crew (ADR-0049). The plan supplies independent, oracle-gated work
-items. servo runs each one, or gates each one the host runs, under its
-per-node discipline:
+items. servo runs each one, or gates each one the host runs. Servo-driven and
+wrapped workers run under the per-node discipline:
 - oracle and budget;
 - the plateau ladder (038-03);
 - role placement (038-02).
+
+Advisory workers get only an oracle check of claimed passes.
 
 It records each item's typed outcome (spec 040) in a file ledger. Advisory
 outcomes are marked `self_reported`. An episodic
