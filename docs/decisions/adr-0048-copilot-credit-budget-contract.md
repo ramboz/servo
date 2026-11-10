@@ -118,6 +118,10 @@ contract has six parts:
    - With no context brake (part 4), the call that crosses the cap is also the
      run's largest. So the overrun bound and the missing context brake are one
      acceptance (Open question 1).
+   - **Launch refuses when the bound swamps the budget.** If the computed
+     bound for the worker model is at least the credit ceiling, `loop.py`
+     refuses to launch and names the smallest sensible ceiling. Otherwise a
+     small ceiling would be a budget in name only.
 3. **Fail closed on missing or partial telemetry.**
    - A missing or unreadable usage report halts the run, and spend is reported
      as `null`, not 0. So does a timed-out or killed invocation whose usage
@@ -130,6 +134,15 @@ contract has six parts:
      token counts per call. Any call with tokens and no cost means the report
      is partial. If per-call telemetry is unavailable for `-p` runs, the A5
      kill criterion fires.
+   - The span stream must itself be complete, or an empty file would read as
+     "no partial calls" and fail open:
+     - servo pins the exporter env vars (`COPILOT_OTEL_EXPORTER_TYPE`,
+       `COPILOT_OTEL_FILE_EXPORTER_PATH`) on every worker invocation, so an
+       inherited or managed setting cannot redirect them;
+     - a missing, empty or unparseable span file is **unavailable**: halt
+       `credit_usage_unavailable` with spend `null` (ADR-0043 §3);
+     - if Σ per-call `nano_aiu` ≠ `totalNanoAiu`, or the span token sums ≠
+       `modelMetrics`, the report counts as partial.
 4. **Explicit bounds required.** `--host copilot` runs only with a credit
    ceiling and an explicit `--max-iterations`. Context is recorded as
    unavailable (`null`).
@@ -215,8 +228,10 @@ settles them.
    acceptable as ADR-0043's "separately recorded budget policy", given that
    the context brake is unavailable so the crossing call is the run's largest?
    The bound is (1 + c) × the per-call maximum, with *c* = 1 for compaction;
-   for a large model this can be a large number of credits. It is checked by
-   041-01 and on every later run.
+   for a large model this can be a large number of credits. 041-01 computes it
+   for the default worker model from `/model` prices, giving the owner a
+   number rather than a formula before acceptance. It is checked again on every
+   later run, and launch refuses when it is at least the ceiling.
 2. **Legacy-billing accounts:** refuse, or brake on premium requests as a
    second unit?
 3. **Single-threaded worker:** is denying subagent spawning acceptable, given

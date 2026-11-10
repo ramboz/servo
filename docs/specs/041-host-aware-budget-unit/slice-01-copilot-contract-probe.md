@@ -42,8 +42,13 @@ open question 4 shows the arithmetic).
 5. Legacy-billing behaviour (A4) is recorded as observed, or as unobservable on
    this account. For partial cost (A5), the probe records whether the
    OpenTelemetry file export gives per-call `github.copilot.nano_aiu` and token
-   counts for a `-p` run. If it does not, ADR-0048's partial-cost kill
-   criterion fires and 041-02 stays blocked.
+   counts for a `-p` run, with the exporter env vars pinned. It also records
+   whether Σ per-call `nano_aiu` matches `totalNanoAiu`, and whether span token
+   sums match `modelMetrics`. If per-call telemetry is unavailable, ADR-0048's
+   partial-cost kill criterion fires and 041-02 stays blocked.
+7. **Worked bound.** Record the default worker model's `/model` "Credits Per 1M
+   Tokens" and context window, and compute ADR-0048's (1 + c) × per-call bound
+   as a number for the owner's Open question 1.
 6. **Overrun (A6).**
    - On the run whose spend crosses its `--max-ai-credits` cap, record
      `spend − cap`, and the calls in flight at the crossing from the

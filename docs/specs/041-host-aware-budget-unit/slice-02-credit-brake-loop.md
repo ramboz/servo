@@ -27,7 +27,9 @@ ceiling, it refuses as today.
    `--credit-ceiling N` (N ≥ 30, from the flag or plan
    `budget.credit_ceiling`) and an explicit `--max-iterations` are given.
    Otherwise the ADR-0043 refusal is unchanged (`env_error`, rc=2, no
-   subprocess, no state).
+   subprocess, no state). It also refuses when ADR-0048's computed overrun
+   bound for the worker model is at least the ceiling, naming the smallest
+   sensible ceiling.
 2. **Brake.**
    - The running total is `cumulative_credits = Σ` of each iteration's credits
      (from `totalNanoAiu / 1e9`, per 041-01's semantics).
@@ -36,8 +38,10 @@ ceiling, it refuses as today.
    - Each invocation gets `--max-ai-credits <left>`, session-adjusted if
      041-01 shows the cap is session-scoped.
    - Post-iteration: halt when `cumulative_credits > credit_ceiling`.
-3. **Fail closed.** A missing, unreadable or partial usage report, or a
-   timed-out invocation with no report, halts `credit_usage_unavailable` with
+3. **Fail closed.** A missing, unreadable or partial usage report, a missing,
+   empty or unparseable OpenTelemetry span file (the exporter env vars are
+   pinned per invocation), span sums that disagree with the usage report, or a
+   timed-out invocation with no report all halt `credit_usage_unavailable` with
    rc=2. Spend for that invocation is `null`, and the run's
    `cumulative_credits` is then unknown and reported as `null`, never 0. The
    parser no longer truncates.
@@ -63,7 +67,8 @@ ceiling, it refuses as today.
      is refused before any model call (ADR-0048 part 5), unless the owner
      approved a USD oracle ceiling.
 
-**DoD:** ACs pass with a mock `copilot` fed 041-01's real usage files; full CI
+**DoD:** ACs pass with a mock `copilot` fed 041-01's real usage and
+OpenTelemetry span files; full CI
 gate; docs (agent-loop SKILL.md, architecture, Copilot host README) updated;
 host packages regenerated; reviews (compliance, craft, arch).
 
