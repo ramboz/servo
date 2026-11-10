@@ -1,17 +1,18 @@
 ---
 slice: 038-03 — plateau escalation ladder
 pass: frame-critique
-verdict: needs-changes
+verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-11-10T19:38:34Z
-prompt_source: review.py frame-critique docs/specs/038-per-node-model-tiering/spec.md 038-03
+reviewed_at: 2026-11-10T19:50:00Z
+prompt_source: review.py frame-critique docs/specs/038-per-node-model-tiering/spec.md 038-03 (round 3)
 ---
 
-VERDICT: needs-changes
+VERDICT: pass
 
 REASONING:
-Round 1. Rungs sharing unchanged budgets do not run to exhaustion: under heartbeat defaults (5 iters, window 3) oracle_plateau becomes unreachable with any ladder, stuck findings end max_iterations_reached/cost_ceiling_reached -> `tried`, silently disabling ADR-0030 quarantine.
+Round 3. The ladder frame now holds: escalation is guarded on iterations AND cost (lower bound), rung windows start at the first runner turn, every rung gets a fresh runner session, D5 files every escalated cut-short outcome as quarantine, and the kill criterion excludes cut-short runs. Remaining notes are narrow and folded in.
 
 SPECIFIC ISSUES:
-- [spec] Guard escalation on remaining iterations and/or quarantine escalated-but-not-passed runs.
-- [spec] Rung windows count iterations, not runner attempts (judge iterations re-score the same tree); the top rung can be declared plateaued after one runner attempt. Align the rung window to start on a runner iteration.
+- [spec] BR-7 pass-stop assumed claude_invocation_failed means a broken rung config, but that terminal is shared with timeouts / 429 / 529 — dropped the pass stop; breadcrumb only (D5 quarantine already equals the no-ladder outcome).
+- [spec] A1 "runner can inspect and revert" unsupported (last tree kept, not best; prompt carried no baseline) — the rung's first runner prompt now names the best composite, its iteration, and the composite at escalation.
+- [spec] Kill criterion "fair failure" lumps ladder-exhausted with guard-declined — rates now reported per rung reached.

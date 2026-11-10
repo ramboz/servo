@@ -16,9 +16,8 @@ configuration, behaviour is unchanged.
 
 **DoR:**
 - 038-01 DONE (`requested` field exists, accounting proves what ran).
-- ✅ ADR-0047 Accepted 2026-11-10 (role placement + session split decision). This was a gate
-  before `READY_FOR_IMPLEMENTATION`; the ADR is Proposed while under
-  frame-critique.
+- ✅ ADR-0047 Accepted 2026-11-10 (role placement + session split decision),
+  after two frame-critique rounds.
 - ✅ `claude -p` accepts `--model`, `--effort`, `--advisor` (probed, spec 038).
 - ✅ Shared-lane cache behaviour probed (spec 038 grounding): the judge's
   agent-switched `--resume` reads 0 cached tokens at equal model.

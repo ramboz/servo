@@ -195,10 +195,11 @@ record (`failure_signature: oracle_plateau`).
 `interrupted` and the oracle-environment refusals keep today's filing. They
 say nothing about the finding.
 
-An escalated run that ended on an invocation failure or a verdict mismatch
-also **stops the heartbeat pass** with rc=2. The likely cause is a broken rung
-config, and continuing would burn every remaining stuck finding on it; those
-findings stay `open`.
+An escalated run that ended on an invocation failure or a verdict mismatch also
+gets a breadcrumb naming the rung config, but the pass is **not** stopped.
+`claude_invocation_failed` is shared with timeouts and rate limits, and even a
+broken rung leaves each finding where a no-ladder run would: quarantined after
+its plateau.
 
 ## Recommended Decision
 
@@ -253,8 +254,10 @@ Adopt D1-A, D2-A, D3-A, D4 and D5. Concretely:
 - **A1 (vendor evidence):** escalating effort before model is cheaper for an
   equal pass rate. That rests on Anthropic's own benchmark of fresh re-runs,
   which D3-A only partly mirrors. Each rung starts a fresh transcript, but from
-  the stuck attempt's tree, which may be worse than the best-so-far baseline
-  it must beat. The runner can inspect and revert that tree. servo does not assume it
+  the stuck attempt's *last* tree, which may be worse than the best-so-far
+  baseline it must beat. The best tree is not snapshotted. Instead, the rung's
+  first prompt names the best composite, its iteration and the composite at
+  escalation, so the runner knows whether it starts from a regression. servo does not assume it
   holds for its targets; 038-01's accounting plus `escalation_rung` makes it
   measurable per target.
 - **A2 (experimental flag):** `--advisor` is accepted by claude 2.1.321 but is
@@ -277,8 +280,10 @@ Adopt D1-A, D2-A, D3-A, D4 and D5. Concretely:
   - **cut short:** a budget brake or invocation failure. Report these
     separately; they are excluded from the rate.
 
-  After ≥ 20 converted-plus-fair-failure runs across real targets, if fewer
-  than ~10% converted, stop recommending the ladder. It would be spending
+  Report the rate per rung reached (`escalation_rung` vs `escalation_rungs`),
+  so effort-only rungs are not read as the verdict on a model rung that never
+  started. After ≥ 20 converted-plus-fair-failure runs across real targets, if
+  fewer than ~10% converted, stop recommending the ladder. It would be spending
   without moving outcomes, so the default posture reverts to
   "plateau ⇒ quarantine".
 - **D2-A.** If 038-01 accounting shows split-judge iterations cost more than

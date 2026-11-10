@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: READY_FOR_IMPLEMENTATION
 kind: feature
 dependencies: [038-02, adr-0047]
 last_verified:
@@ -72,7 +72,15 @@ quarantines a finding only after the whole ladder failed.
    runner iteration omits `--resume`. The worktree (the code progress) is
    kept; the transcript of the stuck attempt is not. This matches the
    "re-run the failure at higher capability" pattern behind spec 038 A2, and
-   it keeps the rung from anchoring on the failed context.
+   it keeps the rung from anchoring on the failed context. The rung's first
+   runner prompt adds one short `Escalation` section to the usual seed, last
+   oracle output and last verdict. It names:
+   - the rung;
+   - the best composite so far and the iteration that reached it;
+   - the composite at escalation.
+
+   The fresh runner then knows when the current tree has regressed from the
+   best.
 5. **Recorded in state, stdout and summary.** With a ladder configured:
    - each history entry and per-iteration stdout line carries `rung` (0 = base);
    - `state.json` carries `escalation_rung` and `escalation_events`
@@ -111,11 +119,11 @@ quarantines a finding only after the whole ladder failed.
      (`failure_signature: oracle_plateau`), so ADR-0030's evidence-gated
      re-admission applies.
    - When the escalated run ended `claude_invocation_failed` or
-     `verdict_schema_mismatch`, a rung config is likely broken. The heartbeat
-     records that finding's outcome and quarantine (its spend counts), then
-     stops the pass with rc=2 and a breadcrumb naming the rung. The remaining
-     candidates stay `open`, so one bad `--models` ladder cannot burn every
-     stuck finding in the pass.
+     `verdict_schema_mismatch`, the heartbeat emits a breadcrumb naming the
+     rung and its runner config, and the pass continues.
+     `claude_invocation_failed` also covers timeouts and rate limits, so it
+     does not prove a broken config. Even a broken rung leaves each finding
+     where a no-ladder run would: quarantined after its plateau.
 9. **ADR-0010 amended.** ADR-0010's single-attempt rule carries a dated
    amendment pointing to ADR-0047: one dispatch per finding still holds, and one
    dispatch may now span the configured rungs.
@@ -127,7 +135,7 @@ quarantines a finding only after the whole ladder failed.
 | BR-1 | plateau detected | loop driver | rung < ladder length and the next rung's window fits the iterations left | escalate, fresh runner session, continue | try more capability before giving up, with a fair window | AC2, AC4 |
 | BR-2 | plateau detected | loop driver | last rung, no ladder, or window does not fit | halt `oracle_plateau` | a ladder never turns a plateau into a budget halt | AC2, AC8 |
 | BR-6 | outcome recorded | heartbeat | escalated, not passed, ended on a budget brake / invocation failure / verdict mismatch | quarantine (signature `oracle_plateau`) | the finding plateaued; a cut-short ladder must not fall to sticky `tried` | AC8 |
-| BR-7 | outcome recorded | heartbeat | escalated run ended `claude_invocation_failed` / `verdict_schema_mismatch` | quarantine that finding, stop the pass rc=2, rest stay `open` | a broken rung config must not burn every stuck finding | AC8 |
+| BR-7 | outcome recorded | heartbeat | escalated run ended `claude_invocation_failed` / `verdict_schema_mismatch` | quarantine (BR-6) + rung-naming breadcrumb; the pass continues | the terminal is shared with transient failures; the quarantine already matches the no-ladder outcome | AC8 |
 | BR-8 | plateau detected | loop driver | cost left < needed × largest per-iteration cost | halt `oracle_plateau` (no escalation) | a rung must not start without the money for a full window | AC2 |
 | BR-3 | any brake | loop driver | any rung | brake fires as today | rungs never loosen a brake | AC3 |
 | BR-4 | `--models` value | heartbeat | not JSON / unreadable | pass refused rc=2, nothing dispatched | don't burn findings on a config typo | AC8 |
