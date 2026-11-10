@@ -1434,7 +1434,7 @@ point to audit both drivers' exit-code contract against dispatch together.
 **Surfaced by:** spec 031-01 arch + craft reviews (2026-09-01).
 
 
-## Spec 038-01 hardening carried into 038-02's review round
+## ~~Spec 038-01 hardening carried into 038-02's review round~~ — RESOLVED 2026-11-10 (038-02 deviation 8)
 
 **Deferred (owner: slice 038-02 review round, single `loop.py` writer at a time):**
 two small hardenings that slice 038-01's reviews recorded as residuals:
@@ -1450,3 +1450,14 @@ two small hardenings that slice 038-01's reviews recorded as residuals:
 
 **Resolution trigger:** 038-02's implementation review round. Close this entry
 when both are fixed and tested.
+
+
+## ADR-0016 plan-shape example lags the plan schema
+
+**Deferred (owner decision):** ADR-0016's `plan.json` example lacks
+`budget_hash` (016-03) and the optional `models` block (038-02, ADR-0047). Both
+are additive and documented in docs/architecture.md and the slices that added
+them. A pointer amendment to an Accepted ADR needs explicit owner approval.
+
+**Resolution trigger:** the owner approves a dated `## Amendments` pointer on
+ADR-0016, or a later ADR supersedes its schema example.

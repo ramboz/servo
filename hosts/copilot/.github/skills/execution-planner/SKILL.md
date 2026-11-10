@@ -39,7 +39,7 @@ The helper lives at
 | `loop.py --plan <path>` | Run consumes the plan: budget/driver defaults, clamped, never loosened past a brake | 016-02 |
 | `execution_plan.py compile` (recompile-preserve) | refuse to silently clobber a hand-edited `plan.json`'s `budget`/`driver`/`models` (`--force` to override) | 016-03, 038-02 |
 
-A human may add a top-level `models` block (`{"runner": {...}, "judge": {...}}`, spec 038-02) to a compiled plan to place the loop's roles on models; `loop.py` validates and applies it (see the agent-loop skill). Compile never writes `models`, and the recompile-preserve hash covers it, so a recompile refuses to discard it without `--force`.
+A human may add a top-level `models` block (`{"runner": {...}, "judge": {...}}`, spec 038-02) to a compiled plan to place the loop's roles on models; `loop.py` validates and applies it (see the agent-loop skill). Compile never writes `models`, and the recompile-preserve hash covers it, so a recompile refuses to discard a hand-added or edited block without `--force`. The exception is a `models` block whose `budget_hash` was re-stamped to include it: it then reads as unedited, and a recompile replaces it (016-03 semantics).
 
 ## When to use this skill
 
@@ -123,7 +123,7 @@ mode:
 | `manifest_missing` | no `.servo/install.json` at the target | run `/servo:scaffold-init` first |
 | `manifest_malformed` | `.servo/install.json` is not valid JSON, or has no `components` list | re-run `/servo:scaffold-init`, or fix the manifest by hand |
 | `oracle_missing` | no `oracle.sh` at the target | run `/servo:scaffold-init` first |
-| `plan_edit_detected` | an existing `plan.json`'s `budget`/`driver` (and, if present, `models`) content no longer matches its recorded `budget_hash` (hand-edited since the last compile) | review the edit; pass `--force` to recompile and discard it, or keep the edit and skip recompiling |
+| `plan_edit_detected` | an existing `plan.json`'s `budget`/`driver` (and, if present, `models`) content no longer matches its recorded `budget_hash` (hand-edited since the last compile), or a legacy plan with no `budget_hash` carries a `models` block (compile never writes one) | review the edit; pass `--force` to recompile and discard it, or keep the edit and skip recompiling |
 
 ## Human + `--json` output
 

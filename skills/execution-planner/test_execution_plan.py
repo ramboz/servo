@@ -744,6 +744,7 @@ class ModelsBlockPreservedTests(unittest.TestCase):
             res = _run_cli(target, spec)
             self.assertEqual(res.returncode, 2, res.stderr)
             self.assertIn("plan_edit_detected", res.stderr)
+            self.assertIn("has no recorded budget_hash but carries", res.stderr)
             self.assertEqual(plan_path.read_bytes(), before)
 
     def test_legacy_hashless_plan_without_models_still_overwrites(self):

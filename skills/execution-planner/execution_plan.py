@@ -409,16 +409,21 @@ def write_plan(target: Path, spec_id: str, plan: dict, *, force: bool = False) -
                 existing.get("budget") or {}, existing.get("driver"),
                 existing["models"] if "models" in existing else _ABSENT,
             )
-            if (
-                (recorded_hash is not None and recorded_hash != current_hash)
-                or (recorded_hash is None and "models" in existing)
-            ):
+            if recorded_hash is not None and recorded_hash != current_hash:
                 raise EnvError(
                     "plan_edit_detected",
                     f"plan at {out_path} was edited since it was last "
                     f"compiled (budget/driver/models content no longer matches its "
                     f"recorded budget_hash); refusing to overwrite the edit. "
                     f"Pass --force to recompile and discard it.",
+                )
+            if recorded_hash is None and "models" in existing:
+                raise EnvError(
+                    "plan_edit_detected",
+                    f"plan at {out_path} has no recorded budget_hash but carries "
+                    f"a `models` block, which compile never writes (a human "
+                    f"edit); refusing to overwrite it. Pass --force to recompile "
+                    f"and discard it.",
                 )
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp = out_dir / f"{TMP_PREFIX}plan.json{TMP_SUFFIX}"

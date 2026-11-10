@@ -137,11 +137,18 @@ Research input: jig research note R-003 "advisor-style model tiering"
 - **A1: advisor and subagent models are only partly identified.** 038-01's
   `model` field picks the non-advisor `modelUsage` entry with the highest
   `costUSD`. Advisor entries are recognised from `usage.iterations`
-  (`advisor_message`), which lists only the invocation's final API call, and,
-  from 038-02 on, from servo's own requested advisor. A consult in an earlier
-  turn under an inherited advisor, or a subagent on another model, can
-  therefore be mislabelled. Neither is probed. The per-model breakdown
-  (`model_usage`) is exact either way and is the authoritative record.
+  (`advisor_message`), which lists only the invocation's final API call. From
+  038-02 on they are also recognised from servo's own requested advisor, but
+  only when the role also requests an explicit `model`. With an inherited
+  model, the executor's own entry may share the advisor's family token. So
+  three cases can be mislabelled:
+  - a consult in an earlier turn under an inherited advisor;
+  - a consult in an earlier turn under a requested advisor with an inherited
+    model;
+  - a subagent on another model.
+
+  None of these is probed. The per-model breakdown (`model_usage`) is exact
+  either way and is the authoritative record.
 - **A2: Anthropic's "re-run failures at higher effort" figure (equal pass rate
   at "a little over half the cost") is vendor-reported**, on Anthropic's
   benchmark, not servo's. 038-03 makes the ladder measurable (rung reached +

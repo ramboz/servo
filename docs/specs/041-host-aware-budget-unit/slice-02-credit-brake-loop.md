@@ -66,6 +66,11 @@ ceiling, it refuses as today.
    - Under `--host copilot`, a target whose oracle has USD-priced components
      is refused before any model call (ADR-0048 part 5), unless the owner
      approved a USD oracle ceiling.
+7. **Role placement honoured or refused.** The Copilot invocation path
+   currently drops 038-02's `role_args`, which is unreachable today. It must
+   either map them to Copilot's own flags, or refuse a `models` block that
+   sets a field it cannot honour. `requested` must never record a flag that
+   was not passed.
 
 **DoD:** ACs pass with a mock `copilot` fed 041-01's real usage and
 OpenTelemetry span files; full CI

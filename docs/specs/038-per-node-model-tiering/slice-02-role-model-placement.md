@@ -1,8 +1,8 @@
 ---
-status: IN_PROGRESS
+status: RECONCILED
 kind: feature
 dependencies: [038-01, adr-0047]
-last_verified:
+last_verified: 2026-11-10
 arch_review: true
 frame_review: true
 claimed_by: claude/model-tiering
@@ -95,15 +95,17 @@ configuration, behaviour is unchanged.
 | BR-3 | judge config | goal driver | judge non-inherit | ignored + stderr note | the goal driver has no judge role | AC6 |
 
 **DoD:**
-- [ ] All ACs pass; full suite green; new tests shown to fail with the feature removed.
-- [ ] No `model:`/`effort:` added to `agents/*.md`; the 032-03 Copilot
+- [x] All ACs pass; full suite green (3.13: 2637 passed / 10 skipped; 3.9.6 green
+      except the two pre-existing macOS-only `[forged]` cases); new tests shown
+      to fail with the feature removed, with the exceptions in deviation 11.
+- [x] No `model:`/`effort:` added to `agents/*.md`; the 032-03 Copilot
       model-neutrality tests stay green.
-- [ ] `skills/agent-loop/SKILL.md`, `skills/execution-planner/SKILL.md` and
+- [x] `skills/agent-loop/SKILL.md`, `skills/execution-planner/SKILL.md` and
       `docs/architecture.md` (plan.json `models`, state `models`) updated.
       The SKILL.md names the split-only measurement baseline: a block that
       sets the default model explicitly gives the split without a tier.
       Host packages regenerated.
-- [ ] Reviewed (compliance + craft + arch); deviation log + reconciliation
+- [x] Reviewed (compliance + craft + arch); deviation log + reconciliation
       sweep; reconciliation review passed.
 
 **Anti-horizontal-phasing check:** After this slice a user can run the runner on
@@ -112,8 +114,98 @@ Sonnet with an Opus advisor and an Opus judge in its own session, and read in
 
 ### Deviation log (after reconciliation)
 
-_Filled at reconciliation._
+The original ACs are preserved above. What changed during implementation and
+review (compliance, craft and arch all passed in round 1; their notes were
+applied in one follow-up batch):
+
+1. **AC7 advisor exclusion.** An id is marked as the advisor when it equals the
+   requested advisor or contains it as a `-`-delimited token, unless it also
+   equals or token-names the role's own requested model. This follows the
+   plan.md wording rather than "equals" only, because aliases such as `opus`
+   map to full ids. The second signal applies **only when the role requests an
+   explicit `model`**. With an inherited model, the executor's own entry could
+   share the advisor's family token, so only the `usage.iterations`
+   (final-turn) signal is used. Spec A1 is corrected in place to name this
+   case: a requested advisor consulted in a non-final turn under an
+   inherited model is not attributed.
+2. **AC1 inline detection** uses `value.lstrip().startswith("{")`, so leading
+   whitespace is accepted. An inline value starting with `[`, and a file
+   holding valid non-object JSON, both get a "must be a JSON object" message.
+   Files are read as UTF-8, and a decode error is `models_invalid`, never a
+   traceback.
+3. **AC2 reason channel.** The structured reason is on the stdout summary line
+   (via `_refuse_plan`), with a free-text `loop:` stderr breadcrumb. This
+   follows the existing 016-03 plan-refusal convention.
+4. **AC5 resume.** `--plan` and `--resume` are mutually exclusive (016-02 AC8),
+   so only `--models` can replace the persisted block on resume. A kept,
+   persisted block is re-validated, and an invalid one refuses with
+   `models_invalid` before any model call.
+5. **AC6 notes.** Under `--background`, the parent also prints the
+   judge-ignored note; the child writes it to `background.log`.
+   `--emit-routine-prompt` with `--models` prints one note that the block is
+   not carried into the Routine prompt. The Routine path is not covered by
+   any AC.
+6. **AC8 presence hashing.** The planner hashes the presence of a `models` key
+   with any value, including `null`, through an `_ABSENT` sentinel. This lets
+   the planner and loop agree, since loop refuses `models: null`. A legacy
+   plan with no hash that carries `models` now refuses overwrite without
+   `--force`: `models` is never compiled, so its presence proves a human edit.
+   Plans with no `models` key hash byte-identically to before (pinned digest).
+   The hash-less case has its own `plan_edit_detected` message. One edge
+   follows 016-03's semantics: a `models` block whose `budget_hash` was
+   re-stamped to include it reads as unedited and is replaced on recompile
+   (pinned by a test). SKILL.md states this exception.
+7. **Built ahead for 038-03.** `_validate_models(allow_escalation=True)`
+   validates an `escalation` list. No 038-02 caller enables it; 038-03 does.
+   Flagged under the leanness lens and kept because 038-03 is the next commit
+   on this branch.
+8. **038-01 hardenings landed here.** Tracked in refinement-todo, now closed:
+   - `_iteration_cost_delta` requires the snapshot's model-usage tokens to be
+     greater than 0 before accepting `session_delta`;
+   - `_reported_total_cost` parses through `_as_number`, so NaN, inf and
+     numeric strings count as absent.
+9. **Context-fill reading under the split.** `last_context_fill_ratio` and the
+   summary's `context_fill_ratio` alternate between the runner's session and a
+   fresh judge session. The gate still protects the runner, because every
+   runner turn is followed by a pre-judge check on the runner's own ratio.
+   This is documented in architecture.md, SKILL.md and a code comment.
+10. **Persistence shape.** `models` is persisted in goal-driver state as well as
+    loop state. An all-`inherit` block persists as `{"runner": {}, "judge": {}}`
+    and is not in effect.
+11. **DoD exceptions.**
+    - Ten tests are negative guards. They pass with or without the feature, by
+      design: no-config argv identical, shared session without a block,
+      unmarked usage without an advisor, goal argv unchanged, plan without
+      `models`, old state, `requested` all null, compiled plan hash unchanged,
+      no inherit-judge note, all-inherit not configured.
+    - The follow-up batch's tests were written after their code. Red was
+      witnessed by mutation instead: 10 mutations, each turning its targeted
+      tests red.
+12. **Out of scope, tracked.** The Copilot branch of `_invoke_claude` drops
+    `role_args`. This can't run today, because `run_loop` refuses
+    `--host copilot`. Spec 041-02 now carries an AC to honour or refuse
+    `role_args` before the refusal is lifted.
+    ADR-0016's plan-shape example now lacks `budget_hash` and `models`. A
+    pointer amendment needs owner approval, so it is recorded in
+    refinement-todo rather than written.
+13. **Pre-existing 3.9 failures.** Two macOS-only
+    `test_gate_output_readback.py [forged]` cases fail the same way on
+    `origin/main`, and they pass in Linux CI (PR 50).
 
 ### Reconciliation sweep
 
-_Filled at reconciliation._
+| Artifact | Disposition | Rationale |
+|----------|-------------|-----------|
+| `README.md` | `no-op` | The front door does not list loop flags; no user-facing claim changed. |
+| `docs/specs/README.md` | `deferred` | Regenerated by `workflow.py status-board` at the close step, before DONE. |
+| `docs/product-vision.md` | `no-op` | Checked; no scope change. |
+| `docs/specs/038-…/spec.md` | `updated` | Assumption A1 corrected in place for the inherited-model case of the advisor signal. |
+| `docs/architecture.md` | `updated` | plan.json `models`, state `models`, judge split, context-fill alternation. |
+| Primer surfaces | `no-op` | servo has no root primer; scaffold templates don't describe loop flags. |
+| `docs/inbox.md` | `no-op` | servo has no inbox file. |
+| `docs/refinement-todo.md` | `updated` | The "Spec 038-01 hardening" entry is closed (deviation 8). A new entry records the ADR-0016 plan-shape pointer, which awaits the owner's decision. |
+| `docs/memory/**` | `no-op` | Nothing new beyond 038-01's learning: the cache probe is recorded in spec 038 and ADR-0047. |
+| `docs/decisions/**` | `no-op` | ADR-0047 governs; no ADR text changed in this slice. |
+| `docs/specs/041-…/slice-02-…` | `updated` | Added an AC: honour or refuse `role_args` on the Copilot path (deviation 12). |
+| `skills/agent-loop/SKILL.md`, `skills/execution-planner/SKILL.md`, generated `hosts/**` | `updated` | Options and refusal-table rows, the split rule and its rationale, the split-only measurement baseline, the advisor caveat. The planner's `plan_edit_detected` message and table row now cover the hash-less + `models` case, and the re-stamped-hash exception is stated. Hosts regenerated and drift-checked. |
+| `agents/*.md` | `no-op` | Unchanged; Copilot model-neutrality preserved. |
