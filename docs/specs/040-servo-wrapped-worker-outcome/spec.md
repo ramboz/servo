@@ -48,6 +48,19 @@ the line verbatim:
   (for example a campaign ledger), but servo neither reads nor writes jig
   artifacts.
 
+## Consumer: spec 042 campaigns
+
+Spec 042 / ADR-0049 (Proposed) is this line's first consumer. A campaign
+ledger never trusts the line's own field values for a wrapped worker:
+- `campaign record` uses the line only to locate the run (`run_id`);
+- it re-renders result, rung and cost from that run's `state.json`, after
+  verifying the worktree's content fingerprint against the loop's halt state.
+
+So the line must carry `run_id`, and `loop.py` must record the content
+fingerprint (HEAD plus diff plus untracked contents) and its start HEAD at
+halt. Those two state additions belong with 040-01 or 042-03, whichever lands
+first.
+
 ## Assumptions
 
 - **A1:** hosts can capture a worker's last stdout line, or a file, and forward
