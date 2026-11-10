@@ -3,19 +3,16 @@ adr: 0048
 pass: frame-critique
 verdict: needs-changes
 reviewer: jig:reviewer
-reviewed_at: 2026-11-10T20:05:42Z
-prompt_source: review.py frame-critique docs/decisions/adr-0048-copilot-credit-budget-contract.md
+reviewed_at: 2026-11-10T20:09:04Z
+prompt_source: review.py frame-critique docs/decisions/adr-0048-copilot-credit-budget-contract.md (round 2)
 ---
 
 VERDICT: needs-changes
 
 REASONING:
-Round 1. Direction holds (never-converted AI-credit brake enforced between invocations, fail-closed telemetry, mirrors the USD brake). The weak point was the overrun claim the owner is asked to accept ("one over-cap response plus compaction"): read off help text, not in the Assumptions ledger, not probed, plausibly wrong in count (parallel subagents share the cap) and size (crossing call is the run's largest context).
+Round 2. All round-1 findings addressed; direction sound. Riskiest remaining: A6's "single-threaded => k = 1" — tool denial can block subagents but not compaction (background model work that fires near full context, exactly when the crossing call is largest), and the short 041-01 probe would never reach it.
 
 SPECIFIC ISSUES:
-- [spec] Overrun bound unestablished -> A6 added; restated as k x per-call max; single-threaded worker (k=1); 041-01 AC6 measures overrun + concurrency; kill multiple stated (1x cap); Q1 merged with the missing-context-brake question.
-- [spec] Kill criterion 1 contradicted the contract (session-delta and interrupted cases are already handled) -> rewritten: no report for completed runs / subagent+compaction omitted.
-- [spec] Partial reports: derived check (modelMetrics tokens with zero credits) + kill arm when undetectable.
-- [spec] Oracle/judge USD spend uncovered under Copilot -> part 5 refuses USD-priced oracle components by default (owner Q5).
-- [spec] Lift clause silently dropped 034-03's "context" evidence and "hard in-flight bounds" -> now explicit.
-- [spec] Probe authorization too small -> 150 AI credits with arithmetic.
+- [spec] Bound restated as (1 + c) x per-call max with c = 1 (compaction) unless observed otherwise; per-call max priced at max(input, cache-write) x window; spawning not deniable -> refuse (no observed-k fallback).
+- [spec] Kill line measured a different quantity (overrun vs 1x cap) -> now compares overrun to the stated bound; 041-02 emits overrun_exceeds_bound so later runs can trigger it.
+- [spec] Derived partial check could not see per-call partials from per-model JSON -> per-call OTel nano_aiu is the source; A5 kill fires if unavailable for -p runs.
