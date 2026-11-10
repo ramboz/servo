@@ -80,9 +80,10 @@ file only fixes names and hook points so the three slices compose.
   of non-empty role-key objects).
 - `_runner_config_at_rung(models, rung)` folds the base runner config with
   rungs 1..rung.
-- State keys: `escalation_rung`, `escalation_events`,
-  `escalation_baseline_composite`, `escalation_history_start` (the index of
-  the rung's first runner entry; `None` until that entry is appended).
+- State keys: `escalation_rung`, `escalation_events` (each with
+  `baseline_composite`; the current rung's baseline is read from
+  `escalation_events[-1]`), and `escalation_history_start` (the index of the
+  rung's first runner entry; `None` until that entry is appended).
 - Plateau check:
   `_check_plateau(([{"composite": baseline}] if baseline is not None else [])
   + history[start:], window, noise_floor)`. At rung 0, start = 0 and there is

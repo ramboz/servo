@@ -447,6 +447,13 @@ Since the ADR-0008 rebase the driver has three modes. `--driver auto` (the **def
 | `goal` (explicit) | → goal driver | **refuses** rc=2 / `goal_unavailable` (names the forcing factor) |
 | `loop` (explicit) | → loop driver | → loop driver |
 
+Exception (spec 038-03): `auto` whose `models` block carries a non-empty
+`escalation` ladder routes to the loop driver, with one stderr line, because
+the goal driver has no plateau signal. `--background` still needs the goal
+driver; it prints the ladder-ignored note. `--explain-routing` still reports the
+host-only verdict and does not reflect a ladder. The same is true of a plan's
+driver.
+
 The downgrade is **fail-safe** (the always-works external driver), and the refusal is **fail-closed** (an explicit `--driver goal` never silently degrades) — both consistent with spec 003's "brakes wired in from day one" posture. The loop driver remains the **portable cross-host layer** ([ADR-0008](decisions/adr-0008-loop-on-autonomy-primitives.md) Assumption 7), demoted from default to one of two first-class paths.
 
 ### Execution matrix by host (spec 003-08)

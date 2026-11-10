@@ -1487,3 +1487,16 @@ anything. A guard could skip escalation when
 
 **Resolution trigger:** a real laddered run spends rungs on a permission wall,
 which 038-01's accounting together with `escalation_rung` would show.
+
+
+## `auto` resume of a loop-driver run on a goal-capable host
+
+**Deferred:** `--resume <run-id>` under `--driver auto` on a host that supports
+`/goal` routes to the goal driver. That driver refuses with
+`goal_resume_unsupported`, instead of honouring the run's persisted driver.
+The gap predates spec 038, but 038-03's auto-routing of laddered runs to the
+loop driver makes it common. The documented workaround is `--driver loop` on
+resume (agent-loop SKILL.md).
+
+**Resolution trigger:** a user hits it, or routing is next touched. The fix is
+to read the persisted state's driver and ladder in the `auto` check on resume.
