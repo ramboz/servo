@@ -1,20 +1,20 @@
 ---
 slice: 038-03 — plateau escalation ladder
 pass: compliance
-verdict: needs-changes
+verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-11-10T21:59:04Z
-prompt_source: review.py (compliance) docs/specs/038-per-node-model-tiering/spec.md 038-03 <deliverables>
+reviewed_at: 2026-11-10T22:28:13Z
+prompt_source: review.py (compliance) docs/specs/038-per-node-model-tiering/spec.md 038-03 <deliverables> (round 2)
 ---
 
-VERDICT: needs-changes
+VERDICT: pass
 
 REASONING:
-Round 1. AC1-AC9 implemented on main paths (worked example 4/7/11, guard arithmetic, fresh session per rung, judge untouched, Escalation prompt, recording, resume/clamp, goal note, heartbeat forwarding/refusal/quarantine). One real bug: a ladder-less --models resume after an escalation leaves the stale rung, which can silently disable the plateau brake. Several tests pass at HEAD by construction.
+Round 2. Every round-1 finding fixed with a test that fails without it: ladder-less resume falls through to _check_plateau and strips stale keys; bad-ladder tests assert models.escalation[0]; heartbeat refusal tests assert models_invalid; timeout caveat only for claude_invocation_failed; rung config via the loop terminal_breadcrumb. AC1-AC9 satisfied.
 
 SPECIFIC ISSUES:
-- [impl] Ladder-less resume keeps a stale escalation_rung; _rung_plateau returns False forever when escalation_history_start is null (High).
-- [impl] Resume-without-ladder test checks summary keys only (High).
-- [impl] Bad-ladder flag test and validator test pass at HEAD; heartbeat refusal tests assert rc only (Medium).
-- [impl] Breadcrumb/doc says verdict_schema_mismatch covers timeouts/rate limits (Medium).
-- [impl] Heartbeat breadcrumb fold disagrees with loop.py on inherit (Medium).
+- [impl] heartbeat _run_loop docstring stale about --driver (Medium).
+- [spec] architecture.md heartbeat paragraph omits the ladder driver pin and sizing note (Medium).
+
+RECONCILIATION NOTES:
+- Log: driver pin (or its replacement), sizing note, context-ratio reset interpretation, verdict_schema_mismatch rung breadcrumb, baseline read from events, escalation_history_start extra key, rung in human view, ladder-less resume to rung 0, JSON-content check.

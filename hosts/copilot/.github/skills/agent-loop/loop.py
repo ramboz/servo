@@ -570,6 +570,7 @@ def _parse_verdict_block(
 
 def _assemble_iteration_prompt(
     seed: str, last_oracle: Optional[dict], last_verdict: Optional[dict],
+    escalation: Optional[dict] = None,
 ) -> str:
     """Build the per-iteration prompt block sent to claude (AC8).
 
@@ -580,8 +581,13 @@ def _assemble_iteration_prompt(
 
     Format is documented in `agents/runner.md` and `agents/judge.md` so
     agents know how to read the prompt.
+
+    `escalation` (spec 038-03): passed only for an escalation rung's first
+    runner iteration; adds one `Escalation` section (the rung, the best
+    composite so far and the iteration that reached it, the composite at
+    escalation) so the fresh runner session knows the tree may have regressed.
     """
-    if last_oracle is None and last_verdict is None:
+    if last_oracle is None and last_verdict is None and escalation is None:
         return seed
     parts = [seed.rstrip(), "", "---", "Context from prior iteration:"]
     if last_oracle is not None:
@@ -610,6 +616,20 @@ def _assemble_iteration_prompt(
             "",
             "Last agent verdict:",
             *verdict_lines,
+        ])
+    if escalation is not None:
+        best = escalation.get("best_composite")
+        best_text = (
+            "none recorded" if best is None else
+            f"{best} (iteration {escalation.get('best_iteration')})")
+        parts.extend([
+            "",
+            "Escalation:",
+            f"- This is escalation rung {escalation.get('rung')}: the "
+            "previous rung plateaued, so you start a fresh session with more "
+            "capability on the same working tree.",
+            f"- Best composite so far: {best_text}.",
+            f"- Composite at escalation: {escalation.get('composite')}.",
         ])
     parts.append("---")
     return "\n".join(parts) + "\n"
@@ -1839,7 +1859,7 @@ def _validate_models(
     fields dropped (both roles always present). One validator serves the flag
     and the plan key; the caller picks the refusal reason. `allow_escalation`
     additionally accepts a top-level `escalation` list of non-empty role-key
-    objects (turned on by spec 038-03; unknown here until then).
+    objects (spec 038-03).
     """
     if not isinstance(block, dict):
         return None, f"models must be a JSON object, got {block!r}"
@@ -1892,9 +1912,106 @@ def _load_models_arg(value: str) -> "tuple[Optional[object], Optional[str]]":
 
 
 def _models_in_effect(models: Optional[dict]) -> bool:
-    """True when the resolved block sets at least one role field."""
-    return bool(models) and any(
-        (models.get(role) or {}) for role in MODELS_ROLES)
+    """True when the resolved block sets at least one role field or a ladder."""
+    return bool(models) and (
+        any((models.get(role) or {}) for role in MODELS_ROLES)
+        or bool(models.get("escalation")))
+
+
+def _rung_failure_breadcrumb(
+    models: Optional[dict], rung: int, reason: str, agent: str,
+) -> str:
+    """Names the rung (and, for a runner turn, its config) for a raised-rung
+    halt (038-03). The judge's config never changes with the rung."""
+    if agent == AGENT_JUDGE:
+        return (
+            f"{reason} on escalation rung {rung} (judge turn); the judge "
+            "config is unchanged by the rung")
+    return (
+        f"{reason} on escalation rung {rung} ({agent}); runner config "
+        f"{json.dumps(_runner_config_at_rung(models, rung))}")
+
+
+def _ladder_of(models: Optional[dict]) -> "list[dict]":
+    """The configured escalation rungs (empty = no ladder)."""
+    return list((models or {}).get("escalation") or [])
+
+
+def _runner_config_at_rung(models: Optional[dict], rung: int) -> dict:
+    """Runner role config at `rung`: the base runner config with rungs
+    1..`rung` applied in order (cumulative; rung 0 = base)."""
+    cfg = dict(_role_cfg(models, AGENT_RUNNER))
+    for step in _ladder_of(models)[:max(rung, 0)]:
+        cfg.update(step)
+    return cfg
+
+
+def _best_composite(history: list) -> "tuple[Optional[float], Optional[int]]":
+    """`(best numeric composite, first iteration that reached it)`."""
+    best: Optional[float] = None
+    best_iteration: Optional[int] = None
+    for entry in history:
+        value = entry.get("composite")
+        if (isinstance(value, bool)
+                or not isinstance(value, (int, float))):
+            continue
+        if best is None or value > best:
+            best, best_iteration = value, entry.get("iteration")
+    return best, best_iteration
+
+
+def _rung_plateau(state: dict) -> bool:
+    """Plateau check for the run's current rung (spec 038-03 AC2).
+
+    Rung 0 is today's check on the whole history. A raised rung checks its
+    baseline (the best composite at escalation) plus its own window, which
+    starts at its first runner iteration; until that entry exists there is
+    nothing to check."""
+    history = state["oracle_score_history"]
+    window = state["plateau_window"]
+    floor = state.get("plateau_noise_floor", DEFAULT_PLATEAU_NOISE_FLOOR)
+    if not _ladder_of(state.get("models")) or not state.get("escalation_rung"):
+        return _check_plateau(history, window, floor)
+    start = state.get("escalation_history_start")
+    if start is None:
+        return False
+    events = state.get("escalation_events") or []
+    baseline = events[-1].get("baseline_composite") if events else None
+    seed = [{"composite": baseline}] if baseline is not None else []
+    return _check_plateau(seed + history[start:], window, floor)
+
+
+def _escalation_guard(
+    state: dict, iteration: int,
+) -> "tuple[bool, Optional[str]]":
+    """Fair-window guard (spec 038-03 AC2): `(ok, breadcrumb-if-refused)`.
+
+    The next rung may start only if the iterations left (and, with a cost
+    ceiling, the dollars left) cover one full plateau window. `needed` counts
+    one extra iteration when the next one is a judge turn that the window
+    excludes."""
+    needed = state["plateau_window"] + (
+        1 if _agent_for_iteration(iteration + 1) == AGENT_JUDGE else 0)
+    left = state["max_iterations"] - iteration
+    shortfalls = []
+    if left < needed:
+        shortfalls.append(f"{left} iteration(s) left, {needed} needed")
+    ceiling = state["cost_ceiling_usd"]
+    if ceiling > 0:
+        costs = [
+            e["cost_usd"] for e in state["oracle_score_history"]
+            if isinstance(e.get("cost_usd"), (int, float))
+            and not isinstance(e.get("cost_usd"), bool)]
+        need_usd = needed * max(costs, default=0)
+        left_usd = ceiling - state["cumulative_cost_usd"]
+        if left_usd < need_usd:
+            shortfalls.append(
+                f"${left_usd:.4f} left, ${need_usd:.4f} needed")
+    if not shortfalls:
+        return True, None
+    return False, (
+        f"plateau at iteration {iteration}: no escalation rung started "
+        f"({'; '.join(shortfalls)} for a full plateau window)")
 
 
 def _role_cfg(models: Optional[dict], agent: str) -> dict:
@@ -1917,6 +2034,14 @@ def _note_judge_ignored(models: Optional[dict]) -> None:
         sys.stderr.write(
             "loop: models.judge is ignored under --driver goal (the goal "
             "driver has no judge role).\n")
+
+
+def _note_escalation_ignored(models: Optional[dict]) -> None:
+    """One stderr note when a ladder meets the (plateau-less) goal driver."""
+    if _ladder_of(models):
+        sys.stderr.write(
+            "loop: models.escalation is ignored under --driver goal (the "
+            "goal driver has no plateau signal).\n")
 
 
 def _requested_of(role_cfg: Optional[dict]) -> dict:
@@ -2760,6 +2885,10 @@ def _summary_payload(
     }
     if terminal_breadcrumb is not None:
         payload["terminal_breadcrumb"] = terminal_breadcrumb
+    ladder = _ladder_of(state.get("models"))
+    if ladder:
+        payload["escalation_rung"] = state.get("escalation_rung", 0)
+        payload["escalation_rungs"] = len(ladder)
     if state.get("oracle") is not None:
         payload.update(gate_consumer.fields(state))
         payload["oracle_reason"] = state.get("oracle_reason")
@@ -3021,7 +3150,8 @@ def run_loop(
         if models is not None:
             state["models"] = models
         elif state.get("models") is not None:
-            kept, kept_err = _validate_models(state["models"])
+            kept, kept_err = _validate_models(
+                state["models"], allow_escalation=True)
             if kept_err is not None:
                 return _refuse_preflight(
                     run_id=resume_run_id,
@@ -3161,6 +3291,23 @@ def run_loop(
         _atomic_write_state(state, state_path)
         last_context_fill_ratio = None
 
+    # Spec 038-03: ladder bookkeeping, only when a ladder is configured (no
+    # ladder -> no keys, existing shapes unchanged). Resume restores the
+    # persisted rung/baseline/window index; a shorter resumed ladder clamps.
+    ladder = _ladder_of(state.get("models"))
+    if ladder:
+        state["escalation_rung"] = min(
+            int(state.get("escalation_rung") or 0), len(ladder))
+        state.setdefault("escalation_events", [])
+        state.setdefault("escalation_history_start", 0)
+    else:
+        # A resumed run with no ladder is a plain run again: back to rung 0
+        # and no leftover window bookkeeping (it would silence the brake).
+        # `escalation_events` stays: it is the per-rung measurement record.
+        for stale in ("escalation_rung", "escalation_history_start",
+                      "escalation_baseline_composite"):
+            state.pop(stale, None)
+
     # ---- Phase 2: iteration loop --------------------------------------------
     final_oracle_status = STATUS_ENV_ERROR
     # Populate final_oracle_status from prior history (resume case): the
@@ -3246,13 +3393,32 @@ def run_loop(
         role_models = state.get("models")
         split_judge = (
             agent_name == AGENT_JUDGE and _models_in_effect(role_models))
-        role_cfg = _role_cfg(role_models, agent_name)
+        rung = state.get("escalation_rung", 0) if ladder else 0
+        role_cfg = (
+            _runner_config_at_rung(role_models, rung)
+            if agent_name == AGENT_RUNNER
+            else _role_cfg(role_models, agent_name))
         session_id_arg = (
             None if split_judge else (state.get("current_session_id") or None))
+        escalation_section = None
+        if (ladder and rung >= 1 and agent_name == AGENT_RUNNER
+                and state.get("escalation_history_start") is None):
+            # The rung's first runner iteration: tell the fresh session where
+            # the previous rung left off (spec 038-03 AC4).
+            at_iteration = state["escalation_events"][-1]["at_iteration"]
+            seen = [e for e in state["oracle_score_history"]
+                    if (e.get("iteration") or 0) <= at_iteration]
+            best, best_iteration = _best_composite(seen)
+            escalation_section = {
+                "rung": rung, "best_composite": best,
+                "best_iteration": best_iteration,
+                "composite": seen[-1].get("composite") if seen else None,
+            }
         iteration_prompt = _assemble_iteration_prompt(
             state["prompt"],
             state.get("last_oracle_json"),
             state.get("last_verdict"),
+            escalation_section,
         )
         # Slice 031-01 (ADR-0037): snapshot the tree immediately BEFORE the
         # runner invoke. Runner iterations only (`_agent_for_iteration` odd; the
@@ -3301,11 +3467,18 @@ def run_loop(
 
         if claude_data is None:
             sys.stderr.write(f"loop: {error}\n")
+            rung_crumb = None
+            if ladder and rung >= 1:
+                rung_crumb = _rung_failure_breadcrumb(
+                    role_models, rung, REASON_CLAUDE_INVOCATION_FAILED,
+                    agent_name)
+                sys.stderr.write(f"loop: {rung_crumb}\n")
             _finalize_state_and_summary(
                 state, state_path,
                 terminal_reason=REASON_CLAUDE_INVOCATION_FAILED,
                 final_oracle_status=(STATUS_ENV_ERROR if state.get("oracle") is not None
                                      else final_oracle_status),
+                terminal_breadcrumb=rung_crumb,
             )
             return EXIT_ENV_ERROR
 
@@ -3390,12 +3563,19 @@ def run_loop(
         if verdict_error is not None:
             # AC10: refuse the run on a malformed verdict block.
             sys.stderr.write(f"loop: {verdict_error}\n")
+            rung_crumb = None
+            if ladder and rung >= 1:
+                rung_crumb = _rung_failure_breadcrumb(
+                    role_models, rung, REASON_VERDICT_SCHEMA_MISMATCH,
+                    agent_name)
+                sys.stderr.write(f"loop: {rung_crumb}\n")
             state["iteration_count"] = iteration
             _finalize_state_and_summary(
                 state, state_path,
                 terminal_reason=REASON_VERDICT_SCHEMA_MISMATCH,
                 final_oracle_status=(STATUS_ENV_ERROR if state.get("oracle") is not None
                                      else final_oracle_status),
+                terminal_breadcrumb=rung_crumb,
             )
             return EXIT_ENV_ERROR
         # `verdict_fields` may be None (no block found); that's fine — the
@@ -3452,8 +3632,15 @@ def run_loop(
             "threshold": oracle_threshold,
             "status": oracle_status,
             **accounting,
+            **({"rung": rung} if ladder else {}),
             **gate_consumer.fields(gate_data),
         })
+        if (ladder and agent_name == AGENT_RUNNER
+                and state.get("escalation_history_start") is None):
+            # The rung's window opens at its first runner entry (a leading
+            # judge turn re-scores the previous rung's tree and is skipped).
+            state["escalation_history_start"] = (
+                len(state["oracle_score_history"]) - 1)
         state.update(gate_consumer.fields(gate_data))
         state["last_terminal_reason"] = claude_terminal_reason
         state["last_oracle_json"] = gate_data
@@ -3474,6 +3661,7 @@ def run_loop(
             "oracle_composite": oracle_composite,
             "oracle_threshold": oracle_threshold,
             "run_id": state["run_id"],
+            **({"rung": rung} if ladder else {}),
             **gate_consumer.fields(gate_data),
         })
 
@@ -3505,10 +3693,36 @@ def run_loop(
         # Slice 003-05 plateau check (AC1/AC2/AC3): after gate scoring, if
         # the last `plateau_window` iterations failed to improve over the
         # max-prior-composite, halt. AC4 disables when window==0.
-        if _check_plateau(
-            state["oracle_score_history"], state["plateau_window"],
-            state.get("plateau_noise_floor", DEFAULT_PLATEAU_NOISE_FLOOR),
-        ):
+        if _rung_plateau(state):
+            # Spec 038-03: a plateau climbs the next rung when one exists and
+            # can afford a fair window; otherwise it halts exactly as before.
+            if ladder and state["escalation_rung"] < len(ladder):
+                ok, refusal = _escalation_guard(state, iteration)
+                if ok:
+                    new_rung = state["escalation_rung"] + 1
+                    baseline, _ = _best_composite(
+                        state["oracle_score_history"])
+                    runner_now = _runner_config_at_rung(role_models, new_rung)
+                    state["escalation_rung"] = new_rung
+                    state["escalation_history_start"] = None
+                    state["escalation_events"].append({
+                        "rung": new_rung, "at_iteration": iteration,
+                        "baseline_composite": baseline, "runner": runner_now,
+                    })
+                    # A fresh runner session per rung; the worktree is kept.
+                    state["current_session_id"] = ""
+                    state["current_session_usage_snapshot"] = None
+                    # ...and no measured fill: the old session's ratio must
+                    # not trip the context gate before the rung has run.
+                    last_context_fill_ratio = None
+                    state["last_context_fill_ratio"] = None
+                    _atomic_write_state(state, state_path)
+                    sys.stderr.write(
+                        f"loop: plateau at iteration {iteration}: escalating "
+                        f"to rung {new_rung} of {len(ladder)}; runner config "
+                        f"{json.dumps(runner_now)}\n")
+                    continue
+                sys.stderr.write(f"loop: {refusal}\n")
             terminal_reason = REASON_ORACLE_PLATEAU
             halted_on_plateau = True
             break
@@ -3954,6 +4168,7 @@ def run_goal_loop(
     # driver has no judge role, so a judge block is ignored (one note).
     runner_cfg = _role_cfg(models, AGENT_RUNNER)
     _note_judge_ignored(models)
+    _note_escalation_ignored(models)
 
     def _finalize(terminal_reason, *, cumulative_cost_usd, final_oracle_status,
                   composite=None, threshold=None, subtype=None,
@@ -4388,6 +4603,7 @@ def run_goal_loop_background(
     ceiling = cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
     max_turns = max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
     _note_judge_ignored(models)  # the parent says so too (the child logs its own)
+    _note_escalation_ignored(models)
 
     err = _unpriced_oracle_error(target)
     if err is not None:
@@ -4803,7 +5019,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.models is not None:
         raw_models, models_err = _load_models_arg(args.models)
         if models_err is None:
-            flag_models, models_err = _validate_models(raw_models)
+            flag_models, models_err = _validate_models(
+                raw_models, allow_escalation=True)
         if models_err is not None:
             return _refuse_plan(
                 reason=REASON_MODELS_INVALID,
@@ -4900,7 +5117,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         if "models" in plan:
             # Validated even when `--models` will override it: a bad plan key
             # is a bad plan (fail-closed, 038-02 AC2).
-            plan_models, plan_models_err = _validate_models(plan["models"])
+            plan_models, plan_models_err = _validate_models(
+                plan["models"], allow_escalation=True)
             if plan_models_err is not None:
                 return _refuse_plan(
                     reason=REASON_PLAN_VALUE_INVALID,
@@ -4990,6 +5208,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     # the goal driver (it delegates continuation to /goal), so it routes as if
     # `--driver goal` was requested — an unsupported host refuses rather than
     # silently downgrading to a non-detachable loop run.
+    if (effective_arg_driver == DRIVER_AUTO and not args.background
+            and _ladder_of(models)):
+        # Spec 038-03: the goal driver has no plateau signal, so a ladder
+        # would be ignored there; an explicit `--driver goal` keeps its note.
+        effective_arg_driver = DRIVER_LOOP
+        sys.stderr.write(
+            "loop: a models.escalation ladder needs the loop driver "
+            "(plateau-driven); routing --driver auto to loop.\n")
     routing_driver = DRIVER_GOAL if args.background else effective_arg_driver
     if routing_driver == DRIVER_LOOP:
         effective_driver = DRIVER_LOOP

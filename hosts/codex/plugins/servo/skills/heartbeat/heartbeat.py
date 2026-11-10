@@ -255,6 +255,17 @@ QUARANTINE_SCHEMA_VERSION = 1
 # quarantine write. Matched as a string across the subprocess boundary — servo
 # never imports loop.py (the dependency-free invariant).
 REASON_ORACLE_PLATEAU = "oracle_plateau"
+# Spec 038-03 (ADR-0047): a loop that refused its `--models` block at runtime
+# (a pass-level refusal, never an outcome) and the terminals that, after the
+# loop escalated at least once, mean its ladder was cut short after a plateau.
+REASON_MODELS_INVALID = "models_invalid"
+_LADDER_CUT_SHORT_TERMINALS = frozenset({
+    "max_iterations_reached", "cost_ceiling_reached", "context_full",
+    "claude_invocation_failed", "verdict_schema_mismatch",
+})
+_LADDER_BREADCRUMB_TERMINALS = frozenset({
+    "claude_invocation_failed", "verdict_schema_mismatch",
+})
 
 
 # Evidence-projection keys dropped before computing an `evidence_pointer` (spec
@@ -1070,6 +1081,11 @@ def _outcome_details(outcome: object) -> list[str]:
         value = outcome.get(key)
         if isinstance(value, str) and value:
             details.append(f"{label}: {value}")
+    rung, rungs = outcome.get("escalation_rung"), outcome.get("escalation_rungs")
+    if isinstance(rung, int) and not isinstance(rung, bool):
+        ladder = (f" of {rungs}" if isinstance(rungs, int)
+                  and not isinstance(rungs, bool) else "")
+        details.append(f"escalation: rung {rung}{ladder}")
     if outcome.get("oracle") is not None:
         unavailable = outcome.get("oracle_status") in (OUTCOME_ENV_ERROR, "unknown_interrupted")
         oracle = outcome["oracle"]
@@ -2080,14 +2096,17 @@ def _build_dispatch_prompt(finding: dict, *, jig_present: bool = False) -> str:
 def _run_loop(
     worktree: Path, prompt: str, *,
     cost_ceiling: Optional[float], max_iterations: Optional[int],
+    models: Optional[str] = None,
 ) -> Optional[dict]:
     """Dispatch `loop.py <worktree> --prompt <framed> [...]`; return its summary (AC6).
 
     Forwards `--cost-ceiling` / `--max-iterations` ONLY when provided (else
     loop.py applies its own defaults — $2 / 5 iterations; a heartbeat-specific
     default is deferred to 011-04's whole-pass ceiling). Driver default is
-    loop.py's own `auto`, so `--driver` is not passed. loop.py emits per-iteration
-    JSON lines plus a final **summary** line carrying `final_oracle_status`; the
+    loop.py's own `auto`, so `--driver` is not passed (and `--models` is
+    forwarded verbatim: loop.py's `auto` routing sends a block with an
+    `escalation` ladder to the loop driver, since the goal driver ignores it). loop.py emits
+    per-iteration JSON lines plus a final **summary** line carrying `final_oracle_status`; the
     summary is the last stdout line with that key. Returns None when loop.py
     cannot be run or emits no parseable summary (→ a dispatch env-error, AC6). No
     outer timeout: loop.py self-bounds via `--max-iterations` + the per-iteration
@@ -2099,6 +2118,8 @@ def _run_loop(
         argv += ["--cost-ceiling", _format_ceiling(cost_ceiling)]
     if max_iterations is not None:
         argv += ["--max-iterations", str(max_iterations)]
+    if models is not None:
+        argv += ["--models", models]  # spec 038-03: forwarded verbatim
     try:
         proc = subprocess.run(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -2189,7 +2210,43 @@ def _outcome_from_summary(summary: dict, *, target: Optional[Path] = None) -> di
         value = summary.get(key)
         if isinstance(value, str) and value:
             outcome[key] = value
+    for key in ("escalation_rung", "escalation_rungs"):  # spec 038-03
+        value = summary.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            outcome[key] = value
     return outcome
+
+
+def _models_arg_error(value: str) -> Optional[str]:
+    """Why a `--models` value is unusable, or None (spec 038-03 AC8).
+
+    Same two forms as loop.py: inline JSON when it starts with `{`, else a
+    readable file. Only "is JSON" is checked here; the block's shape is
+    loop.py's validator's job (it refuses with `models_invalid` at runtime)."""
+    text = value
+    if not value.lstrip().startswith("{"):
+        try:
+            text = Path(value).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return f"--models file {value!r} is unreadable: {exc}"
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as exc:
+        return f"--models is not valid JSON: {exc.msg} (line {exc.lineno})"
+    return None
+
+
+def _quarantine_due(terminal_reason: Optional[str], outcome: dict) -> bool:
+    """Quarantine trigger (spec 038-03 AC8): a plateau, or an escalated run
+    that did not pass and was cut short before it could finish its ladder."""
+    if terminal_reason == REASON_ORACLE_PLATEAU:
+        return True
+    rung = outcome.get("escalation_rung")
+    return (
+        isinstance(rung, int) and not isinstance(rung, bool) and rung >= 1
+        and outcome.get("oracle_status") != _ORACLE_STATUS_PASS
+        and terminal_reason in _LADDER_CUT_SHORT_TERMINALS
+    )
 
 
 def _outcome_cost_usd(outcome: object) -> float:
@@ -2420,6 +2477,7 @@ def _reconcile_quarantine(target: Path, findings: list[dict]) -> list[dict]:
 def _dispatch_one(
     target: Path, finding: dict, dispatch_dir: Path, *,
     cost_ceiling: Optional[float], max_iterations: Optional[int],
+    models: Optional[str] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Isolate → provision → verify → dispatch one candidate; return (outcome, terminal_reason).
 
@@ -2498,7 +2556,7 @@ def _dispatch_one(
     prompt = _build_dispatch_prompt(finding, jig_present=_jig_present(target))
     summary = _run_loop(
         worktree, prompt,
-        cost_ceiling=cost_ceiling, max_iterations=max_iterations,
+        cost_ceiling=cost_ceiling, max_iterations=max_iterations, models=models,
     )
     if summary is None:
         _emit_breadcrumb(
@@ -2507,6 +2565,13 @@ def _dispatch_one(
         )
         return _env_error_outcome(), None
     terminal_reason = str(summary.get("terminal_reason") or "") or None
+    if terminal_reason == REASON_MODELS_INVALID:
+        # Spec 038-03 BR-5: the loop refused the block before any model call -
+        # a pass-level refusal, not a scored outcome (the finding stays open).
+        _emit_breadcrumb(
+            f"loop.py refused --models for finding {fid} "
+            f"({REASON_MODELS_INVALID}); leaving it open")
+        return None, REASON_MODELS_INVALID
     return _outcome_from_summary(summary, target=worktree), terminal_reason
 
 
@@ -2517,6 +2582,7 @@ def run_dispatch(
     max_candidates: Optional[int] = None,
     whole_cost_ceiling: Optional[float] = None,
     whole_cost_since: Optional[datetime] = None,
+    models: Optional[str] = None,
 ) -> int:
     """Oracle-gated, serial dispatch of the actionable-open candidate set (011-03).
 
@@ -2534,6 +2600,12 @@ def run_dispatch(
     and budget halts.
     """
     # ---- Env preconditions (pass-level exit 2) -----------------------------
+    if models is not None:
+        models_err = _models_arg_error(models)
+        if models_err is not None:
+            _emit_breadcrumb(f"{models_err} ({REASON_MODELS_INVALID}); "
+                             "dispatching nothing")
+            return EXIT_ENV_ERROR
     if not target.exists():
         _emit_breadcrumb(f"target does not exist: {target} (target_missing)")
         return EXIT_ENV_ERROR
@@ -2693,6 +2765,7 @@ def run_dispatch(
                 outcome, terminal_reason = _dispatch_one(
                     target, finding, dispatch_dir,
                     cost_ceiling=loop_cost_ceiling, max_iterations=max_iterations,
+                    models=models,
                 )
                 accounting_refusal = terminal_reason in (
                     REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
@@ -2703,7 +2776,21 @@ def run_dispatch(
                 # `quarantined` (distinct from `tried`) + writes a durable
                 # cross-run record keyed by finding_id, so it stops being a
                 # candidate (open-only selection) until new evidence re-admits it.
-                if terminal_reason == REASON_ORACLE_PLATEAU:
+                # Spec 038-03: also an escalated run whose ladder was cut short.
+                if (terminal_reason in _LADDER_BREADCRUMB_TERMINALS
+                        and _quarantine_due(terminal_reason, outcome)):
+                    detail = outcome.get("terminal_breadcrumb")
+                    _emit_breadcrumb(
+                        f"finding {fid}: escalated run ended {terminal_reason} "
+                        f"on rung {outcome['escalation_rung']}"
+                        + (f" ({detail})" if detail else "")
+                        + "; quarantining it as a plateau"
+                        + ("; this terminal also covers timeouts and rate "
+                           "limits, so it does not prove a broken config"
+                           if terminal_reason == "claude_invocation_failed"
+                           else "")
+                    )
+                if _quarantine_due(terminal_reason, outcome):
                     new_status = STATUS_QUARANTINED
                 elif outcome["oracle_status"] == _ORACLE_STATUS_PASS:
                     new_status = STATUS_PASSED
@@ -2784,6 +2871,7 @@ def run_heartbeat(
     cost_ceiling: float = DEFAULT_HEARTBEAT_COST_CEILING_USD,
     max_iterations: Optional[int] = None,
     max_candidates: Optional[int] = None,
+    models: Optional[str] = None,
 ) -> int:
     """Run one full heartbeat: discover, then dispatch under one whole-pass ceiling.
 
@@ -2794,6 +2882,13 @@ def run_heartbeat(
     budget. Discovery currently costs $0; when a future LLM triage assist exists,
     its cost should be recorded in the same spine before dispatch.
     """
+    if models is not None:
+        models_err = _models_arg_error(models)
+        if models_err is not None:
+            # Refuse before discovery touches the inbox (spec 038-03 BR-4).
+            _emit_breadcrumb(f"{models_err} ({REASON_MODELS_INVALID}); "
+                             "running nothing")
+            return EXIT_ENV_ERROR
     accounting_rc = _unpriced_oracle_preflight(target)
     if accounting_rc is not None:
         return accounting_rc
@@ -2809,6 +2904,7 @@ def run_heartbeat(
         max_candidates=max_candidates,
         whole_cost_ceiling=cost_ceiling,
         whole_cost_since=run_started_at,
+        models=models,
     )
 
 
@@ -2923,6 +3019,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Max iterations forwarded to each loop.py run (omitted → loop.py default).",
     )
     dispatch_parser.add_argument(
+        "--models",
+        default=None,
+        metavar="JSON|FILE",
+        help=(
+            "Per-role model placement forwarded verbatim to each loop.py "
+            "--models (spec 038-03 / ADR-0047): inline JSON (starts with `{`) "
+            "or a readable JSON file; may carry a plateau `escalation` ladder. "
+            "Not JSON / unreadable refuses the pass (rc=2) before any "
+            "candidate is touched."
+        ),
+    )
+    dispatch_parser.add_argument(
         "--max-candidates",
         type=int,
         default=None,
@@ -2972,6 +3080,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Max iterations forwarded to each loop.py run (omitted → loop.py default).",
     )
     run_parser.add_argument(
+        "--models",
+        default=None,
+        metavar="JSON|FILE",
+        help=(
+            "Per-role model placement forwarded verbatim to each loop.py "
+            "--models (spec 038-03 / ADR-0047): inline JSON (starts with `{`) "
+            "or a readable JSON file; may carry a plateau `escalation` ladder. "
+            "Not JSON / unreadable refuses the pass (rc=2) before any "
+            "candidate is touched."
+        ),
+    )
+    run_parser.add_argument(
         "--max-candidates",
         type=int,
         default=None,
@@ -2999,6 +3119,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             cost_ceiling=args.cost_ceiling,
             max_iterations=args.max_iterations,
             max_candidates=args.max_candidates,
+            models=args.models,
         )
     if args.command == "run":
         return run_heartbeat(
@@ -3006,6 +3127,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             cost_ceiling=args.cost_ceiling,
             max_iterations=args.max_iterations,
             max_candidates=args.max_candidates,
+            models=args.models,
         )
 
     # argparse `required=True` guarantees a known subcommand; this is a

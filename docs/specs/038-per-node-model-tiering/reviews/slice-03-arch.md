@@ -1,24 +1,23 @@
 ---
 slice: 038-03 — plateau escalation ladder
 pass: arch
-verdict: needs-changes
+verdict: pass
 reviewer: jig:reviewer
-reviewed_at: 2026-11-10T21:59:05Z
-prompt_source: review.py (arch) docs/specs/038-per-node-model-tiering/spec.md 038-03 <deliverables>
+reviewed_at: 2026-11-10T22:28:13Z
+prompt_source: review.py (arch) docs/specs/038-per-node-model-tiering/spec.md 038-03 <deliverables> (round 2)
 substrate: non-interactive
 ---
 
-VERDICT: needs-changes
+VERDICT: pass
 
 REASONING:
-Round 1. Placement matches ADR-0047 (ladder in loop.py, trigger-agnostic; heartbeat only forwards and files; rung 0 byte-identical; rungs inside existing caps; judge and oracle untouched; same ADR-0030 record). Two compositions with existing brakes are wrong.
+Round 2. Both blockers fixed in the right place and pinned by tests: escalation resets every session-keyed field (session id, cost snapshot, context ratio) in both copies; _rung_plateau requires a ladder and ladder-less resume cleans state. Duplicated fold removed (rung config travels in the ADR-0039 terminal_breadcrumb); duplicate baseline key dropped.
 
 SPECIFIC ISSUES:
-- [blocker][spec] Escalation leaves last_context_fill_ratio of the discarded session -> immediate context_full instead of a fresh rung.
-- [blocker][impl] Ladder-less resume leaves a stale rung that disables the plateau brake (contradicts D4 / ADR-0016 clamp-never-disable).
-- [nit][impl] Heartbeat re-implements the rung fold; prefer loop.py putting the rung config into terminal_breadcrumb.
-- [nit][spec] ADR-0030 has no pointer to the widened trigger (owner question).
-- [strength][impl] Rung 0 is literally the old check; models_invalid reuses the (None, reason) refusal shape; additive keys only with a ladder.
+- [nit][spec] Heartbeat pins --driver loop for ladders (overrides auto routing / plan driver) — record it; owner question: should loop.py auto prefer the loop driver when a ladder is configured (node-owned, trigger-agnostic, retires _models_have_ladder)?
+- [nit][impl] heartbeat _run_loop docstring stale.
+- [strength][impl] One-place session reset on escalation; two-level brake fix; rung failure detail via the existing breadcrumb channel.
 
 RECONCILIATION NOTES:
-- escalation_baseline_composite duplicates escalation_events[-1]; ADR-0010 amendment should say "overrides" not "raises"; heartbeat drops loop stderr so an unsized ladder is silently inert; a never-editing runner still climbs the ladder (future guard).
+- Ladder-less resume also pops escalation_events (measurement record) — keep events, drop only rung/window keys.
+- _rung_failure_breadcrumb names the runner config even on a judge failure.

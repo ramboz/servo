@@ -2455,6 +2455,7 @@ def _write_mock_loop(
                 }
                 if "terminal_breadcrumb" in beh:
                     summary["terminal_breadcrumb"] = beh["terminal_breadcrumb"]
+                summary.update(beh.get("extra_summary", {}))
                 if beh.get("driver") == "goal":
                     summary["driver"] = "goal"
                     summary["oracle_composite"] = beh.get("composite")
@@ -2480,6 +2481,7 @@ def _run_dispatch(
     max_iterations: Optional[int] = None,
     max_candidates: Optional[int] = None,
     path: Optional[str] = None,
+    models: Optional[str] = None,
     extra_env: Optional[dict] = None,
 ) -> subprocess.CompletedProcess:
     """Invoke `heartbeat.py dispatch <target>` on a PATH carrying a real git."""
@@ -2498,6 +2500,8 @@ def _run_dispatch(
         argv += ["--max-iterations", str(max_iterations)]
     if max_candidates is not None:
         argv += ["--max-candidates", str(max_candidates)]
+    if models is not None:
+        argv += ["--models", models]
     return subprocess.run(argv, capture_output=True, text=True, env=env)
 
 
@@ -2510,6 +2514,7 @@ def _run_run(
     max_iterations: Optional[int] = None,
     max_candidates: Optional[int] = None,
     path: Optional[str] = None,
+    models: Optional[str] = None,
     extra_env: Optional[dict] = None,
 ) -> subprocess.CompletedProcess:
     """Invoke `heartbeat.py run <target>` with mock gh + real git by default."""
@@ -2533,6 +2538,8 @@ def _run_run(
         argv += ["--max-iterations", str(max_iterations)]
     if max_candidates is not None:
         argv += ["--max-candidates", str(max_candidates)]
+    if models is not None:
+        argv += ["--models", models]
     return subprocess.run(argv, capture_output=True, text=True, env=env)
 
 
@@ -4587,6 +4594,299 @@ class RankingBoundednessTests(unittest.TestCase):
         self.assertEqual(order, ["security00000a01", "cifail0000000b01"])
         # The lowest-priority candidate is deferred by the cap, left open.
         self.assertEqual(_finding_by_id(self.target, "newwork00000c001")["status"], "open")
+
+
+
+# ============================================================================
+# Slice 038-03 - heartbeat `--models` passthrough + escalation outcome/quarantine
+# ============================================================================
+
+_LADDER_JSON = json.dumps({
+    "runner": {"model": "sonnet"},
+    "escalation": [{"effort": "high"}, {"model": "opus"}]})
+
+
+def _escalated(rung=1, rungs=2, **extra) -> dict:
+    return {"escalation_rung": rung, "escalation_rungs": rungs, **extra}
+
+
+class HeartbeatModelsFlagTests(unittest.TestCase):
+    """AC8 - `--models` on run/dispatch: forward verbatim, refuse before touching."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-models-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.bindir = self.root / "bin"
+        _make_mock_gh(self.bindir)
+        self.loop_log = self.root / "loop.log"
+        self.loop_py = _write_mock_loop(
+            self.root / "mock_loop.py", log_path=self.loop_log)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_dispatch_forwards_inline_json_verbatim_to_each_loop(self):
+        _write_inbox(self.target, [_open_ci("aaaa0000models001"),
+                                   _open_ci("aaaa0000models002")])
+        res = _run_dispatch(self.target, loop_py=self.loop_py,
+                            models=_LADDER_JSON)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 2)
+        for entry in log:
+            self.assertEqual(_loop_flag(entry, "--models"), _LADDER_JSON)
+
+    def test_dispatch_forwards_file_path_verbatim(self):
+        f = self.root / "models.json"
+        f.write_text(_LADDER_JSON)
+        _write_inbox(self.target, [_open_ci("aaaa0000models003")])
+        res = _run_dispatch(self.target, loop_py=self.loop_py, models=str(f))
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertEqual(_loop_flag(_loop_log(self.loop_log)[0], "--models"),
+                         str(f))
+
+    def test_no_models_flag_means_no_models_argv(self):
+        # Negative guard.
+        _write_inbox(self.target, [_open_ci("aaaa0000models004")])
+        _run_dispatch(self.target, loop_py=self.loop_py)
+        self.assertNotIn("--models", _loop_log(self.loop_log)[0]["argv"])
+
+    def test_run_forwards_models_to_dispatched_loops(self):
+        res = _run_run(self.target, bindir=self.bindir, loop_py=self.loop_py,
+                       cost_ceiling=2.0, max_candidates=1, models=_LADDER_JSON)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 1)
+        self.assertEqual(_loop_flag(log[0], "--models"), _LADDER_JSON)
+
+    def test_heartbeat_pins_no_driver_loop_py_routes_a_ladder(self):
+        # Driver choice for a ladder lives in loop.py's `auto` routing, so the
+        # heartbeat forwards `--models` only and never adds `--driver`.
+        for models in (_LADDER_JSON, '{"runner": {"model": "sonnet"}}'):
+            with self.subTest(models=models):
+                (self.root / "loop.log").unlink(missing_ok=True)
+                _write_inbox(self.target, [_open_ci("aaaa0000driver001")])
+                res = _run_dispatch(self.target, loop_py=self.loop_py,
+                                    models=models)
+                self.assertNotIn("--driver", _loop_log(self.loop_log)[0]["argv"])
+                self.assertNotIn("escalation ladder", res.stderr)
+
+    def test_unusable_models_refuses_dispatch_before_any_candidate(self):
+        fid = "aaaa0000models005"
+        _write_inbox(self.target, [_open_ci(fid)])
+        for bad in ("{not json", "/no/such/models-file.json", "plain words"):
+            with self.subTest(models=bad):
+                res = _run_dispatch(self.target, loop_py=self.loop_py,
+                                    models=bad)
+                self.assertEqual(res.returncode, 2, res.stderr)
+                self.assertIn("models_invalid", res.stderr)
+                self.assertEqual(_loop_log(self.loop_log), [])
+                self.assertEqual(_finding_by_id(self.target, fid)["status"],
+                                 "open")
+                self.assertFalse((self.target / ".servo" / "dispatch").exists())
+
+    def test_file_with_non_json_content_refused(self):
+        f = self.root / "bad.json"
+        f.write_text("this is not json")
+        _write_inbox(self.target, [_open_ci("aaaa0000models006")])
+        res = _run_dispatch(self.target, loop_py=self.loop_py, models=str(f))
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("models_invalid", res.stderr)
+        self.assertIn("not valid JSON", res.stderr)
+        self.assertEqual(_loop_log(self.loop_log), [])
+
+    def test_unusable_models_refuses_run_before_discovery(self):
+        res = _run_run(self.target, bindir=self.bindir, loop_py=self.loop_py,
+                       models="{nope")
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertIn("models_invalid", res.stderr)
+        self.assertFalse((_triage_dir(self.target) / "inbox.jsonl").exists())
+        self.assertEqual(_loop_log(self.loop_log), [])
+
+    def test_loop_models_invalid_is_a_pass_level_refusal(self):
+        fids = ["aaaa0000models007", "aaaa0000models008"]
+        loop_py = _write_mock_loop(
+            self.root / "mock_loop.py", log_path=self.loop_log,
+            default={"status": "env_error", "composite": None, "cost": 0.0,
+                     "empty_history": True,
+                     "terminal_reason": "models_invalid"})
+        _write_inbox(self.target, [_open_ci(f) for f in fids])
+        res = _run_dispatch(self.target, loop_py=loop_py,
+                            models='{"runner": {"effort": "turbo"}}')
+        self.assertEqual(res.returncode, 2, res.stderr)
+        self.assertEqual(len(_loop_log(self.loop_log)), 1)    # pass stopped
+        for f in fids:
+            rec = _finding_by_id(self.target, f)
+            self.assertEqual(rec["status"], "open")
+            self.assertIsNone(rec.get("outcome"))
+            self.assertEqual(rec.get("attempts", 0), 0)
+        self.assertIn("models_invalid", res.stderr)
+
+
+class HeartbeatOutcomePassthroughTests(unittest.TestCase):
+    """AC8 - outcome carries escalation_rung / escalation_rungs when present."""
+
+    def test_ints_pass_through_and_absence_adds_nothing(self):
+        base = {"run_id": "r", "final_oracle_status": "below_threshold",
+                "oracle_score_history": [{"composite": 0.3}],
+                "cumulative_cost_usd": 0.2}
+        out = _hb._outcome_from_summary({**base, **_escalated(2, 3)})
+        self.assertEqual((out["escalation_rung"], out["escalation_rungs"]),
+                         (2, 3))
+        plain = _hb._outcome_from_summary(base)
+        self.assertNotIn("escalation_rung", plain)
+        self.assertNotIn("escalation_rungs", plain)
+
+    def test_non_int_values_are_dropped(self):
+        out = _hb._outcome_from_summary({
+            "run_id": "r", "final_oracle_status": "below_threshold",
+            "escalation_rung": "2", "escalation_rungs": True})
+        self.assertNotIn("escalation_rung", out)
+        self.assertNotIn("escalation_rungs", out)
+
+
+class HeartbeatEscalationQuarantineTests(unittest.TestCase):
+    """AC8 / BR-6 / BR-7 - the quarantine predicate and its breadcrumbs."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-esc-q-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _dispatch(self, fid, *, terminal, status="below_threshold", extra=None,
+                  models=None):
+        loop_py = _write_mock_loop(
+            self.root / "mock_loop.py", log_path=self.loop_log,
+            by_fid={fid: {"status": status, "composite": 0.4, "cost": 0.5,
+                          "terminal_reason": terminal, "run_id": "run-" + fid,
+                          "extra_summary": extra or {}}})
+        _write_inbox(self.target, [_open_ci(fid)])
+        return _run_dispatch(self.target, loop_py=loop_py, models=models)
+
+    def test_escalated_cut_short_terminals_quarantine_with_plateau_signature(self):
+        for terminal in ("max_iterations_reached", "cost_ceiling_reached",
+                         "context_full", "claude_invocation_failed",
+                         "verdict_schema_mismatch"):
+            with self.subTest(terminal=terminal):
+                fid = "esc" + terminal.replace("_", "")[:12].ljust(13, "0")
+                res = self._dispatch(fid, terminal=terminal, extra=_escalated())
+                self.assertEqual(res.returncode, 0, res.stderr)
+                rec = _finding_by_id(self.target, fid)
+                self.assertEqual(rec["status"], "quarantined")
+                self.assertEqual(rec["outcome"]["escalation_rung"], 1)
+                self.assertEqual(rec["outcome"]["escalation_rungs"], 2)
+                self.assertEqual(
+                    _read_quarantine(self.target, fid)["failure_signature"],
+                    "oracle_plateau")
+
+    def test_plateau_terminal_still_quarantines_with_and_without_ladder(self):
+        for i, extra in enumerate((None, _escalated(2, 2), _escalated(0, 2))):
+            with self.subTest(extra=extra):
+                fid = f"plateau0000esc{i:03d}"
+                self._dispatch(fid, terminal="oracle_plateau", extra=extra)
+                self.assertEqual(_finding_by_id(self.target, fid)["status"],
+                                 "quarantined")
+
+    def test_unescalated_cut_short_run_is_tried_not_quarantined(self):
+        # rung 0 / no ladder keys: today's behaviour is unchanged.
+        for i, extra in enumerate((None, _escalated(0, 2))):
+            for terminal in ("max_iterations_reached", "claude_invocation_failed"):
+                with self.subTest(extra=extra, terminal=terminal):
+                    fid = f"unesc{i}{terminal[:6]}00000"[:16]
+                    self._dispatch(fid, terminal=terminal, extra=extra)
+                    self.assertEqual(
+                        _finding_by_id(self.target, fid)["status"], "tried")
+                    self.assertFalse(_quarantine_path(self.target, fid).exists())
+
+    def test_passed_escalated_run_is_passed(self):
+        fid = "escpassed0000001"
+        self._dispatch(fid, terminal="oracle_passed", status="pass",
+                       extra=_escalated())
+        self.assertEqual(_finding_by_id(self.target, fid)["status"], "passed")
+        self.assertFalse(_quarantine_path(self.target, fid).exists())
+
+    def test_interrupted_escalated_run_is_not_quarantined(self):
+        fid = "escinterrupted001"
+        self._dispatch(fid, terminal="interrupted", extra=_escalated())
+        self.assertEqual(_finding_by_id(self.target, fid)["status"], "tried")
+        self.assertFalse(_quarantine_path(self.target, fid).exists())
+
+    def test_other_terminals_on_an_escalated_run_stay_tried(self):
+        fid = "escedit000000001"
+        self._dispatch(fid, terminal="edit_permission_unavailable",
+                       extra=_escalated())
+        self.assertEqual(_finding_by_id(self.target, fid)["status"], "tried")
+
+    def test_invocation_failure_breadcrumb_uses_loop_breadcrumb_and_pass_continues(self):
+        fids = ["escbreadcrumb001", "escbreadcrumb002"]
+        crumb = 'rung 2 runner config {"model": "opus", "effort": "high"}'
+        loop_py = _write_mock_loop(
+            self.root / "mock_loop.py", log_path=self.loop_log,
+            by_fid={
+                fids[0]: {"status": "env_error", "composite": None, "cost": 0.1,
+                          "terminal_reason": "claude_invocation_failed",
+                          "terminal_breadcrumb": crumb,
+                          "extra_summary": _escalated(2, 2)},
+                fids[1]: {"status": "pass", "composite": 0.9, "cost": 0.1}})
+        _write_inbox(self.target, [_open_ci(f) for f in fids])
+        res = _run_dispatch(self.target, loop_py=loop_py, models=_LADDER_JSON)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        lines = [ln for ln in res.stderr.splitlines()
+                 if "claude_invocation_failed on rung 2" in ln]
+        self.assertEqual(len(lines), 1, msg=res.stderr)
+        self.assertIn(crumb, lines[0])
+        self.assertIn("timeouts and rate limits", lines[0])
+        self.assertEqual(len(_loop_log(self.loop_log)), 2)    # pass continued
+        self.assertEqual(_finding_by_id(self.target, fids[0])["status"],
+                         "quarantined")
+        self.assertEqual(_finding_by_id(self.target, fids[1])["status"], "passed")
+
+    def test_verdict_mismatch_breadcrumb_has_no_timeout_caveat_and_budget_stays_quiet(self):
+        res = self._dispatch("escverdict0000001", terminal="verdict_schema_mismatch",
+                             extra=_escalated(1, 2))
+        lines = [ln for ln in res.stderr.splitlines()
+                 if "verdict_schema_mismatch on rung 1" in ln]
+        self.assertEqual(len(lines), 1, msg=res.stderr)
+        self.assertNotIn("timeouts", lines[0])
+        res = self._dispatch("escbudget00000001", terminal="max_iterations_reached",
+                             extra=_escalated(1, 2))
+        self.assertNotIn("on rung", res.stderr)
+
+    def test_breadcrumb_without_loop_breadcrumb_still_names_the_rung(self):
+        res = self._dispatch("escnomodels000001", terminal="claude_invocation_failed",
+                             status="env_error", extra=_escalated(1, 1))
+        self.assertIn("claude_invocation_failed on rung 1", res.stderr)
+
+    def test_human_outcome_view_renders_the_rung(self):
+        details = _hb._outcome_details({
+            "oracle_status": "below_threshold", "oracle_composite": 0.3,
+            "terminal_reason": "oracle_plateau", **_escalated(2, 3)})
+        self.assertIn("escalation: rung 2 of 3", details)
+        zero = _hb._outcome_details({
+            "oracle_status": "pass", **_escalated(0, 2)})
+        self.assertIn("escalation: rung 0 of 2", zero)
+        plain = _hb._outcome_details({"oracle_status": "below_threshold"})
+        self.assertFalse([d for d in plain if "escalation" in d])
+
+    def test_quarantine_due_unit(self):
+        due = _hb._quarantine_due
+        self.assertTrue(due("oracle_plateau", {}))
+        self.assertTrue(due("max_iterations_reached", {
+            "escalation_rung": 1, "oracle_status": "below_threshold"}))
+        self.assertFalse(due("max_iterations_reached", {
+            "escalation_rung": 0, "oracle_status": "below_threshold"}))
+        self.assertFalse(due("max_iterations_reached", {
+            "escalation_rung": True, "oracle_status": "below_threshold"}))
+        self.assertFalse(due("max_iterations_reached", {
+            "escalation_rung": 1, "oracle_status": "pass"}))
+        self.assertFalse(due("interrupted", {
+            "escalation_rung": 2, "oracle_status": "below_threshold"}))
+        self.assertFalse(due(None, {"escalation_rung": 2}))
 
 
 if __name__ == "__main__":

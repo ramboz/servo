@@ -1461,3 +1461,29 @@ them. A pointer amendment to an Accepted ADR needs explicit owner approval.
 
 **Resolution trigger:** the owner approves a dated `## Amendments` pointer on
 ADR-0016, or a later ADR supersedes its schema example.
+
+
+## ADR-0030 has no pointer to the widened quarantine trigger
+
+**Deferred (owner decision):** spec 038-03 widened the heartbeat quarantine
+trigger: an escalated run that did not pass and was cut short by a budget brake,
+an invocation failure or a verdict mismatch is quarantined too, with the same
+record and `failure_signature: oracle_plateau`. The decision is recorded in
+ADR-0047 D5, the ADR-0010 amendment and docs/architecture.md, but ADR-0030's own
+text still names only `terminal_reason == oracle_plateau`. ADR-0047 authorized
+only the ADR-0010 amendment, so a dated pointer on ADR-0030 needs the owner's
+approval.
+
+**Resolution trigger:** the owner approves a dated `## Amendments` pointer on
+ADR-0030.
+
+## Ladder escalation for a runner that never edits
+
+**Deferred (idea):** a runner that never edits still climbs the whole ladder
+before `_relabel_terminal_reason` turns the halt into
+`edit_permission_unavailable`, which spends rungs on a run that cannot land
+anything. A guard could skip escalation when
+`edit_signal_computed and not runner_ever_edited`.
+
+**Resolution trigger:** a real laddered run spends rungs on a permission wall,
+which 038-01's accounting together with `escalation_rung` would show.

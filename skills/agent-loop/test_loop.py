@@ -10198,5 +10198,723 @@ class GoalDriverModelsTests(_GoalTargetMixin, unittest.TestCase):
         self.assertNotIn("--models", argv)
 
 
+
+# ============================================================================
+# Slice 038-03 — plateau escalation ladder
+# ============================================================================
+
+_LADDER = {"runner": {"model": "sonnet"}, "judge": {"model": "haiku"},
+           "escalation": [{"effort": "high"}, {"model": "opus"}]}
+_FLAT = _below_threshold_oracle(composite=0.2)
+
+
+def _fail_on_flag_wrapper(bindir: Path, calls: list, flag_pair: str) -> Path:
+    """Running-total mock that exits 1 when argv contains `flag_pair`."""
+    _mock_claude_running_total(bindir, calls)
+    real = (bindir / "claude").read_text()
+    wrapped = real.replace(
+        "exec '", f'case " $* " in *" {flag_pair} "*) echo refused >&2; exit 1;;'
+        " esac\nexec '", 1)
+    (bindir / "claude").write_text(wrapped)
+    return bindir / "claude"
+
+
+def _fail_on_call_wrapper(bindir: Path, calls: list, n: int) -> Path:
+    """Running-total mock whose `n`-th real invocation exits 1."""
+    _mock_claude_running_total(bindir, calls)
+    real = (bindir / "claude").read_text()
+    guard = (
+        f"cnt='{bindir / 'wrapcount'}'\n"
+        'k=$(cat "$cnt" 2>/dev/null || echo 0); k=$((k + 1)); echo $k > "$cnt"\n'
+        f'if [ "$k" = "{n}" ]; then echo refused >&2; exit 1; fi\n')
+    (bindir / "claude").write_text(real.replace("exec '", guard + "exec '", 1))
+    return bindir / "claude"
+
+
+_VERDICT_WRAP_PY = r'''
+import json, os, subprocess, sys
+d = os.path.dirname(os.path.abspath(__file__))
+out = subprocess.run([sys.executable, os.path.join(d, "mock_rt.py")] + sys.argv[1:],
+                     capture_output=True, text=True).stdout
+if "--effort" in sys.argv and sys.argv[sys.argv.index("--effort") + 1] == "high":
+    data = json.loads(out)
+    data["result"] = "```verdict\nschema_version: 9\n```"
+    out = json.dumps(data)
+sys.stdout.write(out)
+'''
+
+
+def _bad_verdict_on_raised_rung(bindir: Path, calls: list) -> Path:
+    _mock_claude_running_total(bindir, calls)
+    (bindir / "wrap.py").write_text(_VERDICT_WRAP_PY)
+    body = f"#!/usr/bin/env bash\nexec '{sys.executable}' '{bindir / 'wrap.py'}' \"$@\"\n"
+    return _make_mock_claude(bindir, body)
+
+
+class LadderConfigUnitTests(unittest.TestCase):
+    """AC1 - the ladder block, cumulative fold, in-effect rule (pure)."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+
+    def test_runner_config_folds_rungs_cumulatively(self):
+        block = {"runner": {"model": "sonnet"},
+                 "escalation": [{"effort": "high"}, {"model": "opus"},
+                                {"advisor": "opus", "effort": "xhigh"}]}
+        cfg = self.m._runner_config_at_rung
+        self.assertEqual(cfg(block, 0), {"model": "sonnet"})
+        self.assertEqual(cfg(block, 1), {"model": "sonnet", "effort": "high"})
+        self.assertEqual(cfg(block, 2), {"model": "opus", "effort": "high"})
+        self.assertEqual(cfg(block, 3), {
+            "model": "opus", "effort": "xhigh", "advisor": "opus"})
+        self.assertEqual(cfg(None, 2), {})
+        self.assertEqual(cfg({"runner": {"model": "sonnet"}}, 5),
+                         {"model": "sonnet"})
+
+    def test_escalation_only_block_is_in_effect(self):
+        ev = self.m._models_in_effect
+        self.assertTrue(ev({"runner": {}, "judge": {},
+                            "escalation": [{"effort": "high"}]}))
+        self.assertFalse(ev({"runner": {}, "judge": {}, "escalation": []}))
+        self.assertFalse(ev({"runner": {}, "judge": {}}))
+
+    def test_pure_validator_accepts_and_normalizes_ladder(self):
+        ok, err = self.m._validate_models(
+            {"escalation": [{"effort": "high"}]}, allow_escalation=True)
+        self.assertIsNone(err)
+        self.assertEqual(ok["escalation"], [{"effort": "high"}])
+        for bad in ({"escalation": "x"}, {"escalation": [{}]},
+                    {"escalation": [{"temperature": "1"}]},
+                    {"escalation": [{"effort": "turbo"}]},
+                    {"escalation": [3]}):
+            with self.subTest(bad=bad):
+                self.assertIsNotNone(
+                    self.m._validate_models(bad, allow_escalation=True)[1])
+
+    def test_rung_plateau_without_a_ladder_is_the_plain_check(self):
+        flat = [{"iteration": i, "composite": 0.2} for i in range(1, 5)]
+        state = {"oracle_score_history": flat, "plateau_window": 3,
+                 "models": {"runner": {"model": "sonnet"}},
+                 "escalation_rung": 1, "escalation_history_start": None}
+        self.assertTrue(self.m._rung_plateau(state))
+        state["models"] = {"escalation": [{"effort": "high"}]}
+        self.assertFalse(self.m._rung_plateau(state))   # window not open yet
+
+    def test_best_composite_first_iteration_reaching_it(self):
+        best = self.m._best_composite
+        self.assertEqual(best([]), (None, None))
+        self.assertEqual(best([{"iteration": 1, "composite": None}]),
+                         (None, None))
+        self.assertEqual(best([
+            {"iteration": 1, "composite": 0.2}, {"iteration": 2, "composite": 0.4},
+            {"iteration": 3, "composite": 0.4}]), (0.4, 2))
+
+    def test_escalation_guard_arithmetic(self):
+        guard = self.m._escalation_guard
+
+        def st(max_it, ceiling=0.0, spent=0.0, costs=(0.5,)):
+            return {"plateau_window": 3, "max_iterations": max_it,
+                    "cost_ceiling_usd": ceiling, "cumulative_cost_usd": spent,
+                    "oracle_score_history": [{"cost_usd": c} for c in costs]}
+        # next iteration 5 is a runner -> needed 3; 6 is a judge -> needed 4
+        self.assertTrue(guard(st(7), 4)[0])
+        self.assertFalse(guard(st(6), 4)[0])
+        self.assertTrue(guard(st(11), 7)[0])
+        self.assertFalse(guard(st(10), 7)[0])
+        ok, crumb = guard(st(5), 4)
+        self.assertFalse(ok)
+        self.assertIn("1 iteration(s) left, 3 needed", crumb)
+        # cost: needs needed * max per-iteration cost (1.5 here)
+        self.assertTrue(guard(st(7, 6.0, 4.5), 4)[0])
+        ok, crumb = guard(st(7, 5.9, 4.5), 4)
+        self.assertFalse(ok)
+        self.assertIn("$1.4000 left, $1.5000 needed", crumb)
+        # no ceiling (0) -> cost not consulted; missing cost_usd counts as 0
+        self.assertTrue(guard(st(7, 0.0, 99.0), 4)[0])
+        old = st(7, 1.0, 0.99)
+        old["oracle_score_history"] = [{"iteration": 1}]
+        self.assertTrue(guard(old, 4)[0])
+
+    def test_prompt_escalation_section_only_when_given(self):
+        a = self.m._assemble_iteration_prompt
+        self.assertEqual(a("seed", None, None), "seed")
+        self.assertNotIn("Escalation", a("seed", {"c": 1}, None))
+        out = a("seed", {"c": 1}, {"schema_version": 1, "x": "y"}, {
+            "rung": 2, "best_composite": 0.4, "best_iteration": 3,
+            "composite": 0.3})
+        self.assertIn("Escalation", out)
+        self.assertIn("rung 2", out)
+        self.assertIn("0.4 (iteration 3)", out)
+        self.assertIn("Composite at escalation: 0.3", out)
+        self.assertIn("Last oracle output", out)
+        self.assertIn("Last agent verdict", out)
+
+
+class LadderEscalationTests(_AccountingTarget, unittest.TestCase):
+    """AC2/AC3/AC4/AC5 - escalate vs halt, fresh sessions, recording."""
+
+    def setUp(self):
+        self._setup_acct()
+        _make_oracle(self.target, _FLAT)
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+
+    def _ladder(self, n, block=_LADDER, *extra, ceiling="10.00"):
+        return _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", str(n),
+            "--cost-ceiling", ceiling, "--plateau-window", "3",
+            "--models", _models_arg(block), *extra, mock_bindir=self.bindir)
+
+    def _summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def _argvs(self):
+        return _read_args_log(self.bindir / "args.log")
+
+    def test_worked_example_escalates_at_4_and_7_and_halts_at_11(self):
+        result = self._ladder(11)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+        self.assertEqual(summary["iterations_completed"], 11)
+        self.assertEqual(summary["escalation_rung"], 2)
+        self.assertEqual(summary["escalation_rungs"], 2)
+        state = _read_state(self.target, summary["run_id"])
+        self.assertEqual(state["escalation_rung"], 2)
+        self.assertEqual(
+            [(e["rung"], e["at_iteration"], e["baseline_composite"])
+             for e in state["escalation_events"]], [(1, 4, 0.2), (2, 7, 0.2)])
+        self.assertEqual(state["escalation_events"][0]["runner"],
+                         {"model": "sonnet", "effort": "high"})
+        self.assertEqual(state["escalation_events"][1]["runner"],
+                         {"model": "opus", "effort": "high"})
+        rungs = [e["rung"] for e in state["oracle_score_history"]]
+        self.assertEqual(rungs, [0] * 4 + [1] * 3 + [2] * 4)
+        stdout_rungs = [ln["rung"] for ln in self._iters(result)]
+        self.assertEqual(stdout_rungs, rungs)
+        self.assertEqual(result.stderr.count("escalating to rung"), 2,
+                         msg=result.stderr)
+        self.assertIn("escalating to rung 1 of 2", result.stderr)
+        # requested reflects the rung's runner config
+        hist = state["oracle_score_history"]
+        self.assertEqual(hist[4]["requested"], {
+            "model": "sonnet", "effort": "high", "advisor": None})
+        self.assertEqual(hist[8]["requested"], {
+            "model": "opus", "effort": "high", "advisor": None})
+        # no cap was raised
+        self.assertEqual(state["max_iterations"], 11)
+        self.assertEqual(state["cost_ceiling_usd"], 10.0)
+
+    def test_argv_cumulative_fold_fresh_sessions_and_judge_unchanged(self):
+        self._ladder(11)
+        argvs = self._argvs()
+        self.assertEqual(len(argvs), 11)
+
+        def cfg(i):
+            a = argvs[i - 1]
+            return (_find_flag_value(a, "--model"),
+                    _find_flag_value(a, "--effort"))
+        self.assertEqual(cfg(1), ("sonnet", None))
+        self.assertEqual(cfg(5), ("sonnet", "high"))       # effort-only rung
+        self.assertEqual(cfg(9), ("opus", "high"))         # cumulative
+        for i in (2, 4, 6, 8, 10):                          # judge never moves
+            self.assertEqual(cfg(i), ("haiku", None))
+            self.assertNotIn("--resume", argvs[i - 1])
+        # rung's first runner iteration is a fresh session, then it resumes
+        self.assertNotIn("--resume", argvs[4])             # iter 5
+        self.assertEqual(_find_flag_value(argvs[6], "--resume"), "sess-5")
+        self.assertNotIn("--resume", argvs[8])             # iter 9
+        self.assertEqual(_find_flag_value(argvs[10], "--resume"), "sess-9")
+        # iteration 3 still resumes the rung-0 session (control)
+        self.assertEqual(_find_flag_value(argvs[2], "--resume"), "sess-1")
+
+    def test_max_iterations_5_never_escalates(self):
+        result = self._ladder(5)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+        self.assertEqual(summary["iterations_completed"], 4)
+        self.assertEqual(summary["escalation_rung"], 0)
+        state = _read_state(self.target, summary["run_id"])
+        self.assertEqual(state["escalation_events"], [])
+        self.assertIn("1 iteration(s) left, 3 needed", result.stderr)
+        self.assertEqual(result.stderr.count("no escalation rung started"), 1)
+        self.assertNotIn("escalating to rung", result.stderr)
+
+    def test_default_budget_never_turns_plateau_into_max_iterations(self):
+        # Defaults: 5 iterations, window 3 -> plateau at 4, guard refuses.
+        result = _run_loop(
+            self.target, "--prompt", "x", "--plateau-window", "3",
+            "--models", _models_arg(_LADDER), mock_bindir=self.bindir)
+        self.assertEqual(self._summary(result)["terminal_reason"],
+                         "oracle_plateau")
+
+    def test_two_rung_ladder_needs_eleven_iterations(self):
+        for n, rung, reason_iters in ((6, 0, 4), (7, 1, 7), (10, 1, 7)):
+            with self.subTest(max_iterations=n):
+                shutil.rmtree(self.target / ".servo" / "runs", ignore_errors=True)
+                (self.bindir / "mockstate.json").unlink(missing_ok=True)
+                (self.bindir / "args.log").unlink(missing_ok=True)
+                summary = self._summary(self._ladder(n))
+                self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+                self.assertEqual(summary["escalation_rung"], rung)
+                self.assertEqual(summary["iterations_completed"], reason_iters)
+
+    def test_cost_guard_refuses_when_cost_left_below_needed(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(1.0)])
+        # at iteration 4: spent 4.0, needed 3 x 1.0 = 3.0
+        result = self._ladder(11, _LADDER, ceiling="6.50")
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+        self.assertEqual(summary["escalation_rung"], 0)
+        self.assertIn("$2.5000 left, $3.0000 needed", result.stderr)
+
+    def test_cost_guard_allows_when_cost_left_covers_window(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(1.0)])
+        result = self._ladder(11, _LADDER, ceiling="7.50")
+        summary = self._summary(result)
+        self.assertEqual(summary["escalation_rung"], 1)
+        self.assertIn("escalating to rung 1", result.stderr)
+
+    def test_cost_brake_still_fires_on_a_raised_rung(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(1.0)])
+        _make_oracle(self.target, _composite_progression_oracle(
+            [0.2, 0.2, 0.2, 0.2, 0.21, 0.22, 0.23, 0.24, 0.25, 0.26, 0.27]))
+        result = self._ladder(11, _LADDER, ceiling="7.50")
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "cost_ceiling_reached")
+        self.assertEqual(summary["escalation_rung"], 1)
+        state = _read_state(self.target, summary["run_id"])
+        self.assertEqual(state["cost_ceiling_usd"], 7.5)
+        self.assertEqual(state["max_iterations"], 11)
+
+    def test_rung_window_skips_a_leading_judge_iteration(self):
+        # Plateau fires at iteration 5 (odd): iteration 6 is a judge turn that
+        # re-scores the old tree and must not open the rung window.
+        _make_oracle(self.target, _composite_progression_oracle(
+            [0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]))
+        block = {"escalation": [{"effort": "high"}]}
+        result = self._ladder(9, block)
+        summary = self._summary(result)
+        # window = runner 7, 8, 9 -> the last rung plateaus at 9, not at 8
+        self.assertEqual(summary["iterations_completed"], 9)
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+        state = _read_state(self.target, summary["run_id"])
+        self.assertEqual(state["escalation_events"][0]["at_iteration"], 5)
+        self.assertEqual(state["escalation_events"][0]["baseline_composite"], 0.3)
+        self.assertEqual(state["escalation_history_start"], 6)   # iteration 7
+
+    def test_escalation_prompt_section_on_first_runner_iteration_only(self):
+        _make_oracle(self.target, _composite_progression_oracle(
+            [0.2, 0.4, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]))
+        block = {"escalation": [{"effort": "high"}]}
+        self._ladder(9, block)
+        argvs = self._argvs()
+
+        def prompt(i):
+            return "\n".join(argvs[i - 1])
+        self.assertIn("Escalation", prompt(7))
+        self.assertIn("rung 1", prompt(7))
+        self.assertIn("Best composite so far: 0.4 (iteration 2)", prompt(7))
+        self.assertIn("Composite at escalation: 0.3", prompt(7))
+        for i in (1, 3, 5, 6, 8, 9):
+            self.assertNotIn("Escalation", prompt(i), msg=f"iteration {i}")
+        # the prompt still carries the usual last oracle / verdict context
+        self.assertIn("Last oracle output", prompt(7))
+
+    def test_effort_only_first_rung_still_starts_a_fresh_session(self):
+        block = {"escalation": [{"effort": "high"}]}
+        self._ladder(9, block)
+        argvs = self._argvs()
+        self.assertNotIn("--model", argvs[4])
+        self.assertEqual(_find_flag_value(argvs[4], "--effort"), "high")
+        self.assertNotIn("--resume", argvs[4])
+
+    def test_passing_after_escalation_records_the_rung(self):
+        _make_oracle(self.target, _composite_progression_oracle(
+            [0.2, 0.2, 0.2, 0.2, 0.9]))
+        result = self._ladder(11)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "oracle_passed")
+        self.assertEqual(summary["escalation_rung"], 1)
+        self.assertEqual(summary["iterations_completed"], 5)
+
+    def test_improvement_pushes_plateau_later(self):
+        _make_oracle(self.target, _composite_progression_oracle(
+            [0.2, 0.2, 0.2, 0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]))
+        result = self._ladder(11)
+        summary = self._summary(result)
+        state = _read_state(self.target, summary["run_id"])
+        # iteration 5 improves on the baseline, so rung 1 plateaus after 8
+        self.assertEqual(state["escalation_events"][0]["at_iteration"], 4)
+        self.assertGreater(
+            state["escalation_events"][1]["at_iteration"], 7)
+
+    def test_no_ladder_keeps_shapes_unchanged(self):
+        # Negative guard: no escalation keys / `rung` anywhere without a ladder.
+        for block in (None, {"runner": {"model": "sonnet"}},
+                      {"runner": {"model": "sonnet"}, "escalation": []}):
+            with self.subTest(block=block):
+                shutil.rmtree(self.target / ".servo" / "runs", ignore_errors=True)
+                (self.bindir / "mockstate.json").unlink(missing_ok=True)
+                extra = ("--models", _models_arg(block)) if block else ()
+                result = _run_loop(
+                    self.target, "--prompt", "x", "--max-iterations", "11",
+                    "--cost-ceiling", "10", "--plateau-window", "3", *extra,
+                    mock_bindir=self.bindir)
+                summary = self._summary(result)
+                self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+                self.assertEqual(summary["iterations_completed"], 4)
+                state = _read_state(self.target, summary["run_id"])
+                for blob in (summary, state, self._iters(result)[0],
+                             state["oracle_score_history"][0]):
+                    for key in ("escalation_rung", "escalation_rungs",
+                                "escalation_events", "rung",
+                                "escalation_baseline_composite",
+                                "escalation_history_start"):
+                        self.assertNotIn(key, blob)
+
+    def test_invocation_failure_on_a_raised_rung_names_rung_and_config(self):
+        _fail_on_flag_wrapper(self.bindir, [_rt_call(0.10)], "--effort high")
+        result = self._ladder(11)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(summary["escalation_rung"], 1)
+        lines = [ln for ln in result.stderr.splitlines()
+                 if "escalation rung 1" in ln]
+        self.assertEqual(len(lines), 1, msg=result.stderr)
+        self.assertIn('"effort": "high"', lines[0])
+        self.assertIn("claude_invocation_failed", lines[0])
+        # the same text rides the summary, so the heartbeat can pass it on
+        crumb = summary["terminal_breadcrumb"]
+        self.assertIn("escalation rung 1", crumb)
+        self.assertIn('"effort": "high"', crumb)
+
+    def test_judge_failure_on_a_raised_rung_names_the_judge_not_the_runner_config(self):
+        _fail_on_call_wrapper(self.bindir, [_rt_call(0.10)], 6)   # judge, rung 1
+        result = self._ladder(11)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
+        crumb = summary["terminal_breadcrumb"]
+        self.assertIn("escalation rung 1", crumb)
+        self.assertIn("judge", crumb)
+        self.assertIn("unchanged", crumb)
+        self.assertNotIn("effort", crumb)           # no runner config reported
+
+    def test_verdict_mismatch_on_a_raised_rung_carries_breadcrumb(self):
+        _bad_verdict_on_raised_rung(self.bindir, [_rt_call(0.10)])
+        result = self._ladder(11)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "verdict_schema_mismatch")
+        self.assertIn("escalation rung 1", summary["terminal_breadcrumb"])
+        self.assertIn("verdict_schema_mismatch", summary["terminal_breadcrumb"])
+
+    def test_escalation_discards_the_old_context_fill_ratio(self):
+        # The plateau iteration (5, a runner turn) filled the old session; the
+        # fresh rung session has no measured fill, so the gate must not halt.
+        small, big = _rt_call(0.10), _rt_call(0.10, tokens=(2, 4, 600000, 0))
+        _mock_claude_running_total(
+            self.bindir, [small] * 4 + [big] + [small] * 10)
+        _make_oracle(self.target, _composite_progression_oracle(
+            [0.2, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3]))
+        result = self._ladder(
+            9, {"escalation": [{"effort": "high"}]},
+            "--context-fill-threshold", "0.5")
+        summary = self._summary(result)
+        self.assertNotEqual(summary["terminal_reason"], "context_full")
+        self.assertGreaterEqual(summary["iterations_completed"], 7)
+        state = _read_state(self.target, summary["run_id"])
+        self.assertEqual(state["escalation_events"][0]["at_iteration"], 5)
+        self.assertEqual(_find_flag_value(self._argvs()[6], "--effort"), "high")
+
+    def test_invocation_failure_on_base_rung_names_no_rung(self):
+        _fail_on_flag_wrapper(self.bindir, [_rt_call(0.10)], "--model sonnet")
+        result = self._ladder(11)
+        summary = self._summary(result)
+        self.assertEqual(summary["terminal_reason"], "claude_invocation_failed")
+        self.assertEqual(summary["escalation_rung"], 0)
+        self.assertNotIn("escalation rung", result.stderr)
+
+
+class LadderRoutingTests(unittest.TestCase):
+    """Driver choice for a ladder lives in the node (038-03): `auto` + ladder
+    routes to the loop driver; an explicit goal driver ignores the ladder."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-ladder-route-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        self.bindir = tmp / "bin"
+        self.bindir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _go(self, *extra, body=None):
+        # Version 2.1.175: an eligible goal host, so `auto` would pick goal.
+        _make_mock_claude(
+            self.bindir, body or _loop_mock_body(), version="2.1.175")
+        return _run_raw(self.target, "--prompt", "x", *extra,
+                        mock_bindir=self.bindir,
+                        extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+
+    def _summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def test_auto_with_a_ladder_routes_to_the_loop_driver(self):
+        for driver in ((), ("--driver", "auto")):
+            with self.subTest(driver=driver):
+                shutil.rmtree(self.target / ".servo" / "runs", ignore_errors=True)
+                result = self._go(*driver, "--models", _models_arg(
+                    {"escalation": [{"effort": "high"}]}))
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                summary = self._summary(result)
+                self.assertNotIn("driver", summary)          # loop-shaped
+                self.assertEqual(summary["escalation_rungs"], 1)
+                self.assertEqual(
+                    result.stderr.count("ladder needs the loop driver"), 1,
+                    msg=result.stderr)
+                self.assertNotIn("auto-routing to --driver loop", result.stderr)
+
+    def test_auto_without_a_ladder_still_picks_goal(self):
+        for block in (None, {"runner": {"model": "sonnet"}},
+                      {"runner": {"model": "sonnet"}, "escalation": []}):
+            with self.subTest(block=block):
+                shutil.rmtree(self.target / ".servo" / "runs", ignore_errors=True)
+                extra = ("--models", _models_arg(block)) if block else ()
+                result = self._go(*extra, body=_goal_mock_body())
+                self.assertEqual(result.returncode, 0, msg=result.stderr)
+                self.assertEqual(self._summary(result)["driver"], "goal")
+                self.assertNotIn("ladder needs", result.stderr)
+
+    def test_explicit_goal_with_a_ladder_stays_goal_and_ignores_it(self):
+        result = self._go(
+            "--driver", "goal", "--models",
+            _models_arg({"escalation": [{"effort": "high"}]}),
+            body=_goal_mock_body())
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(self._summary(result)["driver"], "goal")
+        self.assertEqual(result.stderr.count("models.escalation is ignored"), 1,
+                         msg=result.stderr)
+        self.assertNotIn("ladder needs the loop driver", result.stderr)
+
+
+class LadderResumeTests(_AccountingTarget, unittest.TestCase):
+    """AC6 - persisted rung, baseline and window index survive --resume."""
+
+    def setUp(self):
+        self._setup_acct()
+        _make_oracle(self.target, _FLAT)
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+
+    def _go(self, n, *extra):
+        return _run_loop(
+            self.target, "--prompt", "x", "--max-iterations", str(n),
+            "--cost-ceiling", "10", "--plateau-window", "3", *extra,
+            mock_bindir=self.bindir)
+
+    def _resume(self, n, run_id, *extra):
+        return _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", str(n),
+            "--cost-ceiling", "10", "--plateau-window", "3", *extra,
+            mock_bindir=self.bindir)
+
+    def test_resume_continues_at_the_persisted_rung(self):
+        self._go(7, "--models", _models_arg(_LADDER))
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["escalation_rung"], 1)
+        self.assertEqual(state["escalation_history_start"], 4)
+        self.assertEqual(state["escalation_events"][-1]["baseline_composite"], 0.2)
+        self.assertNotIn("escalation_baseline_composite", state)
+        result = self._resume(8, run_id)           # persisted ladder re-validated
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["oracle_score_history"][-1]["rung"], 1)
+        self.assertEqual(state["escalation_rung"], 1)
+        self.assertEqual(len(state["escalation_events"]), 1)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+        self.assertEqual(summary["escalation_rung"], 1)
+
+    def test_resumed_shorter_ladder_clamps_the_rung(self):
+        self._go(11, "--models", _models_arg(_LADDER))
+        run_id = _find_only_run_id(self.target)
+        self.assertEqual(_read_state(self.target, run_id)["escalation_rung"], 2)
+        short = {"runner": {"model": "sonnet"}, "escalation": [{"effort": "high"}]}
+        result = self._resume(12, run_id, "--models", _models_arg(short))
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["escalation_rung"], 1)
+        self.assertEqual(len(state["escalation_events"]), 2)   # nothing new
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["escalation_rung"], 1)
+        self.assertEqual(summary["escalation_rungs"], 1)
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau")
+
+    def test_ladderless_resume_before_rung_window_opens_keeps_plateau_brake(self):
+        # Escalated, then the rung's first runner invocation failed: no window
+        # start yet. A ladder-less resume must fall back to the plain check.
+        _fail_on_flag_wrapper(self.bindir, [_rt_call(0.10)], "--effort high")
+        result = self._go(11, "--models", _models_arg(_LADDER))
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["escalation_rung"], 1)
+        self.assertIsNone(state["escalation_history_start"])
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+        result = self._resume(
+            12, run_id, "--models", _models_arg({"runner": {"model": "sonnet"}}))
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau",
+                         msg=result.stderr)
+        state = _read_state(self.target, run_id)
+        for key in ("escalation_rung", "escalation_history_start",
+                    "escalation_baseline_composite"):
+            self.assertNotIn(key, state)
+        # the per-rung measurement record is kept
+        self.assertEqual(len(state["escalation_events"]), 1)
+        self.assertNotIn("escalation_rung", summary)
+        self.assertNotIn("escalation_rungs", summary)
+
+    def test_resume_mid_window_uses_the_persisted_baseline_and_window(self):
+        # Baseline .4 (iteration 2) is beaten by nothing; the rung window opens
+        # at iteration 7. Run 1 dies on call 8 with one window entry recorded.
+        # Plateau at 9 needs BOTH the persisted baseline and the window start:
+        # without the persisted window start the plateau fires earlier (8),
+        # and without the baseline it fires later.
+        flat = [0.2, 0.4] + [0.3] * 20
+        _make_oracle(self.target, _composite_progression_oracle(flat))
+        block = {"escalation": [{"effort": "high"}]}
+        _fail_on_call_wrapper(self.bindir, [_rt_call(0.10)], 8)
+        self._go(12, "--models", _models_arg(block))
+        run_id = _find_only_run_id(self.target)
+        state = _read_state(self.target, run_id)
+        self.assertEqual(state["iteration_count"], 7)
+        self.assertEqual(state["escalation_history_start"], 6)
+        self.assertEqual(
+            state["escalation_events"][0]["baseline_composite"], 0.4)
+        result = self._resume(12, run_id)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "oracle_plateau",
+                         msg=result.stderr)
+        self.assertEqual(summary["iterations_completed"], 9)
+        self.assertEqual(summary["escalation_rung"], 1)
+
+    def test_resumed_block_without_ladder_drops_ladder_keys_from_summary(self):
+        self._go(7, "--models", _models_arg(_LADDER))
+        run_id = _find_only_run_id(self.target)
+        result = self._resume(8, run_id, "--models",
+                              _models_arg({"runner": {"model": "sonnet"}}))
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertNotIn("escalation_rung", summary)
+        self.assertNotIn("escalation_rungs", summary)
+
+    def test_hand_edited_persisted_ladder_is_revalidated(self):
+        self._go(2, "--models", _models_arg(_LADDER))
+        run_id = _find_only_run_id(self.target)
+        sp = _state_path(self.target, run_id)
+        state = json.loads(sp.read_text())
+        state["models"]["escalation"] = [{"effort": "turbo"}]
+        sp.write_text(json.dumps(state))
+        result = self._resume(3, run_id)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(_stdout_json_lines(result.stdout)[-1]["terminal_reason"],
+                         "models_invalid")
+        self.assertIn("models.escalation[0]", result.stderr)
+
+
+class LadderFlagSurfaceTests(_AccountingTarget, unittest.TestCase):
+    """AC1 - the ladder reaches the loop through flag, plan and the child."""
+
+    def setUp(self):
+        self._setup_acct()
+        _make_oracle(self.target, _FLAT)
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+
+    def test_flag_refuses_bad_ladders_before_any_run(self):
+        for bad, needle in (
+                ('{"escalation": "x"}', "models.escalation must be a list"),
+                ('{"escalation": [{}]}', "models.escalation[0]"),
+                ('{"escalation": [{"temperature": "1"}]}',
+                 "models.escalation[0]"),
+                ('{"escalation": [{"effort": "turbo"}]}',
+                 "models.escalation[0]")):
+            with self.subTest(bad=bad):
+                result = self._run(2, "--models", bad)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(_stdout_json_lines(result.stdout)[-1]
+                                 ["terminal_reason"], "models_invalid")
+                self.assertIn(needle, result.stderr)
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+    def test_plan_ladder_accepted_and_bad_plan_ladder_refused(self):
+        for models, rc in (({"escalation": [{"effort": "high"}]}, 0),
+                           ({"escalation": [{"effort": "turbo"}]}, 2)):
+            with self.subTest(models=models):
+                shutil.rmtree(self.target / ".servo" / "runs", ignore_errors=True)
+                plan = _compiled_plan(
+                    driver="loop", max_iterations=2, plateau_window=0)
+                plan["models"] = models
+                path = _write_plan(self.target.parent, plan)
+                result = _run_loop(
+                    self.target, "--plan", str(path), "--prompt", "x",
+                    "--cost-ceiling", "10", mock_bindir=self.bindir)
+                self.assertEqual(result.returncode, rc, msg=result.stderr)
+                if rc:
+                    self.assertEqual(_stdout_json_lines(result.stdout)[-1]
+                                     ["terminal_reason"], "plan_value_invalid")
+                    self.assertIn("models.escalation[0]", result.stderr)
+                else:
+                    run_id = _find_only_run_id(self.target)
+                    self.assertEqual(
+                        _read_state(self.target, run_id)["models"]["escalation"],
+                        [{"effort": "high"}])
+
+
+class GoalDriverLadderTests(_GoalTargetMixin, unittest.TestCase):
+    """AC7 - the goal driver ignores a ladder with one note."""
+
+    def setUp(self):
+        self._setup_target(_passing_oracle())
+        self.args_log = self.bindir.parent / "args.log"
+        _mock_claude_goal(
+            self.bindir, _goal_stream_jsonl(assistant_text=GOAL_PASS_SENTINEL),
+            args_log=self.args_log)
+
+    def test_goal_driver_prints_one_note_and_proceeds(self):
+        block = {"runner": {"model": "sonnet"},
+                 "escalation": [{"effort": "high"}]}
+        result = _run_goal(
+            self.target, "--prompt", "x", "--models", _models_arg(block),
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(result.stderr.count("models.escalation is ignored"), 1,
+                         msg=result.stderr)
+        (argv,) = _read_args_log(self.args_log)
+        self.assertEqual(_find_flag_value(argv, "--model"), "sonnet")
+        self.assertNotIn("--effort", argv)
+
+    def test_goal_driver_without_ladder_prints_no_note(self):
+        result = _run_goal(
+            self.target, "--prompt", "x", "--models",
+            _models_arg({"runner": {"model": "sonnet"}}),
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertNotIn("escalation", result.stderr)
+
+    def test_background_child_accepts_and_carries_the_ladder(self):
+        block = {"runner": {"model": "sonnet"},
+                 "escalation": [{"effort": "high"}]}
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x", "--max-iterations",
+            "2", "--models", _models_arg(block), mock_bindir=self.bindir,
+            extra_env={"SERVO_CLAUDE_TIMEOUT": "30"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        state = _await_terminal_state(self.target)
+        self.assertEqual(state["terminal_reason"], "oracle_pass")
+        self.assertEqual(state["models"]["escalation"], [{"effort": "high"}])
+
+
 if __name__ == "__main__":
     unittest.main()
