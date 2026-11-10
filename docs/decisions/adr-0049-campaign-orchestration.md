@@ -248,7 +248,7 @@ Option A. The three boundary lines are handled as follows:
   If it is under ~80%, drop host-driven mode for that host and use Option B.
   servo-driven mode alone may not justify reinterpreting the boundaries.
 - **A5 fails.** If under ~80% of a host's wrapped items verify (run id plus
-  tree fingerprint), treat that host as advisory-only. Its wrapped tier adds
+  content fingerprint, recorded before any commit), treat that host as advisory-only. Its wrapped tier adds
   only overhead.
 - **A4 fails.** If fewer than half of a representative campaign's items can be
   given an oracle, the campaign layer does not serve its motivating case.
