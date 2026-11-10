@@ -34,7 +34,8 @@ Two modes:
   - The **verified-wrapped** tier: the worker runs its item under `loop.py`.
     `campaign record` accepts the item only if its run id and the worktree's
     content fingerprint (HEAD plus diff plus untracked contents) match the
-    loop's halt state. Recording must happen before any commit, and the
+    loop's halt state, and the loop started at the brief's base sha without
+    `--allow-dirty`. Recording must happen before any commit, and the
     outcome is re-rendered from the loop's own state. The worker session's own spend
     stays outside every ceiling. On Copilot this tier comes after ADR-0048
     and spec 041.

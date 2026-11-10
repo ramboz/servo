@@ -87,7 +87,11 @@ below:
         item as wrapped only if both hold:
         - a `loop.py` state with that `run_id` exists in the item's worktree;
         - the worktree's **content fingerprint** equals the one `loop.py`
-          recorded when it halted.
+          recorded when it halted;
+        - the loop **started at the brief's base**: the HEAD `loop.py`
+          recorded at start equals the item's base sha from the kickoff
+          brief, and `--allow-dirty` was not set. So every change between the
+          base and the record happened inside the loop.
       - **The fingerprint covers content, not status lines.** It is the HEAD
         sha at halt, plus a hash of the working-tree diff against that HEAD,
         plus the contents of untracked, non-ignored files. Bookkeeping paths
@@ -248,7 +252,8 @@ Option A. The three boundary lines are handled as follows:
   If it is under ~80%, drop host-driven mode for that host and use Option B.
   servo-driven mode alone may not justify reinterpreting the boundaries.
 - **A5 fails.** If under ~80% of a host's wrapped items verify (run id plus
-  content fingerprint, recorded before any commit), treat that host as advisory-only. Its wrapped tier adds
+  content fingerprint, recorded before any commit), treat that host as
+  advisory-only. Its wrapped tier adds
   only overhead.
 - **A4 fails.** If fewer than half of a representative campaign's items can be
   given an oracle, the campaign layer does not serve its motivating case.
@@ -272,7 +277,8 @@ Option A. The three boundary lines are handled as follows:
    compliance gap of A5, so it is not prioritized there. Servo-driven Claude
    Code has no observed campaign case either: the one recorded run was on
    Copilot. It ships first as a cheap, enforced **baseline** that needs no
-   boundary change while it runs serially, not as the motivating case. Neither advisory mode nor Option B would have stopped
+   boundary change while it runs serially, not as the motivating case. Neither
+   advisory mode nor Option B would have stopped
    the recorded runaway. Verified-wrapped Copilot workers would have bounded
    the loop's own spend, but only to the extent the worker stayed inside
    `loop.py` (A5).
