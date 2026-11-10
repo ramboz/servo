@@ -9451,5 +9451,752 @@ class AccountingHelperUnitTests(unittest.TestCase):
         self.assertIsNone(rec["model"])
 
 
+# ============================================================================
+# Slice 038-02 — role model placement (`--models` / plan `models`)
+# ============================================================================
+
+_SPLIT_BLOCK = {"runner": {"model": "sonnet"}, "judge": {"model": "opus"}}
+
+
+def _models_arg(block) -> str:
+    return json.dumps(block)
+
+
+class ModelsValidationUnitTests(unittest.TestCase):
+    """AC1/AC2 — the shared validator and the flag loader (pure)."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+
+    def _ok(self, block, **kw):
+        norm, err = self.m._validate_models(block, **kw)
+        self.assertIsNone(err, msg=err)
+        return norm
+
+    def _bad(self, block, **kw):
+        norm, err = self.m._validate_models(block, **kw)
+        self.assertIsNone(norm)
+        self.assertTrue(err)
+        return err
+
+    def test_valid_block_normalizes_and_drops_inherit(self):
+        norm = self._ok({
+            "runner": {"model": "sonnet", "effort": "inherit", "advisor": "opus"},
+            "judge": {"model": "inherit"}})
+        self.assertEqual(norm, {
+            "runner": {"model": "sonnet", "advisor": "opus"}, "judge": {}})
+
+    def test_empty_block_and_missing_roles_are_valid(self):
+        self.assertEqual(self._ok({}), {"runner": {}, "judge": {}})
+        self.assertEqual(
+            self._ok({"judge": {"effort": "max"}}),
+            {"runner": {}, "judge": {"effort": "max"}})
+
+    def test_every_effort_level_accepted(self):
+        for level in ("low", "medium", "high", "xhigh", "max", "inherit"):
+            self._ok({"runner": {"effort": level}})
+
+    def test_model_charset_accepts_real_ids(self):
+        for model in ("sonnet", "claude-opus-5-5", "claude-opus-5-5[1m]",
+                      "vendor/model:v1.2_x"):
+            self._ok({"runner": {"model": model}})
+
+    def test_refusals(self):
+        for bad in (
+            [], "x", 3, None,                                  # non-object block
+            {"orchestrator": {}},                              # unknown top key
+            {"runner": []}, {"runner": "sonnet"},              # non-object role
+            {"runner": {"temperature": "1"}},                  # unknown role key
+            {"runner": {"model": 3}}, {"runner": {"model": None}},
+            {"runner": {"model": True}}, {"judge": {"advisor": ["a"]}},
+            {"runner": {"effort": "turbo"}}, {"runner": {"effort": ""}},
+            {"runner": {"effort": "HIGH"}},
+            {"runner": {"model": "-bad"}}, {"runner": {"model": "a b"}},
+            {"runner": {"model": ""}}, {"judge": {"advisor": "x y"}},
+            {"judge": {"advisor": "--evil"}}, {"runner": {"model": "a\nb"}},
+            {"runner": {"model": "opus\n"}},
+        ):
+            with self.subTest(bad=bad):
+                self._bad(bad)
+
+    def test_escalation_key_gated_by_allow_escalation(self):
+        # 038-03 flips this on; in 038-02 `escalation` is an unknown key.
+        block = {"escalation": [{"model": "opus"}]}
+        self._bad(block)
+        self._bad(block, allow_escalation=False)
+        self.assertEqual(
+            self._ok(block, allow_escalation=True)["escalation"],
+            [{"model": "opus"}])
+
+    def test_load_models_arg_inline_and_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "m.json"
+            f.write_text(json.dumps(_SPLIT_BLOCK))
+            self.assertEqual(
+                self.m._load_models_arg(json.dumps(_SPLIT_BLOCK)),
+                (_SPLIT_BLOCK, None))
+            self.assertEqual(
+                self.m._load_models_arg("  " + json.dumps(_SPLIT_BLOCK)),
+                (_SPLIT_BLOCK, None))
+            self.assertEqual(self.m._load_models_arg(str(f)), (_SPLIT_BLOCK, None))
+            for bad in (str(Path(d) / "missing.json"), "{not json"):
+                block, err = self.m._load_models_arg(bad)
+                self.assertIsNone(block)
+                self.assertTrue(err)
+            f.write_text("{bad")
+            self.assertTrue(self.m._load_models_arg(str(f))[1])
+
+    def test_role_args_fixed_order_and_empty(self):
+        self.assertEqual(self.m._role_args({}), [])
+        self.assertEqual(self.m._role_args(None), [])
+        self.assertEqual(
+            self.m._role_args({"advisor": "a", "effort": "high", "model": "m"}),
+            ["--model", "m", "--effort", "high", "--advisor", "a"])
+
+    def test_mark_requested_advisor_signals(self):
+        mu = {OPUS: {"cost_usd": 1.0}, HAIKU: {"cost_usd": 0.1}}
+        marked = self.m._mark_requested_advisor(mu, "opus", "haiku")
+        self.assertTrue(marked[OPUS]["advisor"])
+        self.assertNotIn("advisor", marked[HAIKU])
+        self.assertNotIn("advisor", mu[OPUS])  # input not mutated
+        # exact id (with an explicit own model)
+        self.assertTrue(
+            self.m._mark_requested_advisor(mu, OPUS, "haiku")[OPUS]["advisor"])
+        # an inherited model disables the second signal entirely
+        self.assertNotIn(
+            "advisor", self.m._mark_requested_advisor(mu, OPUS, None)[OPUS])
+        # a substring that is not a `-`-delimited token does not match
+        self.assertNotIn(
+            "advisor", self.m._mark_requested_advisor(mu, "opu", None)[OPUS])
+        # the id also matches the role's own requested model -> not marked
+        self.assertNotIn(
+            "advisor", self.m._mark_requested_advisor(mu, "opus", "opus")[OPUS])
+        # no requested advisor -> nothing marked
+        self.assertNotIn(
+            "advisor", self.m._mark_requested_advisor(mu, None, None)[OPUS])
+
+    def test_inherited_model_disables_second_advisor_signal(self):
+        # With an inherited model the executor's own `claude-opus-*` entry would
+        # share the advisor's family token; only advisor_message may mark it.
+        mu = {OPUS: {"cost_usd": 1.0}}
+        data = {"session_id": "S", "usage": {}}
+        rec = self.m._iteration_accounting(
+            data, agent="runner", cost_usd=1.0, cost_basis="reported",
+            model_usage=mu,
+            requested={"model": None, "effort": None, "advisor": "opus"})
+        self.assertNotIn("advisor", rec["model_usage"][OPUS])
+        self.assertEqual(rec["model"], OPUS)
+        # ... while the advisor_message signal still works.
+        data["usage"] = {"iterations": [
+            {"type": "advisor_message", "model": OPUS}]}
+        rec = self.m._iteration_accounting(
+            data, agent="runner", cost_usd=1.0, cost_basis="reported",
+            model_usage=mu,
+            requested={"model": None, "effort": None, "advisor": "opus"})
+        self.assertTrue(rec["model_usage"][OPUS]["advisor"])
+
+    def test_load_models_arg_clear_errors(self):
+        with tempfile.TemporaryDirectory() as d:
+            f = Path(d) / "m.json"
+            f.write_bytes(b"\xff\xfe\x00bad")
+            block, err = self.m._load_models_arg(str(f))
+            self.assertIsNone(block)
+            self.assertIn("unreadable", err)
+            f.write_text("[1]")
+            block, err = self.m._load_models_arg(str(f))
+            self.assertIsNone(block)
+            self.assertIn("must be a JSON object", err)
+        block, err = self.m._load_models_arg("[1]")
+        self.assertIsNone(block)
+        self.assertIn("must be a JSON object", err)
+        self.assertNotIn("unreadable", err)
+
+    def test_reported_total_cost_ignores_non_finite_and_strings(self):
+        for bad in (float("nan"), float("inf"), "0.5", "nan", True, [1], None):
+            with self.subTest(bad=bad):
+                self.assertEqual(
+                    self.m._reported_total_cost({"total_cost_usd": bad}), 0.0)
+        self.assertEqual(
+            self.m._reported_total_cost({"total_cost_usd": 0.25}), 0.25)
+        self.assertEqual(
+            self.m._reported_total_cost({"total_cost_usd": 2}), 2.0)
+
+    def test_empty_snapshot_model_usage_falls_back_to_reported(self):
+        data = {"session_id": "S", "total_cost_usd": 0.30,
+                "modelUsage": {HAIKU: {"costUSD": 0.30, "inputTokens": 5}},
+                "usage": {"input_tokens": 1}}
+        snap = {"session_id": "S", "total_cost_usd": 0.10, "model_usage": {}}
+        cost, _mu, basis = self.m._iteration_cost_delta(
+            data, resumed_session_id="S", snapshot=snap)
+        self.assertEqual(basis, "reported")
+        self.assertAlmostEqual(cost, 0.30, places=6)
+
+    def test_accounting_second_advisor_signal_recomputes_model(self):
+        data = {"session_id": "S", "total_cost_usd": 1.1, "usage": {}}
+        mu = {OPUS: {"cost_usd": 1.0, "input_tokens": 0, "output_tokens": 0,
+                     "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0},
+              HAIKU: {"cost_usd": 0.1, "input_tokens": 0, "output_tokens": 0,
+                      "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}
+        rec = self.m._iteration_accounting(
+            data, agent="runner", cost_usd=1.1, cost_basis="reported",
+            model_usage=mu,
+            requested={"model": "haiku", "effort": None, "advisor": "opus"})
+        self.assertTrue(rec["model_usage"][OPUS]["advisor"])
+        self.assertEqual(rec["model"], HAIKU)
+        self.assertEqual(rec["requested"]["advisor"], "opus")
+
+
+class ModelsRefusalTests(_AccountingTarget, unittest.TestCase):
+    """AC2 — fail-closed before any run dir / state / claude call."""
+
+    def setUp(self):
+        self._setup_acct()
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+
+    def _assert_refused(self, result, reason):
+        self.assertEqual(result.returncode, 2, msg=result.stdout + result.stderr)
+        self.assertEqual(_stdout_json_lines(result.stdout)[-1]["terminal_reason"], reason)
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+        self.assertEqual(_read_args_log(self.bindir / "args.log"), [])
+
+    def test_bad_flag_blocks_refuse_models_invalid(self):
+        for bad in (
+            '{"runner": {"effort": "turbo"}}', '{"nope": {}}', '{"runner": 3}',
+            '{"runner": {"model": "-x"}}', '{"runner": {"model": 5}}',
+            '[1]', '{bad json',
+        ):
+            with self.subTest(bad=bad):
+                result = self._run(1, "--models", bad)
+                self._assert_refused(result, "models_invalid")
+
+    def test_unreadable_models_file_refuses(self):
+        result = self._run(1, "--models", str(self.target / "absent.json"))
+        self._assert_refused(result, "models_invalid")
+
+    def test_bad_models_file_contents_refuse(self):
+        f = self.target.parent / "m.json"
+        f.write_text('{"runner": {"effort": "turbo"}}')
+        self._assert_refused(self._run(1, "--models", str(f)), "models_invalid")
+
+    def test_non_utf8_models_file_refuses_without_traceback(self):
+        f = self.target.parent / "m.json"
+        f.write_bytes(b"\xff\xfe\x00{")
+        result = self._run(1, "--models", str(f))
+        self._assert_refused(result, "models_invalid")
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_non_object_json_file_says_so(self):
+        f = self.target.parent / "m.json"
+        f.write_text("[1]")
+        result = self._run(1, "--models", str(f))
+        self._assert_refused(result, "models_invalid")
+        self.assertIn("JSON object", result.stderr)
+
+    def test_inline_array_says_must_be_object_not_unreadable(self):
+        result = self._run(1, "--models", "[1]")
+        self._assert_refused(result, "models_invalid")
+        self.assertIn("must be a JSON object", result.stderr)
+        self.assertNotIn("unreadable", result.stderr)
+
+    def test_invalid_persisted_models_refuses_resume_unchanged(self):
+        self._run(1)
+        run_id = _find_only_run_id(self.target)
+        sp = _state_path(self.target, run_id)
+        state = json.loads(sp.read_text())
+        state["models"] = {"runner": {"effort": "turbo"}}
+        sp.write_text(json.dumps(state))
+        before = _read_state(self.target, run_id)
+        n_calls = len(_read_args_log(self.bindir / "args.log"))
+        result = _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "2",
+            "--cost-ceiling", "10", mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 2, msg=result.stderr)
+        self.assertEqual(
+            _stdout_json_lines(result.stdout)[-1]["terminal_reason"],
+            "models_invalid")
+        self.assertEqual(len(_read_args_log(self.bindir / "args.log")), n_calls)
+        self.assertEqual(_read_state(self.target, run_id), before)
+
+    def test_valid_flag_replaces_invalid_persisted_models_on_resume(self):
+        self._run(1)
+        run_id = _find_only_run_id(self.target)
+        sp = _state_path(self.target, run_id)
+        state = json.loads(sp.read_text())
+        state["models"] = "garbage"
+        sp.write_text(json.dumps(state))
+        result = _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", "2",
+            "--cost-ceiling", "10", "--models", _models_arg(_SPLIT_BLOCK),
+            mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+
+    def test_bad_plan_models_refuses_plan_value_invalid(self):
+        plan = _compiled_plan(driver="loop")
+        plan["models"] = {"runner": {"effort": "turbo"}}
+        path = _write_plan(self.target.parent, plan)
+        result = self._run(1, "--plan", str(path))
+        self._assert_refused(result, "plan_value_invalid")
+
+    def test_bad_plan_models_refuses_even_when_flag_overrides(self):
+        plan = _compiled_plan(driver="loop")
+        plan["models"] = "sonnet"
+        path = _write_plan(self.target.parent, plan)
+        result = self._run(1, "--plan", str(path), "--models", _models_arg(_SPLIT_BLOCK))
+        self._assert_refused(result, "plan_value_invalid")
+
+    def test_bad_flag_refuses_on_resume_too(self):
+        self._run(1)
+        run_id = _find_only_run_id(self.target)
+        before = _read_state(self.target, run_id)
+        n_calls = len(_read_args_log(self.bindir / "args.log"))
+        result = _run_loop(
+            self.target, "--resume", run_id, "--models", '{"runner": {"effort": "x"}}',
+            mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(len(_read_args_log(self.bindir / "args.log")), n_calls)
+        self.assertEqual(_read_state(self.target, run_id), before)
+
+
+class RoleArgvTests(_AccountingTarget, unittest.TestCase):
+    """AC3 — role fields reach the argv; no config leaves argv untouched."""
+
+    def setUp(self):
+        self._setup_acct()
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+
+    def test_each_role_gets_its_own_flags_in_fixed_order(self):
+        block = {
+            "runner": {"model": "sonnet", "effort": "high", "advisor": "opus"},
+            "judge": {"model": "opus", "effort": "xhigh"}}
+        result = self._run(2, "--models", _models_arg(block))
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        runner, judge = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(runner[runner.index("--model"):runner.index("--model") + 6],
+                         ["--model", "sonnet", "--effort", "high",
+                          "--advisor", "opus"])
+        self.assertEqual(_find_flag_value(runner, "--agent"), "runner")
+        self.assertEqual(judge[judge.index("--model"):judge.index("--model") + 4],
+                         ["--model", "opus", "--effort", "xhigh"])
+        self.assertNotIn("--advisor", judge)
+        self.assertEqual(_find_flag_value(judge, "--agent"), "judge")
+        self.assertLess(runner.index("--max-budget-usd"), runner.index("--model"))
+
+    def test_inherited_fields_add_no_flag(self):
+        block = {"runner": {"model": "sonnet", "effort": "inherit"}}
+        self._run(2, "--models", _models_arg(block))
+        runner, judge = _read_args_log(self.bindir / "args.log")
+        self.assertIn("--model", runner)
+        self.assertNotIn("--effort", runner)
+        for flag in ("--model", "--effort", "--advisor"):
+            self.assertNotIn(flag, judge)
+
+    def test_no_config_argv_is_byte_identical(self):
+        # Negative guard: with no block (or an all-inherit block) the argv is the
+        # pre-038-02 shape - same tokens, none of the new flags.
+        self._run(2)
+        base = _read_args_log(self.bindir / "args.log")
+        (self.bindir / "args.log").unlink()
+        (self.bindir / "mockstate.json").unlink()
+        self._run(2, "--models",
+                  _models_arg({"runner": {"model": "inherit"}, "judge": {}}))
+        inherit = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(len(base), 2)
+        self.assertEqual(base, inherit)
+        for argv in base:
+            for flag in ("--model", "--effort", "--advisor"):
+                self.assertNotIn(flag, argv)
+            self.assertEqual(argv[:3], ["-p", "--output-format", "json"])
+
+
+class JudgeSplitTests(_AccountingTarget, unittest.TestCase):
+    """AC4 — a configured run gives the judge a fresh session; none = shared."""
+
+    def setUp(self):
+        self._setup_acct()
+        self.calls = [_rt_call(0.10), _rt_call(0.20), _rt_call(0.30), _rt_call(0.40)]
+
+    def test_split_judge_omits_resume_runner_keeps_it(self):
+        _mock_claude_running_total(self.bindir, self.calls)
+        result = self._run(4, "--models", _models_arg(_SPLIT_BLOCK))
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        argvs = _read_args_log(self.bindir / "args.log")
+        agents = [_find_flag_value(a, "--agent") for a in argvs]
+        self.assertEqual(agents, ["runner", "judge", "runner", "judge"])
+        self.assertNotIn("--resume", argvs[0])
+        self.assertNotIn("--resume", argvs[1])           # judge: fresh
+        self.assertEqual(_find_flag_value(argvs[2], "--resume"), "sess-1")
+        self.assertNotIn("--resume", argvs[3])           # judge: fresh again
+
+    def test_judge_never_moves_runner_session_or_snapshot(self):
+        _mock_claude_running_total(self.bindir, self.calls)
+        self._run(4, "--models", _models_arg(_SPLIT_BLOCK))
+        state = _read_state(self.target, _find_only_run_id(self.target))
+        hist = state["oracle_score_history"]
+        runner_sids = [h["session_id"] for h in hist if h["agent"] == "runner"]
+        judge_sids = [h["session_id"] for h in hist if h["agent"] == "judge"]
+        # Runner turns share one session; each judge has its own, recorded.
+        self.assertEqual(runner_sids, ["sess-1", "sess-1"])
+        self.assertEqual(judge_sids, ["sess-2", "sess-4"])
+        self.assertEqual(state["current_session_id"], "sess-1")
+        self.assertEqual(state["current_session_usage_snapshot"]["session_id"], "sess-1")
+
+    def test_judge_cost_basis_reported_and_costs_exact(self):
+        _mock_claude_running_total(self.bindir, self.calls)
+        self._run(4, "--models", _models_arg(_SPLIT_BLOCK))
+        hist = _read_state(
+            self.target, _find_only_run_id(self.target))["oracle_score_history"]
+        self.assertEqual(
+            [h["cost_basis"] for h in hist],
+            ["reported", "reported", "session_delta", "reported"])
+        # runner turn 3 is a delta against the RUNNER snapshot (0.10 + 0.30).
+        self.assertEqual([round(h["cost_usd"], 6) for h in hist],
+                         [0.10, 0.20, 0.30, 0.40])
+
+    def test_split_no_fallback_warning_for_fresh_judge(self):
+        _mock_claude_running_total(self.bindir, self.calls)
+        result = self._run(4, "--models", _models_arg(_SPLIT_BLOCK))
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        argvs = _read_args_log(self.bindir / "args.log")
+        # Red if the split is removed: a shared judge resumes the runner session.
+        self.assertNotIn("--resume", argvs[1])
+        self.assertNotIn("cost basis fell back", result.stderr)
+
+    def test_no_block_shares_one_session_as_today(self):
+        # Negative guard: shared-lane behaviour is unchanged without a block.
+        _mock_claude_running_total(self.bindir, self.calls)
+        self._run(3)
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertNotIn("--resume", argvs[0])
+        self.assertEqual(_find_flag_value(argvs[1], "--resume"), "sess-1")
+        self.assertEqual(_find_flag_value(argvs[2], "--resume"), "sess-1")
+
+    def test_all_inherit_block_is_not_configured(self):
+        _mock_claude_running_total(self.bindir, self.calls)
+        self._run(3, "--models", _models_arg(
+            {"runner": {"model": "inherit"}, "judge": {"effort": "inherit"}}))
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(_find_flag_value(argvs[1], "--resume"), "sess-1")
+
+    def test_runner_only_block_still_splits_the_judge(self):
+        _mock_claude_running_total(self.bindir, self.calls)
+        self._run(3, "--models", _models_arg({"runner": {"model": "sonnet"}}))
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertNotIn("--resume", argvs[1])
+        self.assertEqual(_find_flag_value(argvs[2], "--resume"), "sess-1")
+
+    def test_state_persists_resolved_block(self):
+        _mock_claude_running_total(self.bindir, self.calls)
+        self._run(1, "--models", _models_arg(
+            {"runner": {"model": "sonnet", "effort": "inherit"}}))
+        state = _read_state(self.target, _find_only_run_id(self.target))
+        self.assertEqual(
+            state["models"], {"runner": {"model": "sonnet"}, "judge": {}})
+
+    def test_no_block_state_models_is_null(self):
+        _mock_claude_running_total(self.bindir, self.calls)
+        self._run(1)
+        state = _read_state(self.target, _find_only_run_id(self.target))
+        self.assertIsNone(state["models"])
+
+
+class ModelsSourcePrecedenceTests(_AccountingTarget, unittest.TestCase):
+    """AC1 — flag > plan, block-level; inline JSON or a file."""
+
+    def setUp(self):
+        self._setup_acct()
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+
+    def _plan(self, models):
+        plan = _compiled_plan(driver="loop", max_iterations=2, plateau_window=0)
+        if models is not None:
+            plan["models"] = models
+        return _write_plan(self.target.parent, plan)
+
+    def test_plan_block_applies(self):
+        path = self._plan({"runner": {"model": "sonnet"}, "judge": {"model": "opus"}})
+        result = _run_loop(
+            self.target, "--plan", str(path), "--prompt", "x",
+            "--cost-ceiling", "10", mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        runner, judge = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(_find_flag_value(runner, "--model"), "sonnet")
+        self.assertEqual(_find_flag_value(judge, "--model"), "opus")
+        self.assertNotIn("--resume", judge)
+
+    def test_flag_replaces_plan_block_entirely_no_field_merge(self):
+        path = self._plan({
+            "runner": {"model": "sonnet", "effort": "high"},
+            "judge": {"model": "opus"}})
+        result = _run_loop(
+            self.target, "--plan", str(path), "--prompt", "x", "--cost-ceiling", "10",
+            "--models", _models_arg({"runner": {"advisor": "opus"}}),
+            mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        runner, judge = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(_find_flag_value(runner, "--advisor"), "opus")
+        self.assertNotIn("--model", runner)
+        self.assertNotIn("--effort", runner)
+        self.assertNotIn("--model", judge)
+
+    def test_models_file_path(self):
+        f = self.target.parent / "m.json"
+        f.write_text(json.dumps({"runner": {"effort": "low"}}))
+        self._run(1, "--models", str(f))
+        (runner,) = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(_find_flag_value(runner, "--effort"), "low")
+
+    def test_plan_without_models_and_no_flag_is_unchanged(self):
+        path = self._plan(None)
+        result = _run_loop(
+            self.target, "--plan", str(path), "--prompt", "x",
+            "--cost-ceiling", "10", mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertTrue(argvs)
+        for argv in argvs:
+            self.assertNotIn("--model", argv)
+
+
+class ModelsResumeTests(_AccountingTarget, unittest.TestCase):
+    """AC5 — resume replaces / keeps the persisted block."""
+
+    def setUp(self):
+        self._setup_acct()
+        _mock_claude_running_total(
+            self.bindir, [_rt_call(0.10), _rt_call(0.20), _rt_call(0.30),
+                          _rt_call(0.40)])
+
+    def _resume(self, n, run_id, *extra):
+        return _run_loop(
+            self.target, "--resume", run_id, "--max-iterations", str(n),
+            "--cost-ceiling", "10", *extra, mock_bindir=self.bindir)
+
+    def test_resume_keeps_persisted_block(self):
+        self._run(1, "--models", _models_arg(_SPLIT_BLOCK))
+        run_id = _find_only_run_id(self.target)
+        result = self._resume(3, run_id)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(_find_flag_value(argvs[1], "--model"), "opus")  # judge
+        self.assertNotIn("--resume", argvs[1])
+        self.assertEqual(_find_flag_value(argvs[2], "--model"), "sonnet")
+        self.assertEqual(_find_flag_value(argvs[2], "--resume"), "sess-1")
+        self.assertEqual(
+            _read_state(self.target, run_id)["models"],
+            {"runner": {"model": "sonnet"}, "judge": {"model": "opus"}})
+
+    def test_resume_flag_replaces_persisted_block_and_keeps_runner_session(self):
+        self._run(1, "--models", _models_arg(_SPLIT_BLOCK))
+        run_id = _find_only_run_id(self.target)
+        new = {"runner": {"model": "haiku"}}
+        self._resume(3, run_id, "--models", _models_arg(new))
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertNotIn("--model", argvs[1])            # old judge model gone
+        self.assertEqual(_find_flag_value(argvs[2], "--model"), "haiku")
+        self.assertEqual(_find_flag_value(argvs[2], "--resume"), "sess-1")
+        self.assertEqual(
+            _read_state(self.target, run_id)["models"],
+            {"runner": {"model": "haiku"}, "judge": {}})
+
+    def test_resume_with_all_inherit_block_ends_the_split(self):
+        self._run(1, "--models", _models_arg(_SPLIT_BLOCK))
+        run_id = _find_only_run_id(self.target)
+        self._resume(2, run_id, "--models", "{}")
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(_find_flag_value(argvs[1], "--resume"), "sess-1")
+        self.assertNotIn("--model", argvs[1])
+
+    def test_old_state_without_models_resumes_with_no_block(self):
+        self._run(1)
+        run_id = _find_only_run_id(self.target)
+        sp = _state_path(self.target, run_id)
+        state = json.loads(sp.read_text())
+        state.pop("models", None)
+        sp.write_text(json.dumps(state))
+        result = self._resume(2, run_id)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        argvs = _read_args_log(self.bindir / "args.log")
+        self.assertEqual(_find_flag_value(argvs[1], "--resume"), "sess-1")
+        self.assertNotIn("--model", argvs[1])
+        self.assertIsNone(_read_state(self.target, run_id)["models"])
+
+
+class RequestedAndAdvisorSignalTests(_AccountingTarget, unittest.TestCase):
+    """AC7 — `requested` per role; advisor second signal; persisted block."""
+
+    def setUp(self):
+        self._setup_acct()
+
+    def test_requested_names_each_roles_block(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+        block = {"runner": {"model": "sonnet", "advisor": "opus"},
+                 "judge": {"effort": "max"}}
+        result = self._run(2, "--models", _models_arg(block))
+        runner, judge = self._iters(result)
+        self.assertEqual(runner["requested"],
+                         {"model": "sonnet", "effort": None, "advisor": "opus"})
+        self.assertEqual(judge["requested"],
+                         {"model": None, "effort": "max", "advisor": None})
+        hist = _read_state(
+            self.target, _find_only_run_id(self.target))["oracle_score_history"]
+        self.assertEqual(hist[0]["requested"], runner["requested"])
+
+    def test_no_block_requested_all_null(self):
+        _mock_claude_running_total(self.bindir, [_rt_call(0.10)])
+        result = self._run(1)
+        self.assertEqual(self._iters(result)[0]["requested"],
+                         {"model": None, "effort": None, "advisor": None})
+
+    def test_requested_advisor_flags_model_usage_without_advisor_message(self):
+        # No `advisor_message` iteration in usage: only the second signal can
+        # mark the opus entry.
+        call = {"models": {
+            HAIKU: {"cost": 0.1, "tokens": [2, 4, 100, 50]},
+            OPUS: {"cost": 0.9, "tokens": [3, 1, 0, 0]}}}
+        _mock_claude_running_total(self.bindir, [call])
+        block = {"runner": {"model": "haiku", "advisor": "opus"}}
+        result = self._run(1, "--models", _models_arg(block))
+        entry = self._iters(result)[0]
+        self.assertTrue(entry["model_usage"][OPUS]["advisor"])
+        self.assertNotIn("advisor", entry["model_usage"][HAIKU])
+        self.assertEqual(entry["model"], HAIKU)
+
+    def test_no_requested_advisor_leaves_model_usage_unmarked(self):
+        # Negative guard: without a requested advisor the heuristic never fires.
+        call = {"models": {
+            HAIKU: {"cost": 0.1, "tokens": [2, 4, 100, 50]},
+            OPUS: {"cost": 0.9, "tokens": [3, 1, 0, 0]}}}
+        _mock_claude_running_total(self.bindir, [call])
+        result = self._run(1)
+        entry = self._iters(result)[0]
+        self.assertNotIn("advisor", entry["model_usage"][OPUS])
+        self.assertEqual(entry["model"], OPUS)
+
+
+class GoalDriverModelsTests(_GoalTargetMixin, unittest.TestCase):
+    """AC6 — runner block on the single goal invocation; judge note; background."""
+
+    def setUp(self):
+        self._setup_target(_passing_oracle())
+        self.args_log = self.bindir.parent / "args.log"
+        _mock_claude_goal(
+            self.bindir, _goal_stream_jsonl(assistant_text=GOAL_PASS_SENTINEL),
+            args_log=self.args_log)
+
+    def _goal(self, *extra):
+        return _run_goal(
+            self.target, "--prompt", "x", *extra, mock_bindir=self.bindir,
+            extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+
+    def test_runner_block_reaches_goal_argv_and_requested(self):
+        block = {"runner": {"model": "sonnet", "effort": "high", "advisor": "opus"}}
+        result = self._goal("--models", _models_arg(block))
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        (argv,) = _read_args_log(self.args_log)
+        i = argv.index("--model")
+        self.assertEqual(argv[i:i + 6], ["--model", "sonnet", "--effort", "high",
+                                         "--advisor", "opus"])
+        self.assertLess(argv.index("--max-turns"), i)
+        for blob in (self._summary(result), self._state()):
+            self.assertEqual(blob["requested"], {
+                "model": "sonnet", "effort": "high", "advisor": "opus"})
+        self.assertEqual(self._state()["models"]["runner"]["model"], "sonnet")
+
+    def test_judge_block_ignored_with_one_note(self):
+        block = {"runner": {"model": "sonnet"}, "judge": {"model": "opus"}}
+        result = self._goal("--models", _models_arg(block))
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(
+            result.stderr.count("models.judge is ignored"), 1, msg=result.stderr)
+        self.assertIn("ignored", result.stderr)
+        (argv,) = _read_args_log(self.args_log)
+        self.assertEqual(argv.count("--model"), 1)
+        self.assertEqual(_find_flag_value(argv, "--model"), "sonnet")
+
+    def test_background_parent_prints_judge_note(self):
+        block = {"runner": {"model": "sonnet"}, "judge": {"model": "opus"}}
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x", "--max-iterations", "2",
+            "--models", _models_arg(block), mock_bindir=self.bindir,
+            extra_env={"SERVO_CLAUDE_TIMEOUT": "30"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(
+            result.stderr.count("models.judge is ignored"), 1, msg=result.stderr)
+        _await_terminal_state(self.target)
+
+    def test_background_without_judge_block_prints_no_note(self):
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x", "--max-iterations", "2",
+            "--models", _models_arg({"runner": {"model": "sonnet"}}),
+            mock_bindir=self.bindir, extra_env={"SERVO_CLAUDE_TIMEOUT": "30"})
+        self.assertNotIn("models.judge", result.stderr)
+        _await_terminal_state(self.target)
+
+    def test_emit_routine_prompt_notes_models_not_carried(self):
+        result = _run_raw(
+            self.target, "--emit-routine-prompt", "--prompt", "x",
+            "--models", _models_arg({"runner": {"model": "sonnet"}}),
+            mock_bindir=self.bindir)
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(
+            result.stderr.count("not carried into the Routine prompt"), 1,
+            msg=result.stderr)
+
+    def test_emit_routine_prompt_without_models_prints_no_note(self):
+        result = _run_raw(
+            self.target, "--emit-routine-prompt", "--prompt", "x",
+            mock_bindir=self.bindir)
+        self.assertNotIn("Routine prompt", result.stderr)
+
+    def test_inherit_judge_block_prints_no_note(self):
+        result = self._goal("--models", _models_arg(
+            {"runner": {"model": "sonnet"}, "judge": {"model": "inherit"}}))
+        self.assertNotIn("judge", result.stderr)
+
+    def test_no_block_goal_argv_unchanged(self):
+        # Negative guard.
+        result = self._goal()
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        (argv,) = _read_args_log(self.args_log)
+        for flag in ("--model", "--effort", "--advisor"):
+            self.assertNotIn(flag, argv)
+        self.assertNotIn("judge", result.stderr)
+
+    def test_invalid_block_refused_under_goal(self):
+        result = self._goal("--models", '{"runner": {"effort": "turbo"}}')
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(self._summary(result)["terminal_reason"], "models_invalid")
+        self.assertEqual(list(self.target.glob(".servo/runs/*")), [])
+
+    def test_background_forwards_block_to_detached_child(self):
+        block = {"runner": {"model": "sonnet", "effort": "low"}}
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x", "--max-iterations", "2",
+            "--models", _models_arg(block), mock_bindir=self.bindir,
+            extra_env={"SERVO_CLAUDE_TIMEOUT": "30"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        state = _await_terminal_state(self.target)
+        self.assertEqual(state["terminal_reason"], "oracle_pass")
+        self.assertEqual(state["models"], {"runner": {"model": "sonnet", "effort": "low"},
+                                           "judge": {}})
+        (argv,) = _read_args_log(self.args_log)
+        self.assertEqual(_find_flag_value(argv, "--model"), "sonnet")
+        self.assertEqual(_find_flag_value(argv, "--effort"), "low")
+
+    def test_child_argv_forwards_compact_models_only_when_set(self):
+        m = _load_loop_module()
+        block = {"runner": {"model": "sonnet"}, "judge": {}}
+        argv = m._build_detached_child_argv(
+            Path("/tmp/t"), "RID", prompt="p", max_iterations=None,
+            cost_ceiling=None, models=block)
+        self.assertEqual(
+            json.loads(argv[argv.index("--models") + 1]), block)
+        self.assertNotIn(" ", argv[argv.index("--models") + 1])
+        argv = m._build_detached_child_argv(
+            Path("/tmp/t"), "RID", prompt="p", max_iterations=None,
+            cost_ceiling=None)
+        self.assertNotIn("--models", argv)
+
+
 if __name__ == "__main__":
     unittest.main()

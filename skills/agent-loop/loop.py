@@ -1043,6 +1043,7 @@ def _build_initial_state(
     context_fill_threshold: float, plateau_window: int,
     plateau_noise_floor: float,
     claude_version: Optional[str],
+    models: Optional[dict] = None,
 ) -> dict:
     """Construct the canonical fresh-run state dict (ADR-0004 schema).
 
@@ -1068,6 +1069,8 @@ def _build_initial_state(
         "target_path": str(target),
         "prompt": prompt,
         "current_session_id": "",
+        # Spec 038-02: the resolved role `models` block (None = none in effect).
+        "models": models,
         "iteration_count": 0,
         "max_iterations": max_iterations,
         "cost_ceiling_usd": cost_ceiling,
@@ -1200,7 +1203,8 @@ def _refuse_plan(*, reason: str, message: str) -> int:
     and no configured budget to echo. The summary shape mirrors the preflight
     refusal (a single JSON line + a stderr breadcrumb) with the plan-read
     `terminal_reason`; the closed reasons are `plan_missing` / `plan_malformed`
-    / `plan_schema_mismatch` / `plan_requires_clamp`.
+    / `plan_schema_mismatch` / `plan_requires_clamp` / `plan_value_invalid`,
+    plus `models_invalid` for a bad `--models` flag (spec 038-02).
     """
     sys.stderr.write(f"loop: {message}\n")
     _emit_json({
@@ -1789,7 +1793,160 @@ _MODEL_USAGE_TOKEN_FIELDS = (
     ("cacheReadInputTokens", "cache_read_input_tokens"),
     ("cacheCreationInputTokens", "cache_creation_input_tokens"),
 )
-_NULL_REQUESTED = {"model": None, "effort": None, "advisor": None}
+
+# Spec 038-02 (ADR-0047 D1/D2): per-role model placement. A `models` block is
+# `{"runner": {...}, "judge": {...}}`; each role takes `model` / `effort` /
+# `advisor` (strings; "inherit" == absent).
+MODELS_ROLES = ("runner", "judge")
+MODELS_ROLE_KEYS = ("model", "effort", "advisor")
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+INHERIT = "inherit"
+REASON_MODELS_INVALID = "models_invalid"
+_MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]*")  # fullmatch
+
+
+def _validate_role_models(role: object) -> "tuple[Optional[dict], Optional[str]]":
+    """`(normalized_role, None)` or `(None, error)`; inherited fields dropped."""
+    if not isinstance(role, dict):
+        return None, f"role block must be an object, got {role!r}"
+    out: dict = {}
+    for key, value in role.items():
+        if key not in MODELS_ROLE_KEYS:
+            return None, (
+                f"unknown key {key!r} (allowed: {', '.join(MODELS_ROLE_KEYS)})")
+        if not isinstance(value, str):
+            return None, f"{key} must be a string, got {value!r}"
+        if value == INHERIT:
+            continue
+        if key == "effort":
+            if value not in EFFORT_LEVELS:
+                return None, (
+                    f"effort must be one of {', '.join(EFFORT_LEVELS)} or "
+                    f"{INHERIT!r}, got {value!r}")
+        elif not _MODEL_ID_RE.fullmatch(value):
+            return None, f"{key} {value!r} is not a valid model id"
+        out[key] = value
+    return out, None
+
+
+def _validate_models(
+    block: object, *, allow_escalation: bool = False,
+) -> "tuple[Optional[dict], Optional[str]]":
+    """Validate + normalize a `models` block: `(normalized, None)` or
+    `(None, error_message)`.
+
+    Normalized form is `{"runner": {...}, "judge": {...}}` with inherited
+    fields dropped (both roles always present). One validator serves the flag
+    and the plan key; the caller picks the refusal reason. `allow_escalation`
+    additionally accepts a top-level `escalation` list of non-empty role-key
+    objects (turned on by spec 038-03; unknown here until then).
+    """
+    if not isinstance(block, dict):
+        return None, f"models must be a JSON object, got {block!r}"
+    allowed = MODELS_ROLES + (("escalation",) if allow_escalation else ())
+    for key in block:
+        if key not in allowed:
+            return None, (
+                f"unknown models key {key!r} (allowed: {', '.join(allowed)})")
+    out: dict = {}
+    for role in MODELS_ROLES:
+        norm, err = _validate_role_models(block.get(role, {}))
+        if err is not None:
+            return None, f"models.{role}: {err}"
+        out[role] = norm
+    if "escalation" in block:
+        rungs = block["escalation"]
+        if not isinstance(rungs, list):
+            return None, "models.escalation must be a list"
+        out["escalation"] = []
+        for index, rung in enumerate(rungs):
+            norm, err = _validate_role_models(rung)
+            if err is not None or not norm:
+                return None, (
+                    f"models.escalation[{index}]: "
+                    f"{err or 'a rung must set at least one field'}")
+            out["escalation"].append(norm)
+    return out, None
+
+
+def _load_models_arg(value: str) -> "tuple[Optional[object], Optional[str]]":
+    """Parse a `--models` value: inline JSON when it starts with `{`, else a
+    file path. Returns `(parsed, None)` or `(None, error)`; shape validation
+    is `_validate_models`'s job."""
+    text = value
+    stripped = value.lstrip()
+    if stripped.startswith("["):
+        return None, "--models must be a JSON object (got a JSON array)"
+    if not stripped.startswith("{"):
+        try:
+            text = Path(value).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return None, f"--models file {value!r} is unreadable: {exc}"
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return None, f"--models is not valid JSON: {exc.msg} (line {exc.lineno})"
+    if not isinstance(parsed, dict):
+        return None, "--models must be a JSON object"
+    return parsed, None
+
+
+def _models_in_effect(models: Optional[dict]) -> bool:
+    """True when the resolved block sets at least one role field."""
+    return bool(models) and any(
+        (models.get(role) or {}) for role in MODELS_ROLES)
+
+
+def _role_cfg(models: Optional[dict], agent: str) -> dict:
+    return (models or {}).get(agent) or {}
+
+
+def _role_args(role_cfg: Optional[dict]) -> "list[str]":
+    """`--model` / `--effort` / `--advisor` argv for a role (fixed order)."""
+    args: "list[str]" = []
+    for key in MODELS_ROLE_KEYS:
+        value = (role_cfg or {}).get(key)
+        if value:
+            args.extend([f"--{key}", value])
+    return args
+
+
+def _note_judge_ignored(models: Optional[dict]) -> None:
+    """One stderr note when a judge block meets the (judge-less) goal driver."""
+    if _role_cfg(models, AGENT_JUDGE):
+        sys.stderr.write(
+            "loop: models.judge is ignored under --driver goal (the goal "
+            "driver has no judge role).\n")
+
+
+def _requested_of(role_cfg: Optional[dict]) -> dict:
+    """The `requested` accounting record for a role (null = inherited)."""
+    return {key: (role_cfg or {}).get(key) for key in MODELS_ROLE_KEYS}
+
+
+def _id_names(model_id: str, name: Optional[str]) -> bool:
+    """True when `name` equals `model_id` or is a `-`-delimited token of it."""
+    return bool(name) and (
+        model_id == name or name in model_id.split("-"))
+
+
+def _mark_requested_advisor(
+    model_usage: dict, advisor: Optional[str], model: Optional[str],
+) -> dict:
+    """Copy of `model_usage` with `"advisor": true` on entries naming the
+    requested advisor (second signal, ADR-0047 D1), unless the id also names
+    the role's own requested model. Only applies when the role requests a
+    `model` explicitly: with an inherited model the executor's own entry may
+    share the advisor's family token, so only the `advisor_message` signal
+    (final-turn consults) is trusted."""
+    out = {}
+    for model_id, entry in model_usage.items():
+        if (model and _id_names(model_id, advisor)
+                and not _id_names(model_id, model)):
+            out[model_id] = {**entry, "advisor": True}
+        else:
+            out[model_id] = dict(entry)
+    return out
 
 
 def _as_number(value) -> float:
@@ -1845,10 +2002,8 @@ def _usage_record(claude_data: dict) -> dict:
 
 
 def _reported_total_cost(claude_data: dict) -> float:
-    try:
-        return float((claude_data or {}).get("total_cost_usd", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
+    """Reported `total_cost_usd` as a finite float; NaN/inf/strings count as 0."""
+    return _as_number((claude_data or {}).get("total_cost_usd"))
 
 
 def _session_id_of(claude_data: dict) -> str:
@@ -1893,7 +2048,8 @@ def _iteration_cost_delta(
         snap_cost = _as_number(snapshot.get("total_cost_usd"))
         this_tokens = sum(_usage_record(claude_data).values())
         if (
-            _sum_tokens(reported_mu) >= _sum_tokens(snap_mu) + this_tokens
+            _sum_tokens(snap_mu) > 0  # an empty snapshot proves nothing
+            and _sum_tokens(reported_mu) >= _sum_tokens(snap_mu) + this_tokens
             and reported_cost >= snap_cost
         ):
             delta_mu = {}
@@ -1939,6 +2095,9 @@ def _iteration_accounting(
     for model_id, entry in model_usage.items():
         marked[model_id] = (
             {**entry, "advisor": True} if model_id in advisors else dict(entry))
+    # Spec 038-02: second signal - ids naming the role's requested advisor.
+    marked = _mark_requested_advisor(
+        marked, requested.get("advisor"), requested.get("model"))
     primary, best = None, None
     for model_id, entry in marked.items():
         if entry.get("advisor"):
@@ -2347,8 +2506,12 @@ def _invoke_claude(
     agent_name: Optional[str] = None,
     host: str = HOST_CLAUDE,
     max_ai_credits: Optional[float] = None,
+    role_args: Optional[list] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
+
+    `role_args` (spec 038-02): the role's `--model/--effort/--advisor` flags,
+    inserted before `--settings`; empty/None leaves the argv unchanged.
 
     Slice 032-05: when `host == HOST_COPILOT`, delegates to `_invoke_copilot`
     (which returns a dict in this function's shape so the loop body is
@@ -2393,6 +2556,7 @@ def _invoke_claude(
         )
     cmd: list[str] = ["claude", "-p", "--output-format", "json"]
     cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    cmd.extend(role_args or [])
     cmd.extend(_settings_args(target))
     if agent_name:
         cmd.extend(["--agent", agent_name])
@@ -2694,6 +2858,7 @@ def run_loop(
     allow_dirty: bool = False,
     host: str = HOST_CLAUDE,
     max_ai_credits: Optional[float] = None,
+    models: Optional[dict] = None,
 ) -> int:
     """Drive the iteration loop with state persistence + resume + signal handling.
 
@@ -2850,6 +3015,23 @@ def run_loop(
             state["plateau_window"] = plateau_window
         if plateau_noise_floor is not None:
             state["plateau_noise_floor"] = plateau_noise_floor
+        # Spec 038-02 AC5: a supplied block replaces the persisted one
+        # wholesale; otherwise keep it (old state: none). A kept block is
+        # re-validated - state.json is hand-editable and the block feeds argv.
+        if models is not None:
+            state["models"] = models
+        elif state.get("models") is not None:
+            kept, kept_err = _validate_models(state["models"])
+            if kept_err is not None:
+                return _refuse_preflight(
+                    run_id=resume_run_id,
+                    reason=REASON_MODELS_INVALID,
+                    message=f"persisted state models invalid: {kept_err}",
+                    cost_ceiling=refusal_ceiling,
+                    context_fill_threshold=refusal_threshold,
+                )
+            state["models"] = kept
+        state.setdefault("models", None)
         # Backfill defaults for state files written before slice 003-05.
         # Same state_schema_version=1; additive fields per ADR-0004's
         # "pure additive changes MAY keep version at 1" clause.
@@ -2973,6 +3155,7 @@ def run_loop(
             plateau_window=plateau_window,
             plateau_noise_floor=plateau_noise_floor,
             claude_version=current_claude_version,
+            models=models,
         )
         state_path = _state_path_for(target, run_id)
         _atomic_write_state(state, state_path)
@@ -3052,12 +3235,20 @@ def run_loop(
         )
         # Pass --resume <session_id> when we have one (slice 003-04). For
         # fresh-run iter 1 the session id is empty → no --resume.
-        session_id_arg = state.get("current_session_id") or None
         # Slice 003-05: pick agent (runner/judge alternation) and assemble
         # the per-iteration prompt from the seed + last oracle JSON + last
         # verdict block. Iter 1 of a fresh run sends just the seed; iter 2+
         # / resumed runs send the structured assembly.
         agent_name = _agent_for_iteration(iteration)
+        # Spec 038-02 (ADR-0047 D2): with a models block in effect the judge
+        # runs in its own fresh session every time (no --resume) and never
+        # moves the runner's session or cost snapshot; runners keep resuming.
+        role_models = state.get("models")
+        split_judge = (
+            agent_name == AGENT_JUDGE and _models_in_effect(role_models))
+        role_cfg = _role_cfg(role_models, agent_name)
+        session_id_arg = (
+            None if split_judge else (state.get("current_session_id") or None))
         iteration_prompt = _assemble_iteration_prompt(
             state["prompt"],
             state.get("last_oracle_json"),
@@ -3084,6 +3275,7 @@ def run_loop(
             agent_name=agent_name,
             host=host,
             max_ai_credits=max_ai_credits,
+            role_args=_role_args(role_cfg),
         )
         # Snapshot immediately AFTER the invoke returns, BEFORE the gate runs —
         # so the delta brackets only the runner turn, excluding the later gate
@@ -3134,7 +3326,7 @@ def run_loop(
         accounting = _iteration_accounting(
             claude_data, agent=agent_name, cost_usd=cost_usd,
             cost_basis=cost_basis, model_usage=iter_model_usage,
-            requested=_NULL_REQUESTED,
+            requested=_requested_of(role_cfg),
         )
         claude_terminal_reason = str(claude_data.get("terminal_reason", ""))
 
@@ -3151,7 +3343,7 @@ def run_loop(
         state["cumulative_cost_usd"] += cost_usd
         state["cumulative_input_tokens"] += iter_input_tokens
         state["cumulative_output_tokens"] += iter_output_tokens
-        if session_id:
+        if session_id and not split_judge:
             state["current_session_id"] = session_id
             raw_mu = claude_data.get("modelUsage")
             state["current_session_usage_snapshot"] = {
@@ -3181,6 +3373,10 @@ def run_loop(
         context_fill_ratio, ratio_error = _extract_context_fill_ratio(claude_data)
         if context_fill_ratio is None and ratio_error is not None:
             sys.stderr.write(f"loop: {ratio_error}\n")
+        # Under the judge split (038-02) this ratio alternates between the
+        # runner's session and a fresh judge session. The context-fill gate
+        # still protects the runner: every runner turn is followed by the
+        # pre-iteration check (before the judge turn) on the runner's own ratio.
         state["last_context_fill_ratio"] = context_fill_ratio
 
         # Slice 003-05 AC10: parse the agent's verdict block. The agent's
@@ -3469,6 +3665,7 @@ def _invoke_claude_goal(
     max_turns: int,
     max_budget_usd: Optional[float],
     timeout_seconds: Optional[float] = None,
+    role_args: Optional[list] = None,
 ) -> tuple[Optional[dict], str, Optional[str]]:
     """Invoke one `claude -p --output-format stream-json --verbose` `/goal` run.
 
@@ -3491,6 +3688,7 @@ def _invoke_claude_goal(
     ]
     if max_budget_usd is not None and max_budget_usd > 0:
         cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    cmd.extend(role_args or [])  # spec 038-02: the runner role's flags
     # Bug 004 (parity with bug 002): forward the target's own committed
     # .claude/settings.json so a /goal run against a target that pre-authorizes
     # its tools runs unattended. Same conservative semantics as the loop driver.
@@ -3541,6 +3739,7 @@ def _invoke_claude_goal(
 def _build_goal_state(
     *, run_id: str, target: Path, prompt: str,
     max_turns: int, cost_ceiling: float, claude_version: Optional[str],
+    models: Optional[dict] = None,
 ) -> dict:
     """Goal-driver per-run state (ADR-0004 shape, goal-mode fields).
 
@@ -3558,6 +3757,7 @@ def _build_goal_state(
         "last_updated_at": now_iso,
         "target_path": str(target),
         "prompt": prompt,
+        "models": models,
         "max_turns": max_turns,
         "cost_ceiling_usd": cost_ceiling,
         "cumulative_cost_usd": 0.0,
@@ -3638,6 +3838,7 @@ def run_goal_loop(
     allow_dirty: bool = False,
     run_id: Optional[str] = None,
     detached: bool = False,
+    models: Optional[dict] = None,
 ) -> int:
     """Drive a single `/goal`-continuation run with servo's guardrails wired
     through the OUTER `claude -p` invocation (slice 003-06 / ADR-0008).
@@ -3742,12 +3943,17 @@ def run_goal_loop(
     state = _build_goal_state(
         run_id=run_id, target=target, prompt=prompt,
         max_turns=max_turns, cost_ceiling=ceiling, claude_version=claude_version,
+        models=models,
     )
     if detached:
         state["detached"] = True  # slice 003-08: a `--background` child run
     _atomic_write_state(state, state_path)
 
     goal_accounting: dict = {}  # filled once a result event is parsed (038-01)
+    # Spec 038-02 AC6: the runner role applies to the single invocation; the goal
+    # driver has no judge role, so a judge block is ignored (one note).
+    runner_cfg = _role_cfg(models, AGENT_RUNNER)
+    _note_judge_ignored(models)
 
     def _finalize(terminal_reason, *, cumulative_cost_usd, final_oracle_status,
                   composite=None, threshold=None, subtype=None,
@@ -3811,6 +4017,7 @@ def run_goal_loop(
         goal_prompt, target,
         max_turns=max_turns, max_budget_usd=ceiling,
         timeout_seconds=claude_timeout_seconds,
+        role_args=_role_args(runner_cfg),
     )
     # "Landed anything" = a non-empty delta (incl. a created untracked file).
     # `edit_signal_computed` matches 031-01's notion: the signal was observable
@@ -3844,7 +4051,7 @@ def run_goal_loop(
             result_event, agent=None, cost_usd=None,
             cost_basis=COST_BASIS_REPORTED,
             model_usage=_normalize_model_usage(result_event),
-            requested=_NULL_REQUESTED,
+            requested=_requested_of(runner_cfg),
         ))
         state.update(goal_accounting)
     try:
@@ -4073,6 +4280,7 @@ def _emit_routine_prompt(target: Path, seed: str) -> int:
 def _build_detached_child_argv(
     target: Path, run_id: str, *,
     prompt: str, max_iterations: Optional[int], cost_ceiling: Optional[float],
+    models: Optional[dict] = None,
 ) -> list[str]:
     """argv for the detached goal-driver child of a `--background` launch (AC1).
 
@@ -4092,6 +4300,9 @@ def _build_detached_child_argv(
         argv += ["--max-iterations", str(max_iterations)]
     if cost_ceiling is not None:
         argv += ["--cost-ceiling", str(cost_ceiling)]
+    if models is not None:
+        # Spec 038-02 AC6: the child applies the parent's resolved block.
+        argv += ["--models", json.dumps(models, separators=(",", ":"))]
     return argv
 
 
@@ -4154,6 +4365,7 @@ def run_goal_loop_background(
     max_iterations: Optional[int],
     cost_ceiling: Optional[float],
     allow_dirty: bool,
+    models: Optional[dict] = None,
 ) -> int:
     """Launch the goal driver DETACHED so an unattended run survives terminal close (AC1).
 
@@ -4175,6 +4387,7 @@ def run_goal_loop_background(
     """
     ceiling = cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
     max_turns = max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
+    _note_judge_ignored(models)  # the parent says so too (the child logs its own)
 
     err = _unpriced_oracle_error(target)
     if err is not None:
@@ -4229,6 +4442,7 @@ def run_goal_loop_background(
     state = _build_goal_state(
         run_id=run_id, target=target, prompt=prompt,
         max_turns=max_turns, cost_ceiling=ceiling, claude_version=claude_version,
+        models=models,
     )
     state["detached"] = True
     _atomic_write_state(state, state_path)
@@ -4237,6 +4451,7 @@ def run_goal_loop_background(
     argv = _build_detached_child_argv(
         target, run_id, prompt=prompt,
         max_iterations=max_iterations, cost_ceiling=cost_ceiling,
+        models=models,
     )
     pid, spawn_err = _spawn_detached(argv, log_path)
     if pid is None:
@@ -4420,6 +4635,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--models",
+        dest="models",
+        default=None,
+        help=(
+            "Per-role model placement (spec 038-02 / ADR-0047): inline JSON "
+            "(starts with `{`) or a path to a JSON file, "
+            '`{"runner": {"model", "effort", "advisor"}, "judge": {...}}` '
+            "(`inherit` == unset). Replaces a plan's `models` block entirely; "
+            "on --resume it replaces the persisted block. When any field is "
+            "set the judge runs in its own fresh session every iteration. "
+            "Refuses (rc=2 / models_invalid) before any run on a bad block."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         dest="resume",
         default=None,
@@ -4568,6 +4797,18 @@ def main(argv: Optional[list[str]] = None) -> int:
             "--cost-ceiling).\n"
         )
 
+    # Spec 038-02 AC1/AC2: resolve + validate the `--models` flag fail-closed,
+    # before any run directory / state / claude call.
+    flag_models = None
+    if args.models is not None:
+        raw_models, models_err = _load_models_arg(args.models)
+        if models_err is None:
+            flag_models, models_err = _validate_models(raw_models)
+        if models_err is not None:
+            return _refuse_plan(
+                reason=REASON_MODELS_INVALID,
+                message=f"--models refused: {models_err}")
+
     accounting_rc = _unpriced_oracle_preflight(
         target, cost_ceiling=args.cost_ceiling,
         context_fill_threshold=args.context_fill_threshold,
@@ -4618,6 +4859,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # routing — the Routine runs on a different host (the cloud), so this host's
     # /goal support is irrelevant to producing the artifact.
     if args.emit_routine_prompt:
+        if args.models is not None:
+            sys.stderr.write(
+                "loop: --models is not carried into the Routine prompt (a "
+                "Routine runs on its own host and model settings).\n")
         return _emit_routine_prompt(target, args.prompt)
 
     # Detached child of a `--background` launch (slice 003-08 AC1): run the goal
@@ -4632,6 +4877,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             allow_dirty=args.allow_dirty,
             run_id=args.detached_run_id,
             detached=True,
+            models=flag_models,
         )
 
     # ---- Plan consumption (slice 016-02, ADR-0016) -------------------------
@@ -4644,12 +4890,21 @@ def main(argv: Optional[list[str]] = None) -> int:
     # starts (AC6; AC7 now accepts both compiled and human_edited, 016-03 AC2).
     plan_budget = None
     plan_driver = None
+    plan_models = None
     if args.plan is not None:
         plan, plan_err = _load_plan(args.plan.resolve())
         if plan_err is not None:
             return _refuse_plan(reason=plan_err[0], message=plan_err[1])
         plan_budget = plan.get("budget") or {}
         plan_driver = plan.get("driver")
+        if "models" in plan:
+            # Validated even when `--models` will override it: a bad plan key
+            # is a bad plan (fail-closed, 038-02 AC2).
+            plan_models, plan_models_err = _validate_models(plan["models"])
+            if plan_models_err is not None:
+                return _refuse_plan(
+                    reason=REASON_PLAN_VALUE_INVALID,
+                    message=f"plan models invalid: {plan_models_err}")
 
         # ---- Plan-value validation (slice 016-03 AC3) ----------------------
         # Fail-closed, BEFORE clamping or driver resolution: a plan-sourced
@@ -4666,6 +4921,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             driver_err = _validate_plan_driver(plan_driver)
             if driver_err is not None:
                 return _refuse_plan(reason=driver_err[0], message=driver_err[1])
+
+    # Spec 038-02 AC1: block-level precedence, `--models` > plan `models`.
+    models = flag_models if flag_models is not None else plan_models
 
     # Resolve the effective driver: explicit --driver > plan `driver` > auto
     # (slice 016-02 A1/AC2). Done ABOVE the routing probes so a plan's driver
@@ -4777,6 +5035,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             max_iterations=max_iterations,
             cost_ceiling=cost_ceiling,
             allow_dirty=args.allow_dirty,
+            models=models,
         )
 
     # ---- Dispatch ----------------------------------------------------------
@@ -4809,6 +5068,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             cost_ceiling=cost_ceiling,
             resume_run_id=args.resume,
             allow_dirty=args.allow_dirty,
+            models=models,
         )
 
     # ---- Clamp-never-disable: context_fill_threshold / plateau_window
@@ -4854,6 +5114,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         allow_dirty=args.allow_dirty,
         host=args.host,
         max_ai_credits=args.max_ai_credits,
+        models=models,
     )
 
 

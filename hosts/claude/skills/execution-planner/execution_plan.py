@@ -26,7 +26,7 @@ The `budget` block records `loop.py`'s public defaults — the planned, safe bud
 Clamping a hand-edited disable-sentinel value is `loop.py`'s job at Run time
 (slice 016-03 AC1). This module's own slice 016-03 responsibility (AC4) is
 **recompile-preserve**: `compile` refuses to silently clobber a plan whose
-`budget`/`driver` content was hand-edited since it was last compiled (detected
+`budget`/`driver`/`models` content was hand-edited since it was last compiled (detected
 by `budget_hash`, not a self-reported `provenance` label — see `write_plan`),
 unless `--force` is passed.
 
@@ -290,16 +290,30 @@ def _load_evaluation_model(target: Path, spec_dir: Path, spec_id: str):
 # Compile + persistence
 # ---------------------------------------------------------------------------
 
-def _budget_hash(budget: dict, driver: str) -> str:
-    """sha256 hex digest of the canonical-JSON `{budget, driver}` (016-03 A5).
+_ABSENT = object()  # "the plan has no `models` key" (distinct from `models: null`)
 
-    Only these two fields — the ones this slice's ACs and `loop.py` actually
+
+def _budget_hash(budget: dict, driver: str, models: object = _ABSENT) -> str:
+    """sha256 hex digest of the canonical-JSON `{budget, driver[, models]}`
+    (016-03 A5).
+
+    Spec 038-02: a plan's human-editable `models` block is hashed too. The
+    PRESENCE of the key is hashed content (any value, including null - the
+    loop refuses `models: null`, so the planner must see it as an edit); with
+    the key absent (the default) the digest is exactly today's `{budget,
+    driver}` JSON, so every plan without a `models` key keeps its recorded
+    digest.
+
+    Only these fields — the ones the ACs and `loop.py` actually
     consume — are hashed; the other referenced-not-copied plan fields (per
     ADR-0016) are producer identity, not human-editable surface. `sort_keys`
     makes the digest independent of key insertion order, so an edit that
     reorders keys without changing values does not spuriously read as drift.
     """
-    canonical = json.dumps({"budget": budget, "driver": driver}, sort_keys=True)
+    payload = {"budget": budget, "driver": driver}
+    if models is not _ABSENT:
+        payload["models"] = models
+    canonical = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -360,7 +374,7 @@ def write_plan(target: Path, spec_id: str, plan: dict, *, force: bool = False) -
 
     Slice 016-03 AC4/A5 (recompile-preserve): before overwriting an EXISTING
     plan at this path, recompute what its `budget_hash` should be from its own
-    current on-disk `budget`/`driver` and compare to its own recorded
+    current on-disk `budget`/`driver`/`models` and compare to its own recorded
     `budget_hash`. A mismatch means the content drifted since it was last
     (re)compiled — regardless of what its `provenance` field claims — so this
     raises `EnvError("plan_edit_detected", ...)` and does NOT overwrite,
@@ -378,6 +392,9 @@ def write_plan(target: Path, spec_id: str, plan: dict, *, force: bool = False) -
       existed: there is no recorded baseline to detect drift against, so the
       overwrite proceeds exactly as it did before 016-03. The very next
       compile stamps a `budget_hash`, so drift detection is live from then on.
+      Exception (038-02): such a plan that carries a `models` key is NOT
+      overwritten - compile never writes `models`, so its presence proves a
+      human edit even without a baseline.
     """
     out_dir = target / ".servo" / "plans" / spec_id
     out_path = out_dir / "plan.json"
@@ -389,13 +406,17 @@ def write_plan(target: Path, spec_id: str, plan: dict, *, force: bool = False) -
         if isinstance(existing, dict):
             recorded_hash = existing.get("budget_hash")
             current_hash = _budget_hash(
-                existing.get("budget") or {}, existing.get("driver")
+                existing.get("budget") or {}, existing.get("driver"),
+                existing["models"] if "models" in existing else _ABSENT,
             )
-            if recorded_hash is not None and recorded_hash != current_hash:
+            if (
+                (recorded_hash is not None and recorded_hash != current_hash)
+                or (recorded_hash is None and "models" in existing)
+            ):
                 raise EnvError(
                     "plan_edit_detected",
                     f"plan at {out_path} was edited since it was last "
-                    f"compiled (budget/driver content no longer matches its "
+                    f"compiled (budget/driver/models content no longer matches its "
                     f"recorded budget_hash); refusing to overwrite the edit. "
                     f"Pass --force to recompile and discard it.",
                 )
@@ -455,7 +476,7 @@ def main(argv: list | None = None) -> int:
         "--force", action="store_true",
         help=(
             "bypass the recompile-preserve refusal (016-03 AC4) and "
-            "overwrite an existing plan.json even if its budget/driver "
+            "overwrite an existing plan.json even if its budget/driver/models "
             "content was hand-edited since it was last compiled"
         ),
     )
