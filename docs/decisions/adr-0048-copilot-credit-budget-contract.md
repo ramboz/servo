@@ -173,7 +173,9 @@ The goal driver stays refused (034-07).
 **Becomes easier:**
 
 - servo's per-node discipline (oracle, plateau, ladder, budget) can wrap a
-  Copilot worker. That is the precondition for host-driven campaigns.
+  Copilot worker. That is the precondition for *wrapped* host-driven campaigns
+  on Copilot (ADR-0049). Advisory campaigns do not need it, but they enforce
+  nothing in flight.
 - Spend is visible in the host's own unit instead of being silently 0.
 
 **Becomes harder:**

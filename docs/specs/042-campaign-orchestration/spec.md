@@ -20,16 +20,19 @@ per-node discipline:
 - the plateau ladder (038-03);
 - role placement (038-02).
 
-It records each item's typed outcome (spec 040) in a file ledger. An episodic
+It records each item's typed outcome (spec 040) in a file ledger. Advisory
+outcomes are marked `self_reported`. An episodic
 `campaign next` step reads the ledger, decides and exits. There is no daemon.
 
 Two modes:
 - **servo-driven** (Claude Code, headless): servo runs up to `max_parallel`
   `loop.py` workers itself, default 1.
-- **host-driven** (attended; Copilot or Claude Code sessions): servo emits
-  the plan plus one kickoff brief per item, with the worker contract built
-  in. The host spawns the children, and servo re-checks each claimed pass with
-  the item's oracle before recording it.
+- **host-driven**: servo emits the plan plus one kickoff brief per item, and
+  the host spawns the children. The **wrapped** tier runs each worker under
+  `loop.py`, which enforces per-node discipline and reports the real outcome
+  line; it works on Claude Code hosts today, and on Copilot after ADR-0048 and
+  spec 041. The **advisory** tier enforces only verified passes and a ledger;
+  its other fields are marked `self_reported`. See ADR-0049.
 
 ### Grounded starting point
 
@@ -59,16 +62,17 @@ Two modes:
 
 ## Assumptions
 
-ADR-0049 A1–A3:
-- a host can forward outcomes;
+ADR-0049 A1–A4:
+- adoption: a host coordinator actually calls servo;
 - parallel worktrees don't contend on shared resources;
-- the integration review works as an emitted brief.
+- the integration review works as an emitted brief;
+- campaign items can be oracle-gated.
 
 ## Decomposition (SPIDR)
 
-- **Interface:** host-driven mode comes before servo-driven parallelism.
-  Host-driven mode is the one that would have changed the recorded Copilot
-  run, and it needs no concurrency in servo.
+- **Interface:** host-driven *wrapped* mode on Claude Code hosts comes
+  first. It is enforced, and it needs no concurrency in servo. Advisory
+  Copilot mode follows, then wrapped Copilot after spec 041.
 - **Data:** the plan and ledger come first, since every mode depends on them.
 - **Rules:** parallelism and the integration review come last.
 

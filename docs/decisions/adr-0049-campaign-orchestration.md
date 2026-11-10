@@ -71,19 +71,31 @@ below:
 - **Two modes:**
   - **servo-driven** (Claude Code, headless): servo runs up to *N* `loop.py`
     workers in worktrees, under an aggregate ceiling.
-  - **host-driven** (Copilot, attended): servo emits the plan plus one kickoff
-    brief per item, with the worker contract built in (oracle command,
-    budget, model tier, one-line outcome format, escalation scope). The
-    host's own orchestrator spawns the children, and servo gates their typed
-    outcomes into the ledger. servo neither spawns nor messages host
-    sessions.
+  - **host-driven**: servo emits the plan plus one kickoff brief per item, and
+    the host's own orchestrator spawns the children. servo neither spawns nor
+    messages host sessions. There are two tiers, and they differ in what servo
+    actually enforces:
+    - **wrapped**: each host-spawned worker runs its item under `loop.py`
+      and reports spec 040's outcome line. The line is a rendering of the
+      loop summary, so its cost, rung and result are reported by the loop,
+      not by a model. Per-node discipline is enforced in the worker's process:
+      oracle, budget, plateau, ladder and context brakes. This works on Claude
+      Code hosts today. On Copilot it needs ADR-0048's credit brake and spec
+      041, because ADR-0043 refuses `loop.py --host copilot` until then.
+    - **advisory**: the worker does not run `loop.py`, so budget, model tier,
+      ladder and escalation scope reach it only as brief text. servo enforces
+      the planned list, the ledger and an **oracle re-check of every claimed
+      pass**. Every other outcome field is recorded as `self_reported: true`,
+      and the aggregate ceiling never counts self-reported cost as enforced
+      spend. Nothing stops a runaway advisory worker in flight.
 - **Integration review:** a wave-level step before PRs go out. It produces one
   fresh-context review brief over the wave's diffs.
 
 **Pros:**
 - reuses the heartbeat's proven worktree, outcome and quarantine machinery;
-- the per-node discipline (oracle, budget, plateau, ladder) applies to every
-  worker;
+- servo-driven and wrapped workers run under the per-node discipline (oracle,
+  budget, plateau, ladder); advisory workers get only verified passes and a
+  ledger;
 - the coordinator stays cheap, because it is episodic;
 - the host keeps the session tree (ADR-0008: compose on host primitives).
 
@@ -93,10 +105,30 @@ below:
 - Host-driven mode trusts the host to forward outcomes faithfully. The oracle
   re-check (below) bounds that trust.
 
-### Option B: leave campaigns entirely to the host and jig
+### Option B: leave campaigns to the host and jig, steered by always-loaded instructions
 
-- **Cons:** this is the recorded status quo. Workers ran without servo's
-  discipline, and the coordinator was expensive and lossy. Rejected.
+Since the recorded run, the user's always-loaded Copilot instructions have
+gained a "Multi-session campaigns" section:
+- plan in a file;
+- offer servo `scaffold-init` when `.servo/` is missing;
+- the coordinator never edits;
+- one-line child outcomes;
+- escalation by scope;
+- a fresh cross-PR review.
+
+That is a real alternative, and it costs no servo code.
+
+- **Pros:** zero new servo surface; uses the lever the research found most
+  effective (always-loaded text beats skill descriptions).
+- **Cons:**
+  - no durable ledger;
+  - no oracle check of a claimed pass;
+  - and, the deciding gap, no enforced per-node discipline for any worker.
+
+  Advisory host-driven mode adds only the ledger and verified passes over this.
+  Wrapped and servo-driven modes add enforcement. Option A is chosen for those
+  enforcing tiers. If wrapped mode proves unreachable on a host, Option B plus
+  the advisory ledger is the fallback for that host.
 
 ### Option C: a free-form `/servo:crew` (agents negotiating work among themselves)
 
@@ -137,9 +169,11 @@ Option A. The three boundary lines are handled as follows:
 - No merge-conflict AI. No cloud fan-out: workers are local worktrees, or
   host sessions the host spawns.
 - servo never depends on jig.
-- Unattended Copilot workers stay refused until ADR-0048 is accepted and spec
-  041 is implemented. Host-driven mode on Copilot is attended, so it is not
-  blocked by that.
+- **No route around ADR-0043.** A Copilot worker runs under `loop.py` (wrapped)
+  only once ADR-0048 is accepted and spec 041 is implemented. Until then,
+  Copilot campaigns are **advisory** only. "Attended" is not a reason to skip
+  the brake: host-spawned children that run for hours unwatched are
+  unattended, in the sense ADR-0043 cares about.
 
 ## Consequences
 
@@ -158,10 +192,20 @@ Option A. The three boundary lines are handled as follows:
 
 ## Assumptions
 
-- **A1:** host-driven mode can be made to work. A host coordinator, such as
-  Copilot's `orchestrate` skill or a Claude Code session, forwards a worker's
-  one-line outcome and worktree path to `campaign record`. Unverified for any
-  host. This decides whether that mode is servo-gated or only advisory.
+- **A1 (adoption):** in a real campaign, the host's coordinator actually calls
+  `campaign init` / `next` / `record`. In the recorded run the host's own
+  `orchestrate` skill won the routing, and no servo skill ran. The triggers
+  that would have to carry servo's calls are:
+  - the always-loaded campaign instructions;
+  - jig's reframe emitting a servo plan file;
+  - the kickoff briefs themselves.
+
+  Unverified for any host.
+- **A4 (oracle coverage):** a campaign's work items can be expressed as
+  oracle-gated items, with a `gate.py`-scorable `oracle_ref` each. The
+  motivating run's items were audit-remediation PRs, plus fixes driven by
+  external review, in a repo with no `.servo/`. If most such items can't carry
+  an oracle, campaigns don't cover the run that motivates them.
 - **A2:** worktree-per-worker parallelism on one machine doesn't contend on
   shared resources (ports, caches, the target's own build directories) for
   typical targets. Unverified. `max_parallel` defaults to 1.
@@ -170,9 +214,13 @@ Option A. The three boundary lines are handled as follows:
 
 ## Kill criteria
 
-- If A1 fails, meaning no host can forward outcomes without servo spawning
-  sessions itself, drop host-driven mode. servo-driven mode alone may not
-  justify reinterpreting the boundaries; revisit Option B.
+- **A1 fails.** In a trial host-driven campaign, record the share of items
+  the coordinator recorded through `campaign record` without a human prompt.
+  If it is under ~80%, drop host-driven mode for that host and use Option B.
+  servo-driven mode alone may not justify reinterpreting the boundaries.
+- **A4 fails.** If fewer than half of a representative campaign's items can be
+  given an oracle, the campaign layer does not serve its motivating case.
+  Stop at 042-01 (plan + ledger) and revisit.
 - If parallel workers routinely conflict on shared target resources, cap
   `max_parallel` at 1 and keep only the planned-list and ledger value.
 
@@ -182,5 +230,11 @@ Option A. The three boundary lines are handled as follows:
    oracle-gated, typed-outcome campaign is allowed?
 2. Should the default `max_parallel` stay 1, which is serial and gives
    parallelism by opt-in only?
-3. Should host-driven mode ship first? It is the mode that would have changed
-   the recorded Copilot run.
+3. **Slice order.**
+   - Wrapped host-driven mode on Claude Code hosts first, since it is
+     enforced and runs today.
+   - Advisory mode on Copilot, as a ledger and verified passes only.
+   - Wrapped Copilot after ADR-0048 and spec 041.
+
+   Neither advisory mode nor Option B would have stopped the recorded
+   runaway. Only wrapped Copilot workers would.
