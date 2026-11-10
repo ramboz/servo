@@ -69,19 +69,29 @@ below:
   escalations, writes them, and exits. There is no daemon and no resident
   coordinator context.
 - **Two modes:**
-  - **servo-driven** (Claude Code, headless): servo runs up to *N* `loop.py`
-    workers in worktrees, under an aggregate ceiling.
+  - **servo-driven** (Claude Code, headless): servo itself runs up to *N*
+    `loop.py` workers in worktrees, under an aggregate ceiling. There is no
+    wrapper session, so every brake binds all of the spend. This is the
+    enforced mode on Claude Code.
   - **host-driven**: servo emits the plan plus one kickoff brief per item, and
     the host's own orchestrator spawns the children. servo neither spawns nor
     messages host sessions. There are two tiers, and they differ in what servo
     actually enforces:
-    - **wrapped**: each host-spawned worker runs its item under `loop.py`
-      and reports spec 040's outcome line. The line is a rendering of the
-      loop summary, so its cost, rung and result are reported by the loop,
-      not by a model. Per-node discipline is enforced in the worker's process:
-      oracle, budget, plateau, ladder and context brakes. This works on Claude
-      Code hosts today. On Copilot it needs ADR-0048's credit brake and spec
-      041, because ADR-0043 refuses `loop.py --host copilot` until then.
+    - **wrapped (verified)**: the host-spawned worker is told to run its item
+      under `loop.py` and forward spec 040's outcome line.
+      - **The brakes bind only the `loop.py` subprocess** and the model calls
+        it makes. They do not bind the worker session above it. That session's
+        own spend, and any edits it makes after the loop halts, fall
+        **outside every ceiling**.
+      - So wrapped is **verified, not declared**. `campaign record` accepts a
+        line as wrapped only if both hold:
+        - its `run_id` matches the `loop.py` state in that item's worktree;
+        - the worktree's tree fingerprint equals the one `loop.py` recorded
+          when it halted. `loop.py` records a hash of its existing
+          `_tree_snapshot` at halt; no git operations are needed.
+      - Anything else is downgraded to advisory (`self_reported`).
+      - On Copilot this tier needs ADR-0048's credit brake and spec 041,
+        because ADR-0043 refuses `loop.py --host copilot` until then.
     - **advisory**: the worker does not run `loop.py`, so budget, model tier,
       ladder and escalation scope reach it only as brief text. servo enforces
       the planned list, the ledger and an **oracle re-check of every claimed
@@ -178,8 +188,9 @@ Option A. The three boundary lines are handled as follows:
 ## Consequences
 
 **Becomes easier:**
-- A host-orchestrated campaign gets servo's per-node discipline and a compact
-  ledger in place of a chatty, compacting coordinator.
+- A campaign gets a compact ledger in place of a chatty, compacting
+  coordinator. Servo-driven workers and verified-wrapped workers get servo's
+  per-node discipline; advisory workers get verified passes only.
 - jig's reframe can hand servo a plan instead of prose kickoffs.
 
 **Becomes harder:**
@@ -201,6 +212,10 @@ Option A. The three boundary lines are handled as follows:
   - the kickoff briefs themselves.
 
   Unverified for any host.
+- **A5 (worker compliance):** a host-spawned worker actually runs its item
+  under `loop.py`, stops when the loop halts, and forwards the loop's line
+  unchanged. Verification detects non-compliance after the fact; it cannot
+  prevent it.
 - **A4 (oracle coverage):** a campaign's work items can be expressed as
   oracle-gated items, with a `gate.py`-scorable `oracle_ref` each. The
   motivating run's items were audit-remediation PRs, plus fixes driven by
@@ -218,6 +233,9 @@ Option A. The three boundary lines are handled as follows:
   the coordinator recorded through `campaign record` without a human prompt.
   If it is under ~80%, drop host-driven mode for that host and use Option B.
   servo-driven mode alone may not justify reinterpreting the boundaries.
+- **A5 fails.** If under ~80% of a host's wrapped items verify (run id plus
+  tree fingerprint), treat that host as advisory-only. Its wrapped tier adds
+  only overhead.
 - **A4 fails.** If fewer than half of a representative campaign's items can be
   given an oracle, the campaign layer does not serve its motivating case.
   Stop at 042-01 (plan + ledger) and revisit.
@@ -231,10 +249,14 @@ Option A. The three boundary lines are handled as follows:
 2. Should the default `max_parallel` stay 1, which is serial and gives
    parallelism by opt-in only?
 3. **Slice order.**
-   - Wrapped host-driven mode on Claude Code hosts first, since it is
-     enforced and runs today.
-   - Advisory mode on Copilot, as a ledger and verified passes only.
-   - Wrapped Copilot after ADR-0048 and spec 041.
+   - Servo-driven mode on Claude Code first, serial (`max_parallel` 1). It is
+     enforced end to end, with no wrapper session.
+   - Advisory host-driven mode on Copilot: a ledger and verified passes only.
+   - Verified-wrapped Copilot after ADR-0048 and spec 041.
 
-   Neither advisory mode nor Option B would have stopped the recorded
-   runaway. Only wrapped Copilot workers would.
+   Wrapped mode on Claude Code adds a token-billed wrapper session and the
+   compliance gap of A5. It has no observed case of its own, so it is not
+   prioritized there. Neither advisory mode nor Option B would have stopped
+   the recorded runaway. Verified-wrapped Copilot workers would have bounded
+   the loop's own spend, but only to the extent the worker stayed inside
+   `loop.py` (A5).

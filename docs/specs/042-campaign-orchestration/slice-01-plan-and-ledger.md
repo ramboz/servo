@@ -30,6 +30,10 @@ of typed outcomes exist as servo-owned files, readable by `campaign status`.
    - The append is guarded by `flock` and written atomically, the same
      discipline as the heartbeat inbox.
    - The outcome is spec 040's line: result, rung, cost and reason.
+   - The ledger entry adds `tier` (`servo` | `wrapped` | `advisory`) and
+     `self_reported` (true for advisory).
+   - The aggregate ceiling counts cost only from `servo` and verified
+     `wrapped` entries.
    - A malformed outcome is refused.
 3. `campaign status <id>` prints each item's latest outcome, the totals
    (cost, passed, plateau, blocked) and the items still open. It is read-only.

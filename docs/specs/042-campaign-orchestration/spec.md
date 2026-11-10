@@ -30,11 +30,16 @@ Two modes:
 - **servo-driven** (Claude Code, headless): servo runs up to `max_parallel`
   `loop.py` workers itself, default 1.
 - **host-driven**: servo emits the plan plus one kickoff brief per item, and
-  the host spawns the children. The **wrapped** tier runs each worker under
-  `loop.py`, which enforces per-node discipline and reports the real outcome
-  line; it works on Claude Code hosts today, and on Copilot after ADR-0048 and
-  spec 041. The **advisory** tier enforces only verified passes and a ledger;
-  its other fields are marked `self_reported`. See ADR-0049.
+  the host spawns the children.
+  - The **verified-wrapped** tier: the worker runs its item under `loop.py`.
+    `campaign record` accepts the line only if its run id and worktree tree
+    fingerprint match the loop's halt state. The worker session's own spend
+    stays outside every ceiling. On Copilot this tier comes after ADR-0048
+    and spec 041.
+  - The **advisory** tier enforces only verified passes and a ledger; its
+    other fields are marked `self_reported`.
+
+  See ADR-0049.
 
 ### Grounded starting point
 
@@ -72,23 +77,27 @@ ADR-0049 A1–A4:
 
 ## Decomposition (SPIDR)
 
-- **Interface:** host-driven *wrapped* mode on Claude Code hosts comes
-  first. It is enforced, and it needs no concurrency in servo. Advisory
-  Copilot mode follows, then wrapped Copilot after spec 041.
+- **Interface:** servo-driven serial mode on Claude Code comes first. It is
+  enforced end to end, with no wrapper session and no concurrency. Advisory
+  host-driven Copilot mode follows, then verified-wrapped Copilot after
+  spec 041.
 - **Data:** the plan and ledger come first, since every mode depends on them.
 - **Rules:** parallelism and the integration review come last.
 
 ## Slices (sketch; ACs to sharpen after ADR-0049 is accepted)
 
 - [042-01 — plan and ledger](slice-01-plan-and-ledger.md)
-- 042-02 — kickoff briefs + `campaign record` (host-driven mode; uses spec
-  040's outcome line; re-checks passes with the oracle).
-- 042-03 — `campaign next` (episodic coordinator: reads the ledger, picks the
-  next items, batches escalations by scope).
+- 042-02 — servo-driven serial dispatch plus `campaign next`. The episodic
+  coordinator runs each item under `loop.py`, records the loop's line, and
+  batches escalations by scope.
+- 042-03 — host-driven mode: kickoff briefs plus `campaign record`. The
+  advisory tier gets oracle re-checks of passes and `self_reported` fields.
+  The verified-wrapped tier checks the run id and tree fingerprint, which
+  needs `loop.py` to record a tree fingerprint at halt.
 - 042-04 — servo-driven bounded parallel dispatch (`max_parallel`, aggregate
   ceiling with reservations).
 - 042-05 — wave integration-review brief (one fresh-context review over the
   wave's diffs before PRs are published).
 
 Dependencies: 038 (DONE when this lands), 040 (outcome line), 041 (Copilot
-budget unit, only for unattended Copilot workers).
+budget unit; needed for verified-wrapped Copilot workers).
