@@ -1,7 +1,7 @@
 ---
-status: Proposed
+status: Accepted
 dependencies: [adr-0038, adr-0041, adr-0043, adr-0047]
-last_verified:
+last_verified: 2026-11-11
 frame_review: true
 ---
 
@@ -9,10 +9,18 @@ frame_review: true
 
 ## Status
 
-Proposed (2026-11-10). **Owner acceptance required.** This ADR is the
-"separately recorded budget policy" that ADR-0043's kill criterion asks for.
-It stays Proposed until the owner explicitly accepts its text. A relayed
-priority is not acceptance.
+Accepted (2026-11-11)
+
+The owner accepted this ADR — the "separately recorded budget policy" that
+ADR-0043's kill criterion asks for — with all five open questions resolved per
+their recommended dispositions: the overrun+context bound is accepted as that
+policy (1), legacy-billing accounts get no second premium-request unit (2), the
+single-threaded no-subagent worker stands (3), spec 041-01's billed probe is
+authorized at ≤150 AI credits (4), and USD-priced oracle components under Copilot
+stay refused (5).
+
+Tightened 2026-11-11 before acceptance: added the tiering-and-ladder scope
+boundary for the Copilot loop driver (ADR-0047 stays Claude-only).
 
 ## Context
 
@@ -168,6 +176,14 @@ also **relaxes two of 034-03's conditions**:
 
 The goal driver stays refused (034-07).
 
+**Tiering and the ladder stay out of scope for the Copilot loop driver.**
+ADR-0047's `models` block and escalation ladder are Claude-only. Under `--host
+copilot` a `models` block that sets a model is refused (Copilot renders stay
+model-neutral, spec 032-03); 041-02 decides whether effort maps or is refused,
+and a credit-denominated ladder guard is deferred. This preserves ADR-0047's own
+"Copilot is out of scope" boundary, now that this ADR lifts the loop refusal that
+justified it.
+
 ## Consequences
 
 **Becomes easier:**
@@ -226,21 +242,24 @@ settles them.
 
 ## Open questions (owner)
 
-1. **Overrun and context, one decision.** Is part 2's overrun bound
-   acceptable as ADR-0043's "separately recorded budget policy", given that
-   the context brake is unavailable so the crossing call is the run's largest?
-   The bound is (1 + c) × the per-call maximum, with *c* = 1 for compaction;
-   for a large model this can be a large number of credits. 041-01 computes it
-   for the default worker model from `/model` prices, giving the owner a
-   number rather than a formula before acceptance. It is checked again on every
-   later run, and launch refuses when it is at least the ceiling.
-2. **Legacy-billing accounts:** refuse, or brake on premium requests as a
-   second unit?
-3. **Single-threaded worker:** is denying subagent spawning acceptable, given
-   it may reduce what the Copilot worker can do?
-4. **Billed probe:** authorize spec 041-01's probe, capped at **150 AI
-   credits**? Run 1 needs to spend past the 30-credit minimum cap so the
-   resume test means something (about 40–60). The resumed run (about 30–40)
-   and the timed-out run (about 30) come on top, plus margin.
-5. **USD-priced oracle components under Copilot:** keep refusing them (the
-   default), or approve a separate USD oracle ceiling?
+1. **Resolved (2026-11-11): yes.** Part 2's overrun bound is accepted as
+   ADR-0043's "separately recorded budget policy", with the context brake
+   unavailable so the crossing call is the run's largest. The bound is
+   (1 + c) × the per-call maximum, with *c* = 1 for compaction; 041-01 computes
+   it for the default worker model from `/model` prices before any reliance, it
+   is checked again on every later run, and launch refuses when it is at least
+   the ceiling.
+2. **Resolved (2026-11-11): refuse.** Legacy-billing accounts get no second
+   premium-request unit; AI credits are the sole unit. Revisit only if a real
+   legacy-billing account cannot populate `totalNanoAiu` (A4).
+3. **Resolved (2026-11-11): yes.** Denying subagent spawning is accepted; the
+   single-threaded worker is load-bearing for part 2's overrun bound. If 041-01
+   shows spawning cannot be denied, the native loop stays refused.
+4. **Resolved (2026-11-11): authorized.** Spec 041-01's billed probe is
+   authorized at **≤150 AI credits**, spent when that slice runs (run 1 about
+   40–60 past the 30-credit cap for the resume test, the resumed run about
+   30–40, the timed-out run about 30, plus margin). No credits are spent by this
+   acceptance.
+5. **Resolved (2026-11-11): keep refusing.** USD-priced oracle components under
+   Copilot stay refused (the default); no separate USD oracle ceiling is
+   approved. Revisit if a target needs one.

@@ -53,7 +53,7 @@
 - [ADR-0044: Required constraints cannot be averaged away](adr-0044-required-constraints-cannot-be-averaged-away.md) — (no description) (2026-10-14, Proposed)
 - [ADR-0046: Component-agnostic static evidence with native required verdicts](adr-0046-component-agnostic-static-evidence.md) — Reusable design evidence must not ship a component-specific evaluator. (2026-10-22, Accepted)
 - [ADR-0047: Per-node model tiering and the plateau escalation ladder](adr-0047-per-node-model-tiering-and-escalation-ladder.md) — servo's loop runs one node at a time: a `runner` that edits and a read-only `judge`, alternating through `claude -p`, scored by `gate.py` after every iteration. (2026-11-10, Accepted)
-- [ADR-0048: Copilot AI-credit budget contract for the native loop](adr-0048-copilot-credit-budget-contract.md) — servo refuses its native loop on GitHub Copilot CLI (ADR-0043). (Proposed)
+- [ADR-0048: Copilot AI-credit budget contract for the native loop](adr-0048-copilot-credit-budget-contract.md) — servo refuses its native loop on GitHub Copilot CLI (ADR-0043). (2026-11-11, Accepted)
 - [ADR-0049: Campaigns: bounded dispatch over a planned work list](adr-0049-campaign-orchestration.md) — In a recorded two-day multi-session campaign on Copilot CLI, a coordinator spawned 15 worker sessions to remediate a two-repo audit. (2026-11-11, Accepted)
 
 ## Pending
