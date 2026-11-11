@@ -36,7 +36,7 @@ A [pre-spec research spike](spike.md) (2026-05-18) verified Claude Code's headle
 
 - **Hook-driven `Stop`-event scoring (→ 004 oracle-hook).** The loop driver is a one-shot subprocess; hook integration is its own surface.
 - **Per-variant scoring across worktrees (→ 005 variant-race).** The race driver wraps the loop driver; the loop doesn't know about variants.
-- **Multi-agent crew coordination.** Servo ships a post-mortem template only; no `/servo:crew` skill ever (per `docs/architecture.md` "Why no crew skill").
+- **Multi-agent crew coordination.** Servo ships a post-mortem template only; no `/servo:crew` skill (per [ADR-0049](../../decisions/adr-0049-campaign-orchestration.md): a campaign is a planned, oracle-gated work list, not a free-form crew).
 - **Loop UI / progress bars / TUI.** The loop emits one JSON line per iteration to stdout, plus a final summary line. Consumers can pipe it to whatever rendering they want. Servo doesn't ship a renderer.
 - **Cloud cost ceilings.** Only Claude Code's per-invocation cost (`total_cost_usd`) is tracked. Out-of-band charges (network egress, third-party tool calls) are not in the gate. Documented limitation.
 - **Cross-machine checkpoint portability.** Per ADR-0001's filesystem-only coupling: state files are valid on the machine they were written on. A future spec may add export/import; today, "filesystem-only" means "wherever the JSONL session lives."

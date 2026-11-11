@@ -1,7 +1,7 @@
 ---
-status: Proposed
+status: Accepted
 dependencies: [adr-0008, adr-0010, adr-0018, adr-0030, adr-0043, adr-0047, adr-0048]
-last_verified:
+last_verified: 2026-11-11
 frame_review: true
 ---
 
@@ -9,10 +9,16 @@ frame_review: true
 
 ## Status
 
-Proposed (2026-11-10). **Owner acceptance required.** The owner asked for
-orchestration support ("we should add orchestration support in servo"). That
-authorizes drafting this ADR, not accepting it. No campaign slice is
-implemented until the owner explicitly accepts this text.
+Accepted (2026-11-11)
+
+The owner asked for orchestration support ("we should add orchestration support
+in servo") and accepted this ADR with open questions 1 and 2 answered yes:
+reinterpret "no crew" as "no free-form team", and keep the default
+`max_parallel` at 1. Open question 3 (slice order) was resolved to host-parity
+delivery.
+
+Revised 2026-11-11 after review: added the reservation-recovery rule, the
+coordinator decision log, and the plan-is-DATA framing.
 
 ## Context
 
@@ -63,11 +69,16 @@ below:
   outcome line).
 - **Source of the work list:** a plan file that servo reads. jig's reframe
   manifest or spec slices can produce one, but servo never reads jig
-  internals: the plan is servo's own schema.
+  internals: the plan is servo's own schema. The plan's contents are untrusted
+  DATA, not instructions (spec 011 Guardrail #4). Items can originate from
+  reframe, discovery or a human, so a worker treats item text as data and never
+  as instructions to itself.
 - **Episodic coordinator:** `campaign next` wakes on demand (a host event, a
   Routine or a human), reads the ledger, decides the next dispatches or
   escalations, writes them, and exits. There is no daemon and no resident
-  coordinator context.
+  coordinator context. Each `campaign next` records its own decision in the
+  ledger (what it read, what it dispatched or escalated), so a campaign that
+  fans out wrong can be debugged from the ledger alone.
 - **Two modes:**
   - **servo-driven** (Claude Code, headless): servo itself runs up to *N*
     `loop.py` workers in worktrees, under an aggregate ceiling. There is no
@@ -173,7 +184,11 @@ Option A. The three boundary lines are handled as follows:
    - the campaign has an aggregate cost ceiling, enforced before each
      dispatch on Σ recorded spend + Σ reserved per-worker ceilings of live
      workers;
-   - the ledger uses the existing `flock` + atomic-write discipline.
+   - the ledger uses the existing `flock` + atomic-write discipline;
+   - a per-worker reservation is held only while that item's `loop.py` run is
+     live. `campaign next` reconciles on wake: a reservation whose run is
+     neither live nor recorded is released and the item is re-queued at its
+     base, so a killed worker's budget is recovered.
 2. **"no `/servo:crew` skill ever": kept, reinterpreted.** There is still no
    free-form team. A campaign is a planned list of independent, oracle-gated
    work items with typed outcomes:
@@ -186,6 +201,21 @@ Option A. The three boundary lines are handled as follows:
 3. **"not a queue or a long-lived process": kept.** The ledger is a file. The
    coordinator is a command that exits. Waking it is the trigger's job: a
    host, a Routine or a human.
+
+**Delivery and host parity:**
+The host modes are separate slices of spec 042: servo-driven (Claude Code),
+host-driven advisory, and host-driven verified-wrapped (Copilot). They land
+together as one version. servo does not ship a release where campaign
+capability differs by host, which holds the tri-host parity line (ADR-0022,
+ADR-0038). This makes ADR-0048 and spec 041 prerequisites of that release,
+because verified-wrapped Copilot depends on them. The cheap servo-driven
+baseline is built first, then held until parity. The released version therefore
+includes verified-wrapped Copilot, which bounds the loop's own spend on the
+motivating host within A5's compliance limit, rather than shipping the
+advisory-only Copilot gap that would leave the recorded runaway unbraked. If a
+host's verified-wrapped tier fails its A5 kill criterion, the parity commitment
+is settled in spec 042 planning, not by silently shipping a per-host capability
+gap.
 
 **Kept unchanged:**
 - servo never merges, and the runner does no git operations. Landing goes
@@ -263,22 +293,20 @@ Option A. The three boundary lines are handled as follows:
 
 ## Open questions (owner)
 
-1. Accept reinterpreting "no crew" as "no free-form team", so that a planned,
-   oracle-gated, typed-outcome campaign is allowed?
-2. Should the default `max_parallel` stay 1, which is serial and gives
-   parallelism by opt-in only?
-3. **Slice order.**
-   - Servo-driven mode on Claude Code first, serial (`max_parallel` 1). It is
-     enforced end to end, with no wrapper session.
-   - Advisory host-driven mode on Copilot: a ledger and verified passes only.
-   - Verified-wrapped Copilot after ADR-0048 and spec 041.
-
-   Wrapped mode on Claude Code adds a token-billed wrapper session and the
-   compliance gap of A5, so it is not prioritized there. Servo-driven Claude
-   Code has no observed campaign case either: the one recorded run was on
-   Copilot. It ships first as a cheap, enforced **baseline** that needs no
-   boundary change while it runs serially, not as the motivating case. Neither
-   advisory mode nor Option B would have stopped
-   the recorded runaway. Verified-wrapped Copilot workers would have bounded
-   the loop's own spend, but only to the extent the worker stayed inside
-   `loop.py` (A5).
+1. **Resolved (2026-11-11): yes.** The owner accepted reinterpreting "no crew"
+   as "no free-form team", so a planned, oracle-gated, typed-outcome campaign is
+   allowed. Workers never talk to each other and the coordinator is a
+   deterministic step, so the free-form team spec 003 rejected stays rejected.
+2. **Resolved (2026-11-11): yes.** The default `max_parallel` stays 1. Campaigns
+   are serial unless a run opts into parallelism, which keeps A2 (resource
+   contention) unverified but harmless until a real campaign raises the cap.
+3. **Slice order: resolved (2026-11-11).** The owner chose host parity over
+   staged delivery. The host modes are separate slices of spec 042 that land
+   together as one version, so no host gets campaign capability a release ahead
+   of another. See Recommended Decision, "Delivery and host parity". This makes
+   ADR-0048 and spec 041 prerequisites of the spec 042 release. Wrapped mode on
+   Claude Code stays unprioritized: a token-billed wrapper session plus the A5
+   compliance gap. The recorded runaway is addressed because the single
+   released version includes verified-wrapped Copilot, which bounds the loop's
+   own spend within A5. Advisory mode alone, or Option B, would not have stopped
+   it.
