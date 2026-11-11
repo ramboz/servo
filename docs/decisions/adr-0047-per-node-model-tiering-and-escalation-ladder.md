@@ -9,7 +9,9 @@ frame_review: true
 
 ## Status
 
-Accepted (2026-11-10)
+Accepted (2026-11-10). The owner explicitly accepted this text, together with
+the ADR-0010 amendment that points to it, when approving PR 50 for merge. An
+earlier Accepted marking rested on a relayed approval to draft and implement.
 
 ## Context
 
