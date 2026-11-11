@@ -1,0 +1,379 @@
+{
+  "spec": "038-per-node-model-tiering",
+  "slice": "038-03 \u2014 plateau escalation ladder",
+  "pass": "arch",
+  "category": "arch_review",
+  "run_id": "8fe20f8ace0444d191255cb544cdf3d8",
+  "created_at": "2026-11-10T21:51:07Z",
+  "candidates": [
+    {
+      "name": "arch-review",
+      "description": "Multi-perspective review of architecture proposals, technical design documents, RFCs, and system design specs. Use this skill whenever the user asks to review an architecture proposal, design doc, RFC, ADR, technical spec, system design, or migration plan \u2014 whether they provide a document URL, paste content, upload files, or describe a design verbally. Also trigger when the user says things like \"review this design\", \"what do you think of this architecture\", \"poke holes in this proposal\", \"is this design sound\", \"review my RFC\", \"critique this tech spec\", or references evaluating a colleague's design document. Handles input as uploaded documents (PDF, markdown, Word), pasted text, URLs, or verbal descriptions. Works across domains: distributed systems, frontend architecture, data pipelines, API design, cloud infrastructure, and more. All review prose is written in the author's saved voice.",
+      "path": "/Users/ramboz/.claude/skills/arch-review/SKILL.md",
+      "tier": "high-confidence"
+    },
+    {
+      "name": "access",
+      "description": "Manage Discord channel access \u2014 approve pairings, edit allowlists, set DM/group policy. Use when the user asks to pair, approve someone, check who's allowed, or change policy for the Discord channel.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/skills/access/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "adr-workflow",
+      "description": "Scaffold, accept, index, and link Architectural Decision Records (ADRs). Use when the user says \\\"write an ADR\\\", \\\"record this decision\\\", \\\"resolve [deferred item] with an ADR\\\", \\\"supersede ADR-NNNN\\\", or otherwise wants to capture a hard-to-reverse decision in `docs/decisions/`. Also use when a refinement-todo entry needs to be marked RESOLVED with a link back to the ADR. Do NOT use for ad-hoc design discussion that hasn't crystallized into a decision yet \u2014 wait until the choice is firm.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/adr-workflow/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "agent-development",
+      "description": "This skill should be used when the user asks to \"create an agent\", \"add an agent\", \"write a subagent\", \"agent frontmatter\", \"when to use description\", \"agent examples\", \"agent tools\", \"agent colors\", \"autonomous agent\", or needs guidance on agent structure, system prompts, triggering conditions, or agent development best practices for Claude Code plugins.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/agent-development/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "analyze",
+      "description": "Answer data questions -- from quick lookups to full analyses. Use when looking up a single metric, investigating what's driving a trend or drop, comparing segments over time, or preparing a formal data report for stakeholders.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/analyze/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "bug-fix",
+      "description": "Drive the teeth-gated lifecycle for reported defects: diagnose root cause, prove it, and prevent regression through REPORTED \u2192 DIAGNOSING \u2192 ROOT_CAUSED \u2192 FIXING \u2192 REVIEWED \u2192 DONE, with VERIFIED, ESCALATED, and RESOLVED_ON_MAIN paths where needed. Auto-fires on fix this bug, debug this, root-cause this, this regressed, this broke again, why is this failing, diagnose before fixing, or investigate this failure. Two modes: `diagnose` stops at ROOT_CAUSED; `diagnose_and_fix` runs through DONE. Uses a durable bug record, multiple hypotheses, a fresh-main recheck, and a witnessed red\u2192green test. Do not use for spec-shaped work (use `spec-workflow`) \u2014 including a pure visual design-fidelity gap against an agreed mockup, which is spec-shaped, not a bug (see \\\"Design-fidelity triage\\\" below) \u2014 or trivial one-liners (use `tdd-loop`).\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/bug-fix/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "build-dashboard",
+      "description": "Build an interactive HTML dashboard with charts, filters, and tables. Use when creating an executive overview with KPI cards, turning query results into a shareable self-contained report, building a team monitoring snapshot, or needing multiple charts with filters in one browser-openable file.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/build-dashboard/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "build-mcp-app",
+      "description": "This skill should be used when the user wants to build an \"MCP app\", add \"interactive UI\" or \"widgets\" to an MCP server, \"render components in chat\", build \"MCP UI resources\", make a tool that shows a \"form\", \"picker\", \"dashboard\" or \"confirmation dialog\" inline in the conversation, or mentions \"apps SDK\" in the context of MCP. Use AFTER the build-mcp-server skill has settled the deployment model, or when the user already knows they want UI widgets.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcp-app/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "build-mcp-server",
+      "description": "This skill should be used when the user asks to \"build an MCP server\", \"create an MCP\", \"make an MCP integration\", \"wrap an API for Claude\", \"expose tools to Claude\", \"make an MCP app\", or discusses building something with the Model Context Protocol. It is the entry point for MCP server development \u2014 it interrogates the user about their use case, determines the right deployment model (remote HTTP, MCPB, local stdio), picks a tool-design pattern, and hands off to specialized skills.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcp-server/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "build-mcpb",
+      "description": "This skill should be used when the user wants to \"package an MCP server\", \"bundle an MCP\", \"make an MCPB\", \"ship a local MCP server\", \"distribute a local MCP\", discusses \".mcpb files\", mentions bundling a Node or Python runtime with their MCP server, or needs an MCP server that interacts with the local filesystem, desktop apps, or OS and must be installable without the user having Node/Python set up.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/mcp-server-dev/skills/build-mcpb/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "cardputer-buddy",
+      "description": "Iterate on the Cardputer-Adv MicroPython app bundle (Claude Buddy, Snake, Hello) after the device is already provisioned via m5-onboard. Use when the user wants to add a new app, push a single changed .py without re-flashing, watch device serial logs, or run a one-shot REPL command. Trigger on \"add an app\", \"push to the cardputer\", \"tail the device\", \"run on the device\", or follow-up work after /maker-setup.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/cwc-makers/skills/cardputer-buddy/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "clarify",
+      "description": "Lightweight spec clarification scan for jig projects \u2014 a six-category ambiguity audit that asks up to five prioritized questions and appends them to the spec's `## Clarifications` section. Auto-triggers when you say clarify this spec, audit this spec for ambiguities, is this spec ready for review, find unknowns in this scope, surface what's still unclear or unspecified, scan for unanswered questions, or what's missing from this spec. Do not use for: spec-compliance review of a finished slice (use `/jig:independent-review` instead); cross-artifact consistency analysis or drift detection (use `/jig:analyze` instead); project-vision or architecture elicitation (use `/jig:vision-elicitation` instead).\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/clarify/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "claude-automation-recommender",
+      "description": "Analyze a codebase and recommend Claude Code automations (hooks, subagents, skills, plugins, MCP servers). Use when user asks for automation recommendations, wants to optimize their Claude Code setup, mentions improving Claude Code workflows, asks how to first set up Claude Code for a project, or wants to know what Claude Code features they should use.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/claude-code-setup/skills/claude-automation-recommender/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "claude-md-improver",
+      "description": "Audit and improve CLAUDE.md files in repositories. Use when user asks to check, audit, update, improve, or fix CLAUDE.md files. Scans for all CLAUDE.md files, evaluates quality against templates, outputs quality report, then makes targeted updates. Also use when the user mentions \"CLAUDE.md maintenance\" or \"project memory optimization\".",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/claude-md-management/skills/claude-md-improver/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "code-health",
+      "description": "Run a static-analysis pass on a project \u2014 detect the ecosystem (Python or Node), drive its linter (ruff / eslint, plus advisory pyright/complexity/ prettier and a cross-ecosystem duplication signal) via the `health.py` helper, and act on the normalized exit code (0 clean / 1 findings / 2 no-linter). Auto-triggers when you say lint this, check code health, run the linter, ask is this code clean, ask any lint issues, or want a static analysis pass. Tools are resolved on PATH or run ephemerally via uvx / pipx / npx \u2014 it installs nothing. Defers to any other installed skill whose description identifies it as handling linting, static analysis, or code quality \u2014 prefer it over this baseline. Do not use for running tests (use `/jig:tdd-loop`), for security review (use `/jig:security-review`), for spec-compliance review of a finished slice (use `/jig:independent-review`), or for general PR craft review (use `/jig:pr-review`).\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/code-health/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "command-development",
+      "description": "This skill should be used when the user asks to \"create a slash command\", \"add a command\", \"write a custom command\", \"define command arguments\", \"use command frontmatter\", \"organize commands\", \"create command with file references\", \"interactive command\", \"use AskUserQuestion in command\", or needs guidance on slash command structure, YAML frontmatter fields, dynamic arguments, bash execution in commands, user interaction patterns, or command development best practices for Claude Code.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/command-development/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "configure",
+      "description": "Set up the Discord channel \u2014 save the bot token and review access policy. Use when the user pastes a Discord bot token, asks to configure Discord, asks \"how do I set this up\" or \"who can reach me,\" or wants to check channel status.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/external_plugins/discord/skills/configure/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "contracts",
+      "description": "Team baseline for external-interface contract artifacts: OpenAPI, JSON Schema, AsyncAPI, .proto, and GraphQL SDL, with spectral, ajv, buf, and graphql-inspector validation. Nudges devs toward contract-first artifacts; never writes them and never scaffolds a contracts/ directory. Auto-triggers for what contract should I use for this API, do we have an OpenAPI spec, add a JSON schema for this, recommend a schema for this endpoint, validate this API contract, or what's the right artifact for events. Defers to any other installed skill whose description identifies it as handling external-interface contract artifacts, API schema design, or contract-first workflow. Do not use for internal module-boundary refactoring, scaffolding a contracts/ directory, or auto-generating schemas from code.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/contracts/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "cowork-plugin-customizer",
+      "description": "Customize a Claude Code plugin for a specific organization's tools and workflows. Use when: customize plugin, set up plugin, configure plugin, tailor plugin, adjust plugin settings, customize plugin connectors, customize plugin skill, tweak plugin, modify plugin configuration.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042444-35178-DvMgap/cowork-plugin-management~g3/skills/cowork-plugin-customizer/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "create-cowork-plugin",
+      "description": "Guide users through creating a new plugin from scratch in a cowork session. Use when users want to create a plugin, build a plugin, make a new plugin, develop a plugin, scaffold a plugin, start a plugin from scratch, or design a plugin. This skill requires Cowork mode with access to the outputs directory for delivering the final .plugin file.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042444-35178-DvMgap/cowork-plugin-management~g3/skills/create-cowork-plugin/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "create-viz",
+      "description": "Create publication-quality visualizations with Python. Use when turning query results or a DataFrame into a chart, selecting the right chart type for a trend or comparison, generating a plot for a report or presentation, or needing an interactive chart with hover and zoom.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/create-viz/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "data-context-extractor",
+      "description": "Generate or improve a company-specific data analysis skill by extracting tribal knowledge from analysts.\\nBOOTSTRAP MODE - Triggers: \\\"Create a data context skill\\\", \\\"Set up data analysis for our warehouse\\\", \\\"Help me create a skill for our database\\\", \\\"Generate a data skill for [company]\\\" \u2192 Discovers schemas, asks key questions, generates initial skill with reference files\\nITERATION MODE - Triggers: \\\"Add context about [domain]\\\", \\\"The skill needs more info about [topic]\\\", \\\"Update the data skill with [metrics/tables/terminology]\\\", \\\"Improve the [domain] reference\\\" \u2192 Loads existing skill, asks targeted questions, appends/updates reference files\\nUse when data analysts want Claude to understand their company's specific data warehouse, terminology, metrics definitions, and common query patterns.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/data-context-extractor/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "data-visualization",
+      "description": "Create effective data visualizations with Python (matplotlib, seaborn, plotly). Use when building charts, choosing the right chart type for a dataset, creating publication-quality figures, or applying design principles like accessibility and color theory.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/data-visualization/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "example-command",
+      "description": "An example user-invoked skill that demonstrates frontmatter options and the skills/<name>/SKILL.md layout",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/example-plugin/skills/example-command/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "example-skill",
+      "description": "This skill should be used when the user asks to \"demonstrate skills\", \"show skill format\", \"create a skill template\", or discusses skill development patterns. Provides a reference template for creating Claude Code plugin skills.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/example-plugin/skills/example-skill/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "explain",
+      "description": "Explain jig vocabulary and artifacts in plain language. Three modes: term mode defines one lexicon term; artifact mode walks through a spec or ADR and its linked references; passage mode explains pasted jig output. Output is ephemeral (chat-only). Auto-triggers when you say explain this term, walk me through this spec, explain this ADR, what does this output mean, or explain this snippet; invoke explicitly with `/jig:explain`. Defers to any other installed skill whose description identifies it as handling plain-language explanation, onboarding, or artifact walkthroughs. Does not defer to the generic built-in. Do not use for finished-slice compliance (use `/jig:independent-review` instead), cross-artifact analysis (use `/jig:analyze` instead), or glossary updates (use `/jig:memory-sync` instead).\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/explain/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "explore-data",
+      "description": "Profile and explore a dataset to understand its shape, quality, and patterns. Use when encountering a new table or file, checking null rates and column distributions, spotting data quality issues like duplicates or suspicious values, or deciding which dimensions and metrics to analyze.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/explore-data/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "frontend-design",
+      "description": "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one. Helps with aesthetic direction, typography, and making choices that don't read as templated defaults.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/frontend-design/skills/frontend-design/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "hook-development",
+      "description": "This skill should be used when the user asks to \"create a hook\", \"add a PreToolUse/PostToolUse/Stop hook\", \"validate tool use\", \"implement prompt-based hooks\", \"use ${CLAUDE_PLUGIN_ROOT}\", \"set up event-driven automation\", \"block dangerous commands\", or mentions hook events (PreToolUse, PostToolUse, Stop, SubagentStop, SessionStart, SessionEnd, UserPromptSubmit, PreCompact, Notification). Provides comprehensive guidance for creating and implementing Claude Code plugin hooks with focus on advanced prompt-based hooks API.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "independent-review",
+      "description": "Build the standardized prompt for a fresh reviewer subagent that evaluates implemented work against its spec without access to the implementation conversation. Use after an implementer subagent completes a spec slice (when the slice is ready for REVIEWED), or after a deviation log is written (for reconciliation review). Do not use for ad-hoc code review unrelated to a spec, or for reviewing a spec's authorship (that's the READY_FOR_REVIEW step in spec-workflow).\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/independent-review/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "m5-onboard",
+      "description": "End-to-end onboarding for a freshly-plugged-in M5Stack ESP32 device (Cardputer, Cardputer-Adv, Core, CoreS3, Stick) \u2014 detect on USB, flash UIFlow 2.0 firmware, and install the Claude Buddy MicroPython app bundle. Use whenever the user plugs in or wants to flash/provision/reset an M5Stack or ESP32 board, or says \"m5-onboard go\".",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/cwc-makers/skills/m5-onboard/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "math-olympiad",
+      "description": "",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/math-olympiad/skills/math-olympiad/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "mcp-integration",
+      "description": "This skill should be used when the user asks to \"add MCP server\", \"integrate MCP\", \"configure MCP in plugin\", \"use .mcp.json\", \"set up Model Context Protocol\", \"connect external service\", mentions \"${CLAUDE_PLUGIN_ROOT} with MCP\", or discusses MCP server types (SSE, stdio, HTTP, WebSocket). Provides comprehensive guidance for integrating Model Context Protocol servers into Claude Code plugins for external tool and service integration.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "memory-sync",
+      "description": "Persist new context, terms, learnings, and settled lightweight decisions. Use when the user says remember this, save this for later, add to glossary, note this down, or at session end to consolidate what was learned \u2014 that goes to the memory layer (CLAUDE.md hot cache, docs/memory/, docs/inbox.md). Also use to record a decision or remember this decision when the call is a lightweight one shipped outside a spec slice: UI strings, visual and CSS choices, copy, or translation fixes. Those go to docs/decisions/lightweight-decisions.md via decisions.py. Also use when revising, updating, or re-pricing an already-recorded decision: judge whether it now warrants an ADR and promote it if so, rather than editing it in place. Also auto-fires at session end. Do not use for updating specs or code comments. For a NEW load-bearing decision, one with rejected alternatives, or any the user wants written up as an ADR, use `/jig:adr-workflow`; an already-recorded entry that outgrew this home is promoted from here.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/memory-sync/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "migrate",
+      "description": "Inventory an existing spec-driven project and apply bounded migrations to jig defaults: `report`, `adopt-layout`, `rename-decisions`, `split-slices`, slice-to-spec, `seed-decisions`, and `copy-machinery`. Use when the user says migrate this project to jig, adopt jig here, this repo already has specs \u2014 set up jig, scaffold-init refused \u2014 what now; introduce jig to an existing codebase; apply ADR-0004 to my project; migrate flat slices into nested specs; seed the lightweight-decisions home; or copy jig's machinery into my project. Reports are read-only; mutations support dry runs where available, refuse conflicts before writing, and preserve originals in the agentic slice-to-spec workflow.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/migrate/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "orient",
+      "description": "Orient a spec-driven jig/servo/shaper repository with a read-only, project-wide briefing: start from the `workflow.py orient` headline, then survey open pull requests and unmerged work, Proposed ADRs, DEFERRED triggers, refinement items, release plans, the inbox, and the bug board; render one readable headline, titled sections, one recommendation, and an owning-skill handoff. Use when the user invokes `/jig:orient` or explicitly asks for a whole-project session pickup, a return-after-time-away briefing, the overall project status or big picture, or what to pick up next across the repository. Do not use for mid-implementation questions about the current slice such as \"what''s next?\" or \"what''s blocking this test?\"; those continue current work rather than requesting a project-wide rescan. Also do not use for non-code projects; use `studio:project-desk`. Never write files or lifecycle state; scheduled jobs and dashboards may capture stdout.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/orient/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "playground",
+      "description": "Creates interactive HTML playgrounds \u2014 self-contained single-file explorers that let users configure something visually through controls, see a live preview, and copy out a prompt. Use when the user asks to make a playground, explorer, or interactive tool for a topic.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/playground/skills/playground/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "plugin-settings",
+      "description": "This skill should be used when the user asks about \"plugin settings\", \"store plugin configuration\", \"user-configurable plugin\", \".local.md files\", \"plugin state files\", \"read YAML frontmatter\", \"per-project plugin settings\", or wants to make plugin behavior configurable. Documents the .claude/plugin-name.local.md pattern for storing plugin-specific configuration with YAML frontmatter and markdown content.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "plugin-structure",
+      "description": "This skill should be used when the user asks to \"create a plugin\", \"scaffold a plugin\", \"understand plugin structure\", \"organize plugin components\", \"set up plugin.json\", \"use ${CLAUDE_PLUGIN_ROOT}\", \"add commands/agents/skills/hooks\", \"configure auto-discovery\", or needs guidance on plugin directory layout, manifest configuration, component organization, file naming conventions, or Claude Code plugin architecture best practices.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "pr-review",
+      "description": "Multi-perspective code review for GitHub pull requests. Use this skill whenever the user asks to review a PR, code review, diff, changeset, or merge request \u2014 whether they provide a GitHub URL, paste a diff, upload files, or are working in a repo with full context. Also trigger when the user says things like \"check this PR\", \"review these changes\", \"what do you think of this diff\", \"pre-review this before I share it\", or references reviewing code from colleagues. Works with any language/stack (Node.js/TypeScript, Java/AEM, Python, and others). Handles input from GitHub MCP, web-fetched PR URLs, pasted diffs, uploaded files, or full repo context in Claude Code. By default, when a GitHub PR target is reachable, the review is posted to the PR (approve when there are no blockers, request changes when there are), with inline comments pinned to specific lines. All review prose is written in the author's saved voice.",
+      "path": "/Users/ramboz/.claude/skills/pr-review/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "project-artifact",
+      "description": "Generate and publish a project status artifact \u2014 an opinionated, tabbed status page for a project too big for one update (overview & success criteria, the workstream sequence, next steps, plus background, plan, risks & open questions, and decisions/FAQ when they earn a tab) \u2014 published with the built-in Artifact tool to a default-private claude.ai page the user can share with teammates. Use when a piece of work spans several workstreams and you want a shareable overview kept current. Each artifact is backed by a small per-project config in the plugin data dir, so refreshing it re-gathers live state, redeploys the same URL, and reports only the delta. For software projects whose workstreams are PRs, also read swe.md (the X.Y PR-numbering convention; pulling PR state with gh/git; a per-PR detail block). Needs the built-in Artifact tool (claude.ai login). Not for single-PR changes or public docs.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/project-artifact/skills/project-artifact/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "reframe",
+      "description": "Re-baseline a jig corpus onto a moved load-bearing reference by drafting a keystone ADR and an affected-artifact disposition manifest. Use when a vendor/API contract moved and specs and decisions must be re-anchored. Auto-triggers when you say reframe onto this, we changed direction, the design moved, or re-baseline the project; invoke explicitly as `/jig:reframe`. Defers to any other installed skill whose description identifies it as handling project re-baselining or migrating onto a new reference. Does not defer to the generic built-in. Do not use for adopting jig (use `/jig:migrate`), cleanup against a fixed reference (use `jig:refactor`), changing one decision (use `adr.py supersede`), or cross-artifact drift detection (use `/jig:analyze`).\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/reframe/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scaffold-init",
+      "description": "Initialize an AI-native development workspace with spec-driven workflow infrastructure. Use when starting a new project, setting up Claude Code on a codebase for the first time, or when the user says scaffold, initialize, set up AI workflow, onboard this repo, or similar. Do not use for adding an individual skill or config to an already- scaffolded project \u2014 that is handled by the relevant tier skill directly.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/scaffold-init/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-autotune",
+      "description": "Automatically tune Scout search quality for a repository. Analyzes project structure, generates or updates `.scout/scout.config.yaml` (ignore/boost/dampen rules), creates a query-set.toml for evaluation, then runs 48 parameter sweeps (including class-aware learned-ranker probes) to find optimal search tune params. Use when asked to \"autotune\", \"scout-autotune\", \"tune search for <repo>\", or \"optimize search quality\".",
+      "path": "/Users/ramboz/.agents/skills/scout-autotune/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-bench-create",
+      "description": "Guided workflow for product engineers to create benchmark evaluation suites for their repos. Produces a search quality query-set (TOML) that can be evaluated immediately with `scout evaluate`, and optionally agent outcome tasks (JSON) for the Scout team's centralized benchmark suite. Use when asked to \"create a benchmark\", \"bench-create\", \"benchmark my repo\", or \"measure Scout quality on my repo\".",
+      "path": "/Users/ramboz/.agents/skills/scout-bench-create/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-memory-init",
+      "description": "Seed or extend a repository's Scout memory bank with source-backed architecture, invariants, flows, and workflow knowledge. Use for \"initialize scout memory\", \"seed memory\", \"scout-memory-init\", or \"create memories for <repo>\". Deduplicate existing knowledge, preserve provenance, and stop at useful coverage rather than an entry quota.",
+      "path": "/Users/ramboz/.agents/skills/scout-memory-init/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-pr-review",
+      "description": "Review a pull request or branch with Scout's semantic analysis. Starts with bounded `review_pr` evidence, then targets unresolved or high-risk areas with impact, investigate, affected-test, memory, and dead-code analysis. Decomposes very large PRs into cohesive behavioral themes and tracks every changed file in a coverage ledger. Reviews correctness, architecture, security, test quality, agent integration, and supply-chain posture, including permissions, hooks, network, telemetry, updates and transcript access. Reads existing review threads to identify adverse advice and amplify useful suggestions; honors `.scout/review-policy.md` for repository-specific rules. Posts severity-rated inline findings pinned to changed lines and produces a structured verdict with coverage, evidence gaps, and validation status. Use when asked to review a pull request, review changes, audit a branch, check work before merge, inspect a large PR, assess correctness or security risks, or run `/scout-pr-review`.",
+      "path": "/Users/ramboz/.agents/skills/scout-pr-review/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "scout-scrum-master",
+      "description": "Coordinate coding agents across Claude, Copilot project sessions, or autoresearch workers. Prefer native Copilot child sessions for independent bounded work, while Scout provides the durable event/claim/board plane and the host runtime schedules and wakes workers.",
+      "path": "/Users/ramboz/.agents/skills/scout-scrum-master/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "security-review",
+      "description": "Team baseline for security review \u2014 a best-effort heuristic security pass over a diff or change-set. Auto-triggers for review this for security, any vulnerabilities here, security pass on this diff, is this code secure, check this for security issues, or security review this. Uses installed scanners when available; installs nothing. Defers to any other installed skill whose description identifies it as handling security review, SAST, or vulnerability analysis, including `adobe-security-*`; prefer it over this slim baseline. Do not use for spec-compliance review (use `/jig:independent-review`), general PR craft (use `/jig:pr-review`), or secret prevention (`jig-secret-scan`).\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/security-review/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "session-report",
+      "description": "Generate an explorable HTML report of Claude Code session usage (tokens, cache, subagents, skills, expensive prompts) from ~/.claude/projects transcripts.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/session-report/skills/session-report/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "skill-creator",
+      "description": "Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/skill-creator/skills/skill-creator/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "skill-development",
+      "description": "This skill should be used when the user wants to \"create a skill\", \"add a skill to plugin\", \"write a new skill\", \"improve skill description\", \"organize skill content\", or needs guidance on skill structure, progressive disclosure, or skill development best practices for Claude Code plugins.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "slice-land",
+      "description": "Verify a finished slice is actually ready to land (tests green, DoD ticked, deviation log present, STATUS=DONE) and emit a deterministic landing checklist for either direct merge-to-main or PR-shaped integration. Use when the user says \\\"land this slice\\\", \\\"merge back to main\\\", \\\"ready to ship\\\", \\\"create a PR for this slice\\\", \\\"close out the slice\\\", or \\\"slice is done \u2014 what now\\\". Use `prepare` to emit a readiness report; use `execute --mode direct` to also run the merge sequence; use `execute --mode pr` to push the branch and open the PR.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/slice-land/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "spec-workflow",
+      "description": "Drive the spec-driven lifecycle for any non-trivial work item: SPIDR-split a new spec into vertical slices, transition state markers (DRAFT \u2192 READY_FOR_REVIEW \u2192 READY_FOR_IMPLEMENTATION \u2192 IN_PROGRESS \u2192 REVIEWED \u2192 RECONCILED \u2192 DONE; also DEFERRED for parked slices with a stated resolution trigger), enforce the reconciliation checklist before commit, and surface stale specs/ADRs whose `last_verified` date has aged past dependency changes. Use when starting non-trivial new work, creating a spec, transitioning a slice's state, parking a slice as DEFERRED, reconciling a reviewed slice, or auditing doc freshness. Do not use for quick one-off fixes that don't need a spec, or for bug-shaped work where `jig:bug-fix` is the better fit.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/spec-workflow/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "sql-queries",
+      "description": "Write correct, performant SQL across all major data warehouse dialects (Snowflake, BigQuery, Databricks, PostgreSQL, etc.). Use when writing queries, optimizing slow SQL, translating between dialects, or building complex analytical queries with CTEs, window functions, or aggregations.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/sql-queries/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "statistical-analysis",
+      "description": "Apply statistical methods including descriptive stats, trend analysis, outlier detection, and hypothesis testing. Use when analyzing distributions, testing for significance, detecting anomalies, computing correlations, or interpreting statistical results.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/statistical-analysis/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "tdd-loop",
+      "description": "Drive the red-green-refactor loop for any non-trivial code change. Auto-detect the project's test runner (pytest / vitest / jest / node --test), invoke it via the `tdd.py` helper, and act on the normalized exit code. Use when you write a test, TDD this feature, let me test-drive a behaviour, are about to implement [feature], want to run my tests, ask is my coverage complete, or ask are tests green. Do not use for one-off exploratory scripts, throwaway spikes, or pure-documentation edits that touch no executable code.\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/tdd-loop/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "validate-data",
+      "description": "QA an analysis before sharing -- methodology, accuracy, and bias checks. Use when reviewing an analysis before a stakeholder presentation, spot-checking calculations and aggregation logic, verifying a SQL query's results look right, or assessing whether conclusions are actually supported by the data.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/validate-data/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "vision-elicitation",
+      "description": "Lightweight baseline elicitation pass that fills in `docs/product-vision.md` and the five `docs/architecture.md` elicitation slots after `scaffold-init`. Auto-triggers when you say set up project vision, elicit architecture, define what we're building, run the vision wizard, refresh the project pitch, or capture product scope. Defers to any other installed skill whose description identifies it as handling vision elicitation, product discovery, project framing, or product scope capture \u2014 if such a skill is present, prefer it over this one (jig's version is a slim baseline). Does not defer to the generic built-in `init` skill. Do not use for: ad-hoc brainstorming with no `docs/product-vision.md` slot to write into; silently overwriting vision content the user has already hand-edited (the re-run protocol's divergence detection handles that \u2014 see the Re-run protocol section below); spec authoring (use `/jig:spec-workflow`); seeding ADRs for already-named decisions (use `/jig:adr-workflow new`).\\n",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042452-35178-JXqYhP/jig~g2/skills/vision-elicitation/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "write-query",
+      "description": "Write optimized SQL for your dialect with best practices. Use when translating a natural-language data need into SQL, building a multi-CTE query with joins and aggregations, optimizing a query against a large partitioned table, or getting dialect-specific syntax for Snowflake, BigQuery, Postgres, etc.",
+      "path": "/Users/ramboz/.claude/plugins/.trash/1793833042446-35178-aPCCx3/data~g3/skills/write-query/SKILL.md",
+      "tier": "speculative"
+    },
+    {
+      "name": "writing-hookify-rules",
+      "description": "This skill should be used when the user asks to \"create a hookify rule\", \"write a hook rule\", \"configure hookify\", \"add a hookify rule\", or needs guidance on hookify rule syntax and patterns.",
+      "path": "/Users/ramboz/.claude/plugins/marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md",
+      "tier": "speculative"
+    }
+  ],
+  "pick": "arch-review",
+  "picked_at": "2026-11-10T21:51:07Z",
+  "applied_path": "/Users/ramboz/.claude/skills/arch-review/SKILL.md"
+}

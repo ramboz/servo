@@ -183,3 +183,27 @@ A new read-only verb (mirroring the `gate.py invoke/audit`, `loop.py`/`hook.py` 
 - [Slice 011-02 — triage-state-spine](../specs/011-heartbeat/slice-02-triage-state-spine.md) — the slice this ADR crystallizes.
 - [Slice 011-04 — heartbeat-cost-ceiling](../specs/011-heartbeat/slice-04-heartbeat-cost-ceiling.md) — the consumer of the reserved `outcome.cost_usd` (resumable whole-heartbeat ceiling).
 - `docs/architecture.md` — "Runtime artifacts" reserves `<target>/.servo/triage/`; "Decisions" table lists this ADR.
+
+## Amendments
+
+### 2026-11-10 — one dispatch may span an escalation ladder ([ADR-0047](adr-0047-per-node-model-tiering-and-escalation-ladder.md), spec 038-03)
+
+The rule "**One dispatch attempt per finding in v1**" still holds: a finding is
+dispatched once, and `attempts` still counts dispatches. What one dispatch
+contains has changed.
+
+When the run's `models` block declares an `escalation` ladder, a plateau inside
+the dispatched loop climbs the configured rungs in the same run, worktree and
+budget before the loop gives up. Each rung overrides the runner's effort, model
+or advisor, typically raising capability (a fresh runner session per rung).
+
+- The `outcome` gains `escalation_rung` (the rung reached) and
+  `escalation_rungs` (the ladder length) when a ladder was configured.
+- The quarantine trigger (ADR-0030) widens to cover a ladder cut short by a
+  brake. A finding is quarantined on `terminal_reason == oracle_plateau`, or
+  when the run escalated, did not pass, and ended on a budget brake, an
+  invocation failure or a verdict mismatch.
+- With no ladder configured, the lifecycle is byte-for-byte as before.
+
+The original text above is preserved. The governing decision is ADR-0047's D3
+and D5.

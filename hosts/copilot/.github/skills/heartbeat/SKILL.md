@@ -92,6 +92,35 @@ It records the portable loop's last history score or the goal driver's direct
 change dispatch eligibility, retry budgets, or the `oracle_plateau` quarantine
 trigger. Findings without diagnostics retain the original outcome fields.
 
+**Model placement and the escalation ladder (spec 038-03).** `run` and `dispatch`
+accept `--models <value>` (inline JSON starting with `{`, else a readable JSON
+file), forwarded verbatim to each dispatched `loop.py --models` (see the
+agent-loop skill for the `runner` / `judge` / `escalation` block). A value that
+is not JSON or a readable file refuses the pass (rc=2, `models_invalid`) before
+any candidate is touched. A block that parses but fails loop.py's own check makes
+the loop end `terminal_reason: models_invalid`; that is a pass-level refusal (the
+finding stays `open`, no outcome is recorded, the pass exits 2). When the loop
+summary carries them, `outcome` passes through `escalation_rung` and
+`escalation_rungs` (ints). A finding is quarantined (same record,
+`failure_signature: oracle_plateau`, so evidence-gated re-admission applies) when
+the loop ended `oracle_plateau`, **or** when the run escalated
+(`escalation_rung >= 1`), did not pass, and ended on `max_iterations_reached`,
+`cost_ceiling_reached`, `context_full`, `claude_invocation_failed` or
+`verdict_schema_mismatch` (it plateaued at least once before its ladder was cut
+short). For the last two terminals the heartbeat also prints a breadcrumb naming
+the rung (plus the loop's own rung-and-runner-config `terminal_breadcrumb`); the
+pass continues. `claude_invocation_failed` also covers timeouts and rate limits,
+so that breadcrumb does not prove a broken config. A run that never escalated,
+passed, or was `interrupted` is not quarantined.
+
+The heartbeat never passes `--driver`: loop.py's own `auto` routing sends a block
+with a non-empty `escalation` list to the loop driver (the goal driver has no
+plateau signal and would ignore a ladder), with one stderr line. Size the budget
+for the ladder: at plateau window 3 a two-rung ladder needs `--max-iterations`
+11 or more, and the loop default of 5 never escalates. `status` and `inbox.md`
+show `escalation: rung N of M` whenever a ladder was configured for the run,
+including `rung 0 of M` for a run that never needed to escalate.
+
 Enabled v2 policy, approved sidecars and target-relative evaluator artifacts
 are provisioned with their installed identities unchanged; old gate/component
 run directories are excluded. Absolute external component sidecars cannot be

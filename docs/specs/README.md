@@ -155,6 +155,15 @@
 | [035-required-evidence-alongside-quality-scores](035-required-evidence-alongside-quality-scores/spec.md) | 035-01 — tbd | DRAFT |  |
 | [036-deterministic-design-evidence](036-deterministic-design-evidence/spec.md) | 036-01 — tbd | DRAFT |  |
 | [037-reusable-design-evidence](037-reusable-design-evidence/spec.md) | 037-01 - reusable static evidence | **DONE** |  |
+| [038-per-node-model-tiering](038-per-node-model-tiering/spec.md) | 038-01 — per-iteration accounting | **DONE** | Per-iteration `agent/session_id/cost_usd/cost_basis/usage/model_usage/model/requested` in history + stdout (goal driver: flat keys). Fixes bug 007: on `--resume` claude reports session running totals, so cost = delta from the persisted `current_session_usage_snapshot` only under the >= running-total proof, else reported (over-count only). |
+| [038-per-node-model-tiering](038-per-node-model-tiering/spec.md) | 038-02 — role model placement | **DONE** | `models` block (plan.json or `--models`; block-level precedence) -> `--model/--effort/--advisor` per role; fail-closed `models_invalid`/`plan_value_invalid`. Any block in effect => judge runs in a fresh session per iteration (probe: agent-switched `--resume` reads 0 cached tokens). Planner recompile-preserve hashes the `models` key's presence. |
+| [038-per-node-model-tiering](038-per-node-model-tiering/spec.md) | 038-03 — plateau escalation ladder | **DONE** | `models.escalation` = cumulative runner overrides tried on plateau in the same run only when the next rung's full window fits iterations AND cost left; every rung = fresh runner session (+ context-fill reset); rung window starts at its first runner turn. `auto` + ladder routes to the loop driver. Heartbeat forwards `--models`, records `escalation_rung/escalation_rungs`, quarantines escalated runs cut short (ADR-0010 amended, ADR-0047 D5). |
+| [039-variance-gated-eval-judging](039-variance-gated-eval-judging/spec.md) | 039-01 — two-tier judge | DRAFT |  |
+| [040-servo-wrapped-worker-outcome](040-servo-wrapped-worker-outcome/spec.md) | 040-01 — outcome line | DRAFT |  |
+| [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 🔬 041-01 — Copilot contract probe | DRAFT |  |
+| [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 041-02 — credit brake and supported loop launch | DRAFT |  |
+| [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 041-03 — heartbeat credit ledger | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-01 — plan and ledger | DRAFT |  |
 
 ## Deferred slices
 
@@ -184,8 +193,8 @@
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
 - **4** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
-- **15** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **8** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
+- **17** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
+- **10** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
   - `034-copilot-installed-runtime/slice-04-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
@@ -194,3 +203,5 @@ Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/sli
   - `034-copilot-installed-runtime/slice-06-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
   - `034-copilot-installed-runtime/slice-08-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `037-reusable-design-evidence/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
+  - `038-per-node-model-tiering/slice-01-craft.md` — applied `pr-review`; declined: independent-review, scout-pr-review
+  - `038-per-node-model-tiering/slice-02-craft.md` — applied `pr-review`; declined: independent-review, scout-pr-review

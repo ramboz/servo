@@ -219,7 +219,7 @@ The four still-open questions:
 
 - **Q1: `terminal_reason` taxonomy from `claude -p` JSON output.** Spike captured `terminal_reason="completed"`. Other plausible values: `budget_exceeded`, `error`, `interrupted`, `timeout`. Slice 003-02's cost-ceiling logic assumes the mock harness's `"completed"`; an unexpected real-world value falls into the loop's "claude-terminal-reason-pass-through" branch (per-iter JSON emits whatever claude says) but doesn't drive halt logic — the cumulative tracking is the brake.
 - **Q2: `stop_reason` taxonomy.** Spike captured `stop_reason="end_turn"`. Other Anthropic-API-named values: `max_tokens`, `tool_use`, `stop_sequence`, `pause_turn`. Less load-bearing than Q1; the loop doesn't branch on `stop_reason` today.
-- **Q5: `--max-budget-usd` halt granularity.** Does `claude -p --max-budget-usd X` clean-halt before the next API call would exceed budget, or partway through with a partial response? Slice 003-02's cumulative tracking handles either case (the per-iter cost is summed regardless), but the per-iter `--max-budget-usd` defense-in-depth floor (`MIN_BUDGET_FLOOR_USD=0.01`) was picked conservatively without empirical data.
+- **Q5: `--max-budget-usd` halt granularity.** _2026-11-10 (spec 038): scope verified — it caps the invocation, not the resumed session (a two-turn resumed call under a 0.0025 cap succeeded on a $0.0032 session); halt granularity itself still unprobed._ Does `claude -p --max-budget-usd X` clean-halt before the next API call would exceed budget, or partway through with a partial response? Slice 003-02's cumulative tracking handles either case (the per-iter cost is summed regardless), but the per-iter `--max-budget-usd` defense-in-depth floor (`MIN_BUDGET_FLOOR_USD=0.01`) was picked conservatively without empirical data.
 - **Q6: `--agent <name>` + permissions inheritance.** When `loop.py` invokes `claude --agent runner -p "..."`, does the agent's own `tools:` frontmatter authoritatively narrow the toolset, or does the parent invocation's `--allowedTools` / `--disallowedTools` (if any) intersect with the frontmatter? Slice 003-05's `runner.md` and `judge.md` declare their own `tools:` frontmatter and the loop does NOT pass parent-level `--allowedTools`; the assumption is "frontmatter authoritative." Untested against live `claude -p`.
 
 **Resolution trigger:** First live `claude -p` invocation against a real servo target — either (a) a user runs `/servo:agent-loop` and reports an unexpected behavior, or (b) dogfooding for spec 004 / 005 surfaces a difference. When triggered, update the relevant slice's deviation log and either keep the spike's assumption documented or amend `loop.py` to match observed reality. **A note:** the spec text at `docs/specs/003-agent-loop/spec.md` mentions "all five open questions from spike.md 'Open questions' are either resolved..." — the count is six (Q1–Q6); Q3 / Q4 resolved in spec; Q1, Q2, Q5, Q6 deferred here.
@@ -1432,3 +1432,71 @@ relabel), which extends the same rc=2 behavior to `run_goal_loop` — the natura
 point to audit both drivers' exit-code contract against dispatch together.
 
 **Surfaced by:** spec 031-01 arch + craft reviews (2026-09-01).
+
+
+## ~~Spec 038-01 hardening carried into 038-02's review round~~ — RESOLVED 2026-11-10 (038-02 deviation 8)
+
+**Deferred (owner: slice 038-02 review round, single `loop.py` writer at a time):**
+two small hardenings that slice 038-01's reviews recorded as residuals:
+
+1. `_iteration_cost_delta`: require the snapshot's summed `model_usage` tokens
+   to be > 0 before accepting `session_delta`. An empty snapshot (a previous
+   response with no `modelUsage`) makes the token identity vacuous. Bug 007
+   review; 038-01 deviation 9.
+2. `_reported_total_cost`: route the top-level `total_cost_usd` through
+   `_as_number`, so a NaN/inf/numeric-string cost cannot reach `cost_usd`,
+   `cumulative_cost_usd` or the snapshot. A NaN cumulative never trips the
+   ceiling brake. The behaviour predates 038-01 (038-01 deviation 5).
+
+**Resolution trigger:** 038-02's implementation review round. Close this entry
+when both are fixed and tested.
+
+
+## ADR-0016 plan-shape example lags the plan schema
+
+**Deferred (owner decision):** ADR-0016's `plan.json` example lacks
+`budget_hash` (016-03) and the optional `models` block (038-02, ADR-0047). Both
+are additive and documented in docs/architecture.md and the slices that added
+them. A pointer amendment to an Accepted ADR needs explicit owner approval.
+
+**Resolution trigger:** the owner approves a dated `## Amendments` pointer on
+ADR-0016, or a later ADR supersedes its schema example.
+
+
+## ADR-0030 has no pointer to the widened quarantine trigger
+
+**Deferred (owner decision):** spec 038-03 widened the heartbeat quarantine
+trigger: an escalated run that did not pass and was cut short by a budget brake,
+an invocation failure or a verdict mismatch is quarantined too, with the same
+record and `failure_signature: oracle_plateau`. The decision is recorded in
+ADR-0047 D5, the ADR-0010 amendment and docs/architecture.md, but ADR-0030's own
+text still names only `terminal_reason == oracle_plateau`. ADR-0047 authorized
+only the ADR-0010 amendment, so a dated pointer on ADR-0030 needs the owner's
+approval.
+
+**Resolution trigger:** the owner approves a dated `## Amendments` pointer on
+ADR-0030.
+
+## Ladder escalation for a runner that never edits
+
+**Deferred (idea):** a runner that never edits still climbs the whole ladder
+before `_relabel_terminal_reason` turns the halt into
+`edit_permission_unavailable`, which spends rungs on a run that cannot land
+anything. A guard could skip escalation when
+`edit_signal_computed and not runner_ever_edited`.
+
+**Resolution trigger:** a real laddered run spends rungs on a permission wall,
+which 038-01's accounting together with `escalation_rung` would show.
+
+
+## `auto` resume of a loop-driver run on a goal-capable host
+
+**Deferred:** `--resume <run-id>` under `--driver auto` on a host that supports
+`/goal` routes to the goal driver. That driver refuses with
+`goal_resume_unsupported`, instead of honouring the run's persisted driver.
+The gap predates spec 038, but 038-03's auto-routing of laddered runs to the
+loop driver makes it common. The documented workaround is `--driver loop` on
+resume (agent-loop SKILL.md).
+
+**Resolution trigger:** a user hits it, or routing is next touched. The fix is
+to read the persisted state's driver and ladder in the `auto` check on resume.

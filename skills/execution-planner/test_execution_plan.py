@@ -658,6 +658,135 @@ class CompileGateFailClosedTests(unittest.TestCase):
             self.assertFalse(_plan_path(target).exists())
 
 
+class ModelsBlockPreservedTests(unittest.TestCase):
+    """038-02 AC8 - a hand-added `models` block counts as an edit."""
+
+    # sha256 of today's canonical `{"budget": {"max_iterations": 5}, "driver":
+    # "loop"}` (sort_keys, default separators), computed by the pre-038-02
+    # function.
+    LEGACY_DIGEST = (
+        "b8975485327d867fce4a4d41b6fcf88280689f04e2c1d4cd0b7537937fea3840")
+
+    def test_no_models_hashes_byte_identically_to_today(self):
+        h = execution_plan._budget_hash({"max_iterations": 5}, "loop")
+        self.assertEqual(h, self.LEGACY_DIGEST)
+
+    def test_models_changes_the_hash_and_is_order_independent(self):
+        base = execution_plan._budget_hash({"max_iterations": 5}, "loop")
+        a = execution_plan._budget_hash(
+            {"max_iterations": 5}, "loop",
+            {"runner": {"model": "sonnet", "effort": "high"}})
+        b = execution_plan._budget_hash(
+            {"max_iterations": 5}, "loop",
+            {"runner": {"effort": "high", "model": "sonnet"}})
+        c = execution_plan._budget_hash(
+            {"max_iterations": 5}, "loop", {"runner": {"model": "opus"}})
+        self.assertNotEqual(a, base)
+        self.assertEqual(a, b)
+        self.assertNotEqual(a, c)
+
+    def _compiled(self, root):
+        target = _make_target(root)
+        spec = _make_spec(root)
+        _write_suitability(target, "suitable")
+        self.assertEqual(_run_cli(target, spec).returncode, 0)
+        return target, spec, _plan_path(target)
+
+    def test_compiled_plan_has_no_models_key_and_hash_unchanged(self):
+        with tempfile.TemporaryDirectory() as d:
+            _, _, plan_path = self._compiled(Path(d))
+            plan = json.loads(plan_path.read_text())
+            self.assertNotIn("models", plan)
+            self.assertEqual(
+                plan["budget_hash"],
+                execution_plan._budget_hash(plan["budget"], plan["driver"]))
+
+    def test_hand_added_models_block_refuses_recompile(self):
+        with tempfile.TemporaryDirectory() as d:
+            target, spec, plan_path = self._compiled(Path(d))
+            edited = json.loads(plan_path.read_text())
+            edited["models"] = {"runner": {"model": "sonnet"}}
+            plan_path.write_text(json.dumps(edited, indent=2) + "\n")
+            edited_bytes = plan_path.read_bytes()
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 2, res.stderr)
+            self.assertIn("plan_edit_detected", res.stderr)
+            self.assertEqual(plan_path.read_bytes(), edited_bytes)
+
+    def test_models_key_presence_is_hashed_even_when_null(self):
+        base = execution_plan._budget_hash({"max_iterations": 5}, "loop")
+        null = execution_plan._budget_hash({"max_iterations": 5}, "loop", None)
+        self.assertNotEqual(null, base)
+
+    def test_hand_added_null_models_refuses_recompile(self):
+        # loop.py refuses `models: null`; the planner must treat the key as an
+        # edit rather than silently dropping it on recompile.
+        with tempfile.TemporaryDirectory() as d:
+            target, spec, plan_path = self._compiled(Path(d))
+            edited = json.loads(plan_path.read_text())
+            edited["models"] = None
+            plan_path.write_text(json.dumps(edited, indent=2) + "\n")
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 2, res.stderr)
+            self.assertIn("plan_edit_detected", res.stderr)
+            self.assertIn("budget/driver/models", res.stderr)
+
+    def test_legacy_hashless_plan_with_models_is_not_overwritten(self):
+        # `models` is never compiled, so its presence proves a human edit even
+        # when there is no recorded hash to compare against.
+        with tempfile.TemporaryDirectory() as d:
+            target, spec, plan_path = self._compiled(Path(d))
+            legacy = json.loads(plan_path.read_text())
+            legacy.pop("budget_hash")
+            legacy["models"] = {"runner": {"model": "sonnet"}}
+            plan_path.write_text(json.dumps(legacy, indent=2) + "\n")
+            before = plan_path.read_bytes()
+            res = _run_cli(target, spec)
+            self.assertEqual(res.returncode, 2, res.stderr)
+            self.assertIn("plan_edit_detected", res.stderr)
+            self.assertIn("has no recorded budget_hash but carries", res.stderr)
+            self.assertEqual(plan_path.read_bytes(), before)
+
+    def test_legacy_hashless_plan_without_models_still_overwrites(self):
+        with tempfile.TemporaryDirectory() as d:
+            target, spec, plan_path = self._compiled(Path(d))
+            legacy = json.loads(plan_path.read_text())
+            legacy.pop("budget_hash")
+            plan_path.write_text(json.dumps(legacy, indent=2) + "\n")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            self.assertIn("budget_hash", json.loads(plan_path.read_text()))
+
+    def test_write_plan_passes_existing_models_to_the_hash(self):
+        # Direct call: the on-disk models block is part of the recorded-hash
+        # comparison (red if write_plan stops passing it).
+        with tempfile.TemporaryDirectory() as d:
+            target, spec, plan_path = self._compiled(Path(d))
+            edited = json.loads(plan_path.read_text())
+            plan = dict(edited)
+            edited["models"] = {"runner": {"model": "opus"}}
+            plan_path.write_text(json.dumps(edited, indent=2) + "\n")
+            with self.assertRaises(execution_plan.EnvError) as ctx:
+                execution_plan.write_plan(target, SPEC_ID, plan)
+            self.assertEqual(ctx.exception.reason, "plan_edit_detected")
+
+    def test_recorded_models_block_matching_hash_is_not_an_edit_and_is_dropped(self):
+        # A models block whose hash was recorded is not drift; a plain recompile
+        # proceeds and (models is never compiled) the fresh plan has no models.
+        with tempfile.TemporaryDirectory() as d:
+            target, spec, plan_path = self._compiled(Path(d))
+            edited = json.loads(plan_path.read_text())
+            edited["models"] = {"runner": {"model": "sonnet"}}
+            edited["budget_hash"] = execution_plan._budget_hash(
+                edited["budget"], edited["driver"], edited["models"])
+            plan_path.write_text(json.dumps(edited, indent=2) + "\n")
+            self.assertEqual(_run_cli(target, spec).returncode, 0)
+            fresh = json.loads(plan_path.read_text())
+            self.assertNotIn("models", fresh)
+            self.assertEqual(
+                fresh["budget_hash"],
+                execution_plan._budget_hash(fresh["budget"], fresh["driver"]))
+
+
 class BoundaryHonestyTests(unittest.TestCase):
     """015-03 AC3 — the verdict is a Compile-phase gate ONLY. The heartbeat must
     not import or subprocess suitability (ADR-0018: findings are spec-less)."""

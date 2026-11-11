@@ -58,6 +58,7 @@ Summary line: one JSON line on stdout after the last iteration (or refusal).
 import argparse
 import importlib.util
 import json
+import math
 import os
 import platform
 import re
@@ -569,6 +570,7 @@ def _parse_verdict_block(
 
 def _assemble_iteration_prompt(
     seed: str, last_oracle: Optional[dict], last_verdict: Optional[dict],
+    escalation: Optional[dict] = None,
 ) -> str:
     """Build the per-iteration prompt block sent to claude (AC8).
 
@@ -579,8 +581,13 @@ def _assemble_iteration_prompt(
 
     Format is documented in `agents/runner.md` and `agents/judge.md` so
     agents know how to read the prompt.
+
+    `escalation` (spec 038-03): passed only for an escalation rung's first
+    runner iteration; adds one `Escalation` section (the rung, the best
+    composite so far and the iteration that reached it, the composite at
+    escalation) so the fresh runner session knows the tree may have regressed.
     """
-    if last_oracle is None and last_verdict is None:
+    if last_oracle is None and last_verdict is None and escalation is None:
         return seed
     parts = [seed.rstrip(), "", "---", "Context from prior iteration:"]
     if last_oracle is not None:
@@ -609,6 +616,20 @@ def _assemble_iteration_prompt(
             "",
             "Last agent verdict:",
             *verdict_lines,
+        ])
+    if escalation is not None:
+        best = escalation.get("best_composite")
+        best_text = (
+            "none recorded" if best is None else
+            f"{best} (iteration {escalation.get('best_iteration')})")
+        parts.extend([
+            "",
+            "Escalation:",
+            f"- This is escalation rung {escalation.get('rung')}: the "
+            "previous rung plateaued, so you start a fresh session with more "
+            "capability on the same working tree.",
+            f"- Best composite so far: {best_text}.",
+            f"- Composite at escalation: {escalation.get('composite')}.",
         ])
     parts.append("---")
     return "\n".join(parts) + "\n"
@@ -1042,6 +1063,7 @@ def _build_initial_state(
     context_fill_threshold: float, plateau_window: int,
     plateau_noise_floor: float,
     claude_version: Optional[str],
+    models: Optional[dict] = None,
 ) -> dict:
     """Construct the canonical fresh-run state dict (ADR-0004 schema).
 
@@ -1067,6 +1089,8 @@ def _build_initial_state(
         "target_path": str(target),
         "prompt": prompt,
         "current_session_id": "",
+        # Spec 038-02: the resolved role `models` block (None = none in effect).
+        "models": models,
         "iteration_count": 0,
         "max_iterations": max_iterations,
         "cost_ceiling_usd": cost_ceiling,
@@ -1199,7 +1223,8 @@ def _refuse_plan(*, reason: str, message: str) -> int:
     and no configured budget to echo. The summary shape mirrors the preflight
     refusal (a single JSON line + a stderr breadcrumb) with the plan-read
     `terminal_reason`; the closed reasons are `plan_missing` / `plan_malformed`
-    / `plan_schema_mismatch` / `plan_requires_clamp`.
+    / `plan_schema_mismatch` / `plan_requires_clamp` / `plan_value_invalid`,
+    plus `models_invalid` for a bad `--models` flag (spec 038-02).
     """
     sys.stderr.write(f"loop: {message}\n")
     _emit_json({
@@ -1771,6 +1796,455 @@ def _compute_per_iter_budget(cost_ceiling: float, cumulative: float) -> float:
     return max(cost_ceiling - cumulative, MIN_BUDGET_FLOOR_USD)
 
 
+# ---------------------------------------------------------------------------
+# Spec 038-01 — per-iteration accounting (model, usage, cost basis)
+# ---------------------------------------------------------------------------
+
+COST_BASIS_REPORTED = "reported"
+COST_BASIS_SESSION_DELTA = "session_delta"
+_USAGE_TOKEN_KEYS = (
+    "input_tokens", "cache_read_input_tokens",
+    "cache_creation_input_tokens", "output_tokens",
+)
+# modelUsage field -> normalized key (cost is handled separately).
+_MODEL_USAGE_TOKEN_FIELDS = (
+    ("inputTokens", "input_tokens"),
+    ("outputTokens", "output_tokens"),
+    ("cacheReadInputTokens", "cache_read_input_tokens"),
+    ("cacheCreationInputTokens", "cache_creation_input_tokens"),
+)
+
+# Spec 038-02 (ADR-0047 D1/D2): per-role model placement. A `models` block is
+# `{"runner": {...}, "judge": {...}}`; each role takes `model` / `effort` /
+# `advisor` (strings; "inherit" == absent).
+MODELS_ROLES = ("runner", "judge")
+MODELS_ROLE_KEYS = ("model", "effort", "advisor")
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+INHERIT = "inherit"
+REASON_MODELS_INVALID = "models_invalid"
+_MODEL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]*")  # fullmatch
+
+
+def _validate_role_models(role: object) -> "tuple[Optional[dict], Optional[str]]":
+    """`(normalized_role, None)` or `(None, error)`; inherited fields dropped."""
+    if not isinstance(role, dict):
+        return None, f"role block must be an object, got {role!r}"
+    out: dict = {}
+    for key, value in role.items():
+        if key not in MODELS_ROLE_KEYS:
+            return None, (
+                f"unknown key {key!r} (allowed: {', '.join(MODELS_ROLE_KEYS)})")
+        if not isinstance(value, str):
+            return None, f"{key} must be a string, got {value!r}"
+        if value == INHERIT:
+            continue
+        if key == "effort":
+            if value not in EFFORT_LEVELS:
+                return None, (
+                    f"effort must be one of {', '.join(EFFORT_LEVELS)} or "
+                    f"{INHERIT!r}, got {value!r}")
+        elif not _MODEL_ID_RE.fullmatch(value):
+            return None, f"{key} {value!r} is not a valid model id"
+        out[key] = value
+    return out, None
+
+
+def _validate_models(
+    block: object, *, allow_escalation: bool = False,
+) -> "tuple[Optional[dict], Optional[str]]":
+    """Validate + normalize a `models` block: `(normalized, None)` or
+    `(None, error_message)`.
+
+    Normalized form is `{"runner": {...}, "judge": {...}}` with inherited
+    fields dropped (both roles always present). One validator serves the flag
+    and the plan key; the caller picks the refusal reason. `allow_escalation`
+    additionally accepts a top-level `escalation` list of non-empty role-key
+    objects (spec 038-03).
+    """
+    if not isinstance(block, dict):
+        return None, f"models must be a JSON object, got {block!r}"
+    allowed = MODELS_ROLES + (("escalation",) if allow_escalation else ())
+    for key in block:
+        if key not in allowed:
+            return None, (
+                f"unknown models key {key!r} (allowed: {', '.join(allowed)})")
+    out: dict = {}
+    for role in MODELS_ROLES:
+        norm, err = _validate_role_models(block.get(role, {}))
+        if err is not None:
+            return None, f"models.{role}: {err}"
+        out[role] = norm
+    if "escalation" in block:
+        rungs = block["escalation"]
+        if not isinstance(rungs, list):
+            return None, "models.escalation must be a list"
+        out["escalation"] = []
+        for index, rung in enumerate(rungs):
+            norm, err = _validate_role_models(rung)
+            if err is not None or not norm:
+                return None, (
+                    f"models.escalation[{index}]: "
+                    f"{err or 'a rung must set at least one field'}")
+            out["escalation"].append(norm)
+    return out, None
+
+
+def _load_models_arg(value: str) -> "tuple[Optional[object], Optional[str]]":
+    """Parse a `--models` value: inline JSON when it starts with `{`, else a
+    file path. Returns `(parsed, None)` or `(None, error)`; shape validation
+    is `_validate_models`'s job."""
+    text = value
+    stripped = value.lstrip()
+    if stripped.startswith("["):
+        return None, "--models must be a JSON object (got a JSON array)"
+    if not stripped.startswith("{"):
+        try:
+            text = Path(value).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return None, f"--models file {value!r} is unreadable: {exc}"
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return None, f"--models is not valid JSON: {exc.msg} (line {exc.lineno})"
+    if not isinstance(parsed, dict):
+        return None, "--models must be a JSON object"
+    return parsed, None
+
+
+def _models_in_effect(models: Optional[dict]) -> bool:
+    """True when the resolved block sets at least one role field or a ladder."""
+    return bool(models) and (
+        any((models.get(role) or {}) for role in MODELS_ROLES)
+        or bool(models.get("escalation")))
+
+
+def _rung_failure_breadcrumb(
+    models: Optional[dict], rung: int, reason: str, agent: str,
+) -> str:
+    """Names the rung (and, for a runner turn, its config) for a raised-rung
+    halt (038-03). The judge's config never changes with the rung."""
+    if agent == AGENT_JUDGE:
+        return (
+            f"{reason} on escalation rung {rung} (judge turn); the judge "
+            "config is unchanged by the rung")
+    return (
+        f"{reason} on escalation rung {rung} ({agent}); runner config "
+        f"{json.dumps(_runner_config_at_rung(models, rung))}")
+
+
+def _ladder_of(models: Optional[dict]) -> "list[dict]":
+    """The configured escalation rungs (empty = no ladder)."""
+    return list((models or {}).get("escalation") or [])
+
+
+def _runner_config_at_rung(models: Optional[dict], rung: int) -> dict:
+    """Runner role config at `rung`: the base runner config with rungs
+    1..`rung` applied in order (cumulative; rung 0 = base)."""
+    cfg = dict(_role_cfg(models, AGENT_RUNNER))
+    for step in _ladder_of(models)[:max(rung, 0)]:
+        cfg.update(step)
+    return cfg
+
+
+def _best_composite(history: list) -> "tuple[Optional[float], Optional[int]]":
+    """`(best numeric composite, first iteration that reached it)`."""
+    best: Optional[float] = None
+    best_iteration: Optional[int] = None
+    for entry in history:
+        value = entry.get("composite")
+        if (isinstance(value, bool)
+                or not isinstance(value, (int, float))):
+            continue
+        if best is None or value > best:
+            best, best_iteration = value, entry.get("iteration")
+    return best, best_iteration
+
+
+def _rung_plateau(state: dict) -> bool:
+    """Plateau check for the run's current rung (spec 038-03 AC2).
+
+    Rung 0 is today's check on the whole history. A raised rung checks its
+    baseline (the best composite at escalation) plus its own window, which
+    starts at its first runner iteration; until that entry exists there is
+    nothing to check."""
+    history = state["oracle_score_history"]
+    window = state["plateau_window"]
+    floor = state.get("plateau_noise_floor", DEFAULT_PLATEAU_NOISE_FLOOR)
+    if not _ladder_of(state.get("models")) or not state.get("escalation_rung"):
+        return _check_plateau(history, window, floor)
+    start = state.get("escalation_history_start")
+    if start is None:
+        return False
+    events = state.get("escalation_events") or []
+    baseline = events[-1].get("baseline_composite") if events else None
+    seed = [{"composite": baseline}] if baseline is not None else []
+    return _check_plateau(seed + history[start:], window, floor)
+
+
+def _escalation_guard(
+    state: dict, iteration: int,
+) -> "tuple[bool, Optional[str]]":
+    """Fair-window guard (spec 038-03 AC2): `(ok, breadcrumb-if-refused)`.
+
+    The next rung may start only if the iterations left (and, with a cost
+    ceiling, the dollars left) cover one full plateau window. `needed` counts
+    one extra iteration when the next one is a judge turn that the window
+    excludes."""
+    needed = state["plateau_window"] + (
+        1 if _agent_for_iteration(iteration + 1) == AGENT_JUDGE else 0)
+    left = state["max_iterations"] - iteration
+    shortfalls = []
+    if left < needed:
+        shortfalls.append(f"{left} iteration(s) left, {needed} needed")
+    ceiling = state["cost_ceiling_usd"]
+    if ceiling > 0:
+        costs = [
+            e["cost_usd"] for e in state["oracle_score_history"]
+            if isinstance(e.get("cost_usd"), (int, float))
+            and not isinstance(e.get("cost_usd"), bool)]
+        need_usd = needed * max(costs, default=0)
+        left_usd = ceiling - state["cumulative_cost_usd"]
+        if left_usd < need_usd:
+            shortfalls.append(
+                f"${left_usd:.4f} left, ${need_usd:.4f} needed")
+    if not shortfalls:
+        return True, None
+    return False, (
+        f"plateau at iteration {iteration}: no escalation rung started "
+        f"({'; '.join(shortfalls)} for a full plateau window)")
+
+
+def _role_cfg(models: Optional[dict], agent: str) -> dict:
+    return (models or {}).get(agent) or {}
+
+
+def _role_args(role_cfg: Optional[dict]) -> "list[str]":
+    """`--model` / `--effort` / `--advisor` argv for a role (fixed order)."""
+    args: "list[str]" = []
+    for key in MODELS_ROLE_KEYS:
+        value = (role_cfg or {}).get(key)
+        if value:
+            args.extend([f"--{key}", value])
+    return args
+
+
+def _note_judge_ignored(models: Optional[dict]) -> None:
+    """One stderr note when a judge block meets the (judge-less) goal driver."""
+    if _role_cfg(models, AGENT_JUDGE):
+        sys.stderr.write(
+            "loop: models.judge is ignored under --driver goal (the goal "
+            "driver has no judge role).\n")
+
+
+def _note_escalation_ignored(models: Optional[dict]) -> None:
+    """One stderr note when a ladder meets the (plateau-less) goal driver."""
+    if _ladder_of(models):
+        sys.stderr.write(
+            "loop: models.escalation is ignored under --driver goal (the "
+            "goal driver has no plateau signal).\n")
+
+
+def _requested_of(role_cfg: Optional[dict]) -> dict:
+    """The `requested` accounting record for a role (null = inherited)."""
+    return {key: (role_cfg or {}).get(key) for key in MODELS_ROLE_KEYS}
+
+
+def _id_names(model_id: str, name: Optional[str]) -> bool:
+    """True when `name` equals `model_id` or is a `-`-delimited token of it."""
+    return bool(name) and (
+        model_id == name or name in model_id.split("-"))
+
+
+def _mark_requested_advisor(
+    model_usage: dict, advisor: Optional[str], model: Optional[str],
+) -> dict:
+    """Copy of `model_usage` with `"advisor": true` on entries naming the
+    requested advisor (second signal, ADR-0047 D1), unless the id also names
+    the role's own requested model. Only applies when the role requests a
+    `model` explicitly: with an inherited model the executor's own entry may
+    share the advisor's family token, so only the `advisor_message` signal
+    (final-turn consults) is trusted."""
+    out = {}
+    for model_id, entry in model_usage.items():
+        if (model and _id_names(model_id, advisor)
+                and not _id_names(model_id, model)):
+            out[model_id] = {**entry, "advisor": True}
+        else:
+            out[model_id] = dict(entry)
+    return out
+
+
+def _as_number(value) -> float:
+    """`value` as a float when it is a finite real number, else 0.0.
+
+    `bool`, non-numbers, NaN and +/-inf all count as absent so malformed
+    accounting can never crash an iteration.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    number = float(value)
+    return number if math.isfinite(number) else 0.0
+
+
+def _normalize_model_usage(claude_data: dict) -> dict:
+    """Claude's `modelUsage` as `{id: {cost_usd, <4 token counts>}}`.
+
+    Non-dict `modelUsage` (or a non-dict entry) yields `{}` (or zeros): the
+    accounting is best-effort and never fails an iteration.
+    """
+    raw = (claude_data or {}).get("modelUsage")
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for model_id, entry in raw.items():
+        entry = entry if isinstance(entry, dict) else {}
+        record = {"cost_usd": _as_number(entry.get("costUSD"))}
+        for src, dst in _MODEL_USAGE_TOKEN_FIELDS:
+            record[dst] = int(_as_number(entry.get(src)))
+        out[str(model_id)] = record
+    return out
+
+
+def _advisor_model_ids(claude_data: dict) -> set:
+    """Models of `usage.iterations[]` elements typed `advisor_message`."""
+    usage = (claude_data or {}).get("usage")
+    iterations = usage.get("iterations") if isinstance(usage, dict) else None
+    ids = set()
+    if isinstance(iterations, list):
+        for element in iterations:
+            if (isinstance(element, dict)
+                    and element.get("type") == "advisor_message"
+                    and element.get("model")):
+                ids.add(str(element["model"]))
+    return ids
+
+
+def _usage_record(claude_data: dict) -> dict:
+    """Top-level (per-invocation) `usage` as four ints (bad/absent -> 0)."""
+    usage = (claude_data or {}).get("usage")
+    usage = usage if isinstance(usage, dict) else {}
+    return {k: int(_as_number(usage.get(k))) for k in _USAGE_TOKEN_KEYS}
+
+
+def _reported_total_cost(claude_data: dict) -> float:
+    """Reported `total_cost_usd` as a finite float; NaN/inf/strings count as 0."""
+    return _as_number((claude_data or {}).get("total_cost_usd"))
+
+
+def _session_id_of(claude_data: dict) -> str:
+    """The reported `session_id` as a string; absent/null gives ""."""
+    value = (claude_data or {}).get("session_id")
+    return "" if value is None else str(value)
+
+
+def _sum_tokens(model_usage: dict) -> int:
+    return sum(
+        entry[dst] for entry in model_usage.values()
+        for _src, dst in _MODEL_USAGE_TOKEN_FIELDS
+    )
+
+
+def _iteration_cost_delta(
+    claude_data: dict, *, resumed_session_id: Optional[str],
+    snapshot: Optional[dict],
+) -> "tuple[float, dict, str]":
+    """`(cost_usd, per_model_usage, cost_basis)` for one invocation (bug 007).
+
+    On `--resume`, Claude reports the SESSION's running `total_cost_usd` /
+    `modelUsage`, while top-level `usage` is this invocation only. The delta
+    against the last snapshot is used only when that is proven: the
+    iteration resumed `S`, Claude returned `S`, a snapshot for `S` exists, the
+    summed `modelUsage` tokens are >= snapshot tokens + this invocation's
+    `usage` tokens, and the reported cost is >= the snapshot's. Models this
+    invocation did not use (all-zero delta) are dropped. Anything else falls back to the reported
+    values, which can only over-count (fail-safe for the cost brake), and says so in `cost_basis`.
+    """
+    reported_cost = _reported_total_cost(claude_data)
+    reported_mu = _normalize_model_usage(claude_data)
+    returned_id = _session_id_of(claude_data)
+    if (
+        resumed_session_id
+        and returned_id == resumed_session_id
+        and isinstance(snapshot, dict)
+        and snapshot.get("session_id") == resumed_session_id
+    ):
+        snap_mu = _normalize_model_usage(
+            {"modelUsage": snapshot.get("model_usage")})
+        snap_cost = _as_number(snapshot.get("total_cost_usd"))
+        this_tokens = sum(_usage_record(claude_data).values())
+        if (
+            _sum_tokens(snap_mu) > 0  # an empty snapshot proves nothing
+            and _sum_tokens(reported_mu) >= _sum_tokens(snap_mu) + this_tokens
+            and reported_cost >= snap_cost
+        ):
+            delta_mu = {}
+            for model_id, entry in reported_mu.items():
+                before = snap_mu.get(model_id, {})
+                delta = {
+                    k: max(v - before.get(k, 0), 0) for k, v in entry.items()}
+                if any(delta.values()):
+                    delta_mu[model_id] = delta
+            return (
+                reported_cost - snap_cost, delta_mu, COST_BASIS_SESSION_DELTA,
+            )
+    return reported_cost, reported_mu, COST_BASIS_REPORTED
+
+
+def _warn_reported_fallback(
+    resumed_session_id: Optional[str], cost_basis: str, host: str,
+) -> bool:
+    """True when a resumed iteration fell back to the reported total.
+
+    Suppressed off the Claude host: Copilot reports no `modelUsage`, so the
+    fallback would fire on every resumed iteration there and mean nothing.
+    """
+    return bool(
+        resumed_session_id and cost_basis == COST_BASIS_REPORTED
+        and host == HOST_CLAUDE
+    )
+
+
+def _iteration_accounting(
+    claude_data: dict, *, agent: Optional[str], cost_usd: Optional[float],
+    cost_basis: str, model_usage: dict, requested: dict,
+) -> dict:
+    """Accounting keys for a history entry / stdout line / goal summary.
+
+    `agent` / `cost_usd` of None are omitted (the goal driver has neither: its
+    cost is already `cumulative_cost_usd`). Advisor-consult models get
+    `"advisor": true` (best-effort); `model` is the highest-cost non-advisor
+    model (first on a tie), else None.
+    """
+    advisors = _advisor_model_ids(claude_data)
+    marked = {}
+    for model_id, entry in model_usage.items():
+        marked[model_id] = (
+            {**entry, "advisor": True} if model_id in advisors else dict(entry))
+    # Spec 038-02: second signal - ids naming the role's requested advisor.
+    marked = _mark_requested_advisor(
+        marked, requested.get("advisor"), requested.get("model"))
+    primary, best = None, None
+    for model_id, entry in marked.items():
+        if entry.get("advisor"):
+            continue
+        if best is None or entry["cost_usd"] > best:
+            primary, best = model_id, entry["cost_usd"]
+    record = {}
+    if agent is not None:
+        record["agent"] = agent
+    record["session_id"] = _session_id_of(claude_data)
+    if cost_usd is not None:
+        record["cost_usd"] = cost_usd
+    record.update({
+        "cost_basis": cost_basis,
+        "usage": _usage_record(claude_data),
+        "model_usage": marked,
+        "model": primary,
+        "requested": dict(requested),
+    })
+    return record
+
+
 def _extract_context_fill_ratio(
     claude_data: dict,
 ) -> tuple[Optional[float], Optional[str]]:
@@ -2157,8 +2631,12 @@ def _invoke_claude(
     agent_name: Optional[str] = None,
     host: str = HOST_CLAUDE,
     max_ai_credits: Optional[float] = None,
+    role_args: Optional[list] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
+
+    `role_args` (spec 038-02): the role's `--model/--effort/--advisor` flags,
+    inserted before `--settings`; empty/None leaves the argv unchanged.
 
     Slice 032-05: when `host == HOST_COPILOT`, delegates to `_invoke_copilot`
     (which returns a dict in this function's shape so the loop body is
@@ -2203,6 +2681,7 @@ def _invoke_claude(
         )
     cmd: list[str] = ["claude", "-p", "--output-format", "json"]
     cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    cmd.extend(role_args or [])
     cmd.extend(_settings_args(target))
     if agent_name:
         cmd.extend(["--agent", agent_name])
@@ -2406,6 +2885,10 @@ def _summary_payload(
     }
     if terminal_breadcrumb is not None:
         payload["terminal_breadcrumb"] = terminal_breadcrumb
+    ladder = _ladder_of(state.get("models"))
+    if ladder:
+        payload["escalation_rung"] = state.get("escalation_rung", 0)
+        payload["escalation_rungs"] = len(ladder)
     if state.get("oracle") is not None:
         payload.update(gate_consumer.fields(state))
         payload["oracle_reason"] = state.get("oracle_reason")
@@ -2504,6 +2987,7 @@ def run_loop(
     allow_dirty: bool = False,
     host: str = HOST_CLAUDE,
     max_ai_credits: Optional[float] = None,
+    models: Optional[dict] = None,
 ) -> int:
     """Drive the iteration loop with state persistence + resume + signal handling.
 
@@ -2660,6 +3144,24 @@ def run_loop(
             state["plateau_window"] = plateau_window
         if plateau_noise_floor is not None:
             state["plateau_noise_floor"] = plateau_noise_floor
+        # Spec 038-02 AC5: a supplied block replaces the persisted one
+        # wholesale; otherwise keep it (old state: none). A kept block is
+        # re-validated - state.json is hand-editable and the block feeds argv.
+        if models is not None:
+            state["models"] = models
+        elif state.get("models") is not None:
+            kept, kept_err = _validate_models(
+                state["models"], allow_escalation=True)
+            if kept_err is not None:
+                return _refuse_preflight(
+                    run_id=resume_run_id,
+                    reason=REASON_MODELS_INVALID,
+                    message=f"persisted state models invalid: {kept_err}",
+                    cost_ceiling=refusal_ceiling,
+                    context_fill_threshold=refusal_threshold,
+                )
+            state["models"] = kept
+        state.setdefault("models", None)
         # Backfill defaults for state files written before slice 003-05.
         # Same state_schema_version=1; additive fields per ADR-0004's
         # "pure additive changes MAY keep version at 1" clause.
@@ -2783,10 +3285,28 @@ def run_loop(
             plateau_window=plateau_window,
             plateau_noise_floor=plateau_noise_floor,
             claude_version=current_claude_version,
+            models=models,
         )
         state_path = _state_path_for(target, run_id)
         _atomic_write_state(state, state_path)
         last_context_fill_ratio = None
+
+    # Spec 038-03: ladder bookkeeping, only when a ladder is configured (no
+    # ladder -> no keys, existing shapes unchanged). Resume restores the
+    # persisted rung/baseline/window index; a shorter resumed ladder clamps.
+    ladder = _ladder_of(state.get("models"))
+    if ladder:
+        state["escalation_rung"] = min(
+            int(state.get("escalation_rung") or 0), len(ladder))
+        state.setdefault("escalation_events", [])
+        state.setdefault("escalation_history_start", 0)
+    else:
+        # A resumed run with no ladder is a plain run again: back to rung 0
+        # and no leftover window bookkeeping (it would silence the brake).
+        # `escalation_events` stays: it is the per-rung measurement record.
+        for stale in ("escalation_rung", "escalation_history_start",
+                      "escalation_baseline_composite"):
+            state.pop(stale, None)
 
     # ---- Phase 2: iteration loop --------------------------------------------
     final_oracle_status = STATUS_ENV_ERROR
@@ -2862,16 +3382,43 @@ def run_loop(
         )
         # Pass --resume <session_id> when we have one (slice 003-04). For
         # fresh-run iter 1 the session id is empty → no --resume.
-        session_id_arg = state.get("current_session_id") or None
         # Slice 003-05: pick agent (runner/judge alternation) and assemble
         # the per-iteration prompt from the seed + last oracle JSON + last
         # verdict block. Iter 1 of a fresh run sends just the seed; iter 2+
         # / resumed runs send the structured assembly.
         agent_name = _agent_for_iteration(iteration)
+        # Spec 038-02 (ADR-0047 D2): with a models block in effect the judge
+        # runs in its own fresh session every time (no --resume) and never
+        # moves the runner's session or cost snapshot; runners keep resuming.
+        role_models = state.get("models")
+        split_judge = (
+            agent_name == AGENT_JUDGE and _models_in_effect(role_models))
+        rung = state.get("escalation_rung", 0) if ladder else 0
+        role_cfg = (
+            _runner_config_at_rung(role_models, rung)
+            if agent_name == AGENT_RUNNER
+            else _role_cfg(role_models, agent_name))
+        session_id_arg = (
+            None if split_judge else (state.get("current_session_id") or None))
+        escalation_section = None
+        if (ladder and rung >= 1 and agent_name == AGENT_RUNNER
+                and state.get("escalation_history_start") is None):
+            # The rung's first runner iteration: tell the fresh session where
+            # the previous rung left off (spec 038-03 AC4).
+            at_iteration = state["escalation_events"][-1]["at_iteration"]
+            seen = [e for e in state["oracle_score_history"]
+                    if (e.get("iteration") or 0) <= at_iteration]
+            best, best_iteration = _best_composite(seen)
+            escalation_section = {
+                "rung": rung, "best_composite": best,
+                "best_iteration": best_iteration,
+                "composite": seen[-1].get("composite") if seen else None,
+            }
         iteration_prompt = _assemble_iteration_prompt(
             state["prompt"],
             state.get("last_oracle_json"),
             state.get("last_verdict"),
+            escalation_section,
         )
         # Slice 031-01 (ADR-0037): snapshot the tree immediately BEFORE the
         # runner invoke. Runner iterations only (`_agent_for_iteration` odd; the
@@ -2894,6 +3441,7 @@ def run_loop(
             agent_name=agent_name,
             host=host,
             max_ai_credits=max_ai_credits,
+            role_args=_role_args(role_cfg),
         )
         # Snapshot immediately AFTER the invoke returns, BEFORE the gate runs —
         # so the delta brackets only the runner turn, excluding the later gate
@@ -2919,42 +3467,63 @@ def run_loop(
 
         if claude_data is None:
             sys.stderr.write(f"loop: {error}\n")
+            rung_crumb = None
+            if ladder and rung >= 1:
+                rung_crumb = _rung_failure_breadcrumb(
+                    role_models, rung, REASON_CLAUDE_INVOCATION_FAILED,
+                    agent_name)
+                sys.stderr.write(f"loop: {rung_crumb}\n")
             _finalize_state_and_summary(
                 state, state_path,
                 terminal_reason=REASON_CLAUDE_INVOCATION_FAILED,
                 final_oracle_status=(STATUS_ENV_ERROR if state.get("oracle") is not None
                                      else final_oracle_status),
+                terminal_breadcrumb=rung_crumb,
             )
             return EXIT_ENV_ERROR
 
         # Extract iteration data.
-        session_id = str(claude_data.get("session_id", ""))
-        try:
-            cost_usd = float(claude_data.get("total_cost_usd", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            cost_usd = 0.0
+        session_id = _session_id_of(claude_data)
+        # Bug 007 / spec 038-01: the invocation's OWN cost, not the session
+        # running total Claude reports on `--resume`.
+        snapshot = state.get("current_session_usage_snapshot")
+        cost_usd, iter_model_usage, cost_basis = _iteration_cost_delta(
+            claude_data, resumed_session_id=session_id_arg, snapshot=snapshot,
+        )
+        if _warn_reported_fallback(session_id_arg, cost_basis, host):
+            sys.stderr.write(
+                f"loop: iteration {iteration}: cost basis fell back to the "
+                "reported session total (resumed-session running-total "
+                "semantics unproven) - cost may be over-counted\n"
+            )
+        accounting = _iteration_accounting(
+            claude_data, agent=agent_name, cost_usd=cost_usd,
+            cost_basis=cost_basis, model_usage=iter_model_usage,
+            requested=_requested_of(role_cfg),
+        )
         claude_terminal_reason = str(claude_data.get("terminal_reason", ""))
 
         # Token tallies for AC2's cumulative_input_tokens / cumulative_output_tokens.
-        usage = claude_data.get("usage") or {}
-        if not isinstance(usage, dict):
-            usage = {}
-        try:
-            iter_input_tokens = (
-                int(usage.get("input_tokens", 0) or 0)
-                + int(usage.get("cache_read_input_tokens", 0) or 0)
-                + int(usage.get("cache_creation_input_tokens", 0) or 0)
-            )
-            iter_output_tokens = int(usage.get("output_tokens", 0) or 0)
-        except (TypeError, ValueError):
-            iter_input_tokens = 0
-            iter_output_tokens = 0
+        # Same helper as the recorded `usage`, so the two cannot disagree.
+        iter_usage = accounting["usage"]
+        iter_input_tokens = (
+            iter_usage["input_tokens"]
+            + iter_usage["cache_read_input_tokens"]
+            + iter_usage["cache_creation_input_tokens"]
+        )
+        iter_output_tokens = iter_usage["output_tokens"]
 
         state["cumulative_cost_usd"] += cost_usd
         state["cumulative_input_tokens"] += iter_input_tokens
         state["cumulative_output_tokens"] += iter_output_tokens
-        if session_id:
+        if session_id and not split_judge:
             state["current_session_id"] = session_id
+            raw_mu = claude_data.get("modelUsage")
+            state["current_session_usage_snapshot"] = {
+                "session_id": session_id,
+                "total_cost_usd": _reported_total_cost(claude_data),
+                "model_usage": raw_mu if isinstance(raw_mu, dict) else {},
+            }
 
         # Slice 032-05 (AC2/AC4): under `--host copilot` surface the native cost
         # (premium-requests / nano-AIU — NOT USD; the USD `--cost-ceiling` does
@@ -2977,6 +3546,10 @@ def run_loop(
         context_fill_ratio, ratio_error = _extract_context_fill_ratio(claude_data)
         if context_fill_ratio is None and ratio_error is not None:
             sys.stderr.write(f"loop: {ratio_error}\n")
+        # Under the judge split (038-02) this ratio alternates between the
+        # runner's session and a fresh judge session. The context-fill gate
+        # still protects the runner: every runner turn is followed by the
+        # pre-iteration check (before the judge turn) on the runner's own ratio.
         state["last_context_fill_ratio"] = context_fill_ratio
 
         # Slice 003-05 AC10: parse the agent's verdict block. The agent's
@@ -2990,12 +3563,19 @@ def run_loop(
         if verdict_error is not None:
             # AC10: refuse the run on a malformed verdict block.
             sys.stderr.write(f"loop: {verdict_error}\n")
+            rung_crumb = None
+            if ladder and rung >= 1:
+                rung_crumb = _rung_failure_breadcrumb(
+                    role_models, rung, REASON_VERDICT_SCHEMA_MISMATCH,
+                    agent_name)
+                sys.stderr.write(f"loop: {rung_crumb}\n")
             state["iteration_count"] = iteration
             _finalize_state_and_summary(
                 state, state_path,
                 terminal_reason=REASON_VERDICT_SCHEMA_MISMATCH,
                 final_oracle_status=(STATUS_ENV_ERROR if state.get("oracle") is not None
                                      else final_oracle_status),
+                terminal_breadcrumb=rung_crumb,
             )
             return EXIT_ENV_ERROR
         # `verdict_fields` may be None (no block found); that's fine — the
@@ -3051,8 +3631,16 @@ def run_loop(
             "composite": oracle_composite,
             "threshold": oracle_threshold,
             "status": oracle_status,
+            **accounting,
+            **({"rung": rung} if ladder else {}),
             **gate_consumer.fields(gate_data),
         })
+        if (ladder and agent_name == AGENT_RUNNER
+                and state.get("escalation_history_start") is None):
+            # The rung's window opens at its first runner entry (a leading
+            # judge turn re-scores the previous rung's tree and is skipped).
+            state["escalation_history_start"] = (
+                len(state["oracle_score_history"]) - 1)
         state.update(gate_consumer.fields(gate_data))
         state["last_terminal_reason"] = claude_terminal_reason
         state["last_oracle_json"] = gate_data
@@ -3063,9 +3651,7 @@ def run_loop(
         # so a downstream consumer can group per-iter lines by role.
         _emit_json({
             "iteration": iteration,
-            "agent": agent_name,
-            "session_id": session_id,
-            "cost_usd": cost_usd,
+            **accounting,
             "cumulative_cost_usd": state["cumulative_cost_usd"],
             "context_fill_ratio": context_fill_ratio,
             "verdict": verdict_fields,
@@ -3075,6 +3661,7 @@ def run_loop(
             "oracle_composite": oracle_composite,
             "oracle_threshold": oracle_threshold,
             "run_id": state["run_id"],
+            **({"rung": rung} if ladder else {}),
             **gate_consumer.fields(gate_data),
         })
 
@@ -3106,10 +3693,36 @@ def run_loop(
         # Slice 003-05 plateau check (AC1/AC2/AC3): after gate scoring, if
         # the last `plateau_window` iterations failed to improve over the
         # max-prior-composite, halt. AC4 disables when window==0.
-        if _check_plateau(
-            state["oracle_score_history"], state["plateau_window"],
-            state.get("plateau_noise_floor", DEFAULT_PLATEAU_NOISE_FLOOR),
-        ):
+        if _rung_plateau(state):
+            # Spec 038-03: a plateau climbs the next rung when one exists and
+            # can afford a fair window; otherwise it halts exactly as before.
+            if ladder and state["escalation_rung"] < len(ladder):
+                ok, refusal = _escalation_guard(state, iteration)
+                if ok:
+                    new_rung = state["escalation_rung"] + 1
+                    baseline, _ = _best_composite(
+                        state["oracle_score_history"])
+                    runner_now = _runner_config_at_rung(role_models, new_rung)
+                    state["escalation_rung"] = new_rung
+                    state["escalation_history_start"] = None
+                    state["escalation_events"].append({
+                        "rung": new_rung, "at_iteration": iteration,
+                        "baseline_composite": baseline, "runner": runner_now,
+                    })
+                    # A fresh runner session per rung; the worktree is kept.
+                    state["current_session_id"] = ""
+                    state["current_session_usage_snapshot"] = None
+                    # ...and no measured fill: the old session's ratio must
+                    # not trip the context gate before the rung has run.
+                    last_context_fill_ratio = None
+                    state["last_context_fill_ratio"] = None
+                    _atomic_write_state(state, state_path)
+                    sys.stderr.write(
+                        f"loop: plateau at iteration {iteration}: escalating "
+                        f"to rung {new_rung} of {len(ladder)}; runner config "
+                        f"{json.dumps(runner_now)}\n")
+                    continue
+                sys.stderr.write(f"loop: {refusal}\n")
             terminal_reason = REASON_ORACLE_PLATEAU
             halted_on_plateau = True
             break
@@ -3266,6 +3879,7 @@ def _invoke_claude_goal(
     max_turns: int,
     max_budget_usd: Optional[float],
     timeout_seconds: Optional[float] = None,
+    role_args: Optional[list] = None,
 ) -> tuple[Optional[dict], str, Optional[str]]:
     """Invoke one `claude -p --output-format stream-json --verbose` `/goal` run.
 
@@ -3288,6 +3902,7 @@ def _invoke_claude_goal(
     ]
     if max_budget_usd is not None and max_budget_usd > 0:
         cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
+    cmd.extend(role_args or [])  # spec 038-02: the runner role's flags
     # Bug 004 (parity with bug 002): forward the target's own committed
     # .claude/settings.json so a /goal run against a target that pre-authorizes
     # its tools runs unattended. Same conservative semantics as the loop driver.
@@ -3338,6 +3953,7 @@ def _invoke_claude_goal(
 def _build_goal_state(
     *, run_id: str, target: Path, prompt: str,
     max_turns: int, cost_ceiling: float, claude_version: Optional[str],
+    models: Optional[dict] = None,
 ) -> dict:
     """Goal-driver per-run state (ADR-0004 shape, goal-mode fields).
 
@@ -3355,6 +3971,7 @@ def _build_goal_state(
         "last_updated_at": now_iso,
         "target_path": str(target),
         "prompt": prompt,
+        "models": models,
         "max_turns": max_turns,
         "cost_ceiling_usd": cost_ceiling,
         "cumulative_cost_usd": 0.0,
@@ -3376,6 +3993,7 @@ def _goal_summary(
     composite, threshold, subtype, claude_terminal_reason,
     num_turns: int, transcript_showed_pass: bool,
     terminal_breadcrumb: Optional[str] = None,
+    accounting: Optional[dict] = None,
 ) -> dict:
     """Single source for the goal-mode summary line (every halt path uses it).
 
@@ -3401,6 +4019,10 @@ def _goal_summary(
     }
     if terminal_breadcrumb is not None:
         payload["terminal_breadcrumb"] = terminal_breadcrumb
+    if accounting:
+        # Spec 038-01 AC4: only after a parsed result event; refusal paths that
+        # never invoke Claude keep today's shape.
+        payload.update(accounting)
     return payload
 
 
@@ -3430,6 +4052,7 @@ def run_goal_loop(
     allow_dirty: bool = False,
     run_id: Optional[str] = None,
     detached: bool = False,
+    models: Optional[dict] = None,
 ) -> int:
     """Drive a single `/goal`-continuation run with servo's guardrails wired
     through the OUTER `claude -p` invocation (slice 003-06 / ADR-0008).
@@ -3534,10 +4157,18 @@ def run_goal_loop(
     state = _build_goal_state(
         run_id=run_id, target=target, prompt=prompt,
         max_turns=max_turns, cost_ceiling=ceiling, claude_version=claude_version,
+        models=models,
     )
     if detached:
         state["detached"] = True  # slice 003-08: a `--background` child run
     _atomic_write_state(state, state_path)
+
+    goal_accounting: dict = {}  # filled once a result event is parsed (038-01)
+    # Spec 038-02 AC6: the runner role applies to the single invocation; the goal
+    # driver has no judge role, so a judge block is ignored (one note).
+    runner_cfg = _role_cfg(models, AGENT_RUNNER)
+    _note_judge_ignored(models)
+    _note_escalation_ignored(models)
 
     def _finalize(terminal_reason, *, cumulative_cost_usd, final_oracle_status,
                   composite=None, threshold=None, subtype=None,
@@ -3574,6 +4205,7 @@ def run_goal_loop(
             claude_terminal_reason=claude_terminal_reason, num_turns=num_turns,
             transcript_showed_pass=transcript_showed_pass,
             terminal_breadcrumb=terminal_breadcrumb,
+            accounting=goal_accounting,
         )
         summary.update(gate_consumer.fields(state))
         _emit_json(summary)
@@ -3600,6 +4232,7 @@ def run_goal_loop(
         goal_prompt, target,
         max_turns=max_turns, max_budget_usd=ceiling,
         timeout_seconds=claude_timeout_seconds,
+        role_args=_role_args(runner_cfg),
     )
     # "Landed anything" = a non-empty delta (incl. a created untracked file).
     # `edit_signal_computed` matches 031-01's notion: the signal was observable
@@ -3622,10 +4255,20 @@ def run_goal_loop(
     # exit path (interrupt, goal_unavailable, the normal verdict) reports the
     # real spend, not a hardcoded $0, even when the run was cut short.
     _rev = result_event or {}
-    try:
-        result_cost = float(_rev.get("total_cost_usd", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        result_cost = 0.0
+    result_cost = _reported_total_cost(_rev)
+    if isinstance(result_event, dict):
+        # Spec 038-01 AC4: the goal invocation is fresh, so its cost is the
+        # reported total (== cumulative_cost_usd). Built as soon as a result
+        # event exists so EVERY later exit (interrupt, goal_unavailable, gate
+        # paths) carries the accounting; `_finalize` copies it into the summary
+        # and persists `state`.
+        goal_accounting.update(_iteration_accounting(
+            result_event, agent=None, cost_usd=None,
+            cost_basis=COST_BASIS_REPORTED,
+            model_usage=_normalize_model_usage(result_event),
+            requested=_requested_of(runner_cfg),
+        ))
+        state.update(goal_accounting)
     try:
         result_num_turns = int(_rev.get("num_turns", 0) or 0)
     except (TypeError, ValueError):
@@ -3852,6 +4495,7 @@ def _emit_routine_prompt(target: Path, seed: str) -> int:
 def _build_detached_child_argv(
     target: Path, run_id: str, *,
     prompt: str, max_iterations: Optional[int], cost_ceiling: Optional[float],
+    models: Optional[dict] = None,
 ) -> list[str]:
     """argv for the detached goal-driver child of a `--background` launch (AC1).
 
@@ -3871,6 +4515,9 @@ def _build_detached_child_argv(
         argv += ["--max-iterations", str(max_iterations)]
     if cost_ceiling is not None:
         argv += ["--cost-ceiling", str(cost_ceiling)]
+    if models is not None:
+        # Spec 038-02 AC6: the child applies the parent's resolved block.
+        argv += ["--models", json.dumps(models, separators=(",", ":"))]
     return argv
 
 
@@ -3933,6 +4580,7 @@ def run_goal_loop_background(
     max_iterations: Optional[int],
     cost_ceiling: Optional[float],
     allow_dirty: bool,
+    models: Optional[dict] = None,
 ) -> int:
     """Launch the goal driver DETACHED so an unattended run survives terminal close (AC1).
 
@@ -3954,6 +4602,8 @@ def run_goal_loop_background(
     """
     ceiling = cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD
     max_turns = max_iterations if max_iterations is not None else DEFAULT_MAX_ITERATIONS
+    _note_judge_ignored(models)  # the parent says so too (the child logs its own)
+    _note_escalation_ignored(models)
 
     err = _unpriced_oracle_error(target)
     if err is not None:
@@ -4008,6 +4658,7 @@ def run_goal_loop_background(
     state = _build_goal_state(
         run_id=run_id, target=target, prompt=prompt,
         max_turns=max_turns, cost_ceiling=ceiling, claude_version=claude_version,
+        models=models,
     )
     state["detached"] = True
     _atomic_write_state(state, state_path)
@@ -4016,6 +4667,7 @@ def run_goal_loop_background(
     argv = _build_detached_child_argv(
         target, run_id, prompt=prompt,
         max_iterations=max_iterations, cost_ceiling=cost_ceiling,
+        models=models,
     )
     pid, spawn_err = _spawn_detached(argv, log_path)
     if pid is None:
@@ -4199,6 +4851,20 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--models",
+        dest="models",
+        default=None,
+        help=(
+            "Per-role model placement (spec 038-02 / ADR-0047): inline JSON "
+            "(starts with `{`) or a path to a JSON file, "
+            '`{"runner": {"model", "effort", "advisor"}, "judge": {...}}` '
+            "(`inherit` == unset). Replaces a plan's `models` block entirely; "
+            "on --resume it replaces the persisted block. When any field is "
+            "set the judge runs in its own fresh session every iteration. "
+            "Refuses (rc=2 / models_invalid) before any run on a bad block."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         dest="resume",
         default=None,
@@ -4347,6 +5013,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             "--cost-ceiling).\n"
         )
 
+    # Spec 038-02 AC1/AC2: resolve + validate the `--models` flag fail-closed,
+    # before any run directory / state / claude call.
+    flag_models = None
+    if args.models is not None:
+        raw_models, models_err = _load_models_arg(args.models)
+        if models_err is None:
+            flag_models, models_err = _validate_models(
+                raw_models, allow_escalation=True)
+        if models_err is not None:
+            return _refuse_plan(
+                reason=REASON_MODELS_INVALID,
+                message=f"--models refused: {models_err}")
+
     accounting_rc = _unpriced_oracle_preflight(
         target, cost_ceiling=args.cost_ceiling,
         context_fill_threshold=args.context_fill_threshold,
@@ -4397,6 +5076,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # routing — the Routine runs on a different host (the cloud), so this host's
     # /goal support is irrelevant to producing the artifact.
     if args.emit_routine_prompt:
+        if args.models is not None:
+            sys.stderr.write(
+                "loop: --models is not carried into the Routine prompt (a "
+                "Routine runs on its own host and model settings).\n")
         return _emit_routine_prompt(target, args.prompt)
 
     # Detached child of a `--background` launch (slice 003-08 AC1): run the goal
@@ -4411,6 +5094,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             allow_dirty=args.allow_dirty,
             run_id=args.detached_run_id,
             detached=True,
+            models=flag_models,
         )
 
     # ---- Plan consumption (slice 016-02, ADR-0016) -------------------------
@@ -4423,12 +5107,22 @@ def main(argv: Optional[list[str]] = None) -> int:
     # starts (AC6; AC7 now accepts both compiled and human_edited, 016-03 AC2).
     plan_budget = None
     plan_driver = None
+    plan_models = None
     if args.plan is not None:
         plan, plan_err = _load_plan(args.plan.resolve())
         if plan_err is not None:
             return _refuse_plan(reason=plan_err[0], message=plan_err[1])
         plan_budget = plan.get("budget") or {}
         plan_driver = plan.get("driver")
+        if "models" in plan:
+            # Validated even when `--models` will override it: a bad plan key
+            # is a bad plan (fail-closed, 038-02 AC2).
+            plan_models, plan_models_err = _validate_models(
+                plan["models"], allow_escalation=True)
+            if plan_models_err is not None:
+                return _refuse_plan(
+                    reason=REASON_PLAN_VALUE_INVALID,
+                    message=f"plan models invalid: {plan_models_err}")
 
         # ---- Plan-value validation (slice 016-03 AC3) ----------------------
         # Fail-closed, BEFORE clamping or driver resolution: a plan-sourced
@@ -4445,6 +5139,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             driver_err = _validate_plan_driver(plan_driver)
             if driver_err is not None:
                 return _refuse_plan(reason=driver_err[0], message=driver_err[1])
+
+    # Spec 038-02 AC1: block-level precedence, `--models` > plan `models`.
+    models = flag_models if flag_models is not None else plan_models
 
     # Resolve the effective driver: explicit --driver > plan `driver` > auto
     # (slice 016-02 A1/AC2). Done ABOVE the routing probes so a plan's driver
@@ -4511,6 +5208,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     # the goal driver (it delegates continuation to /goal), so it routes as if
     # `--driver goal` was requested — an unsupported host refuses rather than
     # silently downgrading to a non-detachable loop run.
+    if (effective_arg_driver == DRIVER_AUTO and not args.background
+            and _ladder_of(models)):
+        # Spec 038-03: the goal driver has no plateau signal, so a ladder
+        # would be ignored there; an explicit `--driver goal` keeps its note.
+        effective_arg_driver = DRIVER_LOOP
+        sys.stderr.write(
+            "loop: a models.escalation ladder needs the loop driver "
+            "(plateau-driven); routing --driver auto to loop.\n")
     routing_driver = DRIVER_GOAL if args.background else effective_arg_driver
     if routing_driver == DRIVER_LOOP:
         effective_driver = DRIVER_LOOP
@@ -4556,6 +5261,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             max_iterations=max_iterations,
             cost_ceiling=cost_ceiling,
             allow_dirty=args.allow_dirty,
+            models=models,
         )
 
     # ---- Dispatch ----------------------------------------------------------
@@ -4588,6 +5294,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             cost_ceiling=cost_ceiling,
             resume_run_id=args.resume,
             allow_dirty=args.allow_dirty,
+            models=models,
         )
 
     # ---- Clamp-never-disable: context_fill_threshold / plateau_window
@@ -4633,6 +5340,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         allow_dirty=args.allow_dirty,
         host=args.host,
         max_ai_credits=args.max_ai_credits,
+        models=models,
     )
 
 
