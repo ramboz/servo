@@ -1,6 +1,7 @@
 """
 servo heartbeat — slices 011-01 (discover-and-inbox) + 011-02 (triage-state-spine)
                    + 011-03 (candidate-dispatch) + 011-04 (heartbeat-cost-ceiling)
+                   + 041-03 (copilot whole-pass AI-credit ledger)
 
 The scheduled front-end of the servo loop. A Routine (cron / scheduled agent
 / CI `schedule:`) wakes servo on an interval; this helper's `discover`
@@ -73,6 +74,8 @@ Usage:
                                            [--max-iterations <n>]
                                            [--max-candidates <n>]
     python3 heartbeat.py run <target> [--cost-ceiling <usd>]
+                                      [--host {claude,copilot}]
+                                      [--credit-ceiling <credits>]  (Copilot: AI credits, min 30)
                                       [--max-iterations <n>]
                                       [--max-candidates <n>]
 
@@ -331,6 +334,15 @@ OUTCOME_ENV_ERROR = "env_error"
 # loop.py's `MIN_BUDGET_FLOOR_USD`: below this, spawning another loop is noise.
 DEFAULT_HEARTBEAT_COST_CEILING_USD = 2.0
 MIN_HEARTBEAT_BUDGET_FLOOR_USD = 0.01
+
+# Slice 041-03 (ADR-0048): the heartbeat forwards a whole-pass AI-credit ceiling
+# to a Copilot-hosted loop, kept strictly apart from USD. `--host` selects the
+# backend (mirrors loop.py's HOST_CLAUDE / HOST_COPILOT). The credit floor is the
+# CLI's `--max-ai-credits` minimum: below it, no loop.py can be launched (and a
+# ceiling below it is a budget in name only), so spawning another is impossible.
+HOST_CLAUDE = "claude"
+HOST_COPILOT = "copilot"
+MIN_HEARTBEAT_CREDIT_CEILING = 30
 
 # Persistent advisory-lock target for the read-merge-write (AC8, ADR-0010). A
 # SEPARATE file from inbox.jsonl — `os.replace` swaps the inbox inode, so a lock
@@ -2097,6 +2109,8 @@ def _run_loop(
     worktree: Path, prompt: str, *,
     cost_ceiling: Optional[float], max_iterations: Optional[int],
     models: Optional[str] = None,
+    host: str = HOST_CLAUDE,
+    credit_ceiling: Optional[float] = None,
 ) -> Optional[dict]:
     """Dispatch `loop.py <worktree> --prompt <framed> [...]`; return its summary (AC6).
 
@@ -2111,13 +2125,27 @@ def _run_loop(
     cannot be run or emits no parseable summary (→ a dispatch env-error, AC6). No
     outer timeout: loop.py self-bounds via `--max-iterations` + the per-iteration
     claude timeout + the cost ceiling.
+
+    Slice 041-03 (ADR-0048): under `host == HOST_COPILOT` the budget is in AI
+    credits, so the argv carries `--host copilot` + `--credit-ceiling` (NEVER
+    `--cost-ceiling`), and loop.py requires an explicit `--max-iterations` on
+    Copilot, so one is always forwarded (defaulting to 5 when the user gave
+    none). Under `--host claude` the argv is byte-identical to pre-041-03.
     """
     loop_py = _resolve_helper(_LOOP_PY_ENV, LOOP_PY_PATH)
     argv = [sys.executable, str(loop_py), str(worktree), "--prompt", prompt]
-    if cost_ceiling is not None:
-        argv += ["--cost-ceiling", _format_ceiling(cost_ceiling)]
-    if max_iterations is not None:
-        argv += ["--max-iterations", str(max_iterations)]
+    if host == HOST_COPILOT:
+        argv += ["--host", HOST_COPILOT]
+        if credit_ceiling is not None:
+            argv += ["--credit-ceiling", _format_ceiling(credit_ceiling)]
+        # loop.py refuses `--host copilot` without an explicit --max-iterations.
+        argv += ["--max-iterations",
+                 str(max_iterations if max_iterations is not None else 5)]
+    else:
+        if cost_ceiling is not None:
+            argv += ["--cost-ceiling", _format_ceiling(cost_ceiling)]
+        if max_iterations is not None:
+            argv += ["--max-iterations", str(max_iterations)]
     if models is not None:
         argv += ["--models", models]  # spec 038-03: forwarded verbatim
     try:
@@ -2151,20 +2179,29 @@ def _format_ceiling(value: float) -> str:
     return repr(float(value))
 
 
-def _env_error_outcome() -> dict:
+def _env_error_outcome(*, host: str = HOST_CLAUDE) -> dict:
     """Build a dispatch env-error `outcome` (AC6) in the ADR-0010-reserved shape.
 
     Used when a candidate cannot be isolated / provisioned / scored, or its
     `loop.py` emitted no parseable summary. `run_id` is null (no loop run owns it),
     composite null, cost 0.0. Maps to `status = tried` (not a pass) per AC7.
+
+    Slice 041-03 (ADR-0048): under `host == HOST_COPILOT` the outcome is a
+    credit-unit one — an env-error dispatched no loop, so it spent 0 credits, and
+    carrying a `credits` key keeps it in the credit unit so it does not trip the
+    whole-pass unit-mixing guard. Under claude no `credits` key is added (the
+    outcome is byte-identical to pre-041-03).
     """
-    return {
+    outcome = {
         "run_id": None,
         "oracle_status": OUTCOME_ENV_ERROR,
         "oracle_composite": None,
         "cost_usd": 0.0,
         "dispatched_at": _now_iso(),
     }
+    if host == HOST_COPILOT:
+        outcome["credits"] = 0.0
+    return outcome
 
 
 def _outcome_from_summary(summary: dict, *, target: Optional[Path] = None) -> dict:
@@ -2191,6 +2228,19 @@ def _outcome_from_summary(summary: dict, *, target: Optional[Path] = None) -> di
         "cost_usd": cost if isinstance(cost, (int, float)) else 0.0,
         "dispatched_at": _now_iso(),
     }
+    if "cumulative_credits" in summary:
+        # Slice 041-03 (ADR-0048): a Copilot summary ALWAYS carries
+        # `cumulative_credits` (a number, or null when the loop fail-closed with
+        # an unknown spend). Record it as `credits`; a non-numeric / null value
+        # becomes None, which `_outcome_credits` reads as the fail-closed signal
+        # (never summed as 0). A Claude summary has no such key, so no `credits`
+        # key is added and the USD outcome stays byte-identical (AC4).
+        raw_credits = summary.get("cumulative_credits")
+        outcome["credits"] = (
+            raw_credits
+            if isinstance(raw_credits, (int, float)) and not isinstance(raw_credits, bool)
+            else None
+        )
     if (any(key in summary for key in ("oracle", "gate_ref", "oracle_reason"))
             or (target is not None and gate_consumer.pins.enabled(target))):
         # A component pass, scalar final_oracle_status or loop terminal cannot
@@ -2261,6 +2311,33 @@ def _outcome_cost_usd(outcome: object) -> float:
     return max(cost, 0.0)
 
 
+def _outcome_is_credit_unit(outcome: object) -> bool:
+    """True iff `outcome` is denominated in AI credits (has a `credits` key).
+
+    Slice 041-03 (ADR-0048): the presence of the key — not its value — is the
+    unit discriminator. A Copilot outcome (loop summary or env-error) always has
+    it; a USD outcome never does. The whole-pass ledger refuses to sum across
+    units, so this gate keeps a USD outcome out of a credit ceiling (AC3).
+    """
+    return isinstance(outcome, dict) and "credits" in outcome
+
+
+def _outcome_credits(outcome: object) -> Optional[float]:
+    """Numeric `outcome.credits`, or None when it is null / missing / non-numeric.
+
+    Slice 041-03 (ADR-0048) fail-closed rule: a credit-unit outcome whose credits
+    is None is the signal that spend is UNKNOWN — the caller halts the pass rather
+    than read it as 0. This never clamps a number to 0 the way USD does; an
+    unknown spend must stay unknown.
+    """
+    if not isinstance(outcome, dict):
+        return None
+    raw = outcome.get("credits")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    return float(raw)
+
+
 def _parse_iso_utc(value: object) -> Optional[datetime]:
     """Parse a human-editable ISO stamp to UTC; malformed values are ignored."""
     if not isinstance(value, str):
@@ -2293,6 +2370,33 @@ def _spent_cost_usd(
             if dispatched_at is None or dispatched_at < since:
                 continue
         total += _outcome_cost_usd(outcome)
+    return total
+
+
+def _spent_credits(
+    records: list[dict], *, since: Optional[datetime] = None,
+) -> float:
+    """Sum credit-unit `outcome.credits` values, optionally for one pass only.
+
+    Slice 041-03 (ADR-0048): only credit-unit outcomes are summed — a USD
+    outcome is skipped here, and the per-candidate ledger refuses to continue a
+    pass that mixes units (AC3). A credit-unit outcome whose credits is null (the
+    fail-closed signal) contributes nothing to a baseline sum; the pass has
+    already halted on it at dispatch time (AC2), so this ledger never reads null
+    as 0.
+    """
+    total = 0.0
+    for record in records:
+        outcome = record.get("outcome")
+        if since is not None:
+            dispatched_at = _outcome_dispatched_at(outcome)
+            if dispatched_at is None or dispatched_at < since:
+                continue
+        if not _outcome_is_credit_unit(outcome):
+            continue
+        credits = _outcome_credits(outcome)
+        if credits is not None:
+            total += credits
     return total
 
 
@@ -2478,6 +2582,8 @@ def _dispatch_one(
     target: Path, finding: dict, dispatch_dir: Path, *,
     cost_ceiling: Optional[float], max_iterations: Optional[int],
     models: Optional[str] = None,
+    host: str = HOST_CLAUDE,
+    credit_ceiling: Optional[float] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Isolate → provision → verify → dispatch one candidate; return (outcome, terminal_reason).
 
@@ -2492,6 +2598,10 @@ def _dispatch_one(
     cannot fabricate a tried/zero-cost outcome; an actual child summary retains
     its reported outcome and spend even when it stops for that same reason.
     The worktree is RETAINED (v1); GC is out of scope.
+
+    Slice 041-03 (ADR-0048): `host`/`credit_ceiling` thread the Copilot
+    AI-credit budget to `_run_loop`, and under copilot every env-error outcome is
+    built credit-unit (`credits: 0.0`) so it stays in the whole-pass credit unit.
     """
     fid = str(finding["finding_id"])
 
@@ -2501,7 +2611,7 @@ def _dispatch_one(
             f"target is not a git work tree; cannot isolate finding {fid} "
             f"(dispatch_env_error: non_git_target)"
         )
-        return _env_error_outcome(), None
+        return _env_error_outcome(host=host), None
 
     worktree = dispatch_dir / fid
     branch = HEARTBEAT_BRANCH_PREFIX + fid
@@ -2514,7 +2624,7 @@ def _dispatch_one(
             f"worktree creation failed for finding {fid}: {err} "
             f"(dispatch_env_error: worktree_create_failed)"
         )
-        return _env_error_outcome(), None
+        return _env_error_outcome(host=host), None
 
     # AC4 — provision the oracle + manifest (+ sidecars), then VERIFY with gate.py.
     try:
@@ -2524,7 +2634,7 @@ def _dispatch_one(
             f"oracle provisioning failed for finding {fid}: {exc} "
             f"(dispatch_env_error: provision_failed)"
         )
-        return _env_error_outcome(), None
+        return _env_error_outcome(host=host), None
     gate = _run_gate_json(worktree)
     if gate is None or gate.get("exit_code") == EXIT_ENV_ERROR:
         reason = (gate or {}).get("reason", "gate_uninvocable")
@@ -2537,7 +2647,7 @@ def _dispatch_one(
             REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
         ):
             return None, reason  # Pass-level refusal, not a scored outcome.
-        outcome = _env_error_outcome()
+        outcome = _env_error_outcome(host=host)
         if gate is not None:
             outcome.update(gate_consumer.fields(gate))
         return outcome, None
@@ -2557,13 +2667,14 @@ def _dispatch_one(
     summary = _run_loop(
         worktree, prompt,
         cost_ceiling=cost_ceiling, max_iterations=max_iterations, models=models,
+        host=host, credit_ceiling=credit_ceiling,
     )
     if summary is None:
         _emit_breadcrumb(
             f"loop.py emitted no parseable summary for finding {fid}; "
             f"recording env-error (dispatch_env_error: no_loop_summary)"
         )
-        return _env_error_outcome(), None
+        return _env_error_outcome(host=host), None
     terminal_reason = str(summary.get("terminal_reason") or "") or None
     if terminal_reason == REASON_MODELS_INVALID:
         # Spec 038-03 BR-5: the loop refused the block before any model call -
@@ -2583,6 +2694,8 @@ def run_dispatch(
     whole_cost_ceiling: Optional[float] = None,
     whole_cost_since: Optional[datetime] = None,
     models: Optional[str] = None,
+    host: str = HOST_CLAUDE,
+    whole_credit_ceiling: Optional[float] = None,
 ) -> int:
     """Oracle-gated, serial dispatch of the actionable-open candidate set (011-03).
 
@@ -2598,6 +2711,14 @@ def run_dispatch(
     `{0, 2}` exit (AC10/011-04 AC8): 2 only on a pass-level env error; 0 in
     every other case, including below-threshold loops, per-candidate env-errors,
     and budget halts.
+
+    Slice 041-03 (ADR-0048): under `host == HOST_COPILOT` the whole-pass budget
+    is `whole_credit_ceiling`, denominated in AI credits and held in a unit of its
+    own, never USD. The ledger sums ONLY credit-unit outcomes; a USD outcome under
+    a credit ceiling halts the pass (`credit_unit_mixing`, rc=2, AC3), and a null
+    credit spend halts it too (`credit_usage_unavailable`, rc=2, leaving the rest
+    `open`, AC2) — a null is never read as 0. The 30-credit floor mirrors the USD
+    floor. Under claude the emitted bytes are unchanged (AC4).
     """
     # ---- Env preconditions (pass-level exit 2) -----------------------------
     if models is not None:
@@ -2641,6 +2762,17 @@ def run_dispatch(
             _emit_breadcrumb(
                 "whole-heartbeat cost ceiling reached before dispatch: "
                 f"spent ${spent:.2f} / ${whole_cost_ceiling:.2f}; leaving "
+                f"{len(candidates)} candidate{'' if len(candidates) == 1 else 's'} open"
+            )
+            return EXIT_OK
+    if whole_credit_ceiling is not None:
+        # Slice 041-03: the credit-unit twin of the early USD exhaustion check.
+        spent_credits = _spent_credits(records, since=whole_cost_since)
+        if _remaining_heartbeat_budget(
+                whole_credit_ceiling, spent_credits) < MIN_HEARTBEAT_CREDIT_CEILING:
+            _emit_breadcrumb(
+                "whole-heartbeat credit ceiling reached before dispatch: "
+                f"spent {spent_credits:.2f} / {whole_credit_ceiling:.2f} cr; leaving "
                 f"{len(candidates)} candidate{'' if len(candidates) == 1 else 's'} open"
             )
             return EXIT_OK
@@ -2713,7 +2845,14 @@ def run_dispatch(
                 else candidates[: max(0, max_candidates)]
             )
             deferred = len(candidates) - len(capped)
-            spent = _spent_cost_usd(locked_records, since=whole_cost_since)
+            # Slice 041-03: `spent` holds the running total in the ACTIVE unit —
+            # AI credits under copilot, USD under claude. The ledger arithmetic
+            # (`_remaining_heartbeat_budget`) is unit-agnostic; only the
+            # baseline-sum helper and the floor differ.
+            if host == HOST_COPILOT:
+                spent = _spent_credits(locked_records, since=whole_cost_since)
+            else:
+                spent = _spent_cost_usd(locked_records, since=whole_cost_since)
             index = {
                 str(r.get("finding_id")): i for i, r in enumerate(locked_records)
             }
@@ -2752,7 +2891,17 @@ def run_dispatch(
                     )
                     continue
                 loop_cost_ceiling = cost_ceiling
-                if whole_cost_ceiling is not None:
+                loop_credit_ceiling: Optional[float] = None
+                if host == HOST_COPILOT and whole_credit_ceiling is not None:
+                    # Slice 041-03: below the 30-credit floor no loop.py can
+                    # launch, so halt and leave the rest open (AC1 budget stop).
+                    remaining = _remaining_heartbeat_budget(whole_credit_ceiling, spent)
+                    if remaining < MIN_HEARTBEAT_CREDIT_CEILING:
+                        budget_halted = True
+                        budget_deferred = len(capped) - processed - skipped
+                        break
+                    loop_credit_ceiling = remaining
+                elif whole_cost_ceiling is not None:
                     if _heartbeat_budget_exhausted(whole_cost_ceiling, spent):
                         budget_halted = True
                         budget_deferred = len(capped) - processed - skipped
@@ -2765,7 +2914,7 @@ def run_dispatch(
                 outcome, terminal_reason = _dispatch_one(
                     target, finding, dispatch_dir,
                     cost_ceiling=loop_cost_ceiling, max_iterations=max_iterations,
-                    models=models,
+                    models=models, host=host, credit_ceiling=loop_credit_ceiling,
                 )
                 accounting_refusal = terminal_reason in (
                     REASON_UNPRICED_COMPONENTS_INVALID, REASON_UNPRICED_ORACLE_COMPONENTS,
@@ -2828,7 +2977,29 @@ def run_dispatch(
                     )
                     return EXIT_ENV_ERROR
                 processed += 1
-                spent += _outcome_cost_usd(outcome)
+                if host == HOST_COPILOT:
+                    # Slice 041-03: the outcome is now recorded; ledger it in AI
+                    # credits. A USD outcome under a credit ceiling must never be
+                    # summed (AC3), and a null credit spend must never read as 0
+                    # (AC2) — either halts the pass, leaving the rest `open`.
+                    if not _outcome_is_credit_unit(outcome):
+                        _emit_breadcrumb(
+                            f"finding {fid}: a USD-denominated outcome appeared under "
+                            f"a whole-pass AI-credit ceiling; refusing to mix units "
+                            f"and halting the pass (credit_unit_mixing)"
+                        )
+                        return EXIT_ENV_ERROR
+                    credits = _outcome_credits(outcome)
+                    if credits is None:
+                        _emit_breadcrumb(
+                            f"finding {fid}: the loop reported no usable AI-credit "
+                            f"spend (null, never 0); halting the pass and leaving the "
+                            f"remaining candidates open (credit_usage_unavailable)"
+                        )
+                        return EXIT_ENV_ERROR
+                    spent += credits
+                else:
+                    spent += _outcome_cost_usd(outcome)
                 if outcome["oracle_status"] == OUTCOME_ENV_ERROR:
                     env_errors += 1
                 if accounting_refusal:
@@ -2860,6 +3031,12 @@ def run_dispatch(
             f"{budget_deferred} left open"
             if whole_cost_ceiling is not None and budget_halted else ""
         )
+        + (
+            "; whole-heartbeat credit ceiling reached "
+            f"(spent {spent:.2f} / {whole_credit_ceiling:.2f} cr); "
+            f"{budget_deferred} left open"
+            if whole_credit_ceiling is not None and budget_halted else ""
+        )
         + (f"; {deferred} deferred (--max-candidates)" if deferred else "")
         + f"; outcomes recorded → {jsonl_path}"
     )
@@ -2872,6 +3049,8 @@ def run_heartbeat(
     max_iterations: Optional[int] = None,
     max_candidates: Optional[int] = None,
     models: Optional[str] = None,
+    host: str = HOST_CLAUDE,
+    credit_ceiling: Optional[float] = None,
 ) -> int:
     """Run one full heartbeat: discover, then dispatch under one whole-pass ceiling.
 
@@ -2881,6 +3060,10 @@ def run_heartbeat(
     this pass count against the pass, and each loop receives only the remaining
     budget. Discovery currently costs $0; when a future LLM triage assist exists,
     its cost should be recorded in the same spine before dispatch.
+
+    Slice 041-03 (ADR-0048): under `host == HOST_COPILOT` the whole-pass ceiling
+    is in AI credits — `whole_credit_ceiling` is passed (and `whole_cost_ceiling`
+    is None) so the dispatch ledger stays in credits, never USD.
     """
     if models is not None:
         models_err = _models_arg_error(models)
@@ -2897,6 +3080,18 @@ def run_heartbeat(
     discover_rc = run_discover(target)
     if discover_rc != EXIT_OK:
         return discover_rc
+    if host == HOST_COPILOT:
+        return run_dispatch(
+            target,
+            cost_ceiling=None,
+            max_iterations=max_iterations,
+            max_candidates=max_candidates,
+            whole_cost_ceiling=None,
+            whole_credit_ceiling=credit_ceiling,
+            whole_cost_since=run_started_at,
+            models=models,
+            host=HOST_COPILOT,
+        )
     return run_dispatch(
         target,
         cost_ceiling=None,
@@ -3069,7 +3264,30 @@ def main(argv: Optional[list[str]] = None) -> int:
         metavar="USD",
         help=(
             "Whole-heartbeat cost ceiling in USD. Default "
-            f"${DEFAULT_HEARTBEAT_COST_CEILING_USD:g}; must be > 0."
+            f"${DEFAULT_HEARTBEAT_COST_CEILING_USD:g}; must be > 0. Refused under "
+            "--host copilot (units never mix — use --credit-ceiling; ADR-0048)."
+        ),
+    )
+    run_parser.add_argument(
+        "--host",
+        choices=[HOST_CLAUDE, HOST_COPILOT],
+        default=HOST_CLAUDE,
+        help=(
+            "Coding-agent backend forwarded to each loop.py (spec 041-03 / "
+            "ADR-0048). Default claude (USD budget, unchanged). copilot bounds "
+            "the pass by a whole-pass AI-credit ceiling (--credit-ceiling), kept "
+            "strictly apart from USD."
+        ),
+    )
+    run_parser.add_argument(
+        "--credit-ceiling",
+        type=float,
+        default=None,
+        metavar="CREDITS",
+        help=(
+            "Whole-heartbeat ceiling in AI CREDITS (spec 041-03 / ADR-0048). "
+            f"Required under --host copilot; min {MIN_HEARTBEAT_CREDIT_CEILING}. "
+            "Credits are never converted to USD; refused under --host claude."
         ),
     )
     run_parser.add_argument(
@@ -3108,6 +3326,25 @@ def main(argv: Optional[list[str]] = None) -> int:
         parser.error("dispatch --cost-ceiling must be >= 0")
     if args.command == "run" and args.cost_ceiling <= 0:
         parser.error("run --cost-ceiling must be > 0")
+    if args.command == "run":
+        # Spec 041-03 (ADR-0048) — the two budget units never mix on one pass.
+        if args.host == HOST_COPILOT:
+            if args.credit_ceiling is None:
+                parser.error(
+                    "run --host copilot requires --credit-ceiling (AI credits); "
+                    "ADR-0048 bounds a Copilot pass in credits, not USD")
+            if args.credit_ceiling < MIN_HEARTBEAT_CREDIT_CEILING:
+                parser.error(
+                    f"run --credit-ceiling must be >= {MIN_HEARTBEAT_CREDIT_CEILING} "
+                    "(the Copilot --max-ai-credits minimum)")
+            if args.cost_ceiling != DEFAULT_HEARTBEAT_COST_CEILING_USD:
+                parser.error(
+                    "run --cost-ceiling (USD) is not valid under --host copilot; "
+                    "use --credit-ceiling (AI credits). Units never mix (ADR-0048).")
+        elif args.credit_ceiling is not None:
+            parser.error(
+                "run --credit-ceiling (AI credits) is Copilot-only; under --host "
+                "claude use --cost-ceiling (USD). Units never mix (ADR-0048).")
 
     if args.command == "discover":
         return run_discover(args.target.resolve())
@@ -3128,6 +3365,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             max_iterations=args.max_iterations,
             max_candidates=args.max_candidates,
             models=args.models,
+            host=args.host,
+            credit_ceiling=args.credit_ceiling,
         )
 
     # argparse `required=True` guarantees a known subcommand; this is a
