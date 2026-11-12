@@ -11310,5 +11310,392 @@ class GoalDriverLadderTests(_GoalTargetMixin, unittest.TestCase):
         self.assertEqual(state["models"]["escalation"], [{"effort": "high"}])
 
 
+# ============================================================================
+# Slice 040-01 — outcome line (`--outcome-line <path|->`)
+# ============================================================================
+
+
+def _load_loop_module():
+    """Import loop.py as a module for direct unit tests of its pure helpers."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("loop_mod_040_01", LOOP)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class OutcomeLineMappingUnitTests(unittest.TestCase):
+    """040-01 AC2 — the (terminal_reason, final_oracle_status) → result map."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.loop = _load_loop_module()
+
+    def test_mapping_is_total_over_the_taxonomy(self):
+        # Every REASON_* constant + the three string-literal reasons + an unknown
+        # future reason resolves to a valid bucket, under every oracle status and
+        # both the scored (iterations>=1) and starved (iterations==0) cases.
+        loop = self.loop
+        reasons = sorted({
+            v for k, v in vars(loop).items()
+            if k.startswith("REASON_") and isinstance(v, str)
+        })
+        reasons += ["oracle_evaluation_refused", "native_capability_unavailable",
+                    "backend_mismatch", "some_unknown_future_reason"]
+        valid = {"passed", "plateau", "budget", "blocked", "error"}
+        for iterations in (0, 2):
+            for status in ("pass", "below_threshold", "env_error",
+                           "unknown_interrupted", None):
+                for reason in reasons:
+                    self.assertIn(
+                        loop._outcome_result(reason, status, iterations), valid,
+                        f"{reason!r} @ {status!r} / it={iterations}")
+
+    def test_passed(self):
+        for reason in ("oracle_passed", "oracle_pass"):
+            self.assertEqual(
+                self.loop._outcome_result(reason, "pass", 1), "passed")
+
+    def test_plateau(self):
+        self.assertEqual(
+            self.loop._outcome_result("oracle_plateau", "below_threshold", 4),
+            "plateau")
+        self.assertEqual(
+            self.loop._outcome_result(
+                "oracle_below_threshold", "below_threshold", 1),
+            "plateau")
+
+    def test_budget(self):
+        for reason in ("max_iterations_reached", "iteration_cap_reached",
+                       "cost_ceiling_reached", "context_full",
+                       "credit_ceiling_reached", "credit_ceiling_insufficient"):
+            self.assertEqual(
+                self.loop._outcome_result(reason, "below_threshold", 2), "budget",
+                reason)
+
+    def test_credit_unmeasurable_halts_are_error_not_budget(self):
+        # Spend/bound could not be measured — not "allowance exhausted".
+        for reason in ("credit_usage_unavailable", "credit_bound_unavailable"):
+            self.assertEqual(self.loop._outcome_result(reason, "env_error", 1),
+                             "error", reason)
+
+    def test_blocked(self):
+        for reason in ("edit_permission_unavailable", "dirty_tree",
+                       "readiness_unapproved", "readiness_check_unavailable",
+                       "goal_driver_unsupported_host", "goal_unavailable",
+                       "goal_resume_unsupported"):
+            self.assertEqual(self.loop._outcome_result(reason, "env_error", 1),
+                             "blocked", reason)
+
+    def test_oracle_unavailable_demotes_scored_budget_and_plateau_to_error(self):
+        # Frame-critique overload: the same "clean" reason string is also emitted
+        # when the oracle RAN but never produced a valid verdict (env_error /
+        # unknown_interrupted), which loop.py halts EXIT_ENV_ERROR. More budget
+        # cannot help there → error. Gated on a scoring attempt (iterations>=1).
+        for reason in ("max_iterations_reached", "oracle_plateau",
+                       "cost_ceiling_reached", "context_full",
+                       "iteration_cap_reached", "credit_ceiling_reached"):
+            for status in ("env_error", "unknown_interrupted"):
+                self.assertEqual(self.loop._outcome_result(reason, status, 2),
+                                 "error", f"{reason!r} @ {status!r}")
+
+    def test_starved_budget_halt_before_scoring_stays_budget(self):
+        # A budget halt that fired BEFORE any scoring iteration (iterations==0,
+        # default env_error status) — e.g. a credit ceiling below the runnable
+        # floor — is a genuine budget stop ("raise the ceiling"), not a broken
+        # oracle. The demotion must NOT fire.
+        for reason in ("credit_ceiling_reached", "credit_ceiling_insufficient"):
+            self.assertEqual(self.loop._outcome_result(reason, "env_error", 0),
+                             "budget", reason)
+
+    def test_blocked_not_demoted_by_env_error_status(self):
+        # Preflight blocked reasons carry env_error status but stay blocked —
+        # only budget/plateau are gated on oracle availability.
+        self.assertEqual(self.loop._outcome_result("dirty_tree", "env_error", 0),
+                         "blocked")
+        self.assertEqual(
+            self.loop._outcome_result("readiness_unapproved", "env_error", 0),
+            "blocked")
+
+    def test_unknown_reason_and_none_default_to_error(self):
+        self.assertEqual(self.loop._outcome_result("whatever", "pass", 1), "error")
+        self.assertEqual(self.loop._outcome_result(None, "pass", 0), "error")
+
+
+class OutcomeRecordShapeUnitTests(unittest.TestCase):
+    """040-01 AC3 — the record is a faithful rendering of the summary dict."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.loop = _load_loop_module()
+
+    def test_loop_summary_record(self):
+        summary = {
+            "terminal_reason": "oracle_passed",
+            "iterations_completed": 3,
+            "cumulative_cost_usd": 0.42,
+            "final_oracle_status": "pass",
+            "run_id": "20260101T000000-abcd",
+            "oracle_score_history": [
+                {"iteration": 1, "composite": 0.3, "threshold": 0.5},
+                {"iteration": 3, "composite": 0.91, "threshold": 0.5},
+            ],
+        }
+        rec = self.loop._outcome_record(summary)
+        self.assertEqual(rec["servo_outcome"], 1)
+        self.assertEqual(rec["result"], "passed")
+        self.assertEqual(rec["rung"], 0)
+        self.assertEqual(rec["rungs"], 1)
+        self.assertEqual(rec["iterations"], 3)
+        self.assertEqual(rec["cost_usd"], 0.42)
+        self.assertEqual(rec["composite"], 0.91)
+        self.assertEqual(rec["threshold"], 0.5)
+        self.assertEqual(rec["run_id"], "20260101T000000-abcd")
+        self.assertEqual(rec["reason"], "oracle_passed")
+        # Field order matches the spec sketch.
+        self.assertEqual(
+            list(rec.keys()),
+            ["servo_outcome", "result", "rung", "rungs", "iterations",
+             "cost_usd", "composite", "threshold", "run_id", "reason"])
+
+    def test_ladder_rung_and_rungs(self):
+        summary = {
+            "terminal_reason": "oracle_plateau",
+            "iterations_completed": 7,
+            "cumulative_cost_usd": 1.0,
+            "final_oracle_status": "below_threshold",
+            "run_id": "r",
+            "escalation_rung": 1,
+            "escalation_rungs": 2,
+            "oracle_score_history": [{"composite": 0.6, "threshold": 0.8}],
+        }
+        rec = self.loop._outcome_record(summary)
+        self.assertEqual(rec["rung"], 1)
+        self.assertEqual(rec["rungs"], 2)
+        self.assertEqual(rec["result"], "plateau")
+        self.assertEqual(rec["composite"], 0.6)
+
+    def test_goal_summary_record_reports_rung_zero(self):
+        summary = {
+            "driver": "goal",
+            "terminal_reason": "oracle_pass",
+            "num_turns": 3,
+            "cumulative_cost_usd": 0.42,
+            "final_oracle_status": "pass",
+            "oracle_composite": 0.91,
+            "oracle_threshold": 0.85,
+            "run_id": "g",
+        }
+        rec = self.loop._outcome_record(summary)
+        self.assertEqual(rec["result"], "passed")
+        self.assertEqual(rec["rung"], 0)
+        self.assertEqual(rec["rungs"], 1)
+        self.assertEqual(rec["iterations"], 3)
+        self.assertEqual(rec["composite"], 0.91)
+        self.assertEqual(rec["threshold"], 0.85)
+
+    def test_preflight_refusal_record_degrades_to_null(self):
+        summary = {
+            "terminal_reason": "manifest_missing",
+            "iterations_completed": 0,
+            "cumulative_cost_usd": 0.0,
+            "final_oracle_status": "env_error",
+            "run_id": "p",
+        }
+        rec = self.loop._outcome_record(summary)
+        self.assertEqual(rec["result"], "error")
+        self.assertIsNone(rec["composite"])
+        self.assertIsNone(rec["threshold"])
+        self.assertEqual(rec["rung"], 0)
+        self.assertEqual(rec["rungs"], 1)
+        self.assertEqual(rec["iterations"], 0)
+
+
+class OutcomeLineEmissionTests(unittest.TestCase):
+    """040-01 AC1/AC4 — the loop-driver flag emits exactly one record; without
+    it, stdout is byte-identical."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-loop-040-")
+        self.bindir = Path(self.tmpdir) / "bin"
+        self.bindir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _fresh_target(self, oracle_body, name):
+        target = Path(self.tmpdir) / name
+        target.mkdir()
+        _make_manifest(target)
+        _make_oracle(target, oracle_body)
+        return target
+
+    @staticmethod
+    def _outcome_lines(stdout):
+        return [line for line in _stdout_json_lines(stdout)
+                if "servo_outcome" in line]
+
+    def test_without_flag_emits_no_outcome_line(self):
+        target = self._fresh_target(_below_threshold_oracle(), "t")
+        _mock_claude_constant(self.bindir, _claude_json_payload(),
+                              Path(self.tmpdir) / "c.txt")
+        result = _run_loop(target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(self._outcome_lines(result.stdout), [])
+
+    def test_outcome_line_to_stdout_follows_the_summary(self):
+        target = self._fresh_target(_passing_oracle(), "t")
+        _mock_claude_constant(self.bindir, _claude_json_payload(),
+                              Path(self.tmpdir) / "c.txt")
+        result = _run_loop(target, "--prompt", "x", "--max-iterations", "3",
+                           "--outcome-line", "-", mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        lines = _stdout_json_lines(result.stdout)
+        record = lines[-1]
+        self.assertEqual(record["servo_outcome"], 1)
+        self.assertEqual(record["result"], "passed")
+        self.assertEqual(len(self._outcome_lines(result.stdout)), 1)
+        # The outcome line comes immediately AFTER the summary line.
+        self.assertNotIn("servo_outcome", lines[-2])
+        self.assertIn("terminal_reason", lines[-2])
+        self.assertEqual(record["run_id"], lines[-2]["run_id"])
+
+    def test_outcome_line_to_file_keeps_stdout_clean(self):
+        target = self._fresh_target(_passing_oracle(), "t")
+        out = Path(self.tmpdir) / "outcome.json"
+        _mock_claude_constant(self.bindir, _claude_json_payload(),
+                              Path(self.tmpdir) / "c.txt")
+        result = _run_loop(target, "--prompt", "x", "--max-iterations", "3",
+                           "--outcome-line", str(out), mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(self._outcome_lines(result.stdout), [])
+        record = json.loads(out.read_text())
+        self.assertEqual(record["servo_outcome"], 1)
+        self.assertEqual(record["result"], "passed")
+        self.assertRegex(record["run_id"], r"^\d{8}T\d{6}-[0-9a-f]{4}$")
+
+    def test_file_mode_stdout_byte_identical_to_no_flag(self):
+        pinned = {"SERVO_CLAUDE_TIMEOUT": "20",
+                  "SERVO_TEST_RUN_IDS": "20260101T000000-aaaa"}
+        a = self._fresh_target(_passing_oracle(), "a")
+        b = self._fresh_target(_passing_oracle(), "b")
+        out = Path(self.tmpdir) / "outcome.json"
+        _mock_claude_constant(self.bindir, _claude_json_payload(),
+                              Path(self.tmpdir) / "ca.txt")
+        base = _run_loop(a, "--prompt", "x", "--max-iterations", "3",
+                         mock_bindir=self.bindir, extra_env=pinned)
+        _mock_claude_constant(self.bindir, _claude_json_payload(),
+                              Path(self.tmpdir) / "cb.txt")
+        flagged = _run_loop(b, "--prompt", "x", "--max-iterations", "3",
+                            "--outcome-line", str(out), mock_bindir=self.bindir,
+                            extra_env=pinned)
+        self.assertEqual(base.returncode, flagged.returncode, msg=flagged.stderr)
+        self.assertEqual(base.stdout, flagged.stdout)
+        self.assertTrue(out.exists())
+
+    def test_budget_result_on_max_iterations(self):
+        target = self._fresh_target(_below_threshold_oracle(), "t")
+        _mock_claude_constant(self.bindir, _claude_json_payload(),
+                              Path(self.tmpdir) / "c.txt")
+        result = _run_loop(target, "--prompt", "x", "--max-iterations", "2",
+                           "--outcome-line", "-", mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        record = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(record["result"], "budget")
+        self.assertEqual(record["reason"], "max_iterations_reached")
+        self.assertEqual(record["iterations"], 2)
+
+    def test_preflight_refusal_emits_error_outcome(self):
+        # Target exists with an oracle but no .servo/install.json → manifest_missing.
+        target = Path(self.tmpdir) / "bare"
+        target.mkdir()
+        _make_oracle(target, _passing_oracle())
+        _mock_claude_constant(self.bindir, _claude_json_payload(),
+                              Path(self.tmpdir) / "c.txt")
+        result = _run_loop(target, "--prompt", "x", "--outcome-line", "-",
+                           mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        record = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(record["servo_outcome"], 1)
+        self.assertEqual(record["result"], "error")
+        self.assertEqual(record["reason"], "manifest_missing")
+
+
+class OutcomeLineGoalDriverTests(_GoalTargetMixin, unittest.TestCase):
+    """040-01 AC4 — the goal driver emits the outcome line and reports rung 0."""
+
+    def test_goal_pass_emits_outcome_rung_zero(self):
+        self._setup_target(_passing_oracle())
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text="ran gate\n" + GOAL_PASS_SENTINEL,
+            result_event=_goal_result_event(subtype="success", cost=0.1)))
+        result = _run_goal(self.target, "--prompt", "x", "--outcome-line", "-",
+                           mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        record = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(record["servo_outcome"], 1)
+        self.assertEqual(record["result"], "passed")
+        self.assertEqual(record["rung"], 0)
+        self.assertEqual(record["rungs"], 1)
+
+
+class OutcomeLineChildArgvUnitTests(unittest.TestCase):
+    """040-01 — `--outcome-line` is forwarded into the `--background` child argv."""
+
+    def test_child_argv_forwards_outcome_line_from_the_global(self):
+        m = _load_loop_module()
+        # No flag set → not forwarded.
+        argv = m._build_detached_child_argv(
+            Path("/tmp/t"), "RID", prompt="p", max_iterations=None,
+            cost_ceiling=None)
+        self.assertNotIn("--outcome-line", argv)
+        # Flag set → forwarded verbatim so the child emits the real outcome.
+        m._OUTCOME_LINE_TARGET = "/tmp/out.json"
+        argv = m._build_detached_child_argv(
+            Path("/tmp/t"), "RID", prompt="p", max_iterations=None,
+            cost_ceiling=None)
+        self.assertEqual(argv[argv.index("--outcome-line") + 1], "/tmp/out.json")
+
+
+class OutcomeLineBackgroundTests(_GoalTargetMixin, unittest.TestCase):
+    """040-01 — `--outcome-line` reaches the `--background` detached child, which
+    owns the real terminal (the parent only prints a `detached` summary)."""
+
+    def test_background_child_writes_the_outcome_file(self):
+        self._setup_target(_passing_oracle())
+        _mock_claude_goal(self.bindir, _goal_stream_jsonl(
+            assistant_text=GOAL_PASS_SENTINEL))
+        out = Path(self.tmpdir) / "outcome.json"
+        result = _run_raw(
+            self.target, "--background", "--prompt", "x", "--max-iterations", "2",
+            "--outcome-line", str(out), mock_bindir=self.bindir,
+            extra_env={"SERVO_CLAUDE_TIMEOUT": "30"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        # The parent returns a plain `detached` launch summary — NOT an outcome line.
+        self.assertNotIn("servo_outcome", result.stdout)
+        # The detached child writes the real outcome record to the file at its halt.
+        state = _await_terminal_state(self.target)
+        self.assertEqual(state["terminal_reason"], "oracle_pass")
+        record = self._await_outcome_file(out)
+        self.assertEqual(record["servo_outcome"], 1)
+        self.assertEqual(record["result"], "passed")
+        self.assertEqual(record["run_id"], state["run_id"])
+
+    @staticmethod
+    def _await_outcome_file(path, timeout=15.0):
+        import time
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if path.exists():
+                try:
+                    return json.loads(path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    pass
+            time.sleep(0.05)
+        raise AssertionError(f"outcome file {path} not written within {timeout}s")
+
+
 if __name__ == "__main__":
     unittest.main()
