@@ -1158,6 +1158,165 @@ def _emit_json(payload: dict) -> None:
     sys.stdout.flush()
 
 
+# ---------------------------------------------------------------------------
+# Spec 040-01 — the typed outcome line (`--outcome-line <path|->`; ADR-0049
+# campaign consumer). A compact, typed rendering of the terminal summary a
+# host-spawned worker can forward to its orchestrator in place of a narrative.
+# Pure rendering of the summary `_summary_payload` / `_goal_summary` / the
+# refusal helpers already emit — the loop stays trigger-agnostic (spec 040
+# Boundaries; no `/servo:crew`, no fan-out). No flag → no line → byte-identical
+# output (040-01 AC1).
+# ---------------------------------------------------------------------------
+
+OUTCOME_SCHEMA_VERSION = 1  # the record's `servo_outcome` field
+
+OUTCOME_RESULT_PASSED = "passed"
+OUTCOME_RESULT_PLATEAU = "plateau"
+OUTCOME_RESULT_BUDGET = "budget"
+OUTCOME_RESULT_BLOCKED = "blocked"
+OUTCOME_RESULT_ERROR = "error"
+
+# A2 mapping (spec 040-01): the campaign-facing `result` from the terminal
+# reason. `error` is the fail-safe default, so the map stays total over the
+# closed terminal-reason taxonomy as it grows.
+_OUTCOME_PASSED_REASONS = frozenset({REASON_ORACLE_PASSED, REASON_ORACLE_PASS})
+_OUTCOME_PLATEAU_REASONS = frozenset({
+    REASON_ORACLE_PLATEAU, REASON_ORACLE_BELOW_THRESHOLD,
+})
+_OUTCOME_BUDGET_REASONS = frozenset({
+    REASON_MAX_ITERATIONS_REACHED, REASON_ITERATION_CAP_REACHED,
+    REASON_COST_CEILING_REACHED, REASON_CONTEXT_FULL,
+    REASON_CREDIT_CEILING_REACHED, REASON_CREDIT_CEILING_INSUFFICIENT,
+})
+_OUTCOME_BLOCKED_REASONS = frozenset({
+    REASON_EDIT_PERMISSION_UNAVAILABLE, REASON_DIRTY_TREE,
+    REASON_READINESS_UNAPPROVED, REASON_READINESS_CHECK_UNAVAILABLE,
+    REASON_GOAL_UNSUPPORTED_HOST, REASON_GOAL_UNAVAILABLE,
+    REASON_GOAL_RESUME_UNSUPPORTED,
+})
+# An oracle that never produced a valid verdict — loop.py's own EXIT_ENV_ERROR
+# `unavailable` halt. The budget/plateau reason strings are overloaded across a
+# clean below-threshold stop and this broken-oracle halt; `final_oracle_status`
+# is the summary-line signal the loop itself keys that distinction on.
+_OUTCOME_ORACLE_UNAVAILABLE_STATUSES = frozenset({
+    STATUS_ENV_ERROR, STATUS_UNKNOWN_INTERRUPTED,
+})
+
+
+def _outcome_result(terminal_reason: Optional[str],
+                    final_oracle_status: Optional[str],
+                    iterations: Optional[int]) -> str:
+    """Map (terminal_reason, final_oracle_status, iterations) → campaign `result`.
+
+    `result` is a function of all three, not the reason alone (spec 040-01 A2).
+    `max_iterations_reached` / `oracle_plateau` / `cost_ceiling_reached` /
+    `context_full` / `iteration_cap_reached` are emitted both for a clean
+    below-threshold stop AND for a run whose oracle ran but never produced a valid
+    verdict — which loop.py halts `EXIT_ENV_ERROR` with a
+    `required_evidence_unavailable` breadcrumb. A benign budget/plateau reading is
+    false there (more budget cannot help a worker whose oracle did not evaluate),
+    so a `env_error` / `unknown_interrupted` oracle status demotes those two
+    buckets to `error`.
+
+    The demotion is gated on the oracle having actually ATTEMPTED to score
+    (`iterations >= 1`): a budget halt that fired BEFORE any scoring iteration —
+    e.g. a `--credit-ceiling` set below the model's runnable floor, which halts
+    `credit_ceiling_reached` at `iterations == 0` with the default `env_error`
+    status — is a genuine budget stop ("raise the ceiling"), not a broken oracle.
+    `passed` requires a pass status and `blocked` / `error` already carry their
+    meaning, so the override touches only budget / plateau.
+    """
+    if terminal_reason in _OUTCOME_PASSED_REASONS:
+        return OUTCOME_RESULT_PASSED
+    if terminal_reason in _OUTCOME_PLATEAU_REASONS:
+        bucket = OUTCOME_RESULT_PLATEAU
+    elif terminal_reason in _OUTCOME_BUDGET_REASONS:
+        bucket = OUTCOME_RESULT_BUDGET
+    elif terminal_reason in _OUTCOME_BLOCKED_REASONS:
+        return OUTCOME_RESULT_BLOCKED
+    else:
+        return OUTCOME_RESULT_ERROR
+    if ((iterations or 0) >= 1
+            and final_oracle_status in _OUTCOME_ORACLE_UNAVAILABLE_STATUSES):
+        return OUTCOME_RESULT_ERROR
+    return bucket
+
+
+def _outcome_oracle_scores(
+    summary: dict,
+) -> "tuple[Optional[float], Optional[float]]":
+    """The final (composite, threshold) from a terminal summary, or (None, None).
+
+    The goal summary carries them flat (`oracle_composite` / `oracle_threshold`);
+    the loop summary carries the per-iteration `oracle_score_history`, whose last
+    scored entry is the final reading. A preflight refusal has neither → nulls.
+    """
+    if "oracle_composite" in summary or "oracle_threshold" in summary:
+        return summary.get("oracle_composite"), summary.get("oracle_threshold")
+    for entry in reversed(summary.get("oracle_score_history") or []):
+        if isinstance(entry, dict) and entry.get("composite") is not None:
+            return entry.get("composite"), entry.get("threshold")
+    return None, None
+
+
+def _outcome_record(summary: dict) -> dict:
+    """Render spec 040's typed outcome record from a terminal summary payload.
+
+    A pure rendering of the summary dict every halt path already emits — no new
+    run state. Fields degrade to `null` when the summary lacks them (a preflight
+    refusal has no oracle score; a run with no escalation ladder has no rung
+    fields, so it reports `rung: 0` of `rungs: 1`). `iterations` is the loop
+    driver's `iterations_completed`, else the goal driver's `num_turns`.
+    """
+    terminal_reason = summary.get("terminal_reason")
+    composite, threshold = _outcome_oracle_scores(summary)
+    iterations = summary.get("iterations_completed")
+    if iterations is None:
+        iterations = summary.get("num_turns", 0)
+    return {
+        "servo_outcome": OUTCOME_SCHEMA_VERSION,
+        "result": _outcome_result(
+            terminal_reason, summary.get("final_oracle_status"), iterations),
+        "rung": summary.get("escalation_rung", 0),
+        "rungs": summary.get("escalation_rungs", 1),
+        "iterations": iterations,
+        "cost_usd": summary.get("cumulative_cost_usd"),
+        "composite": composite,
+        "threshold": threshold,
+        "run_id": summary.get("run_id"),
+        "reason": terminal_reason,
+    }
+
+
+# Set once in `main()` from `--outcome-line`: None = flag absent (no line,
+# byte-identical output); "-" = stdout; else a path. Module-global so every
+# terminal-summary emit path (both drivers + the preflight refusals) reaches it
+# without threading a parameter through every halt signature.
+_OUTCOME_LINE_TARGET: Optional[str] = None
+
+
+def _emit_outcome_line(summary: dict) -> None:
+    """Write the spec 040 outcome record after a terminal summary, iff the
+    `--outcome-line` target is set. No-op otherwise — the sole gate that keeps
+    output byte-identical without the flag (040-01 AC1). A file-write failure is
+    a stderr breadcrumb, never a changed exit code: the run's real outcome
+    already reached the summary line and `state.json`.
+    """
+    target = _OUTCOME_LINE_TARGET
+    if target is None:
+        return
+    line = json.dumps(_outcome_record(summary)) + "\n"
+    if target == "-":
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        return
+    try:
+        Path(target).write_text(line, encoding="utf-8")
+    except OSError as exc:
+        sys.stderr.write(
+            f"loop: could not write --outcome-line {target!r}: {exc}\n")
+
+
 def _resolve_claude_timeout() -> Optional[float]:
     """Pick the effective `claude -p` timeout in seconds. None = unbounded.
 
@@ -1200,7 +1359,7 @@ def _refuse_preflight(
     message differ.
     """
     sys.stderr.write(f"loop: {message}\n")
-    _emit_json({
+    payload = {
         "terminal_reason": reason,
         "iterations_completed": 0,
         "cumulative_cost_usd": 0.0,
@@ -1209,7 +1368,9 @@ def _refuse_preflight(
         "context_fill_ratio": None,
         "final_oracle_status": STATUS_ENV_ERROR,
         "run_id": run_id,
-    })
+    }
+    _emit_json(payload)
+    _emit_outcome_line(payload)  # spec 040-01
     return EXIT_ENV_ERROR
 
 
@@ -1223,7 +1384,7 @@ def _refuse_copilot_capability(*, explain: bool = False) -> int:
         "host, or establish an owner-approved enforceable native contract."
     )
     sys.stderr.write(f"loop: {message}\n")
-    _emit_json({
+    payload = {
         "schema_version": 2,
         "backend": HOST_COPILOT,
         "supported": False,
@@ -1234,7 +1395,9 @@ def _refuse_copilot_capability(*, explain: bool = False) -> int:
         "cumulative_cost_usd": None,
         "context_fill_ratio": None,
         "final_oracle_status": STATUS_ENV_ERROR,
-    })
+    }
+    _emit_json(payload)
+    _emit_outcome_line(payload)  # spec 040-01
     return EXIT_OK if explain else EXIT_ENV_ERROR
 
 
@@ -1250,12 +1413,14 @@ def _refuse_plan(*, reason: str, message: str) -> int:
     plus `models_invalid` for a bad `--models` flag (spec 038-02).
     """
     sys.stderr.write(f"loop: {message}\n")
-    _emit_json({
+    payload = {
         "terminal_reason": reason,
         "iterations_completed": 0,
         "cumulative_cost_usd": 0.0,
         "final_oracle_status": STATUS_ENV_ERROR,
-    })
+    }
+    _emit_json(payload)
+    _emit_outcome_line(payload)  # spec 040-01
     return EXIT_ENV_ERROR
 
 
@@ -1352,12 +1517,14 @@ def _refuse_readiness(*, reason: str, message: str) -> int:
     configured budget to echo.
     """
     sys.stderr.write(f"loop: {message}\n")
-    _emit_json({
+    payload = {
         "terminal_reason": reason,
         "iterations_completed": 0,
         "cumulative_cost_usd": 0.0,
         "final_oracle_status": STATUS_ENV_ERROR,
-    })
+    }
+    _emit_json(payload)
+    _emit_outcome_line(payload)  # spec 040-01
     return EXIT_ENV_ERROR
 
 
@@ -3217,12 +3384,14 @@ def _finalize_state_and_summary(
     if terminal_breadcrumb is not None:
         state["terminal_breadcrumb"] = terminal_breadcrumb
     _atomic_write_state(state, state_path)
-    _emit_json(_summary_payload(
+    payload = _summary_payload(
         state,
         terminal_reason=terminal_reason,
         final_oracle_status=final_oracle_status,
         terminal_breadcrumb=terminal_breadcrumb,
-    ))
+    )
+    _emit_json(payload)
+    _emit_outcome_line(payload)  # spec 040-01: one outcome line per terminal
 
 
 def _relabel_terminal_reason(
@@ -4387,6 +4556,7 @@ def _refuse_goal(
         transcript_showed_pass=False,
     )
     _emit_json(summary)
+    _emit_outcome_line(summary)  # spec 040-01
     return EXIT_ENV_ERROR
 
 
@@ -4556,6 +4726,7 @@ def run_goal_loop(
         )
         summary.update(gate_consumer.fields(state))
         _emit_json(summary)
+        _emit_outcome_line(summary)  # spec 040-01
         return exit_code
 
     goal_prompt = _compose_goal_prompt(prompt, gate_path=vendored_gate)
@@ -4865,6 +5036,12 @@ def _build_detached_child_argv(
     if models is not None:
         # Spec 038-02 AC6: the child applies the parent's resolved block.
         argv += ["--models", json.dumps(models, separators=(",", ":"))]
+    # Spec 040-01: forward `--outcome-line` so the detached child — which owns the
+    # real terminal (the parent only emits a `detached` launch summary) — writes
+    # the one outcome record at its halt, to the path (poll it beside state.json)
+    # or to its stdout (the run-dir background.log) for `-`.
+    if _OUTCOME_LINE_TARGET is not None:
+        argv += ["--outcome-line", _OUTCOME_LINE_TARGET]
     return argv
 
 
@@ -5298,6 +5475,19 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--outcome-line",
+        metavar="<path|->",
+        default=None,
+        help=(
+            "Spec 040: after the run's summary, write exactly one typed outcome "
+            "record (`servo_outcome`) that a host-spawned worker can forward to "
+            "its orchestrator in place of a narrative — to <path>, or to stdout "
+            "for `-`. Without the flag, output is byte-identical. The loop only "
+            "renders its existing summary (no /servo:crew, no fan-out); the host "
+            "owns the worker tree."
+        ),
+    )
+    parser.add_argument(
         # Internal: the detached child of a `--background` launch runs the goal
         # loop into this parent-allocated run-id (so both share one run dir).
         "--_detached-run-id",
@@ -5306,6 +5496,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args(argv)
+    # Spec 040-01: arm the outcome-line sink for every terminal-summary path
+    # (both drivers + the preflight refusals). None = flag absent → no line.
+    global _OUTCOME_LINE_TARGET
+    _OUTCOME_LINE_TARGET = args.outcome_line
     target = args.target.resolve()
 
     # --explain-routing (slice 003-07 AC5): print the verdict and exit 0,

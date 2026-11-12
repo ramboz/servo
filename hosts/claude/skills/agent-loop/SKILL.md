@@ -258,6 +258,63 @@ the goal driver, which refuses with `goal_resume_unsupported`.
 
 Final summary line carries `terminal_reason` (one of `oracle_passed`, `max_iterations_reached`, `cost_ceiling_reached`, `context_full`, `oracle_plateau`, `interrupted`, `claude_invocation_failed`, `gate_invocation_failed`, `verdict_schema_mismatch`, the preflight `dirty_tree` refusal, plus the resume-time refusals), `iterations_completed`, `cumulative_cost_usd`, and the configured caps.
 
+## Outcome line — `--outcome-line <path|->` (spec 040)
+
+`--outcome-line` makes the loop write **exactly one** typed, compact record after
+its summary — to a file (`<path>`) or to stdout (`-`). **Without the flag, output
+is byte-identical** to today. It is a pure *rendering* of the summary the run
+already emits (spec 038 cost + escalation-ladder fields included); the loop stays
+trigger-agnostic — a host orchestrator is just another trigger, like the heartbeat.
+
+```json
+{"servo_outcome": 1, "result": "plateau", "rung": 1, "rungs": 2,
+ "iterations": 7, "cost_usd": 0.84, "composite": 0.78, "threshold": 0.8,
+ "run_id": "20260112T143205-a3f1", "reason": "oracle_plateau"}
+```
+
+- **`result`** is derived from the summary's `terminal_reason` **and**
+  `final_oracle_status`: `passed` (oracle cleared the bar) / `plateau` (ran, stayed
+  below) / `budget` (iterations / turns / USD / credits / context exhausted while
+  scoring) / `blocked` (an environment / host / permission precondition refused) /
+  `error` (a fault, malformed input, or an oracle that ran but never produced a
+  valid verdict). The original `terminal_reason` rides along verbatim as `reason`.
+  Both the loop and goal drivers emit it; the goal driver reports `rung: 0`.
+- **`rung` / `rungs`** are the spec-038 ladder position (`0` / `1` with no ladder).
+  **`cost_usd`** is the run's `cumulative_cost_usd`. **`run_id`** locates the run.
+  Under `--host copilot` the run has no USD cost, so `cost_usd` is `null`: the
+  credit spend lives in the summary line and `state.json` (`cumulative_credits`,
+  spec 041-02), which a campaign ledger re-derives by `run_id` regardless.
+
+**A host forwards it (servo does not orchestrate).** A host — a Claude Code
+session, a Copilot `create_session`, a Managed Agents workflow — spawns a worker
+under `loop.py` and forwards the single line up, instead of a conversation:
+
+```bash
+# Capture the one outcome line from the worker's stdout and forward it:
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-loop/loop.py" <target> \
+  --prompt "<task>" --outcome-line - | tail -1
+# → {"servo_outcome":1,"result":"plateau","rung":1,"rungs":2,"cost_usd":0.84,...}
+
+# …or write it to a file (robust against interleaved logging) and read it back:
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-loop/loop.py" <target> \
+  --prompt "<task>" --outcome-line "$RUN_DIR/outcome.json"
+cat "$RUN_DIR/outcome.json"   # the host forwards this verbatim to its coordinator
+```
+
+A Claude Code host that runs the worker as `claude -p "<run loop.py …>"` reads the
+same line from that invocation's captured stdout (A1). With `--background` the flag
+is **forwarded to the detached child**, which owns the real terminal (the parent
+prints only a `detached` launch summary and exits): the child writes the one record
+at its halt — to `--outcome-line <path>` (poll it beside `state.json`), or to its
+stdout (the run-dir `background.log`) for `-`. For an unattended/background worker,
+prefer a `<path>` so the host reads a file rather than scraping the log.
+
+**Boundary (spec 040, non-negotiable).** This is output only. servo does **not**
+spawn, message, or track workers — **no `/servo:crew` (spec 003), no fan-out (spec
+005)**. The host owns the worker tree; the outcome line is just the worker's typed
+result. A campaign ledger (spec 042) uses the line only to locate the run by
+`run_id`, then re-derives result / rung / cost from that run's `state.json`.
+
 ## Options
 
 | Flag | What it does |
@@ -277,6 +334,7 @@ Final summary line carries `terminal_reason` (one of `oracle_passed`, `max_itera
 | `--models <json\|file>` | Place the `runner` / `judge` roles on a model, effort and advisor (spec 038-02): inline JSON starting with `{`, else a JSON file path. Replaces a plan's `models` block entirely, and on `--resume` the persisted one. Any set field (or an `escalation` ladder) gives the judge its own fresh session. A bad block refuses `models_invalid`. `--emit-routine-prompt` does not carry it (stderr note). |
 | `--resume <run-id>` | Resume a prior run. Refuses with rc=2 on missing / schema-mismatched / claude-version-mismatched state (escape via `--resume-anyway`). |
 | `--resume-anyway` | Bypass the schema/version mismatch refusals on resume. Risky — silent mis-decoding may corrupt the run. Does not bypass missing-state refusal. |
+| `--outcome-line <path\|->` | Spec 040: after the summary, write **one** typed outcome record (`servo_outcome`) a host-spawned worker forwards to its orchestrator — to `<path>`, or stdout for `-`. Without it, output is byte-identical. Pure rendering of the summary; no `/servo:crew`, no fan-out. See [Outcome line](#outcome-line----outcome-line-path---spec-040). |
 
 Env var: `SERVO_CLAUDE_TIMEOUT` — per-invocation wall-clock cap on each `claude -p` (default 1800s = 30 min). `0` disables the bound. Test/CI environments commonly lower this.
 

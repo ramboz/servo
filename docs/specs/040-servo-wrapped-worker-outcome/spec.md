@@ -1,12 +1,12 @@
 ---
-status: DRAFT
+status: DONE
 skill: agent-loop
 use_cases: []
 ---
 
 # Spec 040: servo-wrapped worker outcome line
 
-> **Status: DRAFT, scope capture.** Follow-up to
+> **Status: DONE** — slice 040-01 ships the outcome line. Follow-up to
 > [spec 038](../038-per-node-model-tiering/spec.md).
 
 ## Overview
@@ -56,10 +56,11 @@ ledger never trusts the line's own field values for a wrapped worker:
 - it re-renders result, rung and cost from that run's `state.json`, after
   verifying the worktree's content fingerprint against the loop's halt state.
 
-So the line must carry `run_id`, and `loop.py` must record the content
-fingerprint (HEAD plus diff plus untracked contents) and its start HEAD at
-halt. Those two state additions belong with 040-01 or 042-03, whichever lands
-first.
+So the line must carry `run_id`. The content fingerprint (HEAD plus diff plus
+untracked contents) and start HEAD at halt that the verifier checks are **not**
+part of the outcome line — spec 042 scopes them to **042-04** (host-driven
+verified-wrapped). Slice 040-01 ships the outcome line only; the line owes the
+verifier just `run_id`, which it already carries.
 
 ## Assumptions
 
