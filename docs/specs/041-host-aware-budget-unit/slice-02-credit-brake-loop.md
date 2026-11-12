@@ -1,8 +1,8 @@
 ---
-status: DRAFT
+status: DONE
 kind: feature
 dependencies: [041-01, 038-01, adr-0048]
-last_verified:
+last_verified: 2026-11-11
 arch_review: true
 frame_review: true
 ---
