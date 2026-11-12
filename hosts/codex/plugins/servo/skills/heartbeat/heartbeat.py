@@ -298,8 +298,14 @@ def _is_volatile_evidence_key(key: str) -> bool:
 # under the spec's own (git-tracked) `docs/specs/<spec>/oracle/<id>/`
 # directory, so `git worktree add`'s checkout already reproduces it — no
 # provisioning step needed for the new layout.
+# `campaigns` (spec 042): campaign state — plan, ledger, reservations, and the
+# per-item worktrees nested under `.servo/campaigns/<id>/worktrees/` — is volatile
+# and, because a campaign worktree lives *inside* `.servo`, recursive to copy. It
+# is excluded for the same reason as `dispatch`/`runs`: never provisioned into a
+# dispatched worktree (a worker needs the oracle, not the campaign ledger).
 _NON_PROVISIONED_SERVO_DIRS = frozenset(
-    {"runs", "gate-runs", "races", TRIAGE_DIRNAME, DISPATCH_DIRNAME, QUARANTINE_DIRNAME}
+    {"runs", "gate-runs", "races", TRIAGE_DIRNAME, DISPATCH_DIRNAME,
+     QUARANTINE_DIRNAME, "campaigns"}
 )
 
 # Sibling-skill resolution for the subprocessed `gate.py` / `loop.py` (never

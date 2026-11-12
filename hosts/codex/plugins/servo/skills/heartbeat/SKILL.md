@@ -161,16 +161,16 @@ python3 "${PLUGIN_ROOT}/skills/heartbeat/heartbeat.py" run /path/to/repo \
   --host copilot --credit-ceiling 300 --max-candidates 3 --max-iterations 5
 ```
 
-## Campaign (spec 042-01 — plan + ledger)
+## Campaign (spec 042 — plan, ledger, serial dispatch)
 
 A **campaign** is heartbeat-style dispatch over a *planned* work list (ADR-0049):
 a list of independent, oracle-gated work items, each with its own `oracle_ref`,
 `budget` and `models` block, plus an append-only, lock-guarded ledger of typed
-outcomes. Slice 042-01 ships the **file contract** every later mode builds on,
-and the **A4 oracle-coverage checkpoint**: a human or a host can declare a work
-list and read one compact ledger of what each worker did and what it cost — with
-**no worker execution yet**. Dispatch (`campaign next`), host-driven briefs and
-the verified / advisory tiers are later slices (042-02/03/04).
+outcomes. Slice 042-01 ships the **file contract** (`init` / `record` / `status`)
+every mode builds on; slice 042-02 adds **servo-driven serial dispatch**
+(`campaign next`), the enforced Claude Code baseline that runs each item itself
+under `loop.py`. Host-driven briefs and the verified / advisory tiers are later
+slices (042-03/04).
 
 The helper is at `${PLUGIN_ROOT}/skills/heartbeat/campaign.py`.
 
@@ -210,7 +210,10 @@ The plan is servo's own schema (`schema_version: 1`):
 Item ids are unique and match `^[a-z0-9][a-z0-9-]*$`. `budget.unit` is `usd` or
 `credit` and `budget.ceiling` is a positive number. The `models` block uses the
 spec 038 schema + validator (the escalation ladder is allowed). `oracle_ref` is
-recorded as data; this slice does not run it.
+recorded as data; this slice does not run it. An item MAY also carry an optional
+`escalation_scope` (a non-empty string naming the human-escalation area it belongs
+to, used to group ladder-ceiling escalations in `campaign next`, 042-02); items
+without one share a single default scope. Any other unknown key is rejected.
 
 ```bash
 python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" init /path/to/repo \
@@ -256,6 +259,58 @@ credit-denominated items, `status` marks that their spend is tracked in AI credi
 ```bash
 python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" status my-campaign \
   --json --target /path/to/repo
+```
+
+### `campaign.py next <id> [--target <path>]`
+
+The **servo-driven serial dispatch** step (spec 042-02): the episodic coordinator
+for the enforced Claude Code mode. Each `next` reads the ledger, dispatches at most
+one ready item (`max_parallel` 1), records the loop's own typed outcome, and
+exits. There is **no daemon and no resident coordinator context** — waking `next`
+is the trigger's job (a host, a Routine, or a human).
+
+One invocation, in order:
+
+1. **Reconcile reservations.** A per-item reservation is held only while that
+   item's `loop.py` run is live — liveness is the child pid **and** its start time
+   (a reuse-proof handle, so a recycled pid, including across a reboot, is not
+   mistaken for a live run). On wake, for a reservation whose run is no longer live:
+   already **recorded** → the stale file is cleaned up (no re-queue); **finished but
+   unrecorded** (the worker wrote its typed `--outcome-line` but its parent died
+   before recording) → that line is **promoted** into the ledger rather than re-run,
+   keeping the finished worker's result and spend; **killed mid-run** (no outcome
+   produced) → **released and re-queued at its base sha**, recovering the budget.
+2. **Dispatch one ready item.** A *ready* item has no live reservation and no
+   terminal outcome; items dispatch in **plan order**. The item runs in its own
+   fresh worktree (cut at its base sha, reusing the heartbeat's `_dispatch_one`
+   provisioning) under `loop.py` with the item's `budget` (USD → `--cost-ceiling`;
+   credit → `--host copilot --credit-ceiling`) and `models` block. `next` blocks
+   until that worker halts. When **nothing is ready**, it records nothing, prints
+   `nothing to dispatch`, and exits 0. A non-blocking coordinator lock serializes
+   overlapping wakes (a second `next` backs off and exits 0), so the `max_parallel`
+   1 guarantee holds even when a host and a human both fire.
+3. **Record the loop's typed outcome.** On halt, the loop's own `--outcome-line`
+   record is appended with `tier: servo` (never `self_reported`); the **cost is
+   taken from the run's `state.json`**, not re-derived.
+4. **Batch escalations by scope.** Items that plateaued at the ladder ceiling
+   (spec 038-03 — a `plateau` result) are emitted **grouped by `escalation_scope`**
+   as one batch per scope — never one message per item; items without an explicit
+   scope share a single default batch. `budget` / `blocked` / `error` outcomes are
+   also terminal but are surfaced via `campaign status` only (a command, not a
+   queue — a human or host decides re-dispatch); only `plateau` escalates. Auto-retry
+   of a transient `error` is a deferred follow-up.
+5. **Record the coordinator decision.** Every `next` appends a
+   `coordinator_decision` ledger entry (what it read, reconciled, dispatched or
+   failed to dispatch, and escalated), so a campaign that fans out wrong is
+   debuggable from the ledger alone.
+
+servo **never merges** and does no git operation beyond worktree isolation:
+`campaign next` dispatches, records and exits. Landing stays with jig `slice-land
+--mode pr` or the host.
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" next my-campaign \
+  --target /path/to/repo
 ```
 
 ## Q&A before running or wiring a schedule

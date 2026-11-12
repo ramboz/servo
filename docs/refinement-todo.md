@@ -1549,3 +1549,38 @@ resume an interrupted Copilot run (3).
 **Resolution trigger:** (1) the spec 042 parity-release settles the cross-skill-borrow
 question, or another skill needs the `models` validator; (2) a campaign's ledger grows
 large enough that the per-append rewrite cost matters.
+
+## Campaign serial dispatch — deferred follow-ups (spec 042-02)
+
+**Deferred (non-blocking; surfaced by 042-02's arch + frame-critique reviews):**
+
+1. **Loop-launch argv contract has a second home.** `campaign._run_item_loop`
+   mirrors heartbeat `_run_loop`'s budget-routing argv (usd→`--cost-ceiling`,
+   credit→`--host copilot --credit-ceiling --max-iterations`) because it needs a
+   `Popen` + child-pid callback that `_run_loop`'s blocking `subprocess.run` cannot
+   give. A loop.py CLI change must now touch two call sites. Consider a shared
+   argv-builder if a third dispatch surface appears.
+2. **Non-pass terminals are status-only; transient `error` is not retried.** By
+   explicit 042-02 decision, `budget` / `blocked` / `error` outcomes are terminal
+   and surfaced via `campaign status` only (only `plateau` escalates, per AC5). A
+   040 `error` conflates a permanent block with a transient `claude_invocation_failed`
+   / `verdict_schema_mismatch` (038-03 BR-7), so a transient hiccup abandons an item
+   with no auto-retry while an infra-killed worker is re-queued. Auto-retry (or
+   escalation) of a transient error needs a transient-vs-permanent classification.
+3. **`escalation_scope` default is a single shared batch.** Items without an
+   explicit `escalation_scope` all share one default scope, so a large plan with no
+   scopes set produces one undifferentiated escalation batch. Revisit if real plans
+   want finer default grouping (e.g. a derived default) rather than an all-or-one.
+4. **Residual liveness edge: outcome-line write failed AND parent died.** Reservation
+   liveness uses the child pid + its start time (reuse-proof), and a finished run is
+   recovered by promoting its orphaned `--outcome-line`. If the loop finished but its
+   best-effort `--outcome-line` write ALSO failed and the parent died before
+   recording, reconciliation finds no orphan and re-queues (re-runs) the item — rare
+   double-failure; recovery is correct (budget not lost) but the finished work is
+   redone. A run-id recorded in the reservation + a state.json terminal check would
+   close it; loop.py has no injectable `--run-id` today.
+
+**Resolution trigger:** (1) a third servo dispatch surface, or a loop.py CLI change
+that drifts the two homes; (2)/(3) a real campaign hits the transient-error or
+coarse-default-scope case; (4) loop.py gains an injectable `--run-id`, or 042-05's
+bounded parallelism revisits reservation liveness.

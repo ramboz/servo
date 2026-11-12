@@ -812,5 +812,717 @@ class DependencyFreeTests(unittest.TestCase):
         self.assertIn("agent-loop", src)
 
 
+# =========================================================================== #
+# Slice 042-02 — servo-driven serial dispatch (`campaign next`)
+#
+# Dispatch is exercised against a REAL git repo (a fresh `git init` target with a
+# committed oracle.sh, so `git worktree add` runs the real nested-worktree path),
+# with `loop.py` replaced by a deterministic stand-in injected as the subprocess
+# RUNNER via `SERVO_CAMPAIGN_RUNNER_PY` (distinct from `SERVO_CAMPAIGN_LOOP_PY`,
+# which overrides the in-process loop-module import for the validator + the 040
+# outcome renderer — left on the real loop.py here). The stub writes the run's
+# `state.json` and the
+# `--outcome-line` record and prints a terminal summary — so the dispatch
+# contract (worktree provisioned, loop launched with the item's budget/models,
+# the loop's own typed line recorded, cost sourced from state.json) is exercised
+# end to end with no live `claude -p` call. Known heartbeat-dispatch gotcha: a
+# `git log` mock is NOT enough — worktree creation needs a real repo.
+# =========================================================================== #
+
+import tempfile as _tempfile  # noqa: E402  (module-level, after the 042-01 body)
+
+_DISPATCH_ORACLE = (
+    "#!/usr/bin/env bash\n"
+    'echo "oracle: composite=1.0 threshold=0.5"\n'
+    "exit 0\n"
+)
+
+
+def _git_cmd(target: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(target), *args],
+                          capture_output=True, text=True)
+
+
+def _dispatch_repo(target: Path) -> Path:
+    """A real git repo target with a committed oracle + untracked `.servo/` manifest.
+
+    `.servo/` is git-ignored (as in a real scaffolded install), so the worktree
+    checkout does not inherit the manifest and `_provision_oracle` has real work
+    to do.
+    """
+    target.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-q", str(target)], capture_output=True, text=True)
+    _git_cmd(target, "config", "user.email", "test@servo.test")
+    _git_cmd(target, "config", "user.name", "servo test")
+    _git_cmd(target, "config", "commit.gpgsign", "false")
+    (target / ".gitignore").write_text(".servo/\n")
+    (target / "src.py").write_text("print('hello')\n")
+    oracle = target / "oracle.sh"
+    oracle.write_text(_DISPATCH_ORACLE)
+    mode = oracle.stat().st_mode
+    oracle.chmod(mode | 0o111)
+    servo = target / ".servo"
+    servo.mkdir(parents=True, exist_ok=True)
+    (servo / "install.json").write_text(
+        json.dumps({"installed_tier": "tier-0", "components": []}))
+    _git_cmd(target, "add", "-A")
+    _git_cmd(target, "commit", "-qm", "init")
+    return target
+
+
+def _write_stub_loop(path: Path, *, default: Optional[dict] = None,
+                     by_item: Optional[dict] = None,
+                     log_path: Optional[Path] = None) -> Path:
+    """A deterministic stand-in `loop.py` for `campaign next`.
+
+    It parses `--outcome-line <path>`, writes the run's `state.json` at
+    `<worktree>/.servo/runs/<run_id>/state.json`, writes the spec-040 outcome
+    record to the `--outcome-line` file, prints a terminal summary line, and logs
+    its argv. Behaviour is keyed by the worktree basename (= item id). Knobs:
+    `result`, `status` (final_oracle_status), `cost` (the state.json cost — the
+    authoritative figure), `line_cost` (a DIFFERENT cost written into the outcome
+    line, to prove servo reads state.json), `run_id`, `composite`, `threshold`,
+    `rung`, `rungs`, `reason`, `iterations`, `host` (copilot → credit unit),
+    `skip_outcome_line`, `no_summary`, `skip_state`, `exit_code`.
+    """
+    cfg = {
+        "default": default if default is not None
+        else {"result": "passed", "status": "pass", "cost": 0.42},
+        "by_item": by_item or {},
+        "log_path": str(log_path) if log_path is not None else "",
+    }
+    cfg_path = path.with_name(path.name + ".cfg.json")
+    cfg_path.write_text(json.dumps(cfg))
+    src = (
+        "import sys, json, pathlib\n"
+        f"CFG = json.loads(pathlib.Path({json.dumps(str(cfg_path))}).read_text())\n"
+        "args = sys.argv[1:]\n"
+        "worktree = pathlib.Path(args[0])\n"
+        "item = worktree.name\n"
+        "def _opt(name):\n"
+        "    return args[args.index(name) + 1] if name in args else None\n"
+        "if CFG['log_path']:\n"
+        "    with open(CFG['log_path'], 'a') as _f:\n"
+        "        _f.write(json.dumps({'argv': args, 'item': item}) + '\\n')\n"
+        "beh = CFG['by_item'].get(item, CFG['default'])\n"
+        "run_id = beh.get('run_id', 'crun-' + item)\n"
+        "cost = beh.get('cost', 0.42)\n"
+        "copilot = beh.get('host') == 'copilot'\n"
+        "if not beh.get('skip_state'):\n"
+        "    runs = worktree / '.servo' / 'runs' / run_id\n"
+        "    runs.mkdir(parents=True, exist_ok=True)\n"
+        "    state = {'run_id': run_id, 'state_schema_version': 1,\n"
+        "             'backend': 'copilot' if copilot else 'claude',\n"
+        "             'cumulative_cost_usd': None if copilot else cost}\n"
+        "    if copilot:\n"
+        "        state['cumulative_credits_nano'] = beh.get('credits_nano', 1000000000)\n"
+        "    (runs / 'state.json').write_text(json.dumps(state))\n"
+        "rec = {'servo_outcome': 1, 'result': beh.get('result', 'passed'),\n"
+        "       'rung': beh.get('rung', 0), 'rungs': beh.get('rungs', 1),\n"
+        "       'iterations': beh.get('iterations', 1),\n"
+        "       'cost_usd': None if copilot else beh.get('line_cost', cost),\n"
+        "       'composite': beh.get('composite', 0.9),\n"
+        "       'threshold': beh.get('threshold', 0.5), 'run_id': run_id,\n"
+        "       'reason': beh.get('reason', 'oracle_passed')}\n"
+        "ol = _opt('--outcome-line')\n"
+        "if ol and ol != '-' and not beh.get('skip_outcome_line'):\n"
+        "    pathlib.Path(ol).write_text(json.dumps(rec) + '\\n')\n"
+        "if not beh.get('no_summary'):\n"
+        "    summary = {'schema_version': 1,\n"
+        "               'final_oracle_status': beh.get('status', 'pass'),\n"
+        "               'run_id': run_id,\n"
+        "               'cumulative_cost_usd': None if copilot else cost,\n"
+        "               'terminal_reason': beh.get('reason', 'oracle_passed'),\n"
+        "               'iterations_completed': beh.get('iterations', 1),\n"
+        "               'oracle_score_history': [{'iteration': 1,\n"
+        "                   'composite': beh.get('composite', 0.9),\n"
+        "                   'threshold': beh.get('threshold', 0.5)}]}\n"
+        "    if copilot:\n"
+        "        summary['cumulative_credits'] = beh.get('credits', 5.0)\n"
+        "    print(json.dumps(summary))\n"
+        "sys.exit(beh.get('exit_code', 0))\n"
+    )
+    path.write_text(src)
+    return path
+
+
+def _next(tmp: Path, loop_stub: Path, *, campaign_id: str = "camp-1",
+          extra_env: Optional[dict] = None) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    # Inject the stub as the subprocess RUNNER only; the in-process loop-module
+    # import (validator + the spec-040 outcome renderer) stays bound to the real
+    # loop.py, so the fallback-renderer path exercises loop.py's own contract.
+    env["SERVO_CAMPAIGN_RUNNER_PY"] = str(loop_stub)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, str(CAMPAIGN), "next", campaign_id, "--target", str(tmp)],
+        capture_output=True, text=True, env=env,
+    )
+
+
+def _outcome_entries(tmp: Path, campaign_id: str = "camp-1") -> list:
+    return [e for e in _ledger_lines(tmp, campaign_id) if "outcome" in e]
+
+
+def _decision_entries(tmp: Path, campaign_id: str = "camp-1") -> list:
+    return [e for e in _ledger_lines(tmp, campaign_id)
+            if e.get("kind") == "coordinator_decision"]
+
+
+def _reservations_dir(tmp: Path, campaign_id: str = "camp-1") -> Path:
+    return _campaign_dir(tmp, campaign_id) / "reservations"
+
+
+def _seed_reservation(tmp: Path, item: str, *, pid: int, campaign_id: str = "camp-1",
+                      base_sha: str = "0" * 40,
+                      started_at: str = "2020-01-01T00:00:00Z") -> Path:
+    rdir = _reservations_dir(tmp, campaign_id)
+    rdir.mkdir(parents=True, exist_ok=True)
+    worktree = _campaign_dir(tmp, campaign_id) / "worktrees" / item
+    path = rdir / (item + ".json")
+    path.write_text(json.dumps({
+        "item": item, "pid": pid, "base_sha": base_sha,
+        "worktree": str(worktree), "branch": "servo/campaign/" + item,
+        "started_at": started_at,
+    }))
+    return path
+
+
+def _dead_pid() -> int:
+    """A PID that is not alive (raises ProcessLookupError on signal 0)."""
+    for pid in range(999999, 2, -1):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return pid
+        except PermissionError:
+            continue
+    return 999999
+
+
+def _item(item_id: str, *, oracle_ref: str = "oracle.sh", unit: str = "usd",
+          scope: Optional[str] = None) -> dict:
+    it = _valid_item(item_id, unit=unit)
+    it["oracle_ref"] = oracle_ref
+    if scope is not None:
+        it["escalation_scope"] = scope
+    return it
+
+
+# --------------------------------------------------------------------------- #
+# AC1 — dispatch at most one ready item; nothing ready → exit 0
+# --------------------------------------------------------------------------- #
+
+class NextDispatchOneReadyItemTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.log = Path(self._td.name) / "loop.log"
+        self.addCleanup(self._td.cleanup)
+
+    def test_dispatches_first_ready_in_plan_order_and_records_servo_tier(self):
+        plan = _valid_plan(_item("item-a"), _item("item-b"))
+        _init(self.tmp, plan)
+        _write_stub_loop(self.loop, log_path=self.log,
+                         default={"result": "passed", "status": "pass", "cost": 0.5})
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # Exactly one loop launched — the FIRST plan item.
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([c["item"] for c in calls], ["item-a"])
+        # Its outcome is recorded with tier=servo (never self_reported).
+        outs = _outcome_entries(self.tmp)
+        self.assertEqual(len(outs), 1)
+        self.assertEqual(outs[0]["item"], "item-a")
+        self.assertEqual(outs[0]["tier"], "servo")
+        self.assertFalse(outs[0]["self_reported"])
+        self.assertEqual(outs[0]["outcome"]["result"], "passed")
+
+    def test_loop_launched_with_item_budget_and_models(self):
+        plan = _valid_plan(_item("item-a"))
+        _init(self.tmp, plan)
+        _write_stub_loop(self.loop, log_path=self.log)
+        _next(self.tmp, self.loop)
+        argv = [json.loads(line) for line in self.log.read_text().splitlines()][0]["argv"]
+        self.assertIn("--outcome-line", argv)
+        self.assertIn("--prompt", argv)
+        # USD budget → --cost-ceiling carrying the item's ceiling (5.0 → "5").
+        self.assertEqual(argv[argv.index("--cost-ceiling") + 1], "5")
+        self.assertNotIn("--host", argv)  # claude host, not copilot
+        # the item's models block is forwarded verbatim
+        self.assertEqual(
+            json.loads(argv[argv.index("--models") + 1]),
+            {"runner": {"model": "claude-sonnet-5-5", "effort": "high"}})
+
+    def test_nothing_ready_exits_zero_records_no_outcome(self):
+        plan = _valid_plan(_item("item-a"))
+        _init(self.tmp, plan)
+        # Pre-record a terminal outcome so the only item is not ready.
+        _run(["record", "camp-1", "item-a", "--outcome", json.dumps(_usd_outcome()),
+              "--target", str(self.tmp)])
+        _write_stub_loop(self.loop, log_path=self.log)
+        before = len(_outcome_entries(self.tmp))
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("nothing to dispatch", (proc.stdout + proc.stderr).lower())
+        self.assertFalse(self.log.exists(),
+                         "no loop should be launched when nothing is ready")
+        self.assertEqual(len(_outcome_entries(self.tmp)), before)
+
+
+# --------------------------------------------------------------------------- #
+# AC2 — record the loop's own typed line; cost from state.json, not re-derived
+# --------------------------------------------------------------------------- #
+
+class NextCostFromStateJsonTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.addCleanup(self._td.cleanup)
+
+    def test_recorded_cost_comes_from_state_json_not_outcome_line(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        # state.json cost = 0.42 (authoritative); outcome-line cost = 99.0 (wrong).
+        _write_stub_loop(self.loop, default={
+            "result": "passed", "status": "pass", "cost": 0.42, "line_cost": 99.0})
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        outs = _outcome_entries(self.tmp)
+        self.assertEqual(len(outs), 1)
+        self.assertEqual(outs[0]["outcome"]["cost_usd"], 0.42)
+
+    def test_records_the_loops_typed_result_and_run_id(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        _write_stub_loop(self.loop, default={
+            "result": "plateau", "status": "below_threshold", "cost": 1.25,
+            "run_id": "the-run", "reason": "oracle_plateau", "rung": 2, "rungs": 2})
+        _next(self.tmp, self.loop)
+        outcome = _outcome_entries(self.tmp)[0]["outcome"]
+        self.assertEqual(outcome["result"], "plateau")
+        self.assertEqual(outcome["run_id"], "the-run")
+        self.assertEqual(outcome["cost_usd"], 1.25)
+
+
+# --------------------------------------------------------------------------- #
+# AC3 — each `next` records its own coordinator decision
+# --------------------------------------------------------------------------- #
+
+class NextCoordinatorDecisionTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.addCleanup(self._td.cleanup)
+
+    def test_dispatch_records_a_coordinator_decision(self):
+        _init(self.tmp, _valid_plan(_item("item-a"), _item("item-b")))
+        _write_stub_loop(self.loop)
+        _next(self.tmp, self.loop)
+        decisions = _decision_entries(self.tmp)
+        self.assertEqual(len(decisions), 1)
+        d = decisions[0]
+        self.assertEqual(d["max_parallel"], 1)
+        self.assertEqual(d["dispatched"]["item"], "item-a")
+        self.assertEqual(d["dispatched"]["result"], "passed")
+        self.assertIn("item-a", d["read"]["ready"])
+
+    def test_nothing_ready_still_records_a_decision(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        _run(["record", "camp-1", "item-a", "--outcome", json.dumps(_usd_outcome()),
+              "--target", str(self.tmp)])
+        _write_stub_loop(self.loop)
+        _next(self.tmp, self.loop)
+        decisions = _decision_entries(self.tmp)
+        self.assertEqual(len(decisions), 1)
+        self.assertIsNone(decisions[0]["dispatched"])
+
+
+# --------------------------------------------------------------------------- #
+# AC4 — reservation reconciliation on wake
+# --------------------------------------------------------------------------- #
+
+class NextReservationReconcileTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.addCleanup(self._td.cleanup)
+
+    def test_killed_reservation_is_released_and_item_requeued(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        _seed_reservation(self.tmp, "item-a", pid=_dead_pid(), base_sha="f" * 40)
+        _write_stub_loop(self.loop)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The stale reservation was released and re-queued at its base sha.
+        d = _decision_entries(self.tmp)[0]
+        rec = [r for r in d["reconciled"] if r["item"] == "item-a"]
+        self.assertEqual(len(rec), 1)
+        self.assertEqual(rec[0]["action"], "released_requeued")
+        self.assertEqual(rec[0]["base_sha"], "f" * 40)
+        # Budget recovered: the item is re-dispatched (a fresh outcome recorded).
+        self.assertEqual(len(_outcome_entries(self.tmp)), 1)
+        # The reservation is not left dangling after the run halts.
+        self.assertFalse((_reservations_dir(self.tmp) / "item-a.json").exists())
+
+    def test_live_reservation_is_held_not_released(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        # os.getpid() (the test process) is alive → the run is "live".
+        _seed_reservation(self.tmp, "item-a", pid=os.getpid())
+        _write_stub_loop(self.loop, log_path=Path(self._td.name) / "l.log")
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # Held: not reconciled away, not dispatched (item is reserved-live).
+        self.assertTrue((_reservations_dir(self.tmp) / "item-a.json").exists())
+        self.assertEqual(_outcome_entries(self.tmp), [])
+        self.assertIsNone(_decision_entries(self.tmp)[0]["dispatched"])
+
+    def test_recorded_reservation_is_cleaned_without_requeue(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        _run(["record", "camp-1", "item-a", "--outcome", json.dumps(_usd_outcome()),
+              "--target", str(self.tmp)])
+        _seed_reservation(self.tmp, "item-a", pid=_dead_pid())
+        _write_stub_loop(self.loop, log_path=Path(self._td.name) / "l.log")
+        _next(self.tmp, self.loop)
+        d = _decision_entries(self.tmp)[0]
+        rec = [r for r in d["reconciled"] if r["item"] == "item-a"]
+        self.assertEqual(rec[0]["action"], "cleaned_recorded")
+        # Not re-dispatched (it has a terminal outcome already).
+        self.assertEqual(len(_outcome_entries(self.tmp)), 1)
+        self.assertFalse((_reservations_dir(self.tmp) / "item-a.json").exists())
+
+    def test_reservation_released_after_a_normal_dispatch(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        _write_stub_loop(self.loop)
+        _next(self.tmp, self.loop)
+        # A reservation is held only while the run is live → gone at halt.
+        self.assertFalse((_reservations_dir(self.tmp) / "item-a.json").exists())
+
+
+# --------------------------------------------------------------------------- #
+# AC5 — escalations batched by scope
+# --------------------------------------------------------------------------- #
+
+class NextEscalationBatchTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.addCleanup(self._td.cleanup)
+
+    def test_ceiling_plateau_items_batched_by_explicit_scope(self):
+        plan = _valid_plan(
+            _item("item-a", scope="area-x"),
+            _item("item-b", scope="area-x"),
+            _item("item-c", scope="area-y"),
+            _item("item-d", scope="area-z"),
+        )
+        _init(self.tmp, plan)
+        plateau = json.dumps(_usd_outcome(result="plateau", reason="oracle_plateau",
+                                          rung=2, rungs=2))
+        for it in ("item-a", "item-b", "item-c"):
+            _run(["record", "camp-1", it, "--outcome", plateau, "--target", str(self.tmp)])
+        # item-d passed — must NOT be escalated.
+        _run(["record", "camp-1", "item-d", "--outcome", json.dumps(_usd_outcome()),
+              "--target", str(self.tmp)])
+        _write_stub_loop(self.loop)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        d = _decision_entries(self.tmp)[0]
+        esc = {e["scope"]: sorted(e["items"]) for e in d["escalations"]}
+        # One batch per scope (not one message per item); passed item excluded.
+        self.assertEqual(esc, {"area-x": ["item-a", "item-b"], "area-y": ["item-c"]})
+        self.assertIn("area-x", proc.stdout)
+
+    def test_unscoped_plateau_items_batch_into_one_message(self):
+        # Independent items with DISTINCT oracle_refs and NO escalation_scope must
+        # still batch into ONE escalation — not one message per item (the AC5
+        # anti-goal). oracle_ref is the gate, not the escalation scope.
+        plan = _valid_plan(
+            _item("item-a", oracle_ref="oracle-a.sh"),
+            _item("item-b", oracle_ref="oracle-b.sh"),
+            _item("item-c", oracle_ref="oracle-c.sh"),
+        )
+        _init(self.tmp, plan)
+        plateau = json.dumps(_usd_outcome(result="plateau", reason="oracle_plateau",
+                                          rung=2, rungs=2))
+        for it in ("item-a", "item-b", "item-c"):
+            _run(["record", "camp-1", it, "--outcome", plateau, "--target", str(self.tmp)])
+        _write_stub_loop(self.loop)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        d = _decision_entries(self.tmp)[0]
+        self.assertEqual(len(d["escalations"]), 1)  # exactly one batch
+        self.assertEqual(sorted(d["escalations"][0]["items"]),
+                         ["item-a", "item-b", "item-c"])
+        # one human escalation line, not one per item
+        self.assertEqual(proc.stdout.count("plateaued at the ladder ceiling"), 1)
+
+
+# --------------------------------------------------------------------------- #
+# AC6 — servo never merges and the runner does no git operations
+# --------------------------------------------------------------------------- #
+
+class NextNoGitOpsTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.addCleanup(self._td.cleanup)
+
+    def test_next_does_not_commit_or_move_head(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        head_before = _git_cmd(self.tmp, "rev-parse", "HEAD").stdout.strip()
+        count_before = _git_cmd(self.tmp, "rev-list", "--count", "HEAD").stdout.strip()
+        _write_stub_loop(self.loop)
+        _next(self.tmp, self.loop)
+        head_after = _git_cmd(self.tmp, "rev-parse", "HEAD").stdout.strip()
+        count_after = _git_cmd(self.tmp, "rev-list", "--count", "HEAD").stdout.strip()
+        self.assertEqual(head_before, head_after)   # no merge / no commit
+        self.assertEqual(count_before, count_after)
+
+
+def _seed_orphan_outcome(tmp: Path, item: str, *, run_id: str = "orphan-run",
+                         state_cost: float = 0.33, line_cost: float = 0.33,
+                         campaign_id: str = "camp-1") -> None:
+    """Simulate a worker that FINISHED (wrote its --outcome-line + state.json) but
+    whose parent `campaign next` died before recording it: an orphaned sink file
+    plus the run's state.json under the item's worktree."""
+    cdir = _campaign_dir(tmp, campaign_id)
+    wdir = cdir / "worktrees"
+    wdir.mkdir(parents=True, exist_ok=True)
+    rec = _usd_outcome(run_id=run_id, cost_usd=line_cost, result="passed",
+                       reason="oracle_passed")
+    (wdir / (item + ".outcome.json")).write_text(json.dumps(rec) + "\n")
+    runs = wdir / item / ".servo" / "runs" / run_id
+    runs.mkdir(parents=True, exist_ok=True)
+    (runs / "state.json").write_text(
+        json.dumps({"run_id": run_id, "cumulative_cost_usd": state_cost}))
+
+
+# --------------------------------------------------------------------------- #
+# AC1 — plan order skips terminal items
+# --------------------------------------------------------------------------- #
+
+class NextPlanOrderTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.log = Path(self._td.name) / "loop.log"
+        self.addCleanup(self._td.cleanup)
+
+    def test_dispatches_next_ready_when_earlier_item_terminal(self):
+        _init(self.tmp, _valid_plan(_item("item-a"), _item("item-b")))
+        # item-a already plateaued (terminal, not ready); item-b is the next ready.
+        _run(["record", "camp-1", "item-a", "--outcome",
+              json.dumps(_usd_outcome(result="plateau", reason="oracle_plateau")),
+              "--target", str(self.tmp)])
+        _write_stub_loop(self.loop, log_path=self.log)
+        _next(self.tmp, self.loop)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([c["item"] for c in calls], ["item-b"])
+        self.assertIn("item-b", {e["item"] for e in _outcome_entries(self.tmp)})
+
+
+# --------------------------------------------------------------------------- #
+# AC2 — fail-open / fallback paths + credit dispatch
+# --------------------------------------------------------------------------- #
+
+class NextFallbackEnvErrorCreditTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.log = Path(self._td.name) / "loop.log"
+        self.addCleanup(self._td.cleanup)
+
+    def test_fallback_renderer_used_when_outcome_line_missing(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        # no --outcome-line file, but a terminal summary on stdout → the ledger
+        # stores loop.py's OWN _outcome_record rendering of that summary.
+        _write_stub_loop(self.loop, default={
+            "result": "passed", "status": "pass", "cost": 0.7,
+            "skip_outcome_line": True})
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        outs = _outcome_entries(self.tmp)
+        self.assertEqual(len(outs), 1)
+        self.assertEqual(outs[0]["tier"], "servo")
+        self.assertEqual(outs[0]["outcome"]["result"], "passed")
+        self.assertEqual(outs[0]["outcome"]["cost_usd"], 0.7)
+
+    def test_no_outcome_and_no_summary_leaves_item_open_with_dispatch_error(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        _write_stub_loop(self.loop, default={"skip_outcome_line": True,
+                                             "no_summary": True})
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(_outcome_entries(self.tmp), [])  # nothing recorded; item open
+        d = _decision_entries(self.tmp)[0]
+        self.assertIsNone(d["dispatched"])
+        self.assertEqual(d["dispatch_error"]["item"], "item-a")
+        self.assertIn("no outcome line or summary", d["dispatch_error"]["reason"])
+        self.assertFalse((_reservations_dir(self.tmp) / "item-a.json").exists())
+
+    def test_cost_falls_back_to_outcome_line_when_state_json_absent(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        # state.json absent → cost is taken from the loop's own --outcome-line.
+        _write_stub_loop(self.loop, default={
+            "result": "passed", "status": "pass", "line_cost": 0.55,
+            "skip_state": True})
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(_outcome_entries(self.tmp)[0]["outcome"]["cost_usd"], 0.55)
+
+    def test_credit_item_dispatches_copilot_and_records_null_cost(self):
+        _init(self.tmp, _valid_plan(_item("item-a", unit="credit")))
+        _write_stub_loop(self.loop, log_path=self.log, default={
+            "result": "passed", "status": "pass", "host": "copilot", "credits": 42.0})
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        argv = [json.loads(line) for line in self.log.read_text().splitlines()][0]["argv"]
+        self.assertEqual(argv[argv.index("--host") + 1], "copilot")
+        self.assertIn("--credit-ceiling", argv)
+        self.assertNotIn("--cost-ceiling", argv)
+        self.assertEqual(argv[argv.index("--max-iterations") + 1], "5")
+        # a credit/Copilot run records cost_usd null (042-01 rule; credits in 042-04)
+        self.assertIsNone(_outcome_entries(self.tmp)[0]["outcome"]["cost_usd"])
+
+
+# --------------------------------------------------------------------------- #
+# AC4 — a finished-but-unrecorded run is promoted, not re-spent
+# --------------------------------------------------------------------------- #
+
+class NextOrphanPromotionTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.log = Path(self._td.name) / "loop.log"
+        self.addCleanup(self._td.cleanup)
+
+    def test_finished_but_unrecorded_run_is_promoted_not_requeued(self):
+        _init(self.tmp, _valid_plan(_item("item-a")))
+        # a finished worker's orphaned line (line cost 99.0) + its state.json (0.33);
+        # a dead-pid reservation stands in for the died-before-recording parent.
+        _seed_orphan_outcome(self.tmp, "item-a", run_id="r-orphan",
+                             state_cost=0.33, line_cost=99.0)
+        _seed_reservation(self.tmp, "item-a", pid=_dead_pid())
+        _write_stub_loop(self.loop, log_path=self.log)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        d = _decision_entries(self.tmp)[0]
+        rec = [r for r in d["reconciled"] if r["item"] == "item-a"]
+        self.assertEqual(rec[0]["action"], "promoted_orphan")
+        # the finished worker's result is recorded (NOT re-run), cost from state.json
+        outs = _outcome_entries(self.tmp)
+        self.assertEqual(len(outs), 1)
+        self.assertEqual(outs[0]["tier"], "servo")
+        self.assertEqual(outs[0]["outcome"]["cost_usd"], 0.33)
+        self.assertFalse(self.log.exists(), "promoted item must not be re-dispatched")
+        self.assertFalse((_reservations_dir(self.tmp) / "item-a.json").exists())
+
+
+# --------------------------------------------------------------------------- #
+# AC1/AC6 — a non-blocking coordinator lock serializes overlapping wakes
+# --------------------------------------------------------------------------- #
+
+class NextCoordinatorLockTests(unittest.TestCase):
+    def test_contended_next_backs_off_without_dispatching(self):
+        import fcntl
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d) / "repo"
+            _dispatch_repo(tmp)
+            loop = Path(d) / "stub_loop.py"
+            _write_stub_loop(loop)
+            _init(tmp, _valid_plan(_item("item-a")))
+            lock_path = _campaign_dir(tmp) / ".next.lock"
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                proc = _next(tmp, loop)
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("backing off", proc.stdout)
+            self.assertEqual(_outcome_entries(tmp), [])  # nothing dispatched
+            self.assertEqual(_decision_entries(tmp), [])  # no decision appended
+
+
+# --------------------------------------------------------------------------- #
+# Unit contracts: optional escalation_scope + the loop.py renderer drift guard
+# --------------------------------------------------------------------------- #
+
+class NextUnitContractTests(unittest.TestCase):
+    def test_escalation_scope_is_optional_and_validated(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            self.assertEqual(_init(tmp, _valid_plan(_item("item-a", scope="area-x")),
+                                   "camp-ok").returncode, 0)
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            bad = _item("item-a")
+            bad["escalation_scope"] = ""  # present but empty → rejected
+            proc = _init(tmp, {"schema_version": 1, "items": [bad]}, "camp-bad")
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("escalation_scope", proc.stderr)
+
+    def test_default_escalation_scope_groups_unscoped_items(self):
+        plan = _valid_plan(_item("a", oracle_ref="x.sh"), _item("b", oracle_ref="y.sh"))
+        latest = {
+            "a": {"outcome": {"result": "plateau"}},
+            "b": {"outcome": {"result": "plateau"}},
+        }
+        groups = _cmp._compute_escalations(plan, latest)
+        self.assertEqual(len(groups), 1)  # one shared default scope
+        self.assertEqual(groups[0]["scope"], _cmp.DEFAULT_ESCALATION_SCOPE)
+        self.assertEqual(sorted(groups[0]["items"]), ["a", "b"])
+
+    def test_non_git_target_is_dispatch_env_error(self):
+        # A non-git target cannot be isolated — the early guard fails cleanly and
+        # the reason is recorded in the coordinator decision (no worker launched).
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)  # a plain dir, not a git repo
+            loop = tmp / "stub_loop.py"
+            _write_stub_loop(loop)
+            _init(tmp, _valid_plan(_item("item-a")))
+            proc = _next(tmp, loop)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(_outcome_entries(tmp), [])
+            entry = _decision_entries(tmp)[0]
+            self.assertIsNone(entry["dispatched"])
+            self.assertEqual(entry["dispatch_error"]["item"], "item-a")
+            self.assertIn("not a git work tree", entry["dispatch_error"]["reason"])
+
+    def test_outcome_renderer_binds_to_loop_pys_own(self):
+        # Drift guard for the dynamic `_outcome_record` binding (the twin of the
+        # 042-01 validator/constant parity tests): if loop.py renames or reshapes
+        # its 040 renderer, this fails loudly rather than silently mis-recording.
+        renderer = _cmp._load_outcome_renderer()
+        rec = renderer({
+            "terminal_reason": "oracle_passed", "final_oracle_status": "pass",
+            "iterations_completed": 2, "cumulative_cost_usd": 1.5,
+            "oracle_score_history": [{"composite": 0.9, "threshold": 0.5}],
+            "run_id": "r"})
+        self.assertEqual(rec["servo_outcome"], _cmp.OUTCOME_SCHEMA_VERSION)
+        self.assertEqual(rec["result"], "passed")
+        self.assertEqual(rec["cost_usd"], 1.5)
+        self.assertEqual(rec["run_id"], "r")
+
+
 if __name__ == "__main__":
     unittest.main()
