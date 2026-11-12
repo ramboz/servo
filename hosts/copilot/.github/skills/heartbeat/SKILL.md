@@ -49,6 +49,15 @@ Put these guardrails up front before running or wiring anything:
 4. **`run --cost-ceiling` is whole-heartbeat, not per-loop.** One ceiling bounds
    discovery plus all dispatched loops in that pass. `dispatch --cost-ceiling`
    keeps the manual per-loop meaning.
+5. **Copilot: `run --host copilot --credit-ceiling N` (spec 041-03 / ADR-0048).**
+   A whole-heartbeat pass on a Copilot target is bounded in **AI credits**, never
+   USD. Each dispatched loop receives `--host copilot --credit-ceiling <remaining>`
+   (min 30, with an explicit `--max-iterations`). The pass **fails closed**: a loop
+   that reports no usable credit spend (`null`, never summed as 0) or a
+   USD-denominated outcome under the credit ceiling halts the pass (rc=2) and leaves
+   the remaining candidates `open`. `--cost-ceiling` is refused under
+   `--host copilot` and `--credit-ceiling` under `--host claude` — the two units
+   never mix (part 6). The default (claude) path is byte-identical.
 
 ## Modes
 
@@ -158,15 +167,24 @@ python3 "$SERVO_ROOT/skills/heartbeat/heartbeat.py" run /path/to/repo \
   --cost-ceiling 2.00 --max-candidates 3 --max-iterations 5
 ```
 
+For a **Copilot-hosted** target, bound the pass in AI credits instead (spec 041-03 /
+ADR-0048 — `--cost-ceiling` is refused under `--host copilot`):
+
+```bash
+python3 "$SERVO_ROOT/skills/heartbeat/heartbeat.py" run /path/to/repo \
+  --host copilot --credit-ceiling 300 --max-candidates 3 --max-iterations 5
+```
+
 ## Q&A before running or wiring a schedule
 
 Ask only what the user has not already answered:
 
 1. **Target path.** Which repo should the heartbeat inspect?
 2. **Mode.** Do they want `discover`, `status`, `dispatch`, or `run`?
-3. **Budget and caps.** For `run`, confirm the whole-heartbeat
-   `--cost-ceiling`; optionally cap blast radius with `--max-candidates` and
-   loop effort with `--max-iterations`.
+3. **Budget and caps.** For `run`, confirm the whole-heartbeat budget: USD
+   `--cost-ceiling` on the default Claude host, or AI-credit `--credit-ceiling`
+   (min 30) with `--host copilot`. Optionally cap blast radius with
+   `--max-candidates` and loop effort with `--max-iterations`.
 4. **Prerequisites.** `discover` and `status` can operate **without an oracle**.
    `dispatch` and `run` refuse at the execution preflight if
    `.servo/install.json` / `oracle.sh` are missing or invalid; recover with

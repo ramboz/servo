@@ -2407,7 +2407,10 @@ def _write_mock_loop(
     `default`. Behaviour knobs: `status` (final_oracle_status), `composite`,
     `cost`, `run_id`, `emit_summary` (False → no summary line), `garbage` (emit a
     non-JSON line), `empty_history` (env-error shape), `exit_code`, `driver`,
-    `terminal_reason`, and `terminal_breadcrumb`. Never invokes a real `claude`.
+    `terminal_reason`, and `terminal_breadcrumb`. Spec 041-03: `backend:
+    "copilot"` emits a Copilot (credit-unit) summary — `backend: copilot`, null
+    USD fields, and `cumulative_credits` from the `credits` knob (a number, or
+    `None` for the fail-closed null). Never invokes a real `claude`.
     """
     cfg = {
         "log_path": str(log_path),
@@ -2456,6 +2459,13 @@ def _write_mock_loop(
                 if "terminal_breadcrumb" in beh:
                     summary["terminal_breadcrumb"] = beh["terminal_breadcrumb"]
                 summary.update(beh.get("extra_summary", {}))
+                if beh.get("backend") == "copilot":
+                    # Spec 041-03: a Copilot summary carries the credit fields
+                    # (number or null) and nulls the USD fields, mirroring
+                    # loop.py's `--host copilot` summary (ADR-0048 part 6).
+                    summary["backend"] = "copilot"
+                    summary["cumulative_cost_usd"] = None
+                    summary["cumulative_credits"] = beh.get("credits", 5.0)
                 if beh.get("driver") == "goal":
                     summary["driver"] = "goal"
                     summary["oracle_composite"] = beh.get("composite")
@@ -2516,6 +2526,8 @@ def _run_run(
     path: Optional[str] = None,
     models: Optional[str] = None,
     extra_env: Optional[dict] = None,
+    host: Optional[str] = None,
+    credit_ceiling: Optional[float] = None,
 ) -> subprocess.CompletedProcess:
     """Invoke `heartbeat.py run <target>` with mock gh + real git by default."""
     env = dict(os.environ)
@@ -2540,6 +2552,10 @@ def _run_run(
         argv += ["--max-candidates", str(max_candidates)]
     if models is not None:
         argv += ["--models", models]
+    if host is not None:
+        argv += ["--host", host]
+    if credit_ceiling is not None:
+        argv += ["--credit-ceiling", str(credit_ceiling)]
     return subprocess.run(argv, capture_output=True, text=True, env=env)
 
 
@@ -4887,6 +4903,290 @@ class HeartbeatEscalationQuarantineTests(unittest.TestCase):
         self.assertFalse(due("interrupted", {
             "escalation_rung": 2, "oracle_status": "below_threshold"}))
         self.assertFalse(due(None, {"escalation_rung": 2}))
+
+
+# ===========================================================================
+# Spec 041-03 (ADR-0048) — heartbeat AI-credit ledger
+# ===========================================================================
+#
+# These drive `run_dispatch` IN-PROCESS (real gate + mock loop subprocess) so
+# the ledger ACs can key per-finding behaviour on deterministic finding_ids
+# (`run` mints fingerprint ids via discover). The `--host`/`--credit-ceiling`
+# CLI wiring + unit guards are exercised through the real `run` subprocess
+# below (HeartbeatCreditRunCliTests).
+
+
+def _dispatch_credits_inproc(
+    target: Path, *, loop_py: Path,
+    whole_credit_ceiling: Optional[float] = None,
+    whole_cost_ceiling: Optional[float] = None,
+    host: Optional[str] = None,
+    max_candidates: Optional[int] = None,
+    max_iterations: Optional[int] = None,
+    whole_cost_since=None,
+):
+    """Call `heartbeat.run_dispatch` in-process with a mock loop; return (rc, stderr)."""
+    if host is None:
+        host = _hb.HOST_COPILOT if whole_credit_ceiling is not None else _hb.HOST_CLAUDE
+    err = io.StringIO()
+    with mock.patch.dict(os.environ, {"SERVO_HEARTBEAT_LOOP_PY": str(loop_py)}), \
+            contextlib.redirect_stderr(err):
+        rc = _hb.run_dispatch(
+            target, host=host,
+            whole_cost_ceiling=whole_cost_ceiling,
+            whole_credit_ceiling=whole_credit_ceiling,
+            whole_cost_since=whole_cost_since,
+            max_candidates=max_candidates,
+            max_iterations=max_iterations,
+        )
+    return rc, err.getvalue()
+
+
+class HeartbeatCreditOutcomeHelperTests(unittest.TestCase):
+    """041-03 — credit fields on outcomes; the USD path stays byte-identical (AC4)."""
+
+    _COPILOT_SUMMARY = {
+        "run_id": "cop-run", "final_oracle_status": "below_threshold",
+        "oracle_score_history": [{"composite": 0.3}],
+        "cumulative_cost_usd": None, "backend": "copilot",
+        "cumulative_credits": 12.5,
+    }
+
+    def test_copilot_summary_records_credits(self):
+        with mock.patch.object(_hb, "_now_iso", return_value="t"):
+            outcome = _hb._outcome_from_summary(self._COPILOT_SUMMARY)
+        self.assertEqual(outcome["credits"], 12.5)
+        self.assertTrue(_hb._outcome_is_credit_unit(outcome))
+        self.assertEqual(_hb._outcome_credits(outcome), 12.5)
+
+    def test_copilot_null_credits_is_none_not_zero(self):
+        summary = {**self._COPILOT_SUMMARY, "cumulative_credits": None}
+        with mock.patch.object(_hb, "_now_iso", return_value="t"):
+            outcome = _hb._outcome_from_summary(summary)
+        # It IS a credit-unit outcome whose spend is unknown — never read as 0.
+        self.assertIn("credits", outcome)
+        self.assertIsNone(outcome["credits"])
+        self.assertTrue(_hb._outcome_is_credit_unit(outcome))
+        self.assertIsNone(_hb._outcome_credits(outcome))
+
+    def test_claude_summary_has_no_credits_key(self):
+        summary = {
+            "run_id": "cl", "final_oracle_status": "pass",
+            "oracle_score_history": [{"composite": 0.9}],
+            "cumulative_cost_usd": 0.4,
+        }
+        with mock.patch.object(_hb, "_now_iso", return_value="t"):
+            outcome = _hb._outcome_from_summary(summary)
+        self.assertNotIn("credits", outcome)
+        self.assertFalse(_hb._outcome_is_credit_unit(outcome))
+        self.assertEqual(outcome["cost_usd"], 0.4)
+
+    def test_env_error_outcome_is_host_aware(self):
+        with mock.patch.object(_hb, "_now_iso", return_value="t"):
+            claude = _hb._env_error_outcome()
+            copilot = _hb._env_error_outcome(host=_hb.HOST_COPILOT)
+        # AC4 — the Claude env-error outcome is byte-identical (no credits key).
+        self.assertNotIn("credits", claude)
+        self.assertFalse(_hb._outcome_is_credit_unit(claude))
+        # A Copilot env-error dispatched no loop: 0 credits, but credit-unit so
+        # it never trips the AC3 mixing guard.
+        self.assertEqual(copilot["credits"], 0.0)
+        self.assertTrue(_hb._outcome_is_credit_unit(copilot))
+        self.assertEqual(_hb._outcome_credits(copilot), 0.0)
+
+    def test_credit_accessors_tolerate_hand_edits(self):
+        self.assertIsNone(_hb._outcome_credits({"credits": None}))
+        self.assertIsNone(_hb._outcome_credits({"credits": "lots"}))
+        self.assertIsNone(_hb._outcome_credits({"credits": True}))
+        self.assertIsNone(_hb._outcome_credits({}))
+        self.assertIsNone(_hb._outcome_credits("nope"))
+        self.assertEqual(_hb._outcome_credits({"credits": 7}), 7.0)
+        self.assertFalse(_hb._outcome_is_credit_unit({"cost_usd": 1.0}))
+        self.assertFalse(_hb._outcome_is_credit_unit("nope"))
+        self.assertTrue(_hb._outcome_is_credit_unit({"credits": None}))
+
+
+class HeartbeatCreditForwardingTests(unittest.TestCase):
+    """041-03 AC1/AC4 — `--host copilot` + remaining credits forwarded per loop."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-cr-fwd-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _loop(self, **kw):
+        return _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log, **kw)
+
+    def _seed(self, n):
+        fids = [f"credfwd{i:09d}" for i in range(n)]
+        _write_inbox(self.target, [
+            _open_ci(fid, discovered_at=f"2026-06-{i + 1:02d}T00:00:00+00:00")
+            for i, fid in enumerate(fids)
+        ])
+        return fids
+
+    def test_host_and_credit_ceiling_forwarded_default_iterations(self):
+        self._seed(1)
+        loop_py = self._loop(default={"backend": "copilot", "credits": 10.0})
+        rc, err = _dispatch_credits_inproc(
+            self.target, loop_py=loop_py, whole_credit_ceiling=200.0)
+        self.assertEqual(rc, 0, err)
+        entry = _loop_log(self.loop_log)[0]
+        self.assertEqual(_loop_flag(entry, "--host"), "copilot")
+        self.assertEqual(_loop_flag(entry, "--credit-ceiling"), "200")
+        self.assertNotIn("--cost-ceiling", entry["argv"])
+        # loop.py requires an explicit --max-iterations under copilot (default 5).
+        self.assertEqual(_loop_flag(entry, "--max-iterations"), "5")
+
+    def test_explicit_max_iterations_forwarded_under_copilot(self):
+        self._seed(1)
+        loop_py = self._loop(default={"backend": "copilot", "credits": 10.0})
+        rc, err = _dispatch_credits_inproc(
+            self.target, loop_py=loop_py, whole_credit_ceiling=200.0, max_iterations=9)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(_loop_flag(_loop_log(self.loop_log)[0], "--max-iterations"), "9")
+
+    def test_claude_dispatch_is_byte_identical(self):
+        self._seed(1)
+        loop_py = self._loop(default={"status": "pass", "cost": 0.25})
+        rc, err = _dispatch_credits_inproc(
+            self.target, loop_py=loop_py, whole_cost_ceiling=1.0)
+        self.assertEqual(rc, 0, err)
+        entry = _loop_log(self.loop_log)[0]
+        self.assertEqual(_loop_flag(entry, "--cost-ceiling"), "1")
+        self.assertNotIn("--host", entry["argv"])
+        self.assertNotIn("--credit-ceiling", entry["argv"])
+
+
+class HeartbeatCreditLedgerTests(unittest.TestCase):
+    """041-03 AC2/AC3 — credit ledger: fail-closed null, no USD/credit mixing."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-cr-ledger-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.loop_log = self.root / "loop.log"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _loop(self, **kw):
+        return _write_mock_loop(self.root / "mock_loop.py", log_path=self.loop_log, **kw)
+
+    def _seed(self, n):
+        fids = [f"credled{i:09d}" for i in range(n)]
+        _write_inbox(self.target, [
+            _open_ci(fid, discovered_at=f"2026-06-{i + 1:02d}T00:00:00+00:00")
+            for i, fid in enumerate(fids)
+        ])
+        return fids
+
+    def test_credits_recorded_and_ledger_halts_below_floor(self):
+        fids = self._seed(2)
+        loop_py = self._loop(by_fid={
+            fids[0]: {"backend": "copilot", "credits": 25.0, "status": "below_threshold"},
+            fids[1]: {"backend": "copilot", "credits": 25.0, "status": "below_threshold"},
+        })
+        rc, err = _dispatch_credits_inproc(
+            self.target, loop_py=loop_py, whole_credit_ceiling=50.0)
+        self.assertEqual(rc, 0, err)
+        self.assertIn("whole-heartbeat credit ceiling reached", err)
+        # 50 - 25 = 25 < 30 (the CLI minimum) → the 2nd dispatch never happens.
+        self.assertEqual(len(_loop_log(self.loop_log)), 1)
+        self.assertEqual(_finding_by_id(self.target, fids[0])["outcome"]["credits"], 25.0)
+        self.assertEqual(_finding_by_id(self.target, fids[1])["status"], "open")
+
+    def test_null_credits_stops_pass_rc2_remaining_open(self):
+        fids = self._seed(2)
+        loop_py = self._loop(by_fid={
+            fids[0]: {"backend": "copilot", "credits": None, "status": "below_threshold"},
+            fids[1]: {"backend": "copilot", "credits": 10.0},
+        })
+        rc, err = _dispatch_credits_inproc(
+            self.target, loop_py=loop_py, whole_credit_ceiling=200.0)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("credit_usage_unavailable", err)
+        self.assertEqual(len(_loop_log(self.loop_log)), 1, "null credits halts the pass")
+        rec0 = _finding_by_id(self.target, fids[0])
+        self.assertIn("credits", rec0["outcome"])
+        self.assertIsNone(rec0["outcome"]["credits"])
+        self.assertEqual(_finding_by_id(self.target, fids[1])["status"], "open")
+
+    def test_mixed_unit_pass_refuses_rc2(self):
+        fids = self._seed(2)
+        loop_py = self._loop(by_fid={
+            fids[0]: {"backend": "copilot", "credits": 10.0},
+            fids[1]: {"status": "below_threshold", "cost": 0.5},  # a USD outcome
+        })
+        rc, err = _dispatch_credits_inproc(
+            self.target, loop_py=loop_py, whole_credit_ceiling=200.0)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("credit_unit_mixing", err)
+        self.assertEqual(_finding_by_id(self.target, fids[0])["outcome"]["credits"], 10.0)
+
+
+class HeartbeatCreditRunCliTests(unittest.TestCase):
+    """041-03 — `run` CLI: copilot wiring end-to-end + unit-guard validation."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="servo-hb-cr-cli-")
+        self.root = Path(self.tmp.name)
+        self.target = _dispatch_git_init(self.root / "demo")
+        self.bindir = self.root / "bin"
+        self.loop_log = self.root / "loop.log"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _mock_gh_one_ci(self):
+        run = {
+            "attempt": 1, "conclusion": "failure", "createdAt": "2026-06-10T09:00:00Z",
+            "databaseId": 900, "displayTitle": "copilot run failure", "event": "push",
+            "headBranch": "main", "headSha": "0" * 12, "name": "CI", "number": 40,
+            "startedAt": "2026-06-10T09:00:05Z", "status": "completed",
+            "updatedAt": "2026-06-10T09:05:00Z",
+            "url": "https://github.test/o/r/actions/runs/900",
+            "workflowDatabaseId": 700, "workflowName": "Copilot CI",
+        }
+        _make_mock_gh(self.bindir, run_list_json=json.dumps([run]), issue_list_json="[]")
+
+    def test_run_copilot_forwards_host_and_credit_ceiling_end_to_end(self):
+        self._mock_gh_one_ci()
+        loop_py = _write_mock_loop(
+            self.root / "mock_loop.py", log_path=self.loop_log,
+            default={"backend": "copilot", "credits": 20.0, "status": "pass"})
+        res = _run_run(self.target, bindir=self.bindir, loop_py=loop_py,
+                       host="copilot", credit_ceiling=200.0, max_candidates=1)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        log = _loop_log(self.loop_log)
+        self.assertEqual(len(log), 1)
+        self.assertEqual(_loop_flag(log[0], "--host"), "copilot")
+        self.assertEqual(_loop_flag(log[0], "--credit-ceiling"), "200")
+        self.assertNotIn("--cost-ceiling", log[0]["argv"])
+
+    def test_run_copilot_requires_credit_ceiling(self):
+        res = _run_run(self.target, host="copilot")
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("--credit-ceiling", res.stderr)
+
+    def test_run_copilot_rejects_below_min_credit_ceiling(self):
+        res = _run_run(self.target, host="copilot", credit_ceiling=10.0)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("30", res.stderr)
+
+    def test_run_copilot_refuses_cost_ceiling(self):
+        res = _run_run(self.target, host="copilot", credit_ceiling=50.0, cost_ceiling=5.0)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("cost-ceiling", res.stderr.lower())
+
+    def test_run_claude_refuses_credit_ceiling(self):
+        res = _run_run(self.target, credit_ceiling=50.0)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("credit-ceiling", res.stderr.lower())
 
 
 if __name__ == "__main__":
