@@ -1528,3 +1528,24 @@ to read the persisted state's driver and ladder in the `auto` check on resume.
 **Resolution trigger:** plan-sourced budgets are needed for spec 042 campaigns (1);
 a target ships a known-priced oracle component for a Copilot run (2); a user needs to
 resume an interrupted Copilot run (3).
+
+
+## Campaign plan + ledger — deferred follow-ups (spec 042-01)
+
+**Deferred (non-blocking; surfaced by 042-01's arch review):**
+
+1. **Promote the 038 `models` validator to a declared shared surface.** `campaign.py`
+   reaches loop.py's private `_validate_models` across the skill boundary via a dynamic
+   `spec_from_file_location` load (the only in-process cross-skill borrow of another
+   skill's CLI-module private; AC1 requires the exact validator + exact messages, which
+   mirroring would drift from). It is test-guarded — a rename fails `test_campaign.py`'s
+   parity test — but undeclared as a shared contract. Consider moving the validator to
+   `skills/_common/` so both loop.py and campaign.py load a declared surface.
+2. **O(n) full-file ledger rewrite per append.** `campaign record` reads the whole
+   `ledger.jsonl`, appends one entry, and atomically rewrites the file (O(n) per record,
+   O(n²) over a campaign). Deliberate for crash-atomicity (ADR-0004) and negligible for a
+   bounded plan; flagged so the trade-off vs a plain `open(…, "a")` append is on record.
+
+**Resolution trigger:** (1) the spec 042 parity-release settles the cross-skill-borrow
+question, or another skill needs the `models` validator; (2) a campaign's ledger grows
+large enough that the per-append rewrite cost matters.
