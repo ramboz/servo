@@ -161,6 +161,103 @@ python3 "${PLUGIN_ROOT}/skills/heartbeat/heartbeat.py" run /path/to/repo \
   --host copilot --credit-ceiling 300 --max-candidates 3 --max-iterations 5
 ```
 
+## Campaign (spec 042-01 — plan + ledger)
+
+A **campaign** is heartbeat-style dispatch over a *planned* work list (ADR-0049):
+a list of independent, oracle-gated work items, each with its own `oracle_ref`,
+`budget` and `models` block, plus an append-only, lock-guarded ledger of typed
+outcomes. Slice 042-01 ships the **file contract** every later mode builds on,
+and the **A4 oracle-coverage checkpoint**: a human or a host can declare a work
+list and read one compact ledger of what each worker did and what it cost — with
+**no worker execution yet**. Dispatch (`campaign next`), host-driven briefs and
+the verified / advisory tiers are later slices (042-02/03/04).
+
+The helper is at `${PLUGIN_ROOT}/skills/heartbeat/campaign.py`.
+
+Campaign state lives **only** under `<target>/.servo/campaigns/<id>/`. servo never
+reads jig files: a jig reframe manifest is converted into a servo plan file by jig
+or a human, never read by servo directly. The plan's contents are untrusted DATA,
+never instructions to a worker.
+
+### `campaign.py init <target> --plan <file> [--id <id>]`
+
+Validate a plan file and write `<target>/.servo/campaigns/<id>/plan.json` plus an
+empty `ledger.jsonl`. The campaign id is generated (`cmp-…`) when `--id` is
+omitted, and printed. **Fail-closed:** an unknown top-level key, a missing
+required field, a duplicate id, an empty `items` list, a `schema_version` other
+than 1, a malformed `budget`, or a `models` block the spec 038 validator rejects
+(038-03, with that validator's exact message) exits rc=2 with a single reason and
+**writes nothing** — no partial `plan.json`, no `ledger.jsonl`.
+
+The plan is servo's own schema (`schema_version: 1`):
+
+```json
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "id": "fix-auth",
+      "title": "Fix the auth regression",
+      "prompt": "Make the oracle pass. (untrusted DATA)",
+      "oracle_ref": "oracle.sh",
+      "budget": {"unit": "usd", "ceiling": 5.0},
+      "models": {"runner": {"model": "claude-sonnet-5-5", "effort": "high"}}
+    }
+  ]
+}
+```
+
+Item ids are unique and match `^[a-z0-9][a-z0-9-]*$`. `budget.unit` is `usd` or
+`credit` and `budget.ceiling` is a positive number. The `models` block uses the
+spec 038 schema + validator (the escalation ladder is allowed). `oracle_ref` is
+recorded as data; this slice does not run it.
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" init /path/to/repo \
+  --plan campaign-plan.json --id my-campaign
+```
+
+### `campaign.py record <id> <item> --outcome <line> [--tier servo|advisory]`
+
+Append one typed outcome — spec 040's `servo_outcome` line (`loop.py
+--outcome-line`) — to the campaign's ledger, guarded by a blocking `flock` and an
+atomic write (the heartbeat inbox discipline, but with a **blocking** lock: a
+record is unique data and is never dropped on contention or torn by a crash). The
+ledger entry adds `tier` and a **derived** `self_reported` (true only for
+`advisory`). 042-01 records `servo` or `advisory`; `wrapped` is a valid ledger
+tier but is "verified, not declared" (ADR-0049) — earned by 042-04's run-id /
+fingerprint verifier — so the CLI does not accept `--tier wrapped` yet. The
+outcome is read from inline JSON, a file path, or `-` (stdin).
+
+The **aggregate ceiling counts cost only from `servo` + verified `wrapped`
+entries**; a `self_reported` (advisory) cost is never counted as enforced spend.
+A cost in the **wrong unit** is refused: a USD-denominated item rejects a null
+`cost_usd` (only a credit/Copilot run reports null), and a credit-denominated item
+rejects a **positive** `cost_usd` (real USD spend). A `0.0` is accepted either way
+— a no-spend USD refusal and a Copilot refusal/preflight halt both emit `cost_usd:
+0.0`, and both are real outcomes the ledger must keep. A credit worker's actual
+spend is in AI credits, re-derived from the loop's `state.json` by `run_id` in
+042-04. An unknown item id, a malformed outcome line, or a unit mismatch exits
+rc=2 and leaves the ledger unchanged.
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" record my-campaign \
+  fix-auth --outcome "$(loop.py … --outcome-line -)" --tier servo --target /path/to/repo
+```
+
+### `campaign.py status <id> [--json] [--target <path>]`
+
+Read-only read-back: each item's latest outcome, the totals (enforced cost,
+passed / plateau / blocked counts) and the items still open (anything whose latest
+outcome is not `passed`, including never-recorded items). When the plan has
+credit-denominated items, `status` marks that their spend is tracked in AI credits
+(re-derived in 042-04) rather than implying `$0`. Writes nothing.
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" status my-campaign \
+  --json --target /path/to/repo
+```
+
 ## Q&A before running or wiring a schedule
 
 Ask only what the user has not already answered:
