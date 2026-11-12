@@ -1,0 +1,50 @@
+Session Limits Controls:
+
+  Three kinds of limit can stop a session: a session limit you set yourself (an AI credit cap), the
+  usage limits on your account (rate limits), and your plan's budget (see copilot help billing).
+
+Session limits:
+
+  Session limits are opt-in. Usage accumulates across the entire session in both interactive and
+  non-interactive runs, including subagents, which share the parent session's limit. /clear starts a
+  fresh count and keeps the limit.
+
+  --max-ai-credits <credits>             Cap this session (minimum 30 AI credits).
+  /limits                                View or edit the current session's limit.
+  /limits set max-ai-credits <credits>   Set or raise it; /limits unset removes it.
+
+  The AI credit limit is a soft cap: usage is known only after a response returns, so one response can
+  go past the limit; the next model call is then blocked. Hidden work such as compaction counts too.
+  The timeline reports usage around 50%, 75%, and 90% usage ("Session limits: 15/30 AI credits used.").
+  When 10% or less of the AI credit limit remains, the timeline says: "If this session continues, the
+  next model call is final; tools will be disabled." When the limit is reached in interactive mode, "Session limit reached" offers Add AI credits, Set new AI credit limit, Remove
+  session limit or Cancel.
+
+Rate limits:
+
+  Copilot also limits how much you can use over time. /usage shows them as Session and Weekly bars with
+  their reset times, and Copilot warns at 50%, 75%, 90% and 95% ("You've used over 75% of your weekly
+  usage limit. Your limit resets ..."). When you hit one, the message says which, and when it resets:
+
+  "You've hit the rate limit for this model."   Switch models with /model, or wait.
+  "You've hit your session rate limit."         Wait, or switch to Auto.
+  "You've reached your weekly rate limit."      Wait, or switch to Auto.
+  "You've hit your rate limit."                 Wait, or switch to Auto.
+
+  Messages you queued wait automatically ("Rate limited. Pausing 2 pending messages for 5 minutes
+  before continuing."), for 2 minutes if the service gave no reset time.
+
+Switching to Auto:
+
+  Unless you already use Auto or your own model provider, a rate limit (other than the session rate
+  limit) asks "Switch to Copilot Fusion mode?" ("Switch to auto mode?" in remote sessions) with
+  Yes, "Yes, and always switch when rate limited (saves a setting)" and No. The second choice turns
+  on `continueOnAutoMode`, after which Copilot switches without asking; you can also set it in
+  settings.json. In autopilot nothing asks, so only that setting switches models.
+
+Examples:
+
+  $ copilot --max-ai-credits 30
+  /limits set max-ai-credits 100
+
+  Rate limits: https://docs.github.com/copilot/concepts/rate-limits

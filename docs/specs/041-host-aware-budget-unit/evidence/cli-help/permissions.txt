@@ -1,0 +1,123 @@
+Permissions:
+
+  Copilot asks before it runs shell commands, edits files, uses paths or URLs outside what is
+  allowed, or calls MCP tools, unless a rule or mode already allows the request. Commands it
+  recognizes as read-only run without asking.
+
+Approval prompt:
+
+  Yes                                      Allow this request once.
+  Yes, and don't ask again for <command> in this repo (or in this directory)
+                                           Saved for that repository or directory in
+                                           ~/.copilot/permissions-config.json.
+  Yes, and approve <command> for the rest of the running session
+                                           Offered instead when there is no location to save.
+  No, and tell Copilot what to do differently
+                                           Deny, optionally with instructions.
+
+  URL prompts can approve a domain for the session or permanently; permanent approvals are added
+  to `allowedUrls` in settings.json. /reset-allowed-tools clears session approvals, turns off
+  allow-all, and clears saved approvals for the current location.
+
+Tool rules:
+
+  To let Copilot run a command without asking, start it with --allow-tool, such as
+  --allow-tool='shell(npm:*)' for every npm command; --deny-tool='shell(git push)' blocks one.
+  These rules last for that run. To stop being asked in a repository, answer the approval prompt
+  with "Yes, and don't ask again".
+
+  --allow-tool and --deny-tool take a permission pattern of form kind(argument); the argument is
+  optional. Deny rules win over every allow, including --allow-all-tools. --available-tools and
+  --excluded-tools instead decide which tools the model can see at all.
+
+    shell(command:*?)
+        Matches a shell command; with no argument, every shell command. git, gh, npm, pnpm, yarn,
+        cargo, go, pip, mvn, gradle, dotnet and similar tools are matched with their subcommand, as
+        in "shell(git push)" or "shell(gh pr)". Only the first subcommand is part of the name, so
+        "shell(gh pr)" covers "gh pr create --fill" and "shell(gh pr create)" does not.
+        Warning: allowing "shell(gh pr)" also allows "gh pr merge" and "gh pr close" without a
+        command approval prompt; shell rules cannot allow only "gh pr create".
+        The :* suffix matches that command and anything after it: "shell(git:*)" matches
+        "git push" but not "gitea". PowerShell commands match by the name as typed, e.g.
+        "shell(Get-ChildItem)", which does not cover its aliases.
+
+    write(path?)
+        Matches tools that create and modify files. If the path is omitted, matches all such writes. A relative path
+        matches by trailing path components, so "write(.env)" matches a file named ".env" in any directory, not only
+        the one in the current working directory; use an absolute path such as "write(/path/to/.env)" or a path
+        under your home directory such as "write(~/notes/todo.md)" to scope the rule to a single location.
+
+        Paths also accept glob patterns: "*" and "?" match within one path segment and "**" matches across
+        directories, so "write(reports/*/output.txt)" matches reports/a/output.txt and "write(reports/**)" matches
+        every file under a reports directory. A pattern cannot exclude paths (there is no "!" negation); to exclude
+        a path, add a --deny-tool rule for it. A backslash is read as a path separator, not an escape; to match a
+        literal "*", "?" or "[", wrap it in brackets, as in "[*]".
+
+        A rule with a path does not apply to shell commands. An unscoped "write" rule (for example
+        --allow-tool='write') approves a shell command's redirection of output into a file, but not the command
+        itself: a command that is not read-only, such as "touch marker > output.log", still needs its own shell
+        rule, such as "shell(touch)", or --allow-all-tools.
+
+    read(path?)
+        Matches file-read requests from built-in tools. If the path is omitted, matches all such reads. Paths match
+        the same way as write(path?), so "read(.env)" matches a file named ".env" in any directory.
+
+    memory
+        Matches requests to store a memory.
+
+    <mcp-server-name>(tool-name?)
+        One tool of an MCP server, or all of its tools, e.g. "MyMCP(my_tool)".
+
+    url(domain-or-url?)
+        URL access by the shell and web-fetch tools, e.g. "url(https://*.github.com)".
+
+Paths and URLs:
+
+  File access is limited to the working directory and the system temp directory. --add-dir (or
+  /add-dir) adds a directory, --allow-all-paths removes the check, and --disallow-temp-dir drops the
+  temp directory. --allow-url, --deny-url and `allowedUrls` are protocol-aware and default to
+  https://, so https://example.com does not allow http://example.com. --allow-all-urls allows all.
+
+Allow-all and autopilot:
+
+  --allow-all and --yolo equal --allow-all-tools --allow-all-paths --allow-all-urls. In a session,
+  /allow-all (or /permissions allow-all) turns it on and /permissions manual turns it off.
+  Even in allow-all (yolo) mode, Copilot still prompts or denies in these cases:
+
+    - --deny-tool rules still deny.
+    - A command that asks to run outside the sandbox always prompts.
+    - Organization rules (`permissions.deny`, `permissions.ask`, `permissions.allow`) still apply,
+      and "ask" rules always prompt. They come only from organization policy, not your settings.json.
+    - `permissions.disableBypassPermissionsMode` set to "disable" turns allow-all off.
+
+  In autopilot and -p runs, a tool permission request that would prompt is denied.
+  Use --allow-all or --allow-tool rules for unattended work.
+
+  When the agent would ask you a question in autopilot, Copilot answers for you that you are not
+  available and will review the work later. The agent then makes its best guess and keeps going,
+  or, if the request is genuinely ambiguous, ends the task with a summary of what is unclear. The
+  timeline shows the question with "Making best guess".
+
+  MCP input and consent requests that reach the interactive UI, including URL prompts, wait for
+  your explicit answer without leaving Autopilot. Pre-approved MCP requests keep their existing
+  approval policy. Background Autopilot sessions and -p runs still decline requests that need
+  manual MCP input.
+
+Passwords for sudo, ssh and git:
+
+  Commands the agent runs have no terminal, so sudo, ssh or git over HTTPS fails when it asks for
+  a password. Run such a command yourself in the interactive shell that a lone $ opens.
+
+  With experimental mode on (/settings experimental on or --experimental), the interactive CLI
+  shows the prompt instead: type the answer, masked as you type, and press Enter, or Esc to
+  cancel. Only the program that asked gets it; the agent never sees it. Not in autopilot or for
+  sandboxed commands; on Windows only git and ssh ask.
+
+Folder trust:
+
+  When you start in a folder that is not trusted, Copilot asks:
+    Yes                                                  Trust it for this session.
+    Yes, and remember this folder for future sessions    Add it to `trustedFolders` in config.json.
+    No                                                   Exit.
+  Subfolders of a trusted folder are trusted. A -p run in an untrusted folder skips its workspace
+  MCP servers and repository hooks; --trust-folder trusts the folder for that run only.
