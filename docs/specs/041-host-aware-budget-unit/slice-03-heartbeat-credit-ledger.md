@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: DONE
 kind: feature
 dependencies: [041-02]
 last_verified: 2026-11-11
