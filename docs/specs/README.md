@@ -164,6 +164,11 @@
 | [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 041-02 — credit brake and supported loop launch | **DONE** | Copilot AI-credit brake: `--host copilot --credit-ceiling N (≥30) --max-iterations M`. Credits never USD-converted; hard between invocations; **fail-closed** on non-`complete` `aiCreditsStatus`, missing/empty OTel export, or per-call Σ ≠ the session-delta (041-01 A2). Reactive per-model overrun bound (gpt-6.1-sol ~201.5 cr) ⇒ `credit_ceiling_insufficient`; unknown model ⇒ `credit_bound_unavailable`. No `--fleet`; USD flags + `--models` refused; USD fields null. Independent budget-safety review: **no fail-open/under-count**. Deferred (fail-closed): plan-sourced ceiling, known-priced-oracle refusal, cross-process resume. |
 | [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 041-03 — heartbeat credit ledger | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-01 — plan and ledger | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-02 — servo-driven serial dispatch | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-03 — host-driven advisory | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-04 — host-driven verified-wrapped | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-05 — bounded parallel dispatch | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-06 — wave integration-review brief | DRAFT |  |
 
 ## Deferred slices
 

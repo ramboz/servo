@@ -6,9 +6,12 @@ use_cases: []
 
 # Spec 042: Campaign orchestration
 
-> **Status: DRAFT, scope capture.** Gated on the owner explicitly accepting
-> [ADR-0049](../../decisions/adr-0049-campaign-orchestration.md), which stays
-> Proposed until then. No slice is implemented before that.
+> **Status: DRAFT, slices authored.**
+> [ADR-0049](../../decisions/adr-0049-campaign-orchestration.md) was accepted
+> 2026-11-11, so the slices below are firm. Prerequisites 038 and 041 are DONE;
+> the one remaining prerequisite is the typed outcome line (040-01), which
+> 042-01 depends on. Build order: **040-01 → 042-01 → 042-02 → 042-03 →
+> 042-04**, then the deferred 042-05 / 042-06.
 
 ## Overview
 
@@ -54,9 +57,10 @@ Two modes:
     shape (`_outcome_from_summary`).
 
   Dispatch is serial (`heartbeat.py:53`).
-- **Spec 038** adds per-iteration accounting, role placement and the ladder.
-  Spec 040 drafts the typed outcome line. Spec 041 drafts the Copilot credit
-  budget (ADR-0048, Proposed).
+- **Spec 038** adds per-iteration accounting, role placement and the ladder
+  (DONE). Spec 040 drafts the typed outcome line (040-01, DRAFT — a prerequisite
+  of the ledger). Spec 041 shipped the Copilot credit budget (ADR-0048, DONE),
+  so a Copilot worker can now run under `loop.py` for the verified-wrapped tier.
 - **Boundary lines and their treatment:** listed in ADR-0049 with sources.
   They are: "serial in v1" (superseded for campaigns only), "no crew"
   (reinterpreted) and "not a queue or long-lived process" (kept).
@@ -81,28 +85,49 @@ ADR-0049 A1–A5:
 
 ## Decomposition (SPIDR)
 
-- **Interface:** servo-driven serial mode on Claude Code comes first. It is
-  enforced end to end, with no wrapper session and no concurrency. Advisory
-  host-driven Copilot mode follows, then verified-wrapped Copilot after
-  spec 041.
-- **Data:** the plan and ledger come first, since every mode depends on them.
-- **Rules:** parallelism and the integration review come last.
+- **Data:** the plan and ledger (042-01) come first, since every mode depends
+  on them.
+- **Interface:** the three host modes are separate slices (ADR-0049) —
+  servo-driven serial (042-02, the enforced Claude Code baseline), host-driven
+  advisory (042-03), then host-driven verified-wrapped (042-04, which needs
+  spec 041). They land together as one version (host parity, below).
+- **Rules:** bounded parallelism (042-05) and the integration review (042-06)
+  come last and are deferred out of the parity release.
 
-## Slices (sketch; ACs to sharpen after ADR-0049 is accepted)
+## Slices
 
-- [042-01 — plan and ledger](slice-01-plan-and-ledger.md)
-- 042-02 — servo-driven serial dispatch plus `campaign next`. The episodic
-  coordinator runs each item under `loop.py`, records the loop's line, and
-  batches escalations by scope.
-- 042-03 — host-driven mode: kickoff briefs plus `campaign record`. The
-  advisory tier gets oracle re-checks of passes and `self_reported` fields.
-  The verified-wrapped tier checks the run id and content fingerprint, which
-  needs `loop.py` to record that fingerprint at halt, and re-renders the
-  outcome from the loop's state.
-- 042-04 — servo-driven bounded parallel dispatch (`max_parallel`, aggregate
-  ceiling with reservations).
-- 042-05 — wave integration-review brief (one fresh-context review over the
-  wave's diffs before PRs are published).
+**Parity release bundle — these land together as one version.** ADR-0049
+commits to host parity (ADR-0022, ADR-0038): servo ships no release where
+campaign capability differs by host. The three host modes are separate slices
+that land as one version, so verified-wrapped Copilot ships with the rest
+rather than leaving the recorded runaway unbraked.
 
-Dependencies: 038 (DONE when this lands), 040 (outcome line), 041 (Copilot
-budget unit; needed for verified-wrapped Copilot workers).
+- **(prerequisite) [040-01 — outcome line](../040-servo-wrapped-worker-outcome/slice-01-outcome-line.md)**
+  — `loop.py --outcome-line` emits the typed `servo_outcome` record the ledger
+  stores and host workers forward. Built first.
+- [042-01 — plan and ledger](slice-01-plan-and-ledger.md) — `campaign
+  init/record/status` over `plan.json` + `ledger.jsonl`. The A4 checkpoint.
+- [042-02 — servo-driven serial dispatch](slice-02-servo-driven-serial-dispatch.md)
+  — the episodic `campaign next` coordinator runs each item under `loop.py`,
+  serial (`max_parallel` 1), records the loop's line, reconciles reservations
+  and batches escalations by scope. The enforced Claude Code baseline.
+- [042-03 — host-driven advisory](slice-03-host-driven-advisory.md) — kickoff
+  briefs plus `campaign record`, with an oracle re-check of every claimed pass
+  and `self_reported` on every other field.
+- [042-04 — host-driven verified-wrapped](slice-04-host-driven-verified-wrapped.md)
+  — `loop.py` records a content fingerprint at halt; `campaign record` verifies
+  run id + fingerprint + base sha (record-before-commit) and re-renders the
+  outcome from the loop's state. Needs spec 041 (DONE).
+
+**Deferred out of the parity release** (ship in a later version):
+
+- [042-05 — bounded parallel dispatch](slice-05-bounded-parallel-dispatch.md) —
+  `max_parallel` > 1 with an aggregate ceiling and per-worker reservations.
+  `max_parallel` defaults to 1 and A2 (resource contention) is unverified, so
+  this is release-neutral for parity.
+- [042-06 — wave integration-review brief](slice-06-wave-integration-review.md)
+  — one fresh-context review brief over the wave's diffs before PRs publish.
+  Host-agnostic.
+
+Dependencies: 038 (DONE), 040-01 (outcome line — prerequisite), 041 (Copilot
+budget unit, DONE; needed for verified-wrapped Copilot workers).
