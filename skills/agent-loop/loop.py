@@ -182,6 +182,13 @@ STATUS_ENV_ERROR = "env_error"
 REASON_ORACLE_PASSED = "oracle_passed"
 REASON_MAX_ITERATIONS_REACHED = "max_iterations_reached"
 REASON_COST_CEILING_REACHED = "cost_ceiling_reached"
+# Spec 041-02 (ADR-0048) — Copilot AI-credit brake. Credits are a unit of their
+# own, never converted to USD; these halts are the credit analogues of the USD
+# cost-ceiling reasons above.
+REASON_CREDIT_CEILING_REACHED = "credit_ceiling_reached"
+REASON_CREDIT_USAGE_UNAVAILABLE = "credit_usage_unavailable"
+REASON_CREDIT_CEILING_INSUFFICIENT = "credit_ceiling_insufficient"
+REASON_CREDIT_BOUND_UNAVAILABLE = "credit_bound_unavailable"
 REASON_CONTEXT_FULL = "context_full"
 REASON_INTERRUPTED = "interrupted"
 REASON_ORACLE_PLATEAU = "oracle_plateau"
@@ -2380,9 +2387,11 @@ def _parse_copilot_usage(usage_path: Path) -> dict:
     """
     default = {
         "premium_request_cost": 0,
-        "nano_aiu": 0,
+        "nano_aiu": None,
         "files_modified": 0,
         "token_details": {},
+        "ai_credits_status": None,
+        "current_model": None,
     }
     try:
         data = json.loads(usage_path.read_text())
@@ -2397,6 +2406,16 @@ def _parse_copilot_usage(usage_path: Path) -> dict:
         except (TypeError, ValueError):
             return 0
 
+    def _exact_nano(value):
+        # Spec 041-02 AC3: the EXACT integer nano-AIU, or None when absent /
+        # non-integral. Never 0 — a missing credit figure is unavailable, not
+        # free spend (041-01 A3). `bool` is excluded (it is an int subclass).
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        if isinstance(value, float) and not value.is_integer():
+            return None
+        return int(value)
+
     files_modified = 0
     code_changes = data.get("codeChanges")
     if isinstance(code_changes, dict):
@@ -2406,12 +2425,94 @@ def _parse_copilot_usage(usage_path: Path) -> dict:
     if not isinstance(token_details, dict):
         token_details = {}
 
+    status = data.get("aiCreditsStatus")
+    model = data.get("currentModel")
     return {
         "premium_request_cost": _as_int(data.get("totalPremiumRequestCost")),
-        "nano_aiu": _as_int(data.get("totalNanoAiu")),
+        "nano_aiu": _exact_nano(data.get("totalNanoAiu")),
         "files_modified": files_modified,
         "token_details": token_details,
+        # 041-02: the CLI's own completeness marker (primary partial gate, 041-01
+        # A5) and the admin-pinnable worker model (bound-guard key, 041-01 A6).
+        "ai_credits_status": status if isinstance(status, str) else None,
+        "current_model": model if isinstance(model, str) else None,
     }
+
+
+def _sum_otel_call_nano(otel_path: Path) -> Optional[int]:
+    """Σ `github.copilot.nano_aiu` over the per-call `chat <model>` spans of a
+    Copilot OpenTelemetry file export (JSON-lines), in exact nano-AIU (041-01 A5).
+
+    Returns None — the fail-closed signal — when the file is missing, empty,
+    unparseable, or carries no `chat` span: an empty or redirected exporter must
+    never read as "0 spend". Metric / non-`chat` lines are skipped, and a single
+    unparseable line does not void the file, but a file with no parseable `chat`
+    span does.
+    """
+    try:
+        text = otel_path.read_text()
+    except OSError:
+        return None
+    total = 0
+    seen = False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict) or obj.get("type") != "span":
+            continue
+        name = obj.get("name")
+        if not (isinstance(name, str) and name.startswith("chat ")):
+            continue
+        attrs = obj.get("attributes")
+        if not isinstance(attrs, dict):
+            continue
+        val = attrs.get("github.copilot.nano_aiu")
+        if isinstance(val, bool) or not isinstance(val, (int, float)):
+            continue
+        total += int(round(val))
+        seen = True
+    return total if seen else None
+
+
+def _copilot_iteration_nano(
+    usage_path: Path, otel_path: Path, *, resumed: bool,
+    prior_cumulative_nano: Optional[int],
+) -> "tuple[Optional[int], Optional[str]]":
+    """The invocation's OWN credit spend in exact nano-AIU, fail-closed
+    (041-02 AC3 / ADR-0048 part 3).
+
+    Returns `(invocation_nano, None)` on a clean report, else
+    `(None, REASON_CREDIT_USAGE_UNAVAILABLE)` when any hold:
+    - the usage report is missing / unreadable (`nano_aiu` is None);
+    - `aiCreditsStatus` is not exactly `"complete"` (the primary partial gate);
+    - the OpenTelemetry span file is missing / empty / unparseable or has no
+      `chat` span (`_sum_otel_call_nano` is None);
+    - the per-call OTel Σ ≠ the invocation's reported spend — the session-delta
+      `totalNanoAiu - prior` on a resumed invocation, else `totalNanoAiu`
+      (041-01 A2: the usage total is session-cumulative on `--resume`, while the
+      OTel export is per-invocation, so the two reconcile only against the delta).
+
+    `prior_cumulative_nano` is the session's spend before this invocation, used
+    only when `resumed`. Spend is never read as 0; a bad report halts the run.
+    """
+    usage = _parse_copilot_usage(usage_path)
+    nano = usage["nano_aiu"]
+    if nano is None:
+        return None, REASON_CREDIT_USAGE_UNAVAILABLE
+    if usage["ai_credits_status"] != "complete":
+        return None, REASON_CREDIT_USAGE_UNAVAILABLE
+    otel_nano = _sum_otel_call_nano(otel_path)
+    if otel_nano is None:
+        return None, REASON_CREDIT_USAGE_UNAVAILABLE
+    expected = nano - (prior_cumulative_nano or 0) if resumed else nano
+    if expected < 0 or otel_nano != expected:
+        return None, REASON_CREDIT_USAGE_UNAVAILABLE
+    return expected, None
 
 
 def _extract_copilot_text(event: dict) -> str:

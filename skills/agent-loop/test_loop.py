@@ -7825,11 +7825,123 @@ class CopilotUsageParseTests(unittest.TestCase):
         out = self._parse(payload)
         self.assertEqual(out["files_modified"], 0)
 
-    def test_missing_file_yields_zeros_not_crash(self):
+    def test_missing_file_fails_closed_nano_none(self):
+        # Spec 041-02 AC3: a missing usage file yields nano_aiu=None (the
+        # fail-closed credit signal), never 0. Observability-only fields
+        # (premium_request_cost / files_modified) stay 0.
         out = loop_mod._parse_copilot_usage(Path("/nonexistent/servo/usage.json"))
         self.assertEqual(out["premium_request_cost"], 0)
-        self.assertEqual(out["nano_aiu"], 0)
+        self.assertIsNone(out["nano_aiu"])
+        self.assertIsNone(out["ai_credits_status"])
         self.assertEqual(out["files_modified"], 0)
+
+
+_EV_041 = REPO_ROOT / "docs" / "specs" / "041-host-aware-budget-unit" / "evidence"
+
+
+class Copilot041UsageParseTests(unittest.TestCase):
+    """Spec 041-02 AC3 — sharpened usage parse: exact nano, aiCreditsStatus,
+    currentModel, and None (not 0) for a missing credit field."""
+
+    def _parse(self, payload):
+        d = tempfile.mkdtemp(prefix="servo-copilot-usage-")
+        try:
+            p = Path(d) / "usage.json"
+            p.write_text(json.dumps(payload))
+            return loop_mod._parse_copilot_usage(p)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_status_and_model_surfaced(self):
+        out = self._parse({
+            "totalNanoAiu": 5350600000, "aiCreditsStatus": "complete",
+            "currentModel": "gpt-6.1-sol",
+        })
+        self.assertEqual(out["nano_aiu"], 5350600000)
+        self.assertEqual(out["ai_credits_status"], "complete")
+        self.assertEqual(out["current_model"], "gpt-6.1-sol")
+
+    def test_missing_nano_is_none_not_zero(self):
+        out = self._parse({"aiCreditsStatus": "unavailable"})
+        self.assertIsNone(out["nano_aiu"])
+        self.assertEqual(out["ai_credits_status"], "unavailable")
+
+    def test_exact_nano_not_truncated(self):
+        out = self._parse({"totalNanoAiu": 12893040000, "totalPremiumRequestCost": 1.5})
+        self.assertEqual(out["nano_aiu"], 12893040000)
+
+    def test_real_evidence_run_a(self):
+        p = _EV_041 / "run-a-usage.json"
+        self.assertTrue(p.exists(), p)
+        out = loop_mod._parse_copilot_usage(p)
+        self.assertEqual(out["nano_aiu"], 12893040000)
+        self.assertEqual(out["ai_credits_status"], "complete")
+        self.assertEqual(out["current_model"], "gpt-6.1-sol")
+
+
+class CopilotCreditGateTests(unittest.TestCase):
+    """Spec 041-02 AC3 — fail-closed per-iteration credit computation from the
+    usage report + the OpenTelemetry span file, using 041-01's real evidence.
+    All arithmetic is in exact nano-AIU integers."""
+
+    def test_otel_sum_matches_usage_fresh(self):
+        self.assertEqual(
+            loop_mod._sum_otel_call_nano(_EV_041 / "run-a-otel.jsonl"), 12893040000)
+
+    def test_missing_otel_returns_none(self):
+        self.assertIsNone(loop_mod._sum_otel_call_nano(Path("/nonexistent/otel.jsonl")))
+
+    def test_fresh_iteration_nano_ok(self):
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-a-usage.json", _EV_041 / "run-a-otel.jsonl",
+            resumed=False, prior_cumulative_nano=None)
+        self.assertIsNone(err)
+        self.assertEqual(nano, 12893040000)
+
+    def test_resumed_delta_reconciles_against_otel(self):
+        # Run B resumed Run A: usage totalNanoAiu is session-cumulative
+        # (37,175,690,000); the invocation's own spend is the delta
+        # (= 24,282,650,000), which equals Run B's per-invocation OTel sum.
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-b-usage.json", _EV_041 / "run-b-otel.jsonl",
+            resumed=True, prior_cumulative_nano=12893040000)
+        self.assertIsNone(err)
+        self.assertEqual(nano, 24282650000)
+
+    def test_partial_status_fails_closed(self):
+        d = tempfile.mkdtemp()
+        try:
+            u = Path(d) / "u.json"
+            u.write_text(json.dumps(
+                {"totalNanoAiu": 5000000000, "aiCreditsStatus": "partial"}))
+            nano, err = loop_mod._copilot_iteration_nano(
+                u, _EV_041 / "run-a-otel.jsonl", resumed=False,
+                prior_cumulative_nano=None)
+            self.assertIsNone(nano)
+            self.assertEqual(err, loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_missing_otel_fails_closed(self):
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-a-usage.json", Path("/nonexistent/otel.jsonl"),
+            resumed=False, prior_cumulative_nano=None)
+        self.assertIsNone(nano)
+        self.assertEqual(err, loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+
+    def test_otel_sum_mismatch_fails_closed(self):
+        d = tempfile.mkdtemp()
+        try:
+            u = Path(d) / "u.json"
+            u.write_text(json.dumps(
+                {"totalNanoAiu": 999000000000, "aiCreditsStatus": "complete"}))
+            nano, err = loop_mod._copilot_iteration_nano(
+                u, _EV_041 / "run-a-otel.jsonl", resumed=False,
+                prior_cumulative_nano=None)
+            self.assertIsNone(nano)
+            self.assertEqual(err, loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 class CopilotJsonlParseTests(unittest.TestCase):
