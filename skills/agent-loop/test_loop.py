@@ -7756,7 +7756,8 @@ def _copilot_jsonl_fixture(result_text="ok", *, session_id=None):
     return "\n".join(json.dumps(e) for e in [*events, terminal]) + "\n"
 
 
-def _mock_copilot(bindir, jsonl_payload, usage_payload, counter_file, args_log=None):
+def _mock_copilot(bindir, jsonl_payload, usage_payload, counter_file, args_log=None,
+                  otel_payload=None):
     """Write an executable mock `copilot` into `bindir` (PATH-injected).
 
     Emits `jsonl_payload` on stdout, copies `usage_payload` to whatever path
@@ -7764,12 +7765,24 @@ def _mock_copilot(bindir, jsonl_payload, usage_payload, counter_file, args_log=N
     (optionally) appends each invocation's argv to `args_log` using the same
     U+001F/U+001E delimiters as `_mock_claude_with_args_log` so `_read_args_log`
     parses it. A `--version` short-circuit keeps any version probe hermetic.
+
+    Spec 041-02: when `otel_payload` is given, it is also written to the path in
+    `$COPILOT_OTEL_FILE_EXPORTER_PATH` (the exporter file servo pins per
+    invocation), so the fail-closed credit gate can read the per-call span Σ.
     """
     bindir.mkdir(parents=True, exist_ok=True)
     jsonl_file = bindir / "copilot_jsonl.txt"
     jsonl_file.write_text(jsonl_payload)
     usage_src = bindir / "copilot_usage_src.json"
     usage_src.write_text(usage_payload)
+    otel_cmd = ""
+    if otel_payload is not None:
+        otel_src = bindir / "copilot_otel_src.jsonl"
+        otel_src.write_text(otel_payload)
+        otel_cmd = (
+            'if [ -n "$COPILOT_OTEL_FILE_EXPORTER_PATH" ]; then '
+            f"cp '{otel_src}' \"$COPILOT_OTEL_FILE_EXPORTER_PATH\"; fi\n"
+        )
     log_cmd = ""
     if args_log is not None:
         log_cmd = (
@@ -7791,6 +7804,7 @@ def _mock_copilot(bindir, jsonl_payload, usage_payload, counter_file, args_log=N
         '  prev="$a"\n'
         "done\n"
         f'if [ -n "$usage_out" ]; then cp \'{usage_src}\' "$usage_out"; fi\n'
+        f"{otel_cmd}"
         f"cat '{jsonl_file}'\n"
     )
     copilot = bindir / "copilot"
@@ -7825,11 +7839,203 @@ class CopilotUsageParseTests(unittest.TestCase):
         out = self._parse(payload)
         self.assertEqual(out["files_modified"], 0)
 
-    def test_missing_file_yields_zeros_not_crash(self):
+    def test_missing_file_fails_closed_nano_none(self):
+        # Spec 041-02 AC3: a missing usage file yields nano_aiu=None (the
+        # fail-closed credit signal), never 0. Observability-only fields
+        # (premium_request_cost / files_modified) stay 0.
         out = loop_mod._parse_copilot_usage(Path("/nonexistent/servo/usage.json"))
         self.assertEqual(out["premium_request_cost"], 0)
-        self.assertEqual(out["nano_aiu"], 0)
+        self.assertIsNone(out["nano_aiu"])
+        self.assertIsNone(out["ai_credits_status"])
         self.assertEqual(out["files_modified"], 0)
+
+
+_EV_041 = REPO_ROOT / "docs" / "specs" / "041-host-aware-budget-unit" / "evidence"
+
+
+class Copilot041UsageParseTests(unittest.TestCase):
+    """Spec 041-02 AC3 — sharpened usage parse: exact nano, aiCreditsStatus,
+    currentModel, and None (not 0) for a missing credit field."""
+
+    def _parse(self, payload):
+        d = tempfile.mkdtemp(prefix="servo-copilot-usage-")
+        try:
+            p = Path(d) / "usage.json"
+            p.write_text(json.dumps(payload))
+            return loop_mod._parse_copilot_usage(p)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_status_and_model_surfaced(self):
+        out = self._parse({
+            "totalNanoAiu": 5350600000, "aiCreditsStatus": "complete",
+            "currentModel": "gpt-6.1-sol",
+        })
+        self.assertEqual(out["nano_aiu"], 5350600000)
+        self.assertEqual(out["ai_credits_status"], "complete")
+        self.assertEqual(out["current_model"], "gpt-6.1-sol")
+
+    def test_missing_nano_is_none_not_zero(self):
+        out = self._parse({"aiCreditsStatus": "unavailable"})
+        self.assertIsNone(out["nano_aiu"])
+        self.assertEqual(out["ai_credits_status"], "unavailable")
+
+    def test_exact_nano_not_truncated(self):
+        out = self._parse({"totalNanoAiu": 12893040000, "totalPremiumRequestCost": 1.5})
+        self.assertEqual(out["nano_aiu"], 12893040000)
+
+    def test_real_evidence_run_a(self):
+        p = _EV_041 / "run-a-usage.json"
+        self.assertTrue(p.exists(), p)
+        out = loop_mod._parse_copilot_usage(p)
+        self.assertEqual(out["nano_aiu"], 12893040000)
+        self.assertEqual(out["ai_credits_status"], "complete")
+        self.assertEqual(out["current_model"], "gpt-6.1-sol")
+
+
+class CopilotCreditGateTests(unittest.TestCase):
+    """Spec 041-02 AC3 — fail-closed per-iteration credit computation from the
+    usage report + the OpenTelemetry span file, using 041-01's real evidence.
+    All arithmetic is in exact nano-AIU integers."""
+
+    def test_otel_sum_matches_usage_fresh(self):
+        self.assertEqual(
+            loop_mod._sum_otel_call_nano(_EV_041 / "run-a-otel.jsonl"), 12893040000)
+
+    def test_missing_otel_returns_none(self):
+        self.assertIsNone(loop_mod._sum_otel_call_nano(Path("/nonexistent/otel.jsonl")))
+
+    def test_fresh_iteration_nano_ok(self):
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-a-usage.json", _EV_041 / "run-a-otel.jsonl",
+            resumed=False, prior_cumulative_nano=None)
+        self.assertIsNone(err)
+        self.assertEqual(nano, 12893040000)
+
+    def test_resumed_delta_reconciles_against_otel(self):
+        # Run B resumed Run A: usage totalNanoAiu is session-cumulative
+        # (37,175,690,000); the invocation's own spend is the delta
+        # (= 24,282,650,000), which equals Run B's per-invocation OTel sum.
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-b-usage.json", _EV_041 / "run-b-otel.jsonl",
+            resumed=True, prior_cumulative_nano=12893040000)
+        self.assertIsNone(err)
+        self.assertEqual(nano, 24282650000)
+
+    def test_partial_status_fails_closed(self):
+        d = tempfile.mkdtemp()
+        try:
+            u = Path(d) / "u.json"
+            u.write_text(json.dumps(
+                {"totalNanoAiu": 5000000000, "aiCreditsStatus": "partial"}))
+            nano, err = loop_mod._copilot_iteration_nano(
+                u, _EV_041 / "run-a-otel.jsonl", resumed=False,
+                prior_cumulative_nano=None)
+            self.assertIsNone(nano)
+            self.assertEqual(err, loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_missing_otel_fails_closed(self):
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-a-usage.json", Path("/nonexistent/otel.jsonl"),
+            resumed=False, prior_cumulative_nano=None)
+        self.assertIsNone(nano)
+        self.assertEqual(err, loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+
+    def test_otel_sum_mismatch_fails_closed(self):
+        d = tempfile.mkdtemp()
+        try:
+            u = Path(d) / "u.json"
+            u.write_text(json.dumps(
+                {"totalNanoAiu": 999000000000, "aiCreditsStatus": "complete"}))
+            nano, err = loop_mod._copilot_iteration_nano(
+                u, _EV_041 / "run-a-otel.jsonl", resumed=False,
+                prior_cumulative_nano=None)
+            self.assertIsNone(nano)
+            self.assertEqual(err, loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def _copilot_result(iter_nano, *, model="gpt-6.1-sol", credit_error=None, text="ok"):
+    """A `_normalize_copilot_result`-shaped dict for brake-helper unit tests."""
+    return {
+        "type": "result", "subtype": "success", "is_error": False,
+        "session_id": "", "total_cost_usd": 0.0, "terminal_reason": "",
+        "result": text,
+        "usage": {"input_tokens": 100, "cache_read_input_tokens": 0,
+                  "cache_creation_input_tokens": 0, "output_tokens": 50},
+        "copilot_iteration_nano": iter_nano,
+        "copilot_credit_error": credit_error,
+        "copilot_current_model": model,
+    }
+
+
+class CopilotBrakeHelperTests(unittest.TestCase):
+    """Spec 041-02 AC2/AC4 — the per-iteration credit brake helper
+    (`_apply_copilot_credit_iteration`), exercised directly."""
+
+    def _state(self, *, ceiling=500.0, cumulative_nano=0):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        st = loop_mod._build_initial_state(
+            run_id="r", target=Path(d), prompt="p", max_iterations=3,
+            cost_ceiling=0.0, context_fill_threshold=0.0, plateau_window=0,
+            plateau_noise_floor=0.0, claude_version=None,
+            host=loop_mod.HOST_COPILOT, credit_ceiling=ceiling)
+        st["cumulative_credits_nano"] = cumulative_nano
+        return st, Path(d) / "state.json"
+
+    def _apply(self, st, sp, result, *, cap=500.0, iteration=1):
+        return loop_mod._apply_copilot_credit_iteration(
+            st, sp, result, iteration=iteration, iter_credit_cap=cap,
+            agent_name="runner", role_cfg=None, final_oracle_status="unknown")
+
+    def test_accumulate_and_cost_native(self):
+        st, sp = self._state(ceiling=500.0)
+        rc, acc = self._apply(st, sp, _copilot_result(12893040000))
+        self.assertIsNone(rc)
+        self.assertEqual(st["cumulative_credits_nano"], 12893040000)
+        self.assertIsNone(acc["cost_usd"])
+        self.assertEqual(acc["cost_native"],
+                         {"unit": "ai_credits", "value": 12.89304})
+        self.assertAlmostEqual(st["credit_bound"], 201.5, places=0)
+
+    def test_fail_closed_on_credit_error_leaves_cumulative_null(self):
+        st, sp = self._state()
+        rc, acc = self._apply(st, sp, _copilot_result(
+            None, credit_error=loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE))
+        self.assertEqual(rc, loop_mod.EXIT_ENV_ERROR)
+        self.assertIsNone(acc)
+        self.assertIsNone(st["cumulative_credits_nano"])  # null, never 0
+        self.assertEqual(st["last_terminal_reason"],
+                         loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+
+    def test_unknown_model_fails_closed(self):
+        st, sp = self._state()
+        rc, _ = self._apply(st, sp, _copilot_result(5_000_000_000,
+                                                    model="mystery-model"))
+        self.assertEqual(rc, loop_mod.EXIT_ENV_ERROR)
+        self.assertEqual(st["last_terminal_reason"],
+                         loop_mod.REASON_CREDIT_BOUND_UNAVAILABLE)
+
+    def test_bound_at_or_above_ceiling_refuses(self):
+        # gpt-6.1-sol bound ~201.5 >= a 100-credit ceiling.
+        st, sp = self._state(ceiling=100.0)
+        rc, _ = self._apply(st, sp, _copilot_result(5_000_000_000), cap=100.0)
+        self.assertEqual(rc, loop_mod.EXIT_ENV_ERROR)
+        self.assertEqual(st["last_terminal_reason"],
+                         loop_mod.REASON_CREDIT_CEILING_INSUFFICIENT)
+
+    def test_overrun_beyond_bound_sets_flag(self):
+        # cap 100, spend 400 -> overrun 300 cr > the ~201.5 bound; ceiling high
+        # enough (500) that the bound does not swamp it.
+        st, sp = self._state(ceiling=500.0)
+        rc, acc = self._apply(
+            st, sp, _copilot_result(400 * loop_mod.NANO_PER_CREDIT), cap=100.0)
+        self.assertIsNone(rc)
+        self.assertTrue(st["overrun_exceeds_bound"])
 
 
 class CopilotJsonlParseTests(unittest.TestCase):
@@ -8233,6 +8439,194 @@ class CopilotLoopDriverIntegrationTests(unittest.TestCase):
         self.assertNotIn("--allow-all-tools", argv)
         self.assertNotIn("-s", argv)
         self.assertNotIn("--usage-output-file", argv)
+
+
+def _matched_copilot_evidence(nano, *, status="complete", model="gpt-6.1-sol"):
+    """A usage report + a single-span OTel export that reconcile to `nano`
+    (so the fail-closed credit gate passes), for the brake e2e tests."""
+    usage = json.dumps({
+        "totalNanoAiu": nano, "aiCreditsStatus": status, "currentModel": model,
+        "totalPremiumRequestCost": 1,
+        "tokenDetails": {"input": 1000, "cache_read": 0, "cache_write": 0,
+                         "output": 50},
+        "codeChanges": {"filesModifiedCount": 1, "linesAdded": 5,
+                        "linesRemoved": 0},
+    })
+    otel = json.dumps({
+        "type": "span", "name": f"chat {model}",
+        "attributes": {"github.copilot.nano_aiu": nano,
+                       "gen_ai.usage.input_tokens": 1000,
+                       "gen_ai.usage.output_tokens": 50}})
+    return usage, otel
+
+
+class CopilotCreditBrakeLaunchTests(unittest.TestCase):
+    """Spec 041-02 — opt-in launch + the AI-credit brake end-to-end
+    (AC1/AC2/AC3/AC4/AC5/AC7), with a mock `copilot` fed matched usage + OTel."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-brake-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _mock(self, nano, *, status="complete", model="gpt-6.1-sol", with_otel=True):
+        usage, otel = _matched_copilot_evidence(nano, status=status, model=model)
+        _mock_copilot(
+            self.bindir, _copilot_jsonl_fixture(_COPILOT_VERDICT_TEXT),
+            usage, self.counter, args_log=self.args_log,
+            otel_payload=(otel if with_otel else None))
+
+    def _last_summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def _state_json(self):
+        import glob
+        files = glob.glob(str(self.target / ".servo" / "runs" / "*" / "state.json"))
+        return json.loads(Path(files[0]).read_text()) if files else None
+
+    # ---- opt-in launch gate (AC1 / AC5 / AC7) --------------------------------
+    def test_refuses_without_credit_ceiling(self):
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "2", mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertFalse(self.counter.exists())
+
+    def test_refuses_without_max_iterations(self):
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+
+    def test_credit_ceiling_below_minimum_errors(self):
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "10", "--max-iterations", "2",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("credit-ceiling", r.stderr)
+
+    def test_cost_ceiling_refused_under_copilot(self):
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "2",
+                      "--cost-ceiling", "1", mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("cost-ceiling", r.stderr)
+
+    def test_credit_ceiling_refused_under_claude(self):
+        r = _run_loop(self.target, "--host", "claude", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "2")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("credit-ceiling", r.stderr)
+
+    def test_models_refused_under_copilot(self):
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "2",
+                      "--models", '{"runner": {"model": "x"}}',
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2)
+
+    # ---- the brake (AC2 / AC3 / AC4) -----------------------------------------
+    def test_runs_and_records_credits_usd_null(self):
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "1",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        st = self._state_json()
+        self.assertEqual(st["backend"], "copilot")
+        self.assertEqual(st["credit_ceiling"], 500.0)
+        self.assertIsNone(st["cost_ceiling_usd"])        # AC4 — USD null
+        self.assertIsNone(st["cumulative_cost_usd"])
+        self.assertEqual(st["cumulative_credits_nano"],
+                         50 * loop_mod.NANO_PER_CREDIT)
+
+    def test_fail_closed_on_missing_otel(self):
+        self._mock(50 * loop_mod.NANO_PER_CREDIT, with_otel=False)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "2",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        last = self._last_summary(r)
+        self.assertEqual(last["terminal_reason"],
+                         loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+        self.assertIsNone(last["cumulative_credits"])    # AC3 — null, never 0
+
+    def test_bound_insufficient_for_small_ceiling(self):
+        # 30 passes the CLI minimum, but gpt-6.1-sol's ~201cr bound swamps it;
+        # iteration 1 reveals the model, and the run halts.
+        self._mock(5 * loop_mod.NANO_PER_CREDIT)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "30", "--max-iterations", "3",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_CEILING_INSUFFICIENT)
+
+    def test_credit_ceiling_reached(self):
+        # 250 cr/turn; ceiling 400 (above the ~201 bound) — turn 2 crosses it.
+        self._mock(250 * loop_mod.NANO_PER_CREDIT)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "400", "--max-iterations", "6",
+                      mock_bindir=self.bindir)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_CEILING_REACHED)
+
+    def test_argv_single_threaded_and_capped(self):
+        # AC6: the worker invocation never passes --fleet (no subagent tool to
+        # deny — 041-01; omission is the control). AC2: it carries a per-iteration
+        # --max-ai-credits cap (the remaining headroom).
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "1",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        argv = _read_args_log(self.args_log)[0]
+        self.assertNotIn("--fleet", argv)
+        self.assertIn("--usage-output-file", argv)
+        self.assertIn("--max-ai-credits", argv)
+
+    def test_invocation_failure_is_credit_usage_unavailable(self):
+        # AC3: a Copilot invocation that emits no parseable event (crash /
+        # timeout) leaves no usable credit report → credit_usage_unavailable,
+        # not the generic claude_invocation_failed.
+        usage, otel = _matched_copilot_evidence(50 * loop_mod.NANO_PER_CREDIT)
+        _mock_copilot(self.bindir, "garbage not json\n", usage, self.counter,
+                      otel_payload=otel)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "2",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        last = self._last_summary(r)
+        self.assertEqual(last["terminal_reason"],
+                         loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+        self.assertIsNone(last["cumulative_credits"])
+
+    def test_unpriced_oracle_refused_under_copilot(self):
+        # AC6 / ADR-0041: an oracle with unpriced (unknown-USD-cost) components is
+        # refused under Copilot by the shared `_unpriced_oracle_preflight`, before
+        # any model call (no credit is spent).
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        manifest = self.target / ".servo" / "install.json"
+        data = json.loads(manifest.read_text())
+        data["components"] = ["eval:llm-judge"]
+        data["unpriced_components"] = ["eval:llm-judge"]
+        manifest.write_text(json.dumps(data))
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "1",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_UNPRICED_ORACLE_COMPONENTS)
+        self.assertFalse(self.counter.exists())  # refused before any copilot call
 
 
 class EditPermissionRelabelLoopTests(unittest.TestCase):

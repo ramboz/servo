@@ -84,11 +84,21 @@ Goal/Routine vendors include `gate.py`, `required_runtime.py`, and
 
 Installing this skill does not select a native execution backend. The helper's
 default remains Claude; do not silently run Claude for a requested Copilot task.
-Explicit `--host copilot` launch/resume requests fail with exit 2 and
-`native_capability_unavailable` before dispatch or target mutation (ADR-0043).
-Copilot's soft AI-credit cap cannot uphold the hard USD/context contract.
-Zero-valued limits and `--resume-anyway` do not enable an unsupported native run.
-`--explain-routing --host copilot` reports the same support boundary read-only.
+
+**Loop driver on Copilot (spec 041-02 / ADR-0048).** `--host copilot` runs the
+loop under a brake denominated in **AI credits** (never converted to USD), but
+only with an explicit **`--credit-ceiling N`** (N ≥ 30, the CLI's `--max-ai-credits`
+minimum) **and** an explicit `--max-iterations`. Without both, the ADR-0043 refusal
+stands (exit 2, `native_capability_unavailable`, before dispatch or target
+mutation). The worker is single-threaded (no `--fleet` — 041-01 found no subagent
+tool to deny), the goal driver stays refused (`--driver goal` and `--background`
+refuse under Copilot), and a `--models` block is refused (Copilot renders are
+model-neutral, spec 032-03). Units never mix: `--cost-ceiling` (USD) is refused
+under `--host copilot`, and `--credit-ceiling` under `--host claude`. The brake
+**fails closed** — a missing / `partial` usage report, a missing or disagreeing
+OpenTelemetry span export, or a worker model with no shipped overrun bound halt
+(`credit_usage_unavailable` / `credit_bound_unavailable`) with spend reported as
+`null`, never `0`. `--explain-routing --host copilot` stays read-only.
 
 Use the project-owned `quality-gate` independently of a host driver. Native loop,
 checkpoint resume, planned/heartbeat execution and enforcing stop continuation
@@ -255,7 +265,8 @@ Final summary line carries `terminal_reason` (one of `oracle_passed`, `max_itera
 | `--driver {auto\|loop\|goal}` | Continuation driver. `auto` (default) probes the host and routes goal-or-loop; `loop` is the hand-rolled 003-01..05 driver (portable; every brake servo-side); `goal` delegates continuation to `/goal` with the caps on the outer call + a final `gate.py` verdict (ADR-0008). See [Host-scope routing](#host-scope-routing-slice-003-07). |
 | `--prompt "<text>"` | Seed prompt sent to claude each iteration. Required for fresh runs; optional on resume (persisted prompt is used when omitted). Not required with `--explain-routing`. |
 | `--max-iterations N` | Iteration cap. Default 5. Loop halts at N if no earlier brake fires. **Goal mode:** becomes `--max-turns N` on the outer `claude -p`. |
-| `--cost-ceiling N` | Cumulative cost ceiling in USD. Default $2.00. The iteration that first crosses is the last one to run. Pass `0` to disable. **Goal mode:** becomes `--max-budget-usd N` on the outer call (`0` omits it). |
+| `--cost-ceiling N` | Cumulative cost ceiling in USD. Default $2.00. The iteration that first crosses is the last one to run. Pass `0` to disable. **Goal mode:** becomes `--max-budget-usd N` on the outer call (`0` omits it). Refused under `--host copilot`. |
+| `--credit-ceiling N` | **Copilot only** (spec 041-02 / ADR-0048): cumulative budget in **AI credits** for `--host copilot`. Required (with an explicit `--max-iterations`) to run the loop on Copilot; min 30. Never converted to USD; mutually exclusive with `--cost-ceiling`. Each worker invocation gets `--max-ai-credits` = the remaining headroom (the cap is invocation-scoped). Refused under `--host claude`. |
 | `--context-fill-threshold N` | Refuse iter N+1 when the prior iteration's context-fill ratio ≥ this value (in [0.0, 1.0]). Default 0.75. Pass `0` to disable. |
 | `--plateau-window N` | Halt when the oracle composite has not improved over the last N iterations. Default 3. Pass `0` to disable. |
 | `--plateau-noise-floor N` | Frozen noise floor δ (ADR-0005 clause 4): composite gains smaller than N read as "flat" for plateau detection, so a wobbling non-deterministic eval component can neither fake progress nor fake a plateau. Default 0.0 (any strict gain counts as improvement). Set to a frozen eval's δ when an eval component contributes to the composite. Loop-mode brake — ignored under `--driver goal`. |
@@ -278,6 +289,7 @@ The loop uses a closed `{0, 2, 130}` exit contract. **Do NOT silently retry** �
 | `oracle_passed` | 0 | Composite ≥ threshold — done | None needed. |
 | `max_iterations_reached` | 0 | Hit the iteration cap without passing | Offer `--resume <run-id> --max-iterations N+M`. |
 | `cost_ceiling_reached` | 0 | Cumulative cost crossed the ceiling | Offer `--resume <run-id> --cost-ceiling <new>` if user wants to keep spending. |
+| `credit_ceiling_reached` | 0 | **Copilot:** cumulative AI credits crossed `--credit-ceiling` | Offer `--resume <run-id> --credit-ceiling <new>` to keep spending. |
 | `context_full` | 0 | Prior iteration's context was ≥ threshold full | The session is saturated; resume starts a fresh subprocess but reuses `session_id`. Suggest `--resume-anyway` only if user is sure the saturated session is recoverable. |
 | `oracle_plateau` | 0 | No composite improvement over the last M iterations (with a `models.escalation` ladder: on the last rung, or when the next rung could not get a full window) | Loop is likely stuck. Offer to change the seed prompt OR raise `--plateau-window` if a longer plateau is genuinely expected. With a ladder, `escalation_rung` in the summary shows how far it climbed; a ladder needs `--max-iterations` and `--cost-ceiling` sized for its rungs. |
 | `interrupted` | 130 | SIGINT/SIGTERM received | The state file is finalized; resume picks up after the interrupted iteration. |
@@ -288,6 +300,9 @@ The loop uses a closed `{0, 2, 130}` exit contract. **Do NOT silently retry** �
 | `claude_version_mismatch` | 2 | State file's `claude_version` differs from current `claude --version` | Same — `--resume-anyway` accepts the risk that session/JSON semantics may have changed. |
 | `run_id_collision` | 2 | Three consecutive run-id allocation collisions | Pathological; usually a stuck clock or a filesystem issue. Surface the colliding ids. |
 | `claude_invocation_failed` | 2 | `claude -p` failed (binary missing, JSON parse error, timeout) | Surface the stderr breadcrumb. Most common: `claude` not on PATH, or the configured `SERVO_CLAUDE_TIMEOUT` was too tight. |
+| `credit_usage_unavailable` | 2 | **Copilot:** a missing / `partial` usage report, or a missing / disagreeing OTel span export — spend is unknown (`null`, never 0) | Fail-closed by design (ADR-0048 part 3). Check the worker's telemetry; never treat the halt as free spend. |
+| `credit_ceiling_insufficient` | 2 | **Copilot:** the worker model's overrun bound is ≥ `--credit-ceiling` (a budget in name only) | Raise `--credit-ceiling` above the bound named in the stderr breadcrumb. |
+| `credit_bound_unavailable` | 2 | **Copilot:** the worker model has no shipped overrun bound | servo cannot verify the overrun guarantee for this model (fail-closed). File a follow-up to add its bound. |
 | `gate_invocation_failed` | 2 | `gate.py` emitted unparseable output | Defensive branch — should not fire in normal operation. Inspect gate.py output. |
 | `verdict_schema_mismatch` | 2 | Agent's `verdict` block missing `schema_version`, non-integer, or ≠ 1 | The agent (runner/judge) malfunctioned. Likely a Claude Code or agent-prompt upgrade is needed; surface the breadcrumb and ask the user. |
 
