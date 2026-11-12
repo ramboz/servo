@@ -112,6 +112,13 @@ source tree and three committed generated packages:
   plugin-mode skill bodies name `$SERVO_ROOT` — resolved by the shipped
   `.github/scripts/servo_root.py` fresh-shell locator — instead of
   `${CLAUDE_PLUGIN_ROOT}` (bug 036).
+- The **agent-loop driver runs natively on Copilot** under an AI-credit brake
+  (spec 041-02 / [ADR-0048](decisions/adr-0048-copilot-credit-budget-contract.md)):
+  `--host copilot --credit-ceiling N --max-iterations M` enforces a budget in
+  Copilot's own unit (never USD-converted), hard between invocations and
+  fail-closed on missing/partial telemetry. Without the credit ceiling the
+  ADR-0043 refusal stands. The budget contract and its probe evidence live in
+  ADR-0048 and spec 041; see the agent-loop `SKILL.md` for the operator surface.
 
 `scripts/build_host_packages.py` regenerates all three packages and its
 `--check` mode is a read-only CI drift guard. Release archives and the legacy

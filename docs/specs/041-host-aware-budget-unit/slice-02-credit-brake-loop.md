@@ -91,11 +91,13 @@ single-threaded worker is guaranteed by omitting `--fleet`, refining ADR-0048 pa
      before any model call via the existing `_unpriced_oracle_error` /
      `_unpriced_oracle_preflight` path (ADR-0048 part 5), unless the owner approved a USD
      oracle ceiling.
-7. **Role placement honoured or refused.** Under `--host copilot`: a `models` block that
-   sets `model` is **refused** (`REASON_MODELS_INVALID`, the renders stay model-neutral,
-   spec 032-03 / ADR-0048); an `effort` field **maps** to Copilot's `--reasoning-effort`
-   (041-01 verified the flag + its levels); `advisor` is refused (no Copilot analogue).
-   `requested` never records a flag that was not passed.
+7. **Role placement refused.** Under `--host copilot` a `--models` block is **refused
+   whole** (`REASON_MODELS_INVALID`): Copilot renders are model-neutral (spec 032-03) and
+   servo does not tier under Copilot (ADR-0047 is Claude-only), so no `role_args` reach the
+   worker and `requested` records nothing unpassed. (Effort-mapping to Copilot's
+   `--reasoning-effort` was considered — 041-01 verified the flag — but refusing the whole
+   block is simpler and fully compliant with the ADR's "refuse" option; mapping is
+   deferred.)
 
 **DoD:** ACs pass with a mock `copilot` fed 041-01's real usage and
 OpenTelemetry span files; full CI
@@ -105,3 +107,50 @@ host packages regenerated; reviews (compliance, craft, arch).
 **Anti-horizontal-phasing check:** a Copilot user can run servo's loop on a
 Copilot worker capped in AI credits, and the run stops on that cap or on a
 missing usage report, never silently.
+
+### Deviation log
+
+- **AC1 bound guard is REACTIVE, not pre-launch.** The admin-pinned worker model and its
+  context window are not known pre-launch, and the window is unavailable at runtime
+  (041-01), so ADR-0048 part 2's bound cannot be computed before the first invocation.
+  Pre-launch refusal enforces only the checkable preconditions (credit ceiling ≥ 30,
+  explicit `--max-iterations`); the bound-vs-ceiling guard fires after iteration 1 reveals
+  `currentModel`, halting `credit_ceiling_insufficient`. Two **new reasons** support this:
+  `credit_ceiling_insufficient` and `credit_bound_unavailable`.
+- **Shipped per-model bound table.** `COPILOT_MODEL_BOUNDS` is seeded from 041-01
+  (`gpt-6.1-sol` only: window 272 000, 10/250/1000 cr per 1M, max-output 32 768 →
+  bound ≈ 201.5 cr). A `currentModel` not in the table **fails closed**
+  (`credit_bound_unavailable`) — a new, intentional safety; later models add a row.
+- **AC7 = refuse, not map.** Chose to refuse a `--models` block whole under Copilot rather
+  than map `effort` to `--reasoning-effort` (the ADR permits either; refuse is simpler and
+  no `role_args` then reach the worker). Effort-mapping deferred.
+- **aiCreditsStatus is the primary partial gate** (ADR part 3 assumed no such marker); the
+  OTel per-call Σ cross-check reconciles against the session-**delta** on `--resume`
+  (not the raw session-cumulative total — 041-01 A2), implemented in
+  `_copilot_iteration_nano`.
+- **USD fields are `null` (not 0) under Copilot.** The loop branches every USD arithmetic
+  site on host; `_escalation_guard` gained a `None`-guard (the ladder is Claude-only).
+- **A Copilot invocation failure is `credit_usage_unavailable`** (AC3), not the generic
+  `claude_invocation_failed` — no usable credit report means fail-closed with spend `null`.
+- **AC6 oracle-USD refusal reuses existing machinery** (`_unpriced_oracle_error` /
+  `_unpriced_oracle_preflight`), which already runs on the Copilot path; no new code.
+
+### Reconciliation sweep
+
+- **Code:** `skills/agent-loop/loop.py` (telemetry gate, OTel pinning, bound table, brake
+  helper, loop-body host branches, state/summary, CLI). The **Claude path is byte-identical**
+  (`backend` is `HOST_CLAUDE` there, no credit keys, USD arithmetic unchanged) — verified by
+  the unchanged 541-test baseline.
+- **Tests:** `skills/agent-loop/test_loop.py` — mock-`copilot` OTel extension; brake-helper
+  unit tests; credit-gate unit tests; and e2e launch/refusal/brake tests driving `loop.py`
+  with a mock `copilot` fed matched usage + OTel (DoD). Full `test_loop.py` suite green.
+- **Docs:** agent-loop `SKILL.md` (Copilot boundary rewritten, `--credit-ceiling` row, the
+  four credit terminal reasons); `docs/architecture.md` (Copilot credit-brake note). No
+  separate "Copilot host README" exists — SKILL.md + ADR-0048 are the operator surface.
+- **Host packages:** regenerated (`build_host_packages.py`); `--check` in sync.
+- **034-03 (native loop, DEFERRED):** its budget + launch ACs are delivered here; its
+  invocation/tool/resume evidence came from 032-05 + 041-01. Its reconciliation is a
+  follow-up bookkeeping item (not re-opened in this slice).
+- **Contract surface:** new state/summary fields (`credit_ceiling`, `cumulative_credits`,
+  `overrun_credits`, `overrun_exceeds_bound`, `credit_bound`) are additive (ADR-0004
+  "pure additive MAY keep version at 1"); USD fields become `null` under Copilot only.

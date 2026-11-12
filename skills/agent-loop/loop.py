@@ -1071,6 +1071,8 @@ def _build_initial_state(
     plateau_noise_floor: float,
     claude_version: Optional[str],
     models: Optional[dict] = None,
+    host: str = HOST_CLAUDE,
+    credit_ceiling: Optional[float] = None,
 ) -> dict:
     """Construct the canonical fresh-run state dict (ADR-0004 schema).
 
@@ -1087,9 +1089,9 @@ def _build_initial_state(
     "pure additive changes MAY keep version at 1" clause covers them.
     """
     now_iso = datetime.now(timezone.utc).isoformat()
-    return {
+    state = {
         "state_schema_version": STATE_SCHEMA_VERSION,
-        "backend": HOST_CLAUDE,
+        "backend": host,
         "run_id": run_id,
         "started_at": now_iso,
         "last_updated_at": now_iso,
@@ -1126,6 +1128,20 @@ def _build_initial_state(
         # both fall back safely instead of mislabeling a capable run.
         "edit_signal_computed": False,
     }
+    # Spec 041-02 (ADR-0048): under `--host copilot` the budget is denominated in
+    # AI credits, never USD. The USD fields are null (not 0 — units never mix),
+    # and the credit fields are added. The Claude path is byte-identical (host is
+    # HOST_CLAUDE there, so `backend` is unchanged and no credit keys appear).
+    if host == HOST_COPILOT:
+        state["cost_ceiling_usd"] = None
+        state["cumulative_cost_usd"] = None
+        state["credit_ceiling"] = credit_ceiling
+        state["cumulative_credits_nano"] = 0
+        # Filled reactively once iteration 1 reveals the admin-pinned worker
+        # model (041-01 A6): the per-model overrun bound, in AI credits.
+        state["credit_bound"] = None
+        state["overrun_exceeds_bound"] = False
+    return state
 
 
 def _emit_json(payload: dict) -> None:
@@ -1809,6 +1825,9 @@ def _compute_per_iter_budget(cost_ceiling: float, cumulative: float) -> float:
 
 COST_BASIS_REPORTED = "reported"
 COST_BASIS_SESSION_DELTA = "session_delta"
+# Spec 041-02: the per-iteration cost is denominated in AI credits (Copilot),
+# recorded as `cost_native` rather than a USD `cost_usd`.
+COST_BASIS_COPILOT_CREDITS = "copilot_credits"
 _USAGE_TOKEN_KEYS = (
     "input_tokens", "cache_read_input_tokens",
     "cache_creation_input_tokens", "output_tokens",
@@ -2004,7 +2023,7 @@ def _escalation_guard(
     if left < needed:
         shortfalls.append(f"{left} iteration(s) left, {needed} needed")
     ceiling = state["cost_ceiling_usd"]
-    if ceiling > 0:
+    if ceiling is not None and ceiling > 0:
         costs = [
             e["cost_usd"] for e in state["oracle_score_history"]
             if isinstance(e.get("cost_usd"), (int, float))
@@ -2515,6 +2534,126 @@ def _copilot_iteration_nano(
     return expected, None
 
 
+# Spec 041-02 (ADR-0048 part 2) — per-worker-model overrun bound, in AI credits.
+# The admin-pinned worker model and its context window are not known pre-launch,
+# and the window is unavailable at runtime (context is `null` under Copilot), so
+# the `(1 + c) × per-call-max` bound cannot be computed on the fly. servo ships
+# it per model, seeded by 041-01's billed probe. A model absent from this table
+# has no verifiable bound → the brake fails closed (`credit_bound_unavailable`).
+# `context_window` in tokens; prices in credits per 1M tokens; `max_output_tokens`
+# is not exposed by the CLI `/model` view (041-01), so a conservative cap is used
+# (observed peak output 12,812) — the input term alone exceeds the 30-credit CLI
+# minimum, so the launch-refusal conclusion is robust to it.
+COPILOT_OVERRUN_C = 1  # background calls concurrent with the crossing call
+# (compaction); 041-01 observed c = 0, ADR-0048 keeps the conservative c = 1.
+NANO_PER_CREDIT = 1_000_000_000  # 10^9 nano-AIU = 1 AI credit (041-01 A1).
+MIN_COPILOT_CREDIT_CEILING = 30  # the CLI's `--max-ai-credits` minimum (041-01).
+COPILOT_MODEL_BOUNDS = {
+    "gpt-6.1-sol": {
+        "context_window": 272000,
+        "price_cr_per_1m": {"cache_read": 10, "cache_write": 250, "output": 1000},
+        "max_output_tokens": 32768,
+    },
+}
+
+
+def _copilot_overrun_bound(model: Optional[str]) -> Optional[float]:
+    """ADR-0048 part 2's overrun bound (AI credits) for a worker model, or None
+    when the model is not in the shipped table (its bound is unverifiable, so the
+    brake fails closed). per-call-max = window × max(input, cache-write) price +
+    max-output × output price; bound = (1 + c) × per-call-max.
+    """
+    spec = COPILOT_MODEL_BOUNDS.get(model or "")
+    if spec is None:
+        return None
+    window = spec["context_window"]
+    price = spec["price_cr_per_1m"]
+    input_rate = max(price["cache_write"], price.get("input", price["cache_write"]))
+    per_call_max = (
+        window * input_rate / 1e6
+        + spec["max_output_tokens"] * price["output"] / 1e6
+    )
+    return (1 + COPILOT_OVERRUN_C) * per_call_max
+
+
+def _apply_copilot_credit_iteration(
+    state: dict, state_path: Path, claude_data: dict, *,
+    iteration: int, iter_credit_cap: Optional[float], agent_name: str,
+    role_cfg: Optional[dict], final_oracle_status: str,
+) -> "tuple[Optional[int], Optional[dict]]":
+    """Spec 041-02 (ADR-0048) — the per-iteration AI-credit brake.
+
+    Accumulates the invocation's OWN credit spend (fail-closed), runs the
+    reactive overrun-bound guard (041-01 A6 — the admin-pinned worker model is
+    known only now, from the usage report), and builds the credit accounting
+    record. Returns `(exit_code, None)` to HALT the run —
+    `credit_usage_unavailable` (a missing/partial report or a disagreeing span
+    file), `credit_bound_unavailable` (a model with no shipped bound), or
+    `credit_ceiling_insufficient` (a bound at/above the ceiling) — or
+    `(None, accounting)` to continue. Mutates `state` in place.
+    """
+    def _halt(reason: str) -> int:
+        _finalize_state_and_summary(
+            state, state_path, terminal_reason=reason,
+            final_oracle_status=(STATUS_ENV_ERROR if state.get("oracle") is not None
+                                 else final_oracle_status))
+        return EXIT_ENV_ERROR
+
+    iter_nano = claude_data.get("copilot_iteration_nano")
+    credit_error = claude_data.get("copilot_credit_error")
+    if credit_error is not None or iter_nano is None:
+        # AC3: a missing / partial usage report, or a span file that disagrees
+        # with it, halts the run; spend is unknown (null), never read as 0.
+        state["cumulative_credits_nano"] = None
+        sys.stderr.write(
+            f"loop: iteration {iteration}: credit spend unavailable "
+            f"({credit_error or REASON_CREDIT_USAGE_UNAVAILABLE}) — halting, "
+            "reported null not 0\n")
+        return _halt(REASON_CREDIT_USAGE_UNAVAILABLE), None
+
+    cap_nano = round((iter_credit_cap or 0) * NANO_PER_CREDIT)
+    iter_overrun_nano = max(0, iter_nano - cap_nano)
+    state["cumulative_credits_nano"] += iter_nano
+
+    model = claude_data.get("copilot_current_model")
+    bound = _copilot_overrun_bound(model)
+    if bound is None:
+        # An unverifiable worker model (not in the shipped table) fails closed.
+        sys.stderr.write(
+            f"loop: iteration {iteration}: worker model {model!r} has no shipped "
+            "overrun bound — halting (credit_bound_unavailable)\n")
+        return _halt(REASON_CREDIT_BOUND_UNAVAILABLE), None
+    state["credit_bound"] = bound
+
+    if iter_overrun_nano / NANO_PER_CREDIT > bound:
+        # AC4 — the ADR kill-criterion trigger (observed overrun beyond the bound).
+        state["overrun_exceeds_bound"] = True
+        sys.stderr.write(
+            f"loop: iteration {iteration}: overrun "
+            f"{iter_overrun_nano / NANO_PER_CREDIT:.3f} cr exceeds the {model} "
+            f"bound {bound:.3f} cr (overrun_exceeds_bound)\n")
+
+    if bound >= state["credit_ceiling"]:
+        # AC1 reactive launch-refusal: a bound at/above the ceiling makes the
+        # budget a budget in name only — name the smallest sensible ceiling.
+        sys.stderr.write(
+            f"loop: {model} overrun bound {bound:.1f} cr >= credit ceiling "
+            f"{state['credit_ceiling']} cr; set --credit-ceiling to at least "
+            f"{math.ceil(bound) + 1} (credit_ceiling_insufficient)\n")
+        return _halt(REASON_CREDIT_CEILING_INSUFFICIENT), None
+
+    accounting = _iteration_accounting(
+        claude_data, agent=agent_name, cost_usd=0.0,
+        cost_basis=COST_BASIS_COPILOT_CREDITS, model_usage={},
+        requested=_requested_of(role_cfg))
+    # AC4: USD does not apply under Copilot; 038-01's per-iteration record gains
+    # `cost_native` in AI credits instead.
+    accounting["cost_usd"] = None
+    accounting["cost_native"] = {
+        "unit": "ai_credits", "value": iter_nano / NANO_PER_CREDIT}
+    return None, accounting
+
+
 def _extract_copilot_text(event: dict) -> str:
     """Pull the response text out of a Copilot terminal `result` event.
 
@@ -2596,6 +2735,7 @@ def _parse_copilot_jsonl(stdout: str) -> tuple[Optional[dict], str]:
 
 def _normalize_copilot_result(
     terminal_event: dict, result_text: str, session_id: str, usage: dict,
+    *, iteration_nano: Optional[int] = None, credit_error: Optional[str] = None,
 ) -> dict:
     """Normalize Copilot's JSONL + usage into `_invoke_claude`'s result-dict shape.
 
@@ -2645,6 +2785,14 @@ def _normalize_copilot_result(
         "copilot_premium_request_cost": _as_int(usage.get("premium_request_cost")),
         "copilot_nano_aiu": _as_int(usage.get("nano_aiu")),
         "copilot_files_modified": _as_int(usage.get("files_modified")),
+        # Spec 041-02: the fail-closed per-iteration credit figure (exact
+        # nano-AIU, the invocation's own spend) and its error reason, plus the
+        # admin-pinnable worker model for the reactive bound guard (AC6). The
+        # brake reads `copilot_iteration_nano` / `copilot_credit_error`, NOT the
+        # observability-only `copilot_nano_aiu` above.
+        "copilot_iteration_nano": iteration_nano,
+        "copilot_credit_error": credit_error,
+        "copilot_current_model": usage.get("current_model"),
     }
 
 
@@ -2654,6 +2802,7 @@ def _invoke_copilot(
     session_id: Optional[str] = None,
     agent_name: Optional[str] = None,
     max_ai_credits: Optional[float] = None,
+    prior_cumulative_nano: Optional[int] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Copilot loop-driver invocation (slice 032-05 AC1), the `_invoke_claude`
     peer under `--host copilot`.
@@ -2666,25 +2815,42 @@ def _invoke_copilot(
     parseable terminal event is the iteration's result regardless of exit code
     (a cap halt can exit non-zero with a real, scoreable turn — same posture as
     the Claude `--max-budget-usd` path).
+
+    Spec 041-02 (ADR-0048 part 3): pins BOTH OpenTelemetry file-exporter env
+    vars to a fresh per-invocation span file, so an inherited or managed setting
+    cannot redirect the stream servo reads for per-call partial detection, and
+    computes the fail-closed per-iteration credit figure `copilot_iteration_nano`
+    (the invocation's OWN spend — a session-delta against `prior_cumulative_nano`
+    when resuming, 041-01 A2) with its `copilot_credit_error`. `--fleet` is never
+    passed, so the worker is single-threaded (041-01 A6: no subagent tool exists
+    to deny; omission is the control).
     """
     global _active_subprocess
-    # The usage tempfile is created before the try/finally, so guard it: an
-    # OSError here (e.g. an unwritable temp dir) must return a breadcrumb like
-    # every other invocation-failure path, never raise into `run_loop`.
+    # Both telemetry tempfiles are created before the try/finally, so guard
+    # them: an OSError here (e.g. an unwritable temp dir) must return a
+    # breadcrumb like every other invocation-failure path, never raise.
     try:
         usage_fd, usage_name = tempfile.mkstemp(prefix="servo-copilot-usage-", suffix=".json")
         os.close(usage_fd)
+        otel_fd, otel_name = tempfile.mkstemp(prefix="servo-copilot-otel-", suffix=".jsonl")
+        os.close(otel_fd)
     except OSError as exc:
-        return None, f"OS error creating copilot usage tempfile: {exc}"
+        return None, f"OS error creating copilot telemetry tempfiles: {exc}"
     usage_path = Path(usage_name)
+    otel_path = Path(otel_name)
     cmd = _build_copilot_cmd(
         prompt, agent_name=agent_name, session_id=session_id,
         usage_file=usage_path, max_ai_credits=max_ai_credits,
     )
+    # 041-02 AC3: pin both exporter vars (type + path) so the span stream cannot
+    # be redirected away from the file servo reads.
+    child_env = dict(os.environ)
+    child_env["COPILOT_OTEL_EXPORTER_TYPE"] = "file"
+    child_env["COPILOT_OTEL_FILE_EXPORTER_PATH"] = str(otel_path)
     try:
         try:
             proc = subprocess.Popen(
-                cmd, cwd=str(target),
+                cmd, cwd=str(target), env=child_env,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             )
         except FileNotFoundError:
@@ -2713,15 +2879,25 @@ def _invoke_copilot(
             return None, "copilot -p emitted no parseable non-ephemeral event"
 
         usage = _parse_copilot_usage(usage_path)
+        # 041-02 AC2/AC3: the invocation's own credit spend (session-delta on a
+        # resumed session), fail-closed on a non-`complete` status, a missing
+        # OTel export, or a per-call Σ that disagrees with the reported spend.
+        iteration_nano, credit_error = _copilot_iteration_nano(
+            usage_path, otel_path,
+            resumed=session_id is not None,
+            prior_cumulative_nano=prior_cumulative_nano,
+        )
         resolved_session = _extract_copilot_session_id(terminal_event) or (session_id or "")
         return _normalize_copilot_result(
             terminal_event, result_text, resolved_session, usage,
+            iteration_nano=iteration_nano, credit_error=credit_error,
         ), None
     finally:
-        try:
-            usage_path.unlink()
-        except OSError:
-            pass
+        for _p in (usage_path, otel_path):
+            try:
+                _p.unlink()
+            except OSError:
+                pass
 
 
 def _invoke_claude(
@@ -2733,6 +2909,7 @@ def _invoke_claude(
     host: str = HOST_CLAUDE,
     max_ai_credits: Optional[float] = None,
     role_args: Optional[list] = None,
+    prior_cumulative_nano: Optional[int] = None,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
 
@@ -2779,6 +2956,7 @@ def _invoke_claude(
             prompt, target,
             timeout_seconds=timeout_seconds, session_id=session_id,
             agent_name=agent_name, max_ai_credits=max_ai_credits,
+            prior_cumulative_nano=prior_cumulative_nano,
         )
     cmd: list[str] = ["claude", "-p", "--output-format", "json"]
     cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
@@ -2986,6 +3164,20 @@ def _summary_payload(
     }
     if terminal_breadcrumb is not None:
         payload["terminal_breadcrumb"] = terminal_breadcrumb
+    # Spec 041-02 AC4: under Copilot the budget is in AI credits. Carry the
+    # credit fields; `cumulative_credits` is null (never 0) when a fail-closed
+    # halt left the spend unknown (AC3). USD fields above are already null.
+    if state.get("backend") == HOST_COPILOT:
+        cum_nano = state.get("cumulative_credits_nano")
+        ceiling = state.get("credit_ceiling")
+        cum_credits = (cum_nano / NANO_PER_CREDIT) if cum_nano is not None else None
+        payload["credit_ceiling"] = ceiling
+        payload["cumulative_credits"] = cum_credits
+        payload["overrun_credits"] = (
+            max(0.0, cum_credits - ceiling)
+            if (cum_credits is not None and ceiling is not None) else None)
+        payload["overrun_exceeds_bound"] = state.get("overrun_exceeds_bound", False)
+        payload["credit_bound"] = state.get("credit_bound")
     ladder = _ladder_of(state.get("models"))
     if ladder:
         payload["escalation_rung"] = state.get("escalation_rung", 0)
@@ -3089,6 +3281,7 @@ def run_loop(
     host: str = HOST_CLAUDE,
     max_ai_credits: Optional[float] = None,
     models: Optional[dict] = None,
+    credit_ceiling: Optional[float] = None,
 ) -> int:
     """Drive the iteration loop with state persistence + resume + signal handling.
 
@@ -3109,7 +3302,9 @@ def run_loop(
     active subprocess and set a flag the loop polls at iteration
     boundaries.
     """
-    if host == HOST_COPILOT:
+    # Spec 041-02 (ADR-0048): `--host copilot` is now supported, but ONLY with a
+    # credit ceiling (the opt-in brake). Without one, ADR-0043's refusal stands.
+    if host == HOST_COPILOT and credit_ceiling is None:
         return _refuse_copilot_capability()
 
     accounting_rc = _unpriced_oracle_preflight(
@@ -3387,6 +3582,8 @@ def run_loop(
             plateau_noise_floor=plateau_noise_floor,
             claude_version=current_claude_version,
             models=models,
+            host=host,
+            credit_ceiling=credit_ceiling,
         )
         state_path = _state_path_for(target, run_id)
         _atomic_write_state(state, state_path)
@@ -3472,15 +3669,30 @@ def run_loop(
             halted_on_context = True
             break
 
-        # Pre-iteration cost-ceiling floor check (slice 003-02 AC4).
-        if _budget_floor_hit(state["cost_ceiling_usd"], state["cumulative_cost_usd"]):
-            terminal_reason = REASON_COST_CEILING_REACHED
-            halted_on_cost = True
-            break
-
-        per_iter_budget = _compute_per_iter_budget(
-            state["cost_ceiling_usd"], state["cumulative_cost_usd"],
-        )
+        # Pre-iteration budget floor (slice 003-02 AC4 / spec 041-02 AC2).
+        iter_credit_cap = None
+        if host == HOST_COPILOT:
+            remaining_nano = (
+                round(state["credit_ceiling"] * NANO_PER_CREDIT)
+                - state["cumulative_credits_nano"])
+            if remaining_nano < MIN_COPILOT_CREDIT_CEILING * NANO_PER_CREDIT:
+                # Fewer than 30 credits left — below the CLI's cap minimum, so
+                # no further invocation can be bounded (041-01).
+                terminal_reason = REASON_CREDIT_CEILING_REACHED
+                halted_on_cost = True
+                break
+            # The per-invocation `--max-ai-credits` is the remaining headroom,
+            # UNADJUSTED (the cap is invocation-scoped, 041-01 A2).
+            iter_credit_cap = remaining_nano / NANO_PER_CREDIT
+            per_iter_budget = DEFAULT_PER_ITER_BUDGET_USD  # unused under copilot
+        else:
+            if _budget_floor_hit(state["cost_ceiling_usd"], state["cumulative_cost_usd"]):
+                terminal_reason = REASON_COST_CEILING_REACHED
+                halted_on_cost = True
+                break
+            per_iter_budget = _compute_per_iter_budget(
+                state["cost_ceiling_usd"], state["cumulative_cost_usd"],
+            )
         # Pass --resume <session_id> when we have one (slice 003-04). For
         # fresh-run iter 1 the session id is empty → no --resume.
         # Slice 003-05: pick agent (runner/judge alternation) and assemble
@@ -3541,8 +3753,10 @@ def run_loop(
             session_id=session_id_arg,
             agent_name=agent_name,
             host=host,
-            max_ai_credits=max_ai_credits,
+            max_ai_credits=(iter_credit_cap if host == HOST_COPILOT else max_ai_credits),
             role_args=_role_args(role_cfg),
+            prior_cumulative_nano=(
+                state["cumulative_credits_nano"] if host == HOST_COPILOT else None),
         )
         # Snapshot immediately AFTER the invoke returns, BEFORE the gate runs —
         # so the delta brackets only the runner turn, excluding the later gate
@@ -3568,15 +3782,22 @@ def run_loop(
 
         if claude_data is None:
             sys.stderr.write(f"loop: {error}\n")
+            # Spec 041-02 AC3: under Copilot a failed / timed-out invocation
+            # leaves no usable credit report — halt `credit_usage_unavailable`
+            # with spend null, not the generic `claude_invocation_failed`.
+            invoke_fail_reason = (
+                REASON_CREDIT_USAGE_UNAVAILABLE if host == HOST_COPILOT
+                else REASON_CLAUDE_INVOCATION_FAILED)
+            if host == HOST_COPILOT:
+                state["cumulative_credits_nano"] = None
             rung_crumb = None
             if ladder and rung >= 1:
                 rung_crumb = _rung_failure_breadcrumb(
-                    role_models, rung, REASON_CLAUDE_INVOCATION_FAILED,
-                    agent_name)
+                    role_models, rung, invoke_fail_reason, agent_name)
                 sys.stderr.write(f"loop: {rung_crumb}\n")
             _finalize_state_and_summary(
                 state, state_path,
-                terminal_reason=REASON_CLAUDE_INVOCATION_FAILED,
+                terminal_reason=invoke_fail_reason,
                 final_oracle_status=(STATUS_ENV_ERROR if state.get("oracle") is not None
                                      else final_oracle_status),
                 terminal_breadcrumb=rung_crumb,
@@ -3585,23 +3806,37 @@ def run_loop(
 
         # Extract iteration data.
         session_id = _session_id_of(claude_data)
-        # Bug 007 / spec 038-01: the invocation's OWN cost, not the session
-        # running total Claude reports on `--resume`.
-        snapshot = state.get("current_session_usage_snapshot")
-        cost_usd, iter_model_usage, cost_basis = _iteration_cost_delta(
-            claude_data, resumed_session_id=session_id_arg, snapshot=snapshot,
-        )
-        if _warn_reported_fallback(session_id_arg, cost_basis, host):
-            sys.stderr.write(
-                f"loop: iteration {iteration}: cost basis fell back to the "
-                "reported session total (resumed-session running-total "
-                "semantics unproven) - cost may be over-counted\n"
+        if host == HOST_COPILOT:
+            # Spec 041-02 (ADR-0048) — the AI-credit brake: accumulate the
+            # invocation's own spend, run the reactive bound guard, build the
+            # credit accounting. A fail-closed / bound / insufficient halt
+            # finalizes state and returns the exit code from here.
+            rc, accounting = _apply_copilot_credit_iteration(
+                state, state_path, claude_data, iteration=iteration,
+                iter_credit_cap=iter_credit_cap, agent_name=agent_name,
+                role_cfg=role_cfg, final_oracle_status=final_oracle_status,
             )
-        accounting = _iteration_accounting(
-            claude_data, agent=agent_name, cost_usd=cost_usd,
-            cost_basis=cost_basis, model_usage=iter_model_usage,
-            requested=_requested_of(role_cfg),
-        )
+            if rc is not None:
+                return rc
+        else:
+            # Bug 007 / spec 038-01: the invocation's OWN cost, not the session
+            # running total Claude reports on `--resume`.
+            snapshot = state.get("current_session_usage_snapshot")
+            cost_usd, iter_model_usage, cost_basis = _iteration_cost_delta(
+                claude_data, resumed_session_id=session_id_arg, snapshot=snapshot,
+            )
+            if _warn_reported_fallback(session_id_arg, cost_basis, host):
+                sys.stderr.write(
+                    f"loop: iteration {iteration}: cost basis fell back to the "
+                    "reported session total (resumed-session running-total "
+                    "semantics unproven) - cost may be over-counted\n"
+                )
+            accounting = _iteration_accounting(
+                claude_data, agent=agent_name, cost_usd=cost_usd,
+                cost_basis=cost_basis, model_usage=iter_model_usage,
+                requested=_requested_of(role_cfg),
+            )
+            state["cumulative_cost_usd"] += cost_usd
         claude_terminal_reason = str(claude_data.get("terminal_reason", ""))
 
         # Token tallies for AC2's cumulative_input_tokens / cumulative_output_tokens.
@@ -3614,7 +3849,6 @@ def run_loop(
         )
         iter_output_tokens = iter_usage["output_tokens"]
 
-        state["cumulative_cost_usd"] += cost_usd
         state["cumulative_input_tokens"] += iter_input_tokens
         state["cumulative_output_tokens"] += iter_output_tokens
         if session_id and not split_judge:
@@ -3782,8 +4016,14 @@ def run_loop(
             )
             return EXIT_ENV_ERROR
 
-        # Post-iteration cost-ceiling check.
-        if (
+        # Post-iteration budget check (slice 003-02 AC4 / spec 041-02 AC2).
+        if host == HOST_COPILOT:
+            if (state["cumulative_credits_nano"]
+                    > round(state["credit_ceiling"] * NANO_PER_CREDIT)):
+                terminal_reason = REASON_CREDIT_CEILING_REACHED
+                halted_on_cost = True
+                break
+        elif (
             state["cost_ceiling_usd"] > 0
             and state["cumulative_cost_usd"] > state["cost_ceiling_usd"]
         ):
@@ -4892,6 +5132,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
     )
     parser.add_argument(
+        "--credit-ceiling",
+        type=float,
+        default=None,
+        help=(
+            f"Spec 041-02 (ADR-0048): cumulative budget in AI CREDITS for "
+            f"`--host copilot`. Required (with an explicit --max-iterations) to "
+            f"run the loop on Copilot; min {MIN_COPILOT_CREDIT_CEILING}. Credits "
+            f"are never converted to USD; mutually exclusive with --cost-ceiling."
+        ),
+    )
+    parser.add_argument(
         "--context-fill-threshold",
         type=float,
         default=None,
@@ -5106,13 +5357,45 @@ def main(argv: Optional[list[str]] = None) -> int:
                      "--resume for unattended continuation")
 
     if args.host == HOST_COPILOT:
-        return _refuse_copilot_capability()
-    elif args.max_ai_credits is not None:
-        sys.stderr.write(
-            "loop: --max-ai-credits is a Copilot-only per-invocation cap and is "
-            "ignored under --host claude (Claude uses --max-budget-usd / "
-            "--cost-ceiling).\n"
-        )
+        # Spec 041-02 (ADR-0048) — opt-in launch (AC1). `--host copilot` runs the
+        # loop ONLY with a credit ceiling (>= the CLI minimum) AND an explicit
+        # --max-iterations; otherwise ADR-0043's refusal stands (no subprocess,
+        # no state). AC5: the USD ceiling is refused here; AC7: a --models block
+        # is refused (the Copilot renders are model-neutral, spec 032-03, and
+        # servo does not tier under Copilot — ADR-0047 is Claude-only).
+        if args.credit_ceiling is None or args.max_iterations is None:
+            return _refuse_copilot_capability()
+        if args.credit_ceiling < MIN_COPILOT_CREDIT_CEILING:
+            parser.error(
+                f"--credit-ceiling must be >= {MIN_COPILOT_CREDIT_CEILING} "
+                "(the Copilot --max-ai-credits minimum)")
+        if args.cost_ceiling is not None:
+            parser.error(
+                "--cost-ceiling (USD) is not valid under --host copilot; use "
+                "--credit-ceiling (AI credits). Units never mix (ADR-0048).")
+        if args.models is not None:
+            return _refuse_plan(
+                reason=REASON_MODELS_INVALID,
+                message="--models is refused under --host copilot: Copilot "
+                        "renders are model-neutral (spec 032-03) and servo does "
+                        "not tier under Copilot (ADR-0047 is Claude-only).")
+        if args.background or args.driver == DRIVER_GOAL:
+            parser.error(
+                "--host copilot runs the loop driver only; --driver goal and "
+                "--background (which needs /goal) are unsupported on Copilot "
+                "(ADR-0048 / 034-07 — the goal driver stays refused).")
+    else:
+        # AC5: the credit ceiling is Copilot-only.
+        if args.credit_ceiling is not None:
+            parser.error(
+                "--credit-ceiling (AI credits) is Copilot-only; under --host "
+                "claude use --cost-ceiling (USD). Units never mix (ADR-0048).")
+        if args.max_ai_credits is not None:
+            sys.stderr.write(
+                "loop: --max-ai-credits is a Copilot-only per-invocation cap and "
+                "is ignored under --host claude (Claude uses --max-budget-usd / "
+                "--cost-ceiling).\n"
+            )
 
     # Spec 038-02 AC1/AC2: resolve + validate the `--models` flag fail-closed,
     # before any run directory / state / claude call.
@@ -5301,6 +5584,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 f"(016-03 clamp-never-disable).\n"
             )
 
+    # Spec 041-02 (ADR-0048): Copilot runs the LOOP driver only — the goal driver
+    # stays refused (034-07). Force loop so `--driver auto` does not probe Claude
+    # host-support (nonsensical under Copilot); an explicit goal / --background was
+    # already refused at the copilot gate above.
+    if args.host == HOST_COPILOT:
+        effective_arg_driver = DRIVER_LOOP
+
     # ---- Host-scope routing (slice 003-07 AC4) -----------------------------
     # `loop` always runs (the portable path needs no probe). `goal` / `auto`
     # resolve via the deterministic host-support verdict: an explicit `goal` on
@@ -5442,6 +5732,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         host=args.host,
         max_ai_credits=args.max_ai_credits,
         models=models,
+        credit_ceiling=args.credit_ceiling,
     )
 
 
