@@ -1500,3 +1500,31 @@ resume (agent-loop SKILL.md).
 
 **Resolution trigger:** a user hits it, or routing is next touched. The fix is
 to read the persisted state's driver and ladder in the `auto` check on resume.
+
+
+## Copilot credit brake — deferred follow-ups (spec 041-02)
+
+**Deferred (all fail-closed; surfaced by 041-02's compliance review):**
+
+1. **Plan-sourced `budget.credit_ceiling`.** AC1 allows the credit ceiling from a
+   plan's `budget.credit_ceiling`, but only the `--credit-ceiling` flag is wired —
+   `_PLAN_BUDGET_KEYS` / `_resolve_from_plan` / `_validate_plan_budget` omit it, and
+   the Copilot launch gate runs before plan-budget resolution. A plan-only ceiling is
+   refused `native_capability_unavailable`. Fix: resolve `credit_ceiling` from
+   flag-or-plan (≥ 30) before the Copilot gate; extend the 016 clamp semantics to the
+   credit unit.
+2. **Known-USD-priced oracle components under Copilot (ADR-0048 part 5).** The
+   `_unpriced_oracle_error` guard refuses *unknown-cost* (`unpriced_components`)
+   oracle components, not *known-USD-priced* ones. Under Copilot (`cost_ceiling` is
+   `null`) a known-priced oracle component runs with no USD bound. Fix: add a
+   `usd_priced` install-metadata marker and refuse those under Copilot absent an
+   approved USD oracle ceiling.
+3. **Cross-process `--resume` of a Copilot run.** The `backend_mismatch` guard refuses
+   resuming a persisted run whose `backend != claude`, so an interrupted Copilot run
+   restarts fresh. State already persists `cumulative_credits_nano` / `credit_ceiling`.
+   Fix: allow resume for `backend == copilot` (the intra-run session-delta already
+   handles the accounting).
+
+**Resolution trigger:** plan-sourced budgets are needed for spec 042 campaigns (1);
+a target ships a known-priced oracle component for a Copilot run (2); a user needs to
+resume an interrupted Copilot run (3).

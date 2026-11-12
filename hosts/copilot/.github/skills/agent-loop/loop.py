@@ -2392,17 +2392,23 @@ def _build_copilot_cmd(
 
 
 def _parse_copilot_usage(usage_path: Path) -> dict:
-    """Parse Copilot's `--usage-output-file` JSON (slice 032-05 AC2).
+    """Parse Copilot's `--usage-output-file` JSON (slice 032-05 AC2; sharpened
+    for the credit brake in 041-02 per ADR-0048).
 
     Returns native cost (`totalPremiumRequestCost` / `totalNanoAiu` — premium
     requests / nano-AIU, NOT USD), the native edit-signal
     (`codeChanges.filesModifiedCount`, where 0 ⇒ the runner made no edits —
-    ADR-0037's "did the runner edit?" check), and `tokenDetails`.
+    ADR-0037's "did the runner edit?" check), `tokenDetails`, and the credit-brake
+    fields `ai_credits_status` + `current_model`.
 
-    Tolerant by design: a missing or malformed file yields zeros rather than
-    raising. Cost accounting under Copilot is a documented USD-unit residual
-    (the USD `--cost-ceiling` does not gate Copilot), so a missing usage file
-    must degrade to "no cost signal", never crash the loop.
+    **Field-dependent tolerance.** Never raises. The observability-only residual
+    (`premium_request_cost`, `files_modified`, `token_details`) degrades to 0 / {}
+    for a missing or malformed file. The credit-brake field `nano_aiu`, by
+    contrast, fails closed: it is the EXACT integer `totalNanoAiu`, or **None**
+    when the field is missing / unreadable / non-integral — NEVER 0 (a missing
+    credit figure is unavailable, not free spend; 041-01 A3). `ai_credits_status`
+    (`complete`/`partial`/`unavailable`, the primary partial gate) and
+    `current_model` (the bound-guard key) are None when absent.
     """
     default = {
         "premium_request_cost": 0,

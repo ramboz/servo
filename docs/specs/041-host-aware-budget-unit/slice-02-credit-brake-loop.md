@@ -40,7 +40,8 @@ single-threaded worker is guaranteed by omitting `--fleet`, refining ADR-0048 pa
 **Acceptance Criteria:**
 
 1. **Opt-in launch.** `--host copilot` runs the loop only when both
-   `--credit-ceiling N` (N ≥ 30, from the flag or plan `budget.credit_ceiling`) and an
+   `--credit-ceiling N` (N ≥ 30, from the `--credit-ceiling` flag; plan-sourced
+   `budget.credit_ceiling` is **deferred** — see the deviation log) and an
    explicit `--max-iterations` are given. Otherwise the ADR-0043 refusal is unchanged
    (`env_error`, rc=2, no subprocess, no state). **Bound guard (reactive):** because the
    admin-pinned worker model and its context window are not known pre-launch, the
@@ -87,10 +88,13 @@ single-threaded worker is guaranteed by omitting `--fleet`, refining ADR-0048 pa
      tool-kind to deny** (only `shell/write/read/memory/url/<mcp>` exist); subagent
      spawning is gated solely by the `--fleet` launch flag, so omitting it is the control
      (ADR-0048 part 2, refined). No fabricated `--deny-tool` subagent rule is passed.
-   - Under `--host copilot`, a target whose oracle has USD-priced components is refused
-     before any model call via the existing `_unpriced_oracle_error` /
-     `_unpriced_oracle_preflight` path (ADR-0048 part 5), unless the owner approved a USD
-     oracle ceiling.
+   - Under `--host copilot`, a target whose oracle has **unpriced** (unknown-USD-cost)
+     components is refused before any model call via the existing `_unpriced_oracle_error` /
+     `_unpriced_oracle_preflight` path (ADR-0041), which already runs on the Copilot path.
+     This covers the common case (an API judge registered as unpriced). A component with a
+     **known** USD price is not distinguishable from servo's install metadata (no
+     `usd_priced` marker), so refusing it under Copilot per ADR-0048 part 5 is a
+     **deferred** limitation — see the deviation log.
 7. **Role placement refused.** Under `--host copilot` a `--models` block is **refused
    whole** (`REASON_MODELS_INVALID`): Copilot renders are model-neutral (spec 032-03) and
    servo does not tier under Copilot (ADR-0047 is Claude-only), so no `role_args` reach the
@@ -133,7 +137,31 @@ missing usage report, never silently.
 - **A Copilot invocation failure is `credit_usage_unavailable`** (AC3), not the generic
   `claude_invocation_failed` — no usable credit report means fail-closed with spend `null`.
 - **AC6 oracle-USD refusal reuses existing machinery** (`_unpriced_oracle_error` /
-  `_unpriced_oracle_preflight`), which already runs on the Copilot path; no new code.
+  `_unpriced_oracle_preflight`), which already runs on the Copilot path; no new code. It
+  refuses **unpriced** (unknown-USD-cost) components (ADR-0041) — the common API-judge case.
+
+**Deferred (surfaced by the independent compliance review; all fail-closed):**
+
+- **Plan-sourced `budget.credit_ceiling` not wired (AC1).** `credit_ceiling` comes from the
+  `--credit-ceiling` flag only; `_PLAN_BUDGET_KEYS` / `_resolve_from_plan` /
+  `_validate_plan_budget` do not carry it, and the Copilot launch gate runs before the plan
+  budget is resolved. A plan that supplies only `budget.credit_ceiling` (no flag) is
+  **refused** `native_capability_unavailable` — fail-closed, not fail-open. Wiring it
+  (moving the Copilot gate after plan resolution, extending the 016 clamp semantics to
+  credits) is a follow-up; the flag is the primary operator surface. See
+  [refinement-todo](../../refinement-todo.md).
+- **Known-USD-priced oracle components under Copilot (AC6 / ADR-0048 part 5).** The
+  `unpriced_components` guard refuses components whose USD cost is *unknown*, not components
+  with a *known* USD price. servo's install metadata has no `usd_priced` marker, so a
+  known-priced oracle component is not distinguishable and would run under Copilot (where
+  `cost_ceiling` is `null`) with no USD bound. Refusing it per part 5 needs a new metadata
+  marker — deferred. (The worker **credit** brake is unaffected; this is oracle USD.)
+- **Copilot runs are not cross-process `--resume`-able.** The `backend_mismatch` resume
+  guard refuses a persisted run whose `backend != claude`, so an interrupted Copilot run
+  restarts fresh (re-spending credits), even though its state persists
+  `cumulative_credits_nano` / `credit_ceiling`. The spec's "resume" is the intra-run Copilot
+  session resume (the session-delta), which works. Cross-process resume of a Copilot run is
+  a follow-up.
 
 ### Reconciliation sweep
 

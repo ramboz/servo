@@ -8610,6 +8610,24 @@ class CopilotCreditBrakeLaunchTests(unittest.TestCase):
                          loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
         self.assertIsNone(last["cumulative_credits"])
 
+    def test_unpriced_oracle_refused_under_copilot(self):
+        # AC6 / ADR-0041: an oracle with unpriced (unknown-USD-cost) components is
+        # refused under Copilot by the shared `_unpriced_oracle_preflight`, before
+        # any model call (no credit is spent).
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        manifest = self.target / ".servo" / "install.json"
+        data = json.loads(manifest.read_text())
+        data["components"] = ["eval:llm-judge"]
+        data["unpriced_components"] = ["eval:llm-judge"]
+        manifest.write_text(json.dumps(data))
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "1",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_UNPRICED_ORACLE_COMPONENTS)
+        self.assertFalse(self.counter.exists())  # refused before any copilot call
+
 
 class EditPermissionRelabelLoopTests(unittest.TestCase):
     """AC1/AC5/AC8: a walled loop-driver run (git target, runner never edits,
