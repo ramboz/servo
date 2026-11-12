@@ -1,0 +1,161 @@
+{
+  "totalPremiumRequestCost": 1,
+  "totalUserRequests": 1,
+  "totalNanoAiu": 31005230000,
+  "aiCreditsStatus": "complete",
+  "tokenDetails": {
+    "input": {
+      "tokenCount": 87
+    },
+    "cache_read": {
+      "tokenCount": 123258
+    },
+    "cache_write": {
+      "tokenCount": 33873
+    },
+    "output": {
+      "tokenCount": 21287
+    }
+  },
+  "totalApiDurationMs": 212722,
+  "sessionStartTime": "2026-11-11T23:36:10.666Z",
+  "codeChanges": {
+    "linesAdded": 2182,
+    "linesRemoved": 0,
+    "filesModifiedCount": 21,
+    "filesModified": [
+      "./work-d/bigkit/__init__.py",
+      "./work-d/bigkit/strings.py",
+      "./work-d/bigkit/lists.py",
+      "./work-d/bigkit/dicts.py",
+      "./work-d/bigkit/mathx.py",
+      "./work-d/bigkit/dates.py",
+      "./work-d/bigkit/parsing.py",
+      "./work-d/bigkit/validation.py",
+      "./work-d/bigkit/formatting.py",
+      "./work-d/bigkit/caching.py",
+      "./work-d/bigkit/graphs.py",
+      "./work-d/bigkit/stats.py",
+      "./work-d/bigkit/encoding.py",
+      "./work-d/tests/test_strings.py",
+      "./work-d/tests/test_strings_edges.py",
+      "./work-d/tests/test_lists.py",
+      "./work-d/tests/test_lists_edges.py",
+      "./work-d/tests/test_dicts.py",
+      "./work-d/tests/test_dicts_edges.py",
+      "./work-d/tests/test_mathx.py",
+      "./work-d/tests/test_mathx_edges.py"
+    ]
+  },
+  "modelMetrics": {
+    "gpt-6.1-sol": {
+      "requests": {
+        "count": 5,
+        "cost": 1
+      },
+      "usage": {
+        "inputTokens": 157218,
+        "outputTokens": 21287,
+        "cacheReadTokens": 123258,
+        "cacheWriteTokens": 33873,
+        "reasoningTokens": 377
+      },
+      "cacheExpiresAt": "2026-11-12T00:09:48.585Z",
+      "totalNanoAiu": 31005230000,
+      "aiCreditsStatus": "complete",
+      "tokenDetails": {
+        "input": {
+          "tokenCount": 87
+        },
+        "cache_read": {
+          "tokenCount": 123258
+        },
+        "cache_write": {
+          "tokenCount": 33873
+        },
+        "output": {
+          "tokenCount": 21287
+        }
+      }
+    }
+  },
+  "agentMetrics": {
+    "main": {
+      "totalApiDurationMs": 212722,
+      "totalNanoAiu": 31005230000,
+      "modelMetrics": {
+        "gpt-6.1-sol": {
+          "requests": {
+            "count": 5,
+            "cost": 1
+          },
+          "usage": {
+            "inputTokens": 157218,
+            "outputTokens": 21287,
+            "cacheReadTokens": 123258,
+            "cacheWriteTokens": 33873,
+            "reasoningTokens": 377
+          },
+          "totalNanoAiu": 31005230000,
+          "tokenDetails": {
+            "input": {
+              "tokenCount": 87
+            },
+            "cache_read": {
+              "tokenCount": 123258
+            },
+            "cache_write": {
+              "tokenCount": 33873
+            },
+            "output": {
+              "tokenCount": 21287
+            }
+          }
+        }
+      }
+    }
+  },
+  "providerModelMetrics": [
+    {
+      "provider": {
+        "id": "copilot",
+        "label": "GitHub Copilot",
+        "kind": "copilot"
+      },
+      "modelId": "gpt-6.1-sol",
+      "metrics": {
+        "requests": {
+          "count": 5,
+          "cost": 1
+        },
+        "usage": {
+          "inputTokens": 157218,
+          "outputTokens": 21287,
+          "cacheReadTokens": 123258,
+          "cacheWriteTokens": 33873,
+          "reasoningTokens": 377
+        },
+        "totalNanoAiu": 31005230000,
+        "aiCreditsStatus": "complete",
+        "tokenDetails": {
+          "input": {
+            "tokenCount": 87
+          },
+          "cache_read": {
+            "tokenCount": 123258
+          },
+          "cache_write": {
+            "tokenCount": 33873
+          },
+          "output": {
+            "tokenCount": 21287
+          }
+        }
+      },
+      "modelDisplayName": "GPT-6.1 Sol"
+    }
+  ],
+  "currentModel": "gpt-6.1-sol",
+  "lastCallInputTokens": 44741,
+  "lastCallOutputTokens": 72
+}

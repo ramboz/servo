@@ -160,7 +160,7 @@
 | [038-per-node-model-tiering](038-per-node-model-tiering/spec.md) | 038-03 — plateau escalation ladder | **DONE** | `models.escalation` = cumulative runner overrides tried on plateau in the same run only when the next rung's full window fits iterations AND cost left; every rung = fresh runner session (+ context-fill reset); rung window starts at its first runner turn. `auto` + ladder routes to the loop driver. Heartbeat forwards `--models`, records `escalation_rung/escalation_rungs`, quarantines escalated runs cut short (ADR-0010 amended, ADR-0047 D5). |
 | [039-variance-gated-eval-judging](039-variance-gated-eval-judging/spec.md) | 039-01 — two-tier judge | DRAFT |  |
 | [040-servo-wrapped-worker-outcome](040-servo-wrapped-worker-outcome/spec.md) | 040-01 — outcome line | DRAFT |  |
-| [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 🔬 041-01 — Copilot contract probe | DRAFT |  |
+| [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 🔬 041-01 — Copilot contract probe | **DONE** | Billed probe ~85/150 cr (owner-authorized); settled ADR-0048 A1–A6. gpt-6.1-sol admin-pinned; prices 10/250/1000 per 1M, ctx 272K. **A2:** `totalNanoAiu` session-cumulative on `--resume` but `--max-ai-credits`/OTel invocation-scoped (bug-007 pattern). `aiCreditsStatus` self-marks partials (primary gate); overrun 1.005 cr (c=0); no subagent tool (gated by `--fleet` omission); usage file empty on SIGKILL (fail closed). Worked bound ~162–202 cr ⇒ part-2 launch-refusal binds at the 30-cr minimum. Redacted evidence under `evidence/`. Outcome: **041-02 unblocked** |
 | [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 041-02 — credit brake and supported loop launch | DRAFT |  |
 | [041-host-aware-budget-unit](041-host-aware-budget-unit/spec.md) | 041-03 — heartbeat credit ledger | DRAFT |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-01 — plan and ledger | DRAFT |  |
@@ -193,7 +193,7 @@
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
 - **4** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
-- **17** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
+- **18** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
 - **10** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review

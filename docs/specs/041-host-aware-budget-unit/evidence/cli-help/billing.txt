@@ -1,0 +1,66 @@
+AI credit usage:
+
+  Copilot usage is measured in AI credits, or in premium requests on the legacy billing platform;
+  the CLI shows whichever your plan uses.
+
+How a session's usage is counted:
+
+  AI credits         Each model call costs its tokens (input, cache reads and writes, output) at the
+                     model's per-token price. Subagents and background work such as compaction count.
+  Premium requests   Each prompt you send costs one premium request times the model's multiplier, as
+                     does each autopilot continuation ("Continuing autonomously (N premium requests)").
+
+  In /model, each model lists its "Credits Per 1M Tokens" (Input, Output, Cache Read, Cache Write) or,
+  on legacy billing, its multiplier. Every call resends the conversation so far as input, so input
+  tokens grow with each call and can reach millions; what the prompt cache served shows as cached.
+  Autopilot pauses after 5 automatic continuations unless you change --max-autopilot-continues.
+
+What /usage shows:
+
+  Local CLI activity · this device   Prompts you sent per day over 180 days, from sessions stored here.
+  Current session · all accounts used
+    Changes      Lines added (+) and removed (-).
+    AI Credits   Credits used, then the session duration. "Reported AI credits ... (partial)" means
+                 some calls reported no cost, so it is a subtotal; "unavailable" means none did. On
+                 legacy billing the row is Requests (premium requests); with your own model provider,
+                 Duration.
+    Tokens       ↑ input (N cached, N written) • ↓ output (N reasoning): ↑ is tokens sent, including
+                 those read from or written to the prompt cache; ↓ is tokens generated. k and m mean
+                 thousand and million.
+    <model>      The same per model, plus its AI credits (AIC).
+  Active account/provider usage
+    Plan         Your plan's budget: % used, used / limit AIC, when it resets.
+    Session, Weekly   Usage limits: % used and when each resets (see copilot help limits).
+  Bars change color at 50% and 75%.
+
+  The Current session rows, like the exit summary, cover only this session. Plan, Session and
+  Weekly are account-wide, like your usage on GitHub: they include your other sessions and Copilot
+  clients such as IDEs, so their AI credits or premium requests can grow much faster than the
+  exit summary shows.
+
+Other places to see usage:
+
+  footer        "Session: N AIC used" (`footer.showAiUsed`); `footer.showQuota` adds "Plan: N% used".
+                /statusline toggles them as the `ai-used` item (on by default) and the `quota` item
+                (off by default). On legacy billing it shows no usage figure by default.
+  exit summary  The session rows and a resume command, when you quit and after a -p run (stderr;
+                not with --silent or --output-format json).
+  --usage-output-file <file>
+                Writes final usage as JSON: totalNanoAiu (10^9 nano AIU = 1 AI credit),
+                totalPremiumRequestCost, modelMetrics, and agentMetrics ("main" and each subagent).
+  OpenTelemetry Spans carry github.copilot.nano_aiu and github.copilot.cost (premium-request
+                multiplier units, not money); see copilot help monitoring.
+
+When your plan runs out:
+
+  With additional paid usage enabled, work continues ("Plan: additional usage"). Otherwise model
+  calls fail with the service's quota message and a link until the reset ("Plan: 100% used, resets
+  <date>"). To get more, upgrade or allow additional usage in your Copilot settings on GitHub
+  (github.com/settings/copilot), or ask your organization's admin. Full account billing and
+  organization usage metrics are on GitHub, not in the CLI.
+
+Learn more:
+
+  https://docs.github.com/en/copilot/concepts/billing
+  https://docs.github.com/en/copilot/reference/copilot-billing/request-based-billing-legacy
+  https://docs.github.com/en/copilot/concepts/copilot-usage-metrics/copilot-metrics

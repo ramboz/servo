@@ -1,0 +1,37 @@
+Working in Parallel:
+
+  Copilot can work on several things at once in two ways. /fleet splits one task across
+  parallel subagents inside a session. Separate sessions run unrelated tasks side by side
+  without editing the same files when each has its own git worktree (/new worktree).
+
+Subagents with /fleet:
+
+  /fleet <prompt> tells the agent to break the work into todos and run the independent ones as
+  parallel subagents, which report back into the same conversation. No setting turns it on.
+  /fleet with no prompt works through the session's open todos, such as the ones a plan made,
+  and copilot --fleet does the same for a prompt given with -i, -p or piped stdin. When a plan
+  has independent parts, approving it can offer "Accept plan and continue in Autopilot
+  execution mode + /fleet".
+  /tasks lists running subagents and background shell commands; open one to follow it, and x
+  stops it. /subagents chooses each subagent's model or turns one off.
+  `subagents.maxConcurrency` and `subagents.maxDepth` cap how many subagents run at once and
+  how deeply they nest, on usage-based billing only.
+
+Separate sessions side by side:
+
+  /new starts another session and keeps the current one running in the background. With the
+  prompt empty, the Left arrow opens the Sessions sidebar, which lists them and switches
+  between them. Running copilot in another terminal is another independent session.
+
+  Sessions in one checkout edit the same files. To keep them apart, give each its own git
+  worktree: /new worktree starts an empty session in a new worktree, and /fork worktree
+  copies the current conversation into one. /worktree moves the current session into a new
+  worktree and leaves your uncommitted changes behind; /move brings them along.
+
+  New worktrees go in a <repo>.worktrees folder beside the repository unless
+  `worktreePathTemplate` sets another location. `worktreeBaseRef` sets whether /worktree and
+  /new worktree start from your current checkout or the default branch; /fork worktree and
+  /move always start from the current checkout.
+
+  /delegate hands the session to Copilot on GitHub, which works on it there and opens a pull
+  request.

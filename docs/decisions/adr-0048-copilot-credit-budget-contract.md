@@ -203,26 +203,47 @@ justified it.
 
 ## Assumptions
 
-All six come from the CLI documentation alone; spec 041-01's billed probe
-settles them.
+All six were from the CLI documentation alone when this ADR was accepted; spec
+**041-01's billed probe settled them on 2026-11-11** (`copilot` 1.0.110-1, worker
+model **gpt-6.1-sol** admin-pinned, ~85 AI credits; raw redacted evidence under
+`../specs/041-host-aware-budget-unit/evidence/`). No kill criterion fired, so
+Option A stands.
 
-- **A1:** per-invocation `totalNanoAiu` is written for completed `-p` runs and
-  covers subagents and compaction.
-- **A2:** whether `--max-ai-credits` and `totalNanoAiu` count the whole session
-  on `--resume=<sid>` or only the invocation. This is the Copilot analogue of
-  Claude's bug 007. It decides whether the per-invocation cap and the
-  per-iteration cost are computed directly or as a difference from a session
-  snapshot. Either answer is workable.
-- **A3:** whether a usage file is written after a timeout or kill. Either answer
-  is workable, because part 3 fails closed.
-- **A4:** whether legacy-billing accounts populate `totalNanoAiu` at all.
-- **A5:** whether the OpenTelemetry file export gives per-call cost and tokens
-  for `-p` runs, so that part 3's per-call partial check can run.
-- **A6 (the overrun bound):**
-  - the overrun past a cap is at most (1 + c) × the per-call maximum, with
-    *c* = 1 for compaction;
-  - subagent spawning can be denied;
-  - no other background model work runs concurrently.
+- **A1 — VERIFIED.** Completed `-p` runs write `totalNanoAiu` with `modelMetrics`,
+  `agentMetrics` (`main` + any subagents) and `providerModelMetrics`; credits =
+  `totalNanoAiu / 1e9`. Subagents were not spawned (no `--fleet`) and compaction was
+  not forced; both fold into the model's `totalNanoAiu` (`copilot help billing`).
+- **A2 — VERIFIED, with a refinement: the cap and the report have different scopes.**
+  On `--resume` the usage-file `totalNanoAiu` is **session-cumulative** (Run B 37.176 =
+  prior 12.893 + new 24.283), but `--max-ai-credits` is **invocation-scoped** (Run B ran
+  past cumulative 30), and the OTel file export is per-invocation. The brake takes the
+  per-iteration cost as a **difference from a session snapshot** (bug-007 pattern); the
+  invocation cap is a separate, invocation-scoped knob.
+- **A3 — VERIFIED absent → fail-closed confirmed.** After servo's SIGKILL path the
+  `--usage-output-file` target stayed 0 bytes (no usage JSON for a killed invocation) —
+  the `credit_usage_unavailable` case part 3 halts on. OTel retained only a partial
+  per-call lower bound (no `invoke_agent` root-span total).
+- **A4 — unobservable on this account** (bills in AI credits, not legacy premium
+  requests). `totalPremiumRequestCost` is also populated alongside credits, but credits
+  are authoritative; OQ2 unaffected.
+- **A5 — VERIFIED positive, and richer.** OTel `chat <model>` spans give per-call
+  `github.copilot.nano_aiu` + token counts for `-p` runs, and **Σ per-call =
+  `totalNanoAiu` exactly** (11 calls, residual 0). Additionally the usage JSON self-marks
+  via **`aiCreditsStatus`** (`complete` / partial / unavailable) — a simpler **primary**
+  partial gate; part 3's OTel per-call check becomes the cross-check.
+- **A6 — VERIFIED.** A forced cap crossing (Run D) overran its 30-credit cap by
+  **1.005 cr** (one crossing call; strictly sequential calls ⇒ observed `c` = 0, within
+  the conservative `c = 1`); the soft cap blocked the next call, and the cap-halt
+  **exited 0** with a written usage file (so servo detects a halt from `totalNanoAiu ≥
+  cap` / stderr, not the exit code). Subagent spawning has **no tool to deny** — it is
+  gated by the `--fleet` launch flag (never passed), so the single-threaded worker is
+  structural (stronger than part 2's "tool-denial flags" wording; 041-02 implements the
+  omission). **Worked bound:** gpt-6.1-sol context window 272K, prices 10 / 250 / 1000
+  credits per 1M (cache-read / cache-write / output); per-call maximum ≈ 81–101 cr, so
+  `(1 + c) × per-call-max` ≈ **162–202 credits**. That is ≥ any ceiling below ~200, so
+  **part 2's launch-refusal binds at the 30-credit CLI minimum** — a gpt-6.1-sol worker
+  is only meaningfully bounded at ceilings in the low hundreds of credits (the number for
+  owner open question 1).
 
 ## Kill criteria
 
