@@ -1584,3 +1584,41 @@ large enough that the per-append rewrite cost matters.
 that drifts the two homes; (2)/(3) a real campaign hits the transient-error or
 coarse-default-scope case; (4) loop.py gains an injectable `--run-id`, or 042-05's
 bounded parallelism revisits reservation liveness.
+
+---
+
+## Bounded parallelism is servo-driven / single-unit-USD and blocks per wave (042-05)
+
+**Deferred:** spec 042-05 ships bounded parallel dispatch but with a deliberately
+narrow aggregate brake (see the slice's Scope section):
+1. **Credit-priced aggregate ceiling (servo-driven only).** A credit
+   `aggregate_budget` or any credit item under `max_parallel > 1` is rejected
+   fail-closed, because recorded credit spend is `cost_usd: null` (never summed to
+   USD). So a **servo-driven** credit campaign cannot carry an aggregate ceiling and
+   must run serial. Pricing AI credits to a USD-equivalent (spec 041's Copilot per-1M
+   pricing is known) would let a servo-driven credit campaign carry an aggregate
+   ceiling and lift the single-unit-USD restriction. Note this does NOT by itself give
+   a host-driven Copilot campaign an aggregate ceiling: Copilot is always host-driven,
+   so servo never runs its dispatch and `max_parallel` / `aggregate_budget` are inert
+   — that is the separate, deeper structural barrier in point 2.
+2. **Host-driven mode has no campaign-level aggregate cap.** The aggregate ceiling
+   is servo-driven only (servo runs the dispatch); in host-driven advisory/wrapped
+   mode the host spawns the workers, so there is no servo coordinator to enforce an
+   aggregate ceiling — only the per-worker `loop.py` ceilings (and 042-04's
+   per-worker verified-wrapped bounding). The motivating Copilot runaway is bounded
+   per-worker by 042-04, not by an aggregate cap.
+3. **Wave blocking window.** `campaign next` launches the wave then joins its workers
+   in plan order under the held lock with no outer timeout, so it holds the lock for
+   the slowest worker's duration and reuses freed slots/budget only on the next wake
+   (selection is once per wave). A completion-order join (poll/select) with mid-wave
+   re-selection would shrink the lock-holding window and reuse freed capacity within
+   a wave.
+4. **A2 (resource contention) unverified.** Whether parallel worktree workers contend
+   on shared target resources (ports, caches, build dirs) is unverified, so
+   `max_parallel` default stays 1.
+
+**Resolution trigger:** (1) a real credit/Copilot campaign needs an aggregate
+ceiling, or a reviewed credit→USD pricing contract lands; (2) a host-driven campaign
+needs an aggregate cap AND a servo-side enforcement point exists; (3) a real parallel
+campaign's wave-blocking window is a problem in practice; (4) a real campaign settles
+A2 and wants `max_parallel` default raised.

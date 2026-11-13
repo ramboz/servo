@@ -161,7 +161,7 @@ python3 "${PLUGIN_ROOT}/skills/heartbeat/heartbeat.py" run /path/to/repo \
   --host copilot --credit-ceiling 300 --max-candidates 3 --max-iterations 5
 ```
 
-## Campaign (spec 042 — plan, ledger, serial dispatch)
+## Campaign (spec 042 — plan, ledger, serial + bounded parallel dispatch)
 
 A **campaign** is heartbeat-style dispatch over a *planned* work list (ADR-0049):
 a list of independent, oracle-gated work items, each with its own `oracle_ref`,
@@ -323,11 +323,12 @@ python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" status my-campaign \
 
 ### `campaign.py next <id> [--target <path>]`
 
-The **servo-driven serial dispatch** step (spec 042-02): the episodic coordinator
-for the enforced Claude Code mode. Each `next` reads the ledger, dispatches at most
-one ready item (`max_parallel` 1), records the loop's own typed outcome, and
-exits. There is **no daemon and no resident coordinator context** — waking `next`
-is the trigger's job (a host, a Routine, or a human).
+The **servo-driven dispatch** step (spec 042-02 serial, 042-05 bounded parallel):
+the episodic coordinator for the enforced Claude Code mode. Each `next` reads the
+ledger, dispatches up to the plan's `max_parallel` ready items (default 1, serial),
+records each loop's own typed outcome, and exits. There is **no daemon and no
+resident coordinator context** — waking `next` is the trigger's job (a host, a
+Routine, or a human).
 
 One invocation, in order:
 
@@ -363,6 +364,32 @@ One invocation, in order:
    `coordinator_decision` ledger entry (what it read, reconciled, dispatched or
    failed to dispatch, and escalated), so a campaign that fans out wrong is
    debuggable from the ledger alone.
+
+**Bounded parallel dispatch (spec 042-05).** When the plan sets `max_parallel > 1`
+and a plan-level **`aggregate_budget: {unit, ceiling}`**, `next` dispatches up to the
+free slots (`max_parallel` minus the live reservations) of ready items **at once**,
+each in its own worktree, then joins them all before it exits — still one episodic
+command under the non-blocking coordinator lock (which now serializes *waves*, so
+overlapping wakes never together exceed `max_parallel`). Before each dispatch it
+enforces the **aggregate ceiling**: Σ recorded enforced spend (`servo` + verified
+`wrapped`) + Σ the reserved per-item ceilings of the **live** workers + this item's
+ceiling ≤ the aggregate ceiling. A dispatch that would breach it is **refused and the
+item stays queued** (selection stops in plan order — a too-big high-priority item is
+not skipped for a cheaper later one), and a later wake dispatches it once recorded
+spend leaves room. Bounded parallelism is **single-unit USD**: a credit
+`aggregate_budget` or any credit item under `max_parallel > 1` is rejected
+fail-closed (recorded credit spend is `cost_usd: null`, never summed to USD), so a
+credit campaign runs serial. The aggregate ceiling is **servo-driven only** —
+host-driven advisory/wrapped mode (the host spawns the workers; servo only records)
+has no campaign-level aggregate cap — only wrapped's per-worker `loop.py` ceilings
+(advisory has none, so a runaway advisory worker is unbraked in flight) — so bounded
+parallelism does not change the host-driven Copilot aggregate story (ADR-0049 bounds
+that runaway through 042-04's per-worker verified-wrapped). The
+coordinator also blocks for the whole wave (it joins workers in plan order under the
+held lock), so freed slots/budget are reused on the next wake, not mid-wave.
+**A2 (parallel workers not contending on shared target resources) is unverified, so
+`max_parallel` defaults to 1** until a real campaign raises it. `max_parallel`
+1/unset is exactly the serial path above.
 
 servo **never merges** and does no git operation beyond worktree isolation:
 `campaign next` dispatches, records and exits. Landing stays with jig `slice-land
