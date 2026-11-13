@@ -167,7 +167,7 @@
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-02 — servo-driven serial dispatch | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-03 — host-driven advisory | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-04 — host-driven verified-wrapped | **DONE** |  |
-| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-05 — bounded parallel dispatch | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-05 — bounded parallel dispatch | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-06 — wave integration-review brief | DRAFT |  |
 
 ## Deferred slices
@@ -192,23 +192,3 @@
 | Spec | Slice | Abandonment reason |
 |------|-------|---------------------|
 | [026-design-eval-browser-acquisition](026-design-eval-browser-acquisition/spec.md) | 026-04 — authoring-assist | two independent re-scopes could not find a version of |
-
-## Richer-skill selection audit (spec 096-05)
-
-Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
-
-- **6** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
-- **24** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
-- **12** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
-  - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
-  - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
-  - `034-copilot-installed-runtime/slice-04-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
-  - `034-copilot-installed-runtime/slice-05-craft.md` — applied `pr-review`; declined: scout-pr-review
-  - `034-copilot-installed-runtime/slice-06-arch.md` — applied `unknown`; declined: arch-review
-  - `034-copilot-installed-runtime/slice-06-craft.md` — applied `unknown`; declined: pr-review, scout-pr-review
-  - `034-copilot-installed-runtime/slice-08-craft.md` — applied `pr-review`; declined: scout-pr-review
-  - `037-reusable-design-evidence/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
-  - `038-per-node-model-tiering/slice-01-craft.md` — applied `pr-review`; declined: independent-review, scout-pr-review
-  - `038-per-node-model-tiering/slice-02-craft.md` — applied `pr-review`; declined: independent-review, scout-pr-review
-  - `042-campaign-orchestration/slice-01-arch.md` — applied `none`; declined: arch-review
-  - `042-campaign-orchestration/slice-01-craft.md` — applied `none`; declined: independent-review, scout-pr-review
