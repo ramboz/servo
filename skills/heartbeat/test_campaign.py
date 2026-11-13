@@ -634,11 +634,13 @@ class AggregateCeilingAccountingTests(unittest.TestCase):
         self.assertIsNotNone(_cmp._cost_unit_error("credit", 0.01))
         self.assertIsNotNone(_cmp._cost_unit_error("credit", 1.0))
 
-    def test_wrapped_in_schema_not_in_cli(self):
-        # wrapped is a valid LEDGER tier (schema + accounting handle it, ready
-        # for 042-04) but the 042-01 CLI will not record it.
+    def test_wrapped_is_schema_and_cli_tier(self):
+        # wrapped is a valid LEDGER tier whose cost is enforced (not
+        # self_reported); since 042-04 it is also a CLI tier — but "verified, not
+        # declared": `record --tier wrapped` is accepted only after the verifier
+        # confirms the loop's state (see the Wrapped* tests), else it downgrades.
         self.assertIn("wrapped", _cmp.TIERS)
-        self.assertNotIn("wrapped", _cmp.CLI_TIERS)
+        self.assertIn("wrapped", _cmp.CLI_TIERS)
         entry = _cmp._ledger_entry("x", "wrapped", _usd_outcome(), "t")
         self.assertFalse(entry["self_reported"])
 
@@ -1941,6 +1943,325 @@ class AdvisoryNoSpawnTests(unittest.TestCase):
             self.assertEqual(res.returncode, 0, res.stderr)
             self.assertFalse(runner_log.exists())        # brief invoked no worker/loop
             self.assertEqual(_outcome_entries(tmp), [])  # and wrote no outcome
+
+
+# =========================================================================== #
+# Spec 042-04 — host-driven verified-wrapped: `campaign brief --tier wrapped`,
+# the `--tier wrapped` verifier in `record`, re-render from the loop's state, the
+# downgrade paths, and the AC6 status boundary.
+#
+# A worker worktree is a REAL linked git worktree (DoD: fingerprint from a real
+# git worktree, not a mock). Its loop `state.json` is written by hand with a REAL
+# content fingerprint computed via loop.py's OWN `_content_fingerprint` (the same
+# function campaign.py recomputes with), so a happy path verifies and every
+# perturbation downgrades. No Copilot needed.
+# =========================================================================== #
+
+
+def _wrapped_target(tmp: Path) -> Path:
+    """A real git repo campaign target (a subdir, so worker worktrees can be
+    siblings outside the repo)."""
+    return _dispatch_repo(tmp / "proj")
+
+
+def _init_wrapped(target: Path, *items: dict, campaign_id: str = "camp-1",
+                  tmp: Optional[Path] = None) -> None:
+    plan = _valid_plan(*(items or (_item("item-a"),)))
+    planfile = (tmp or target.parent) / "plan-wrapped.json"
+    planfile.write_text(json.dumps(plan))
+    res = _run(["init", str(target), "--plan", str(planfile), "--id", campaign_id])
+    assert res.returncode == 0, res.stderr
+
+
+def _add_worktree(target: Path, dest: Path, item: str, base: str) -> None:
+    _git_cmd(target, "worktree", "add", "-b", "wk/" + item, str(dest), base)
+
+
+def _write_loop_state(worktree: Path, run_id: str, *, start_head: str,
+                      allow_dirty: bool = False, cost: object = 0.42,
+                      result: str = "passed", iterations: int = 3,
+                      outcome: Optional[dict] = None,
+                      outcome_cost: object = "__distinct__",
+                      fingerprint: Optional[dict] = None,
+                      omit_outcome: bool = False) -> None:
+    """Hand-write a loop `state.json` under the worktree — the REAL fingerprint is
+    computed via loop.py's own function unless one is supplied.
+
+    The embedded `state["outcome"]["cost_usd"]` is deliberately set to a value
+    DISTINCT from `cumulative_cost_usd` (`cost`) by default, so a cost assertion
+    proves the verifier sources cost from `_state_cost` (cumulative_cost_usd), not
+    from the outcome record's own field. Pass `outcome_cost=` to pin it."""
+    if fingerprint is None:
+        fingerprint = _loop._content_fingerprint(worktree)
+    if outcome_cost == "__distinct__":
+        outcome_cost = 7.77 if cost == 0.42 else 0.42  # a trap value != cumulative
+    if outcome is None and not omit_outcome:
+        outcome = {"servo_outcome": 1, "result": result, "rung": 0, "rungs": 1,
+                   "iterations": iterations, "cost_usd": outcome_cost,
+                   "composite": 0.9, "threshold": 0.8, "run_id": run_id,
+                   "reason": "oracle_passed"}
+    state = {"run_id": run_id, "state_schema_version": 1, "backend": "claude",
+             "cumulative_cost_usd": cost, "start_head": start_head,
+             "allow_dirty": allow_dirty, "halt_fingerprint": fingerprint}
+    if not omit_outcome:
+        state["outcome"] = outcome
+    runs = worktree / ".servo" / "runs" / run_id
+    runs.mkdir(parents=True, exist_ok=True)
+    (runs / "state.json").write_text(json.dumps(state))
+
+
+def _record_wrapped(target: Path, item: str, worktree: Path, line: dict, *,
+                    campaign_id: str = "camp-1", gate_stub: Optional[Path] = None,
+                    ) -> subprocess.CompletedProcess:
+    args = ["record", campaign_id, item, "--outcome", json.dumps(line),
+            "--tier", "wrapped", "--worktree", str(worktree), "--target", str(target)]
+    env = dict(os.environ)
+    if gate_stub is not None:
+        env["SERVO_HEARTBEAT_GATE_PY"] = str(gate_stub)
+    return subprocess.run([sys.executable, str(CAMPAIGN), *args],
+                          capture_output=True, text=True, env=env)
+
+
+class _WrappedBase(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+        self.target = _wrapped_target(self.tmp)
+        self.item = "item-a"
+        _init_wrapped(self.target, _item(self.item), tmp=self.tmp)
+        self.base = _git_cmd(self.target, "rev-parse", "HEAD").stdout.strip()
+        self.wt = self.tmp / "wt-a"
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _brief_wrapped(self):
+        res = _run(["brief", "camp-1", self.item, "--tier", "wrapped",
+                    "--target", str(self.target)])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        return res
+
+    def _worker_did_work(self):
+        _add_worktree(self.target, self.wt, self.item, self.base)
+        (self.wt / "src.py").write_text("print('fixed by the loop')\n")
+        (self.wt / "new_feature.py").write_text("x = 1\n")
+
+    def _latest_entry(self):
+        entries = [e for e in _ledger_lines(self.tmp / "proj") if "outcome" in e]
+        return entries[-1]
+
+
+class WrappedVerifiedHappyPathTests(_WrappedBase):
+    def test_verified_wrapped_is_enforced_and_rerendered(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        # cumulative_cost_usd=0.42, but the state's OWN outcome record carries a
+        # distinct 7.77 — so a correct recorded cost of 0.42 proves it came from
+        # _state_cost (cumulative_cost_usd), not the state outcome's own field.
+        _write_loop_state(self.wt, "run-ok", start_head=self.base,
+                          allow_dirty=False, cost=0.42, outcome_cost=7.77,
+                          result="passed")
+        # The worker FORWARDS a line with WRONG values — servo must ignore them.
+        line = _usd_outcome(run_id="run-ok", result="blocked", cost_usd=99.0,
+                            iterations=999)
+        res = _record_wrapped(self.target, self.item, self.wt, line)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        entry = self._latest_entry()
+        self.assertEqual(entry["tier"], "wrapped")
+        self.assertFalse(entry["self_reported"])          # enforced spend (AC6)
+        self.assertTrue(entry["wrapped_verification"]["verified"])
+        # AC4: re-rendered from state, NOT the forwarded line (99.0) and NOT the
+        # state outcome's own field (7.77) — the authoritative cumulative cost.
+        self.assertEqual(entry["outcome"]["result"], "passed")
+        self.assertEqual(entry["outcome"]["cost_usd"], 0.42)
+        self.assertEqual(entry["outcome"]["iterations"], 3)
+
+    def test_enforced_cost_counts_in_status(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-ok", start_head=self.base, cost=0.42)
+        self.assertEqual(
+            _record_wrapped(self.target, self.item, self.wt,
+                            _usd_outcome(run_id="run-ok")).returncode, 0)
+        res = _run(["status", "camp-1", "--json", "--target", str(self.target)])
+        summary = json.loads(res.stdout)
+        self.assertEqual(summary["totals"]["enforced_cost_usd"], 0.42)
+        self.assertEqual(summary["totals"]["self_reported_cost_usd"], 0.0)
+        self.assertTrue(summary["wrapped_active"])
+
+    def test_status_states_the_wrapped_boundary(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-ok", start_head=self.base, cost=0.42)
+        _record_wrapped(self.target, self.item, self.wt, _usd_outcome(run_id="run-ok"))
+        res = _run(["status", "camp-1", "--target", str(self.target)])
+        self.assertIn("binds the loop.py subprocess only", res.stdout)
+        self.assertIn("outside every ceiling", res.stdout)
+
+
+class WrappedDowngradeTests(_WrappedBase):
+    """Every verification failure downgrades to advisory (self_reported)."""
+
+    def _expect_downgrade(self, line, reason, *, gate_stub=None):
+        res = _record_wrapped(self.target, self.item, self.wt, line, gate_stub=gate_stub)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        entry = self._latest_entry()
+        self.assertEqual(entry["tier"], "advisory")
+        self.assertTrue(entry["self_reported"])
+        self.assertFalse(entry["wrapped_verification"]["verified"])
+        self.assertEqual(entry["wrapped_verification"]["reason"], reason)
+        return entry
+
+    def test_no_wrapped_brief_downgrades(self):
+        # No `brief --tier wrapped` → no trusted base persisted.
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head=self.base)
+        self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="blocked"), "no_wrapped_brief")
+
+    def test_brief_with_null_base_sha_downgrades(self):
+        # A wrapped brief emitted on a commitless target persists base_sha=null:
+        # the brief EXISTS but there is no trusted base to verify against, so the
+        # reason is distinct from a wholly-missing brief (clearer diagnosis).
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head=self.base)
+        briefs = _campaign_dir(self.target, "camp-1") / "briefs"
+        briefs.mkdir(parents=True, exist_ok=True)
+        (briefs / (self.item + ".json")).write_text(json.dumps(
+            {"item": self.item, "tier": "wrapped", "base_sha": None}))
+        self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="blocked"),
+            "brief_base_sha_unresolved")
+
+    def test_missing_run_state_downgrades(self):
+        self._brief_wrapped()
+        self._worker_did_work()  # a worktree exists, but no state.json for this run_id
+        self._expect_downgrade(
+            _usd_outcome(run_id="ghost", result="blocked"), "state_not_found")
+
+    def test_fingerprint_mismatch_downgrades(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head=self.base)
+        # A post-halt edit to an already-changed file (AC5): status line unchanged,
+        # content differs → fingerprint mismatch.
+        (self.wt / "src.py").write_text("print('edited AFTER the loop halted')\n")
+        self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="blocked"), "fingerprint_mismatch")
+
+    def test_new_untracked_edit_after_halt_downgrades(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head=self.base)
+        (self.wt / "new_feature.py").write_text("x = 2  # tampered post-halt\n")
+        self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="blocked"), "fingerprint_mismatch")
+
+    def test_commit_before_record_downgrades_head_moved(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head=self.base)
+        # Worker commits before recording → HEAD moves (AC3 record-before-commit).
+        _git_cmd(self.wt, "add", "-A")
+        _git_cmd(self.wt, "commit", "-qm", "worker commit")
+        self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="blocked"), "head_moved")
+
+    def test_base_sha_mismatch_downgrades(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head="0" * 40)  # not the base
+        self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="blocked"), "base_sha_mismatch")
+
+    def test_allow_dirty_downgrades(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head=self.base, allow_dirty=True)
+        self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="blocked"), "allow_dirty")
+
+    def test_missing_state_outcome_downgrades(self):
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head=self.base, omit_outcome=True)
+        self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="blocked"), "no_state_outcome")
+
+    def test_downgraded_claimed_pass_is_oracle_rechecked(self):
+        # A downgraded wrapped that CLAIMED passed falls through to the advisory
+        # oracle re-check (gate stub says below-threshold → recorded blocked).
+        self._brief_wrapped()
+        self._worker_did_work()
+        _write_loop_state(self.wt, "run-x", start_head="0" * 40)  # base mismatch
+        gate = _write_stub_gate(self.tmp / "gate.py", exit_code=1, status="below")
+        entry = self._expect_downgrade(
+            _usd_outcome(run_id="run-x", result="passed"), "base_sha_mismatch",
+            gate_stub=gate)
+        self.assertEqual(entry["oracle_recheck"]["claimed_result"], "passed")
+        self.assertEqual(entry["outcome"]["result"], "blocked")  # re-checked, never passed
+
+
+class WrappedContractTests(_WrappedBase):
+    def test_wrapped_requires_worktree(self):
+        self._brief_wrapped()
+        res = subprocess.run(
+            [sys.executable, str(CAMPAIGN), "record", "camp-1", self.item,
+             "--outcome", json.dumps(_usd_outcome(run_id="r")), "--tier", "wrapped",
+             "--target", str(self.target)],
+            capture_output=True, text=True)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("--worktree", res.stderr)
+
+    def test_wrapped_worktree_absent_refused(self):
+        self._brief_wrapped()
+        res = _record_wrapped(self.target, self.item, self.tmp / "nope",
+                              _usd_outcome(run_id="r"))
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("does not exist", res.stderr)
+
+
+class WrappedBriefTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+        self.target = _wrapped_target(self.tmp)
+        _init_wrapped(self.target, _item("item-a"), _item("item-b"), tmp=self.tmp)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def _briefs_dir(self) -> Path:
+        return self.target / ".servo" / "campaigns" / "camp-1" / "briefs"
+
+    def test_wrapped_brief_persists_base_sha(self):
+        base = _git_cmd(self.target, "rev-parse", "HEAD").stdout.strip()
+        res = _run(["brief", "camp-1", "item-a", "--tier", "wrapped",
+                    "--target", str(self.target)])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        rec = json.loads((self._briefs_dir() / "item-a.json").read_text())
+        self.assertEqual(rec["base_sha"], base)
+        self.assertEqual(rec["tier"], "wrapped")
+
+    def test_wrapped_brief_text_instructs_loop_and_wrapped_record(self):
+        out = _run(["brief", "camp-1", "item-a", "--tier", "wrapped",
+                    "--target", str(self.target)]).stdout
+        self.assertIn("loop.py", out)
+        self.assertIn("--tier wrapped", out)
+        self.assertIn("BEFORE YOU COMMIT", out)
+        self.assertIn("binds the loop.py subprocess only", out)  # AC6 boundary
+        self.assertIn(_cmp._ITEM_BEGIN, out)  # item fields still delimited DATA
+
+    def test_wrapped_brief_all_items_persists_each(self):
+        _run(["brief", "camp-1", "--tier", "wrapped", "--target", str(self.target)])
+        self.assertTrue((self._briefs_dir() / "item-a.json").exists())
+        self.assertTrue((self._briefs_dir() / "item-b.json").exists())
+
+    def test_advisory_brief_writes_no_briefs_dir(self):
+        # 042-03 AC5 regression: the default advisory brief stays read-only.
+        res = _run(["brief", "camp-1", "item-a", "--target", str(self.target)])
+        self.assertEqual(res.returncode, 0, res.stderr)
+        self.assertFalse(self._briefs_dir().exists())
 
 
 if __name__ == "__main__":

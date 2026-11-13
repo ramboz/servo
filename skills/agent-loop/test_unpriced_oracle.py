@@ -298,6 +298,11 @@ def test_model_activation_halts_next_gate_and_preserves_only_known_model_spend(
         stack.enter_context(patch.object(loop, "_was_interrupted", return_value=False))
         stack.enter_context(patch.object(loop, "_get_claude_version", return_value="test"))
         stack.enter_context(patch.object(loop, "_tree_snapshot", return_value=None))
+        # Spec 042-04 adds read-only git reads at fresh-run start (`_head_sha`) and
+        # at halt (`_content_fingerprint`); stub them like `_tree_snapshot` above so
+        # the blanket Popen guard below stays a GATE-dispatch detector, not a git one.
+        stack.enter_context(patch.object(loop, "_head_sha", return_value=None))
+        stack.enter_context(patch.object(loop, "_content_fingerprint", return_value=None))
         stack.enter_context(patch.object(
             loop, "_ensure_vendored_gate", return_value=(target / "gate.py", None)
         ))

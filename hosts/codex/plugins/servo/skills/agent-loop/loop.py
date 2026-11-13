@@ -56,6 +56,7 @@ Summary line: one JSON line on stdout after the last iteration (or refusal).
 """
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import math
@@ -1937,6 +1938,167 @@ def _tree_snapshot(target: Path) -> Optional[set[str]]:
     return snapshot
 
 
+# --------------------------------------------------------------------------- #
+# Spec 042-04 — content fingerprint at halt (ADR-0049 verified-wrapped).
+#
+# The campaign "verified-wrapped" tier (042-04) accepts a host-spawned worker's
+# item as `wrapped` only if the worktree it is recorded against still carries
+# EXACTLY the content the loop produced, measured from the brief's base. This is
+# the primitive that makes that verifiable: a content (not `git status`)
+# fingerprint of the worktree, from read-only git queries, recorded into
+# state.json at halt. campaign.py recomputes it with THIS SAME function (via the
+# dynamic loader) and compares — one implementation, no drift.
+#
+# Why content, not a porcelain set: a post-halt edit to a file the loop already
+# changed leaves the `git status --porcelain` line identical ("M path" stays
+# "M path"), so `_tree_snapshot` could not catch it (AC5). `git diff HEAD
+# --full-index` carries each changed file's full blob sha, so re-editing it
+# changes the hash.
+# --------------------------------------------------------------------------- #
+
+FINGERPRINT_ALGO = "sha256"
+
+
+def _head_sha(target: Path) -> Optional[str]:
+    """`git rev-parse HEAD` (read-only), or None when unavailable.
+
+    None for a non-git target or a repo with no commit yet. The loop performs no
+    git writes, so HEAD is stable from start to halt unless something OUTSIDE the
+    loop moves it (the record-before-commit signal the verifier keys on)."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(target), "rev-parse", "HEAD"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    out = proc.stdout.strip()
+    return out if proc.returncode == 0 and out else None
+
+
+def _diff_section_is_bookkeeping(diff_git_line: str) -> bool:
+    """True iff a `diff --git a/<p> b/<p>` header names a bookkeeping path.
+
+    Belt-and-suspenders: `.servo/` and caches are normally untracked (so they
+    never reach `git diff HEAD`), but if one is tracked its diff section is
+    dropped from the fingerprint, reusing the single `_is_bookkeeping_path`
+    predicate so the exclusion set never forks."""
+    body = diff_git_line[len("diff --git "):].strip()
+    # "a/<p> b/<p>"; the b-side (post-image) is what landed. Split on " b/" so a
+    # path with spaces on the a-side stays whole; fall back to the whole body.
+    for cand in (body.split(" b/", 1)[-1], body.split(" b/", 1)[0], body):
+        cand = cand.strip()
+        if cand.startswith(("a/", "b/")):
+            cand = cand[2:]
+        if cand and _is_bookkeeping_path(cand):
+            return True
+    return False
+
+
+def _tracked_diff_digest(target: Path) -> Optional[str]:
+    """sha256 of `git diff HEAD --full-index`, bookkeeping sections removed.
+
+    `git diff HEAD` is the working tree (staged AND unstaged) against HEAD, so it
+    captures every change to a TRACKED file. `--full-index` embeds each file's
+    full pre/post blob sha, making the text content-addressed and deterministic
+    across the loop's halt computation and the verifier's recompute (same repo,
+    seconds apart). A binary file contributes its blob-sha index line
+    (content-bound) without the `--binary` bloat. None on a git error so the
+    caller can fall back safely."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(target), "diff", "HEAD", "--full-index",
+             "--no-color", "--no-ext-diff", "--no-textconv"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    kept: list[str] = []
+    skipping = False
+    for line in proc.stdout.splitlines():
+        if line.startswith("diff --git "):
+            skipping = _diff_section_is_bookkeeping(line)
+        if skipping:
+            continue
+        kept.append(line)
+    return hashlib.sha256("\n".join(kept).encode("utf-8")).hexdigest()
+
+
+def _untracked_digest(target: Path) -> Optional[str]:
+    """sha256 over a canonical manifest of untracked, non-ignored file CONTENTS.
+
+    `git ls-files --others --exclude-standard -z` lists untracked files that are
+    not gitignored (the "non-ignored" of AC1); `-z` avoids path-quoting issues.
+    Bookkeeping paths (`.servo/`, caches) are filtered with the shared
+    `_is_bookkeeping_path`. Paths are sorted and each contributes
+    `path\\0 sha256(bytes)\\0`, so the digest is order-stable and binds content
+    (an edit to an untracked file changes its content sha). None on a git
+    error."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(target), "ls-files", "--others",
+             "--exclude-standard", "-z"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    except (FileNotFoundError, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    paths = sorted(
+        p for p in proc.stdout.split("\0")
+        if p and not _is_bookkeeping_path(p))
+    h = hashlib.sha256()
+    for rel in paths:
+        h.update(rel.encode("utf-8"))
+        h.update(b"\0")
+        try:
+            content_digest = hashlib.sha256((target / rel).read_bytes()).hexdigest()
+        except OSError:
+            # Unreadable (e.g. a dangling symlink): a stable sentinel keeps the
+            # manifest deterministic rather than raising.
+            content_digest = "<unreadable>"
+        h.update(content_digest.encode("utf-8"))
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def _content_fingerprint(target: Path) -> Optional[dict]:
+    """The worktree's content fingerprint vs its HEAD (042-04 AC1).
+
+    `{algo, head, tracked_diff, untracked}` — the HEAD sha, a hash of the
+    working-tree diff against HEAD, and a hash of untracked non-ignored file
+    contents. All from read-only git queries; bookkeeping excluded. None for a
+    non-git target (the verifier then cannot verify and downgrades to advisory).
+    Recorded into state.json at halt and recomputed by campaign.py's
+    verified-wrapped tier via this SAME function, so equality is exact."""
+    if not _is_git_work_tree(target):
+        return None
+    return {
+        "algo": FINGERPRINT_ALGO,
+        "head": _head_sha(target),
+        "tracked_diff": _tracked_diff_digest(target),
+        "untracked": _untracked_digest(target),
+    }
+
+
+def _record_halt_verification(state: dict, outcome: Optional[dict]) -> None:
+    """Record the 042-04 verified-wrapped evidence into state at halt.
+
+    `halt_fingerprint` is the worktree's content fingerprint (ADR-0049);
+    `outcome` is the loop's OWN rendered spec-040 record, so campaign.py's
+    verified-wrapped tier re-renders result/rung/iterations/cost from the loop's
+    state (never the worker's forwarded line, AC4). Best-effort + read-only: a
+    non-computable fingerprint is None and the verifier downgrades to advisory.
+    The target is read from `state["target_path"]`, so both drivers reach it
+    without threading a parameter through every halt signature."""
+    target = Path(state.get("target_path") or ".")
+    state["halt_fingerprint"] = _content_fingerprint(target)
+    if outcome is not None:
+        state["outcome"] = outcome
+
+
 def _dirty_tree_message(paths: list[str]) -> str:
     """Refusal breadcrumb naming the dirty paths (AC2), bounded in length."""
     shown = paths[:_DIRTY_PATHS_SHOWN]
@@ -3383,13 +3545,18 @@ def _finalize_state_and_summary(
         state["final_oracle_status"] = final_oracle_status
     if terminal_breadcrumb is not None:
         state["terminal_breadcrumb"] = terminal_breadcrumb
-    _atomic_write_state(state, state_path)
     payload = _summary_payload(
         state,
         terminal_reason=terminal_reason,
         final_oracle_status=final_oracle_status,
         terminal_breadcrumb=terminal_breadcrumb,
     )
+    # Spec 042-04: persist the halt content fingerprint + the loop's own rendered
+    # outcome into state BEFORE the single atomic write, so campaign's
+    # verified-wrapped tier can verify provenance and re-render from the loop's
+    # own state. stdout (the summary + 040 line) is unchanged.
+    _record_halt_verification(state, _outcome_record(payload))
+    _atomic_write_state(state, state_path)
     _emit_json(payload)
     _emit_outcome_line(payload)  # spec 040-01: one outcome line per terminal
 
@@ -3760,6 +3927,13 @@ def run_loop(
             host=host,
             credit_ceiling=credit_ceiling,
         )
+        # Spec 042-04: record the base HEAD seen at start and whether the dirty
+        # brake was bypassed — the verified-wrapped tier checks the loop started
+        # at the brief's base without --allow-dirty (so every change halt-side
+        # happened inside the loop). Set only on a FRESH run; a resume keeps the
+        # persisted values (the loop does no git writes, so HEAD is unchanged).
+        state["start_head"] = _head_sha(target)
+        state["allow_dirty"] = allow_dirty
         state_path = _state_path_for(target, run_id)
         _atomic_write_state(state, state_path)
         last_context_fill_ratio = None
@@ -4676,6 +4850,10 @@ def run_goal_loop(
         max_turns=max_turns, cost_ceiling=ceiling, claude_version=claude_version,
         models=models,
     )
+    # Spec 042-04: base HEAD at start + dirty-brake bypass flag (see the loop
+    # driver's note). A goal-driven worker (Claude USD wrapped) is verifiable too.
+    state["start_head"] = _head_sha(target)
+    state["allow_dirty"] = allow_dirty
     if detached:
         state["detached"] = True  # slice 003-08: a `--background` child run
     _atomic_write_state(state, state_path)
@@ -4713,7 +4891,6 @@ def run_goal_loop(
         state["transcript_showed_pass"] = transcript_showed_pass
         if terminal_breadcrumb is not None:
             state["terminal_breadcrumb"] = terminal_breadcrumb
-        _atomic_write_state(state, state_path)
         summary = _goal_summary(
             run_id=run_id, terminal_reason=terminal_reason,
             cumulative_cost_usd=cumulative_cost_usd, cost_ceiling=ceiling,
@@ -4725,6 +4902,10 @@ def run_goal_loop(
             accounting=goal_accounting,
         )
         summary.update(gate_consumer.fields(state))
+        # Spec 042-04: same halt-fingerprint + own-outcome recording as the loop
+        # driver, so a goal-driven worker (Claude USD wrapped) is verifiable too.
+        _record_halt_verification(state, _outcome_record(summary))
+        _atomic_write_state(state, state_path)
         _emit_json(summary)
         _emit_outcome_line(summary)  # spec 040-01
         return exit_code
