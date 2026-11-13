@@ -192,8 +192,12 @@ every mode builds on; slice 042-02 adds **servo-driven serial dispatch**
 (`campaign next`), the enforced Claude Code baseline that runs each item itself
 under `loop.py`; slice 042-03 adds the **host-driven advisory** mode (`campaign
 brief` plus `record --tier advisory`), where the host spawns the workers and
-servo re-runs each claimed pass's oracle before it enters the ledger. The
-verified-wrapped tier is a later slice (042-04).
+servo re-runs each claimed pass's oracle before it enters the ledger. Slice
+042-04 adds the **host-driven verified-wrapped** tier (`campaign brief --tier
+wrapped` plus `record --tier wrapped`), where the host's worker runs its item
+under `loop.py` and servo verifies the loop's own recorded state (run id +
+content fingerprint + the brief's base sha) before accepting the item as
+enforced spend — closing the host-parity bundle.
 
 The helper is at `${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py`.
 
@@ -243,16 +247,16 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" init /path/to/repo 
   --plan campaign-plan.json --id my-campaign
 ```
 
-### `campaign.py record <id> <item> --outcome <line> [--tier servo|advisory] [--worktree <path>]`
+### `campaign.py record <id> <item> --outcome <line> [--tier servo|wrapped|advisory] [--worktree <path>]`
 
 Append one typed outcome — spec 040's `servo_outcome` line (`loop.py
 --outcome-line`) — to the campaign's ledger, guarded by a blocking `flock` and an
 atomic write (the heartbeat inbox discipline, but with a **blocking** lock: a
 record is unique data and is never dropped on contention or torn by a crash). The
 ledger entry adds `tier` and a **derived** `self_reported` (true only for
-`advisory`). The CLI records `servo` or `advisory`; `wrapped` is a valid ledger
-tier but is "verified, not declared" (ADR-0049) — earned by 042-04's run-id /
-fingerprint verifier — so the CLI does not accept `--tier wrapped` yet. The
+`advisory`). The CLI records `servo`, `wrapped` or `advisory`; `wrapped` is
+"verified, not declared" (ADR-0049) — `--tier wrapped` is accepted only after the
+verifier confirms the loop's state, else it downgrades to advisory (below). The
 outcome is read from inline JSON, a file path, or `-` (stdin).
 
 **Advisory oracle re-check (host-driven, spec 042-03).** In the `advisory` tier
@@ -272,6 +276,29 @@ recorded as-is with no re-check. A gate that is wholly uninvocable exits rc=2 an
 leaves the ledger unchanged (an operator-fixable servo-side problem, not an item
 outcome).
 
+**Verified-wrapped (host-driven, spec 042-04).** In the `wrapped` tier the host's
+worker runs its item under `loop.py`, so the per-node brakes bind the loop; servo
+does not trust the forwarded line's values, it verifies the loop's **own** recorded
+state. `--worktree` is **required** (servo recomputes the content fingerprint
+there). servo accepts the item as `wrapped` **iff all** hold: a `loop.py`
+`state.json` for the forwarded `run_id` exists in the worktree; the worktree's
+recomputed content fingerprint equals the one the loop recorded at halt (a
+post-halt edit or a commit-before-record fails this); and the loop's recorded
+start HEAD equals the base sha a `campaign brief --tier wrapped` persisted, with
+`--allow-dirty` unset. It then **re-renders** `result` / `rung` / `iterations` /
+`cost` from that run's `state.json` — the forwarded line locates the run only, its
+values are never trusted — and records `tier=wrapped` (enforced spend). **Any**
+verification failure downgrades the record to `advisory` (`self_reported`, with a
+`wrapped_verification` block naming the reason), so unverified spend is never
+enforced; a downgraded claimed-`passed` is then oracle-re-checked like any advisory
+pass. **Record before any commit.** Scope (ADR-0049 A5): verification reads the
+loop state from the worker's own worktree over a public hash, so it binds the
+loop's recorded state to the worktree content for a **compliant** worker (catching
+honest non-compliance and taking the loop's metered cost over the worker's claim);
+it is **not** an adversarial anchor (a worker controlling its worktree can forge a
+self-consistent state), so a host below the ~80%-verify kill criterion is run
+advisory-only.
+
 The **aggregate ceiling counts cost only from `servo` + verified `wrapped`
 entries**; a `self_reported` (advisory) cost is never counted as enforced spend.
 A cost in the **wrong unit** is refused: a USD-denominated item rejects a null
@@ -290,6 +317,11 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" record my-campaign 
 # host-driven advisory: servo re-runs the oracle on the worker's worktree first
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" record my-campaign \
   fix-auth --outcome "$WORKER_OUTCOME_LINE" --tier advisory \
+  --worktree /path/to/worker/worktree --target /path/to/repo
+
+# host-driven verified-wrapped: servo verifies the loop's state before accepting
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" record my-campaign \
+  fix-auth --outcome "$LOOP_OUTCOME_LINE" --tier wrapped \
   --worktree /path/to/worker/worktree --target /path/to/repo
 ```
 
@@ -362,26 +394,35 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" next my-campaign \
   --target /path/to/repo
 ```
 
-### `campaign.py brief <id> [<item>] [--target <path>]`
+### `campaign.py brief <id> [<item>] [--tier advisory|wrapped] [--target <path>]`
 
-The **host-driven advisory** kickoff (spec 042-03). Emits one kickoff brief per
-plan item (or just `<item>`), for a host coordinator to hand to a worker it
-spawns itself. servo **neither spawns nor messages** those workers — in advisory
-mode it only writes briefs and later reads worktrees (`record`'s oracle
-re-check). Each brief carries, **as data inside a delimited UNTRUSTED block** (the
-same data-not-instructions framing `campaign next` uses), the item's title,
-`oracle_ref`, `budget`, `models` block and authored prompt; and, in
-servo-authored instruction position, the item's **base sha**, the instruction to
-run `campaign record --tier advisory --worktree …` before any commit (so servo's
-oracle re-check scores the exact worktree state the worker claims a pass for —
-advisory does NOT bind the worktree to the base sha; that provenance check is the
-verified-wrapped tier, 042-04), and the explicit advisory **runaway-limit**
-disclosure. Budget, model tier and the ladder reach an advisory
-worker as brief text only. Read-only: writes nothing.
+The **host-driven** kickoff (spec 042-03 advisory / 042-04 wrapped). Emits one
+kickoff brief per plan item (or just `<item>`), for a host coordinator to hand to a
+worker it spawns itself. servo **neither spawns nor messages** those workers — it
+only writes briefs and later reads worktrees. Each brief carries, **as data inside
+a delimited UNTRUSTED block** (the same data-not-instructions framing `campaign
+next` uses), the item's title, `oracle_ref`, `budget`, `models` block and authored
+prompt; and, in servo-authored instruction position, the item's **base sha** and
+the record-before-commit instruction.
+
+`--tier advisory` (default) is **read-only** — it tells the worker to run `campaign
+record --tier advisory --worktree …` before any commit (so servo's oracle re-check
+scores the exact worktree state the worker claims a pass for; advisory does NOT
+bind the worktree to the base sha) — and discloses the advisory **runaway limit**.
+`--tier wrapped` tells the worker to run its item under `loop.py` and `campaign
+record --tier wrapped` before any commit, discloses the AC6 brake **boundary** (the
+loop subprocess is bound, not the worker session), and **persists** the emitted
+base sha under `.servo/campaigns/<id>/briefs/<item>.json` so the wrapped record can
+verify against servo's own value.
 
 ```bash
+# advisory (default; read-only)
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" brief my-campaign \
   --target /path/to/repo            # all items; add `fix-auth` for just one
+
+# verified-wrapped (persists the base sha per item)
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" brief my-campaign \
+  fix-auth --tier wrapped --target /path/to/repo
 ```
 
 ## Q&A before running or wiring a schedule

@@ -18,17 +18,23 @@ Subcommands:
     `self_reported`. In the **advisory** tier a claimed `passed` is accepted
     only after servo re-runs the item's oracle on the worker's `--worktree`
     (042-03 AC2): an unconfirmed pass is recorded as blocked/error, never
-    passed, and every other field stays `self_reported`.
+    passed, and every other field stays `self_reported`. In the
+    **verified-wrapped** tier (042-04) `--tier wrapped` is accepted only after
+    servo verifies the loop's OWN recorded state in `--worktree` (run_id +
+    content fingerprint + the brief's base sha, clean start) and re-renders the
+    outcome from that state; any verification failure downgrades to advisory.
   * `status <id> [--json] [--target <path>]` — read-only read-back of each
     item's latest outcome, the totals, and the open items. Discloses the
     advisory runaway limit once advisory is in play (042-03 AC4).
   * `next <id> [--target <path>]` — the episodic servo-driven serial coordinator
     (042-02): reconcile reservations, dispatch one ready item under `loop.py`,
     record its outcome, batch escalations, exit.
-  * `brief <id> [<item>] [--target <path>]` — emit a host-driven advisory
-    kickoff brief per item (042-03 AC1): the item's fields as DATA, its base
-    sha, and the `record`-before-commit instruction. servo neither spawns nor
-    messages the host's workers (AC5).
+  * `brief <id> [<item>] [--tier advisory|wrapped] [--target <path>]` — emit a
+    host-driven kickoff brief per item: the item's fields as DATA, its base sha,
+    and the `record`-before-commit instruction. `advisory` (042-03 AC1,
+    default) is read-only; `wrapped` (042-04) persists the emitted base sha and
+    instructs running under loop.py + `record --tier wrapped`. servo neither
+    spawns nor messages the host's workers.
 
 State lives ONLY under `<target>/.servo/campaigns/`. servo never reads jig
 files: a jig reframe manifest is converted into a servo plan by jig or a human
@@ -48,7 +54,11 @@ not; see `_ledger_lock`.) The dispatch verb `next` (042-02) and the advisory
 oracle re-check (042-03, only on an advisory-`passed` `record`) DO load
 heartbeat.py dynamically — both are verification/dispatch operations that reach
 its worktree-provisioning and canonical `_run_gate_json` helpers — but lazily,
-so every other `record`/`status` call keeps the hot-path invariant.
+so every other `record`/`status` call keeps the hot-path invariant. The
+verified-wrapped `record` (042-04) loads loop.py (not heartbeat) for its
+`_content_fingerprint` — the same read-only function loop.py used at halt, so the
+verifier recomputes it identically — and reaches heartbeat only if it downgrades
+to an advisory `passed` (the same lazy oracle re-check).
 """
 
 from __future__ import annotations
@@ -103,14 +113,20 @@ BUDGET_UNITS = ("usd", "credit")
 TIERS = ("servo", "wrapped", "advisory")
 _TIER_SELF_REPORTED = {"servo": False, "wrapped": False, "advisory": True}
 
-# But `campaign record` accepts only servo + advisory in 042-01. `wrapped` is
-# "verified, not declared" (ADR-0049): a wrapped entry is legitimate only once
-# 042-04's run-id / content-fingerprint / base-sha verifier earns it (an
-# unverified wrapped downgrades to advisory), and its cost counts as enforced
-# spend — so letting a caller self-declare `--tier wrapped` here would count
-# unverified spend as enforced. The schema and the accounting below still handle
-# `wrapped` (ready for 042-04); the CLI gate is what waits.
-CLI_TIERS = ("servo", "advisory")
+# `campaign record` accepts all three tiers. `wrapped` is "verified, not declared"
+# (ADR-0049): `--tier wrapped` is not taken on the caller's reported FIELDS — it is
+# verified by 042-04's run-id / content-fingerprint / base-sha check
+# (`_verify_wrapped`) and RE-RENDERED from the loop's own state, and ANY failure
+# downgrades the record to advisory (self_reported), so a non-compliant run's cost
+# is never counted as enforced. The verification is scoped to a COMPLIANT worker
+# (ADR-0049 A5): it binds the loop's recorded state to the worktree content, which
+# catches honest non-compliance (post-halt edits, commit-before-record, dirty/off-
+# base starts), but it is NOT an adversarial anchor — the state lives in the
+# worker's worktree and the fingerprint is a public hash, so host-driven mode
+# cannot stop a worker that forges a self-consistent state (same residual advisory
+# has; the kill criterion drops such a host to advisory-only). Its cost counts as
+# enforced spend once verified.
+CLI_TIERS = ("servo", "wrapped", "advisory")
 
 # Spec 040's typed outcome line. These mirror loop.py's `OUTCOME_SCHEMA_VERSION`
 # and `OUTCOME_RESULT_*` constants (the 040-01 contract loop.py emits). Unlike the
@@ -144,6 +160,16 @@ ADVISORY_RUNAWAY_NOTE = (
     "advisory mode: nothing stops a runaway worker in flight — servo enforces "
     "only the planned list, the ledger, and oracle-verified passes")
 
+# AC6 boundary disclosure (verified-wrapped, 042-04). The brakes bind the
+# `loop.py` subprocess the worker runs, NOT the worker session above it: that
+# session's own spend, and any edits it makes after the loop halts, fall outside
+# every ceiling. Stated in `campaign status` once wrapped is in play and in the
+# wrapped kickoff brief. Single source of truth so the surfaces can't drift.
+WRAPPED_BOUNDARY_NOTE = (
+    "verified-wrapped mode binds the loop.py subprocess only — its enforced cost "
+    "is the loop's own spend; the worker session's spend and any edits made after "
+    "the loop halts stay outside every ceiling")
+
 # An item id (and a generated campaign id) is a lowercase slug.
 ITEM_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 
@@ -154,6 +180,12 @@ ITEM_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 DEFAULT_MAX_PARALLEL = 1  # serial here; bounded parallelism is 042-05.
 WORKTREES_DIRNAME = "worktrees"       # <campaign_dir>/worktrees/<item>
 RESERVATIONS_DIRNAME = "reservations"  # <campaign_dir>/reservations/<item>.json
+# Host-driven verified-wrapped (042-04). `campaign brief --tier wrapped` persists
+# the base sha it emitted per item here; `campaign record --tier wrapped` reads it
+# as the TRUSTED base (never a worker-supplied value — a worker could set
+# --base-sha to match its own pre-baked start and cheat the "work happened inside
+# the loop" check). <campaign_dir>/briefs/<item>.json.
+BRIEFS_DIRNAME = "briefs"
 OUTCOME_SUFFIX = ".outcome.json"      # the per-item --outcome-line sink
 CAMPAIGN_BRANCH_PREFIX = "servo/campaign/"
 # The worker's `loop.py` run state (040 cost source) + its layout under a worktree.
@@ -236,6 +268,16 @@ def _load_models_validator():
 def _load_outcome_renderer():
     """Return loop.py's `_outcome_record` (the spec-040 line renderer)."""
     return _load_loop_module()._outcome_record
+
+
+def _load_fingerprint_fn():
+    """Return loop.py's `_content_fingerprint` (042-04 verified-wrapped).
+
+    The verified-wrapped tier recomputes the worktree's content fingerprint with
+    the EXACT function loop.py recorded it with at halt, so equality is exact and
+    there is one implementation to drift. Loaded dynamically like the 038
+    validator and the 040 renderer (never a static cross-skill import)."""
+    return _load_loop_module()._content_fingerprint
 
 
 # heartbeat.py carries the proven worktree provisioning (`_dispatch_one`'s
@@ -486,8 +528,9 @@ def _cost_unit_error(unit: str, cost_usd: object) -> Optional[str]:
       * `cost_usd is None` ⇒ a credit/Copilot run — wrong unit on a USD item;
       * `cost_usd > 0`     ⇒ real USD spend — wrong unit on a credit item.
     A `0.0` is accepted on either (a no-spend USD refusal, or a Copilot refusal).
-    A credit item's actual credit spend is not in the 040 line; it is re-derived
-    from the loop's `state.json` by `run_id` in 042-04."""
+    A credit item's actual credit spend is not in the 040 line and is NOT converted
+    to USD; the ledger records `cost_usd: null` for it (the per-run 041-02 credit
+    brake bounds it — the USD totals never mix units)."""
     if unit == "usd":
         if cost_usd is None:
             return ("outcome cost_usd is null (a credit-denominated / Copilot "
@@ -538,10 +581,17 @@ def _recheck_oracle(worktree: Path) -> dict:
     What it does NOT do: bind the worktree's PROVENANCE. The worker supplies and
     controls `--worktree` and everything under it (including its `.servo/` policy
     and `oracle.sh`), so an adversarial worker can still present trivially-passing
-    content and obtain a genuine exit-0. Cryptographic worktree-provenance binding
-    (base sha + content fingerprint + record-before-commit) is the VERIFIED-WRAPPED
-    tier (042-04), not this one. This is faithful to ADR-0049 A5 — "verification
-    detects non-compliance after the fact; it cannot prevent it" — and the
+    content and obtain a genuine exit-0. The VERIFIED-WRAPPED tier (042-04)
+    tightens this for a COMPLIANT worker — it verifies the loop's own recorded
+    state (run id + content fingerprint + base sha) and re-renders the outcome
+    from it, catching an honest worker's post-halt edit / commit-before-record and
+    taking the loop's metered cost rather than the worker's declaration — but it is
+    NOT an adversarial anchor either: that state lives in the worker's worktree and
+    the fingerprint is a public hash, so a worker that controls its worktree can
+    fabricate a self-consistent state. Host-driven mode holds no servo-side secret,
+    so neither host-driven tier prevents a fully adversarial worker (ADR-0049 A5:
+    "verification detects non-compliance after the fact; it cannot prevent it"; the
+    ~80%-verify kill criterion covers honest non-compliance, not forgery). The
     advisory tier is the lightweight floor over Option B: servo runs the oracle
     instead of taking the worker's word, never more. The result is still servo's
     own (not `self_reported`) because servo ran it; `oracle_recheck.confirmed`
@@ -582,10 +632,11 @@ def _status_summary(plan: dict, entries: "list[dict]") -> dict:
 
     Totals:
       * `enforced_cost_usd` — Σ `cost_usd` over entries whose `self_reported`
-        is false (tier servo + wrapped). A self-reported (advisory) cost is
-        never counted as enforced spend, and a credit `cost_usd: null` is not
-        counted here (its credit spend is re-derived in 042-04). This is the
-        aggregate-ceiling accounting rule (AC2).
+        is false (tier servo + verified wrapped). A self-reported (advisory) cost
+        is never counted as enforced spend, and a credit `cost_usd: null` is not
+        counted here (credit spend is in AI credits, bounded per-run by the 041-02
+        brake — the USD totals never mix units). This is the aggregate-ceiling
+        accounting rule (AC2).
       * `self_reported_cost_usd` — the advisory spend, shown but not enforced.
       * `passed` / `plateau` / `blocked` (and `budget` / `error`) — item counts
         by each item's LATEST outcome.
@@ -646,12 +697,18 @@ def _status_summary(plan: dict, entries: "list[dict]") -> dict:
     # quiet for a confirmed servo-only campaign.
     advisory_active = any(
         entry.get("tier") == "advisory" for entry in entries)
+    # AC6: once a verified-wrapped entry is in play, status states that wrapped's
+    # enforced cost is the loop.py subprocess's spend only — the worker session's
+    # own spend and any post-halt edits stay outside every ceiling.
+    wrapped_active = any(
+        entry.get("tier") == "wrapped" for entry in entries)
     return {
         "schema_version": SCHEMA_VERSION,
         "items": item_views,
         "totals": totals,
         "open_items": open_items,
         "advisory_active": advisory_active,
+        "wrapped_active": wrapped_active,
     }
 
 
@@ -688,8 +745,8 @@ def _render_status_human(summary: dict, campaign_id: str) -> str:
         f"error: {totals['error']}")
     if totals.get("credit_items"):
         lines.append(
-            f"  credit items: {totals['credit_items']} — spend tracked in AI "
-            f"credits, re-derived in 042-04 (not in the USD totals above)")
+            f"  credit items: {totals['credit_items']} — spend is in AI credits, "
+            f"bounded per-run by the 041-02 brake (not in the USD totals above)")
     lines.append("")
     if summary["open_items"]:
         lines.append("open items: " + ", ".join(summary["open_items"]))
@@ -698,6 +755,9 @@ def _render_status_human(summary: dict, campaign_id: str) -> str:
     if summary.get("advisory_active"):
         lines.append("")
         lines.append(ADVISORY_RUNAWAY_NOTE + ".")
+    if summary.get("wrapped_active"):
+        lines.append("")
+        lines.append(WRAPPED_BOUNDARY_NOTE + ".")
     return "\n".join(lines) + "\n"
 
 
@@ -707,6 +767,34 @@ def _render_status_human(summary: dict, campaign_id: str) -> str:
 
 def _campaign_dir(target: Path, campaign_id: str) -> Path:
     return target.joinpath(*CAMPAIGNS_SEGMENTS, campaign_id)
+
+
+def _brief_record_path(campaign_dir: Path, item_id: str) -> Path:
+    return campaign_dir / BRIEFS_DIRNAME / f"{item_id}.json"
+
+
+def _write_brief_record(campaign_dir: Path, item_id: str, base_sha: Optional[str]) -> None:
+    """Persist the TRUSTED base sha a `--tier wrapped` kickoff brief emitted for
+    this item (042-04). `campaign record --tier wrapped` reads it back as the base
+    the loop's recorded start HEAD must match — servo's own value, never the
+    worker's word. An atomic write under <campaign_dir>/briefs/."""
+    bdir = campaign_dir / BRIEFS_DIRNAME
+    bdir.mkdir(parents=True, exist_ok=True)
+    record = {"item": item_id, "tier": "wrapped", "base_sha": base_sha,
+              "emitted_at": _now_iso()}
+    _atomic_write(_brief_record_path(campaign_dir, item_id),
+                  json.dumps(record, indent=2) + "\n")
+
+
+def _read_brief_record(campaign_dir: Path, item_id: str) -> Optional[dict]:
+    """The persisted wrapped-brief record for an item, or None when none was
+    emitted / it is unreadable. Absent ⇒ wrapped verification has no trusted base
+    and the record downgrades to advisory (fail-closed)."""
+    try:
+        data = json.loads(_brief_record_path(campaign_dir, item_id).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _load_plan_file(campaign_dir: Path) -> Optional[dict]:
@@ -821,6 +909,30 @@ def cmd_record(args: argparse.Namespace) -> int:
     outcome, err = _validate_outcome(obj)
     if err:
         return _fail(err)
+    # 042-04 verified-wrapped: `--tier wrapped` is never taken on the worker's
+    # word. servo verifies the loop's OWN recorded state (run_id + content
+    # fingerprint + base sha + clean start) and, when it all holds, re-renders the
+    # outcome FROM that state (AC4) and records `tier=wrapped` (enforced spend).
+    # ANY verification failure downgrades to advisory (self_reported) and falls
+    # through to the advisory path below. The forwarded line is used only to find
+    # the run. Requires --worktree (to recompute the fingerprint there).
+    effective_tier = args.tier
+    wrapped_verification = None
+    if args.tier == "wrapped":
+        if args.worktree is None:
+            return _fail(
+                "--tier wrapped requires --worktree <path> so servo can verify "
+                "the loop's content fingerprint there (ADR-0049)")
+        if not args.worktree.is_dir():
+            return _fail(
+                f"--worktree {str(args.worktree)!r} does not exist or is not a "
+                f"directory; wrapped verification cannot run")
+        verified_outcome, wrapped_verification = _verify_wrapped(
+            cdir, args.item, args.worktree, outcome)
+        if verified_outcome is not None:
+            outcome = verified_outcome      # AC4: re-rendered from the loop's state
+        else:
+            effective_tier = "advisory"     # unverified ⇒ downgrade (AC2/AC3/AC5)
     cost_err = _cost_unit_error(budget_unit, outcome["cost_usd"])
     if cost_err:
         return _fail(cost_err)
@@ -828,10 +940,11 @@ def cmd_record(args: argparse.Namespace) -> int:
     # word. servo re-runs the item's oracle on the worker's worktree and accepts
     # `passed` only if the oracle confirms it; otherwise the outcome is recorded
     # as blocked/error, never passed. (Only a claimed pass is re-checked — a
-    # non-pass claim, and every servo-tier outcome, is recorded as-is. A
-    # servo-tier outcome came from servo's own loop run, already oracle-gated.)
+    # non-pass claim, and every servo/verified-wrapped outcome, is recorded as-is;
+    # a verified-wrapped outcome came from the braked loop's own gate.) A wrapped
+    # record that failed verification is now advisory, so it re-checks here too.
     oracle_recheck = None
-    if args.tier == "advisory" and outcome.get("result") == "passed":
+    if effective_tier == "advisory" and outcome.get("result") == "passed":
         if args.worktree is None:
             return _fail(
                 "advisory 'passed' outcome requires --worktree <path> so servo "
@@ -860,7 +973,11 @@ def cmd_record(args: argparse.Namespace) -> int:
         # authoritative result — what status/escalation/accounting read — is the
         # re-checked one. The host's original claim is kept in `oracle_recheck`.
         outcome["result"] = recorded_result
-    entry = _ledger_entry(args.item, args.tier, outcome, _now_iso(), oracle_recheck)
+    entry = _ledger_entry(args.item, effective_tier, outcome, _now_iso(), oracle_recheck)
+    if wrapped_verification is not None:
+        # The verification verdict (verified or the downgrade reason) is servo's
+        # own record of why this item is wrapped or advisory — kept for the ledger.
+        entry["wrapped_verification"] = wrapped_verification
     # flock + atomic read-append-write — never drop or tear a record (AC2).
     with _ledger_lock(cdir):
         ledger_path = cdir / LEDGER_NAME
@@ -893,12 +1010,15 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_brief(args: argparse.Namespace) -> int:
-    """Emit a host-driven advisory kickoff brief per item (042-03 AC1).
+    """Emit a host-driven kickoff brief per item (042-03 advisory / 042-04 wrapped).
 
-    Read-only: writes nothing to the ledger and spawns/messages nothing (AC5) —
-    it only reads the plan and the target's HEAD and prints text. With an item
-    id, one brief; without, one per plan item in plan order. The base sha is the
-    target's current HEAD (servo does no git ops; HEAD is the worker's base)."""
+    `--tier advisory` (default): read-only — reads the plan and the target's HEAD
+    and prints text, writing nothing (042-03 AC5). `--tier wrapped`: additionally
+    PERSISTS the base sha it emits per item under `<campaign_dir>/briefs/`, so
+    `campaign record --tier wrapped` can verify the loop started at servo's own
+    base (never a worker-supplied value). With an item id, one brief; without, one
+    per plan item in plan order. The base sha is the target's current HEAD (servo
+    does no git ops; HEAD is the worker's base)."""
     cdir = _campaign_dir(args.target, args.id)
     plan = _load_plan_file(cdir)
     if plan is None:
@@ -912,7 +1032,13 @@ def cmd_brief(args: argparse.Namespace) -> int:
             return _fail(
                 f"unknown item id {args.item!r} (not in this campaign's plan)")
     base_sha = _git_head_sha(args.target)
-    briefs = [_build_brief(it, base_sha, args.id, args.target) for it in items]
+    if args.tier == "wrapped":
+        # Persist the TRUSTED base sha before emitting, so a later wrapped record
+        # verifies against servo's own value, not the worker's.
+        for it in items:
+            _write_brief_record(cdir, it.get("id", ""), base_sha)
+    briefs = [_build_brief(it, base_sha, args.id, args.target, args.tier)
+              for it in items]
     separator = "\n\n" + ("=" * 72) + "\n\n"
     sys.stdout.write(separator.join(briefs) + "\n")
     return 0
@@ -988,20 +1114,50 @@ _BRIEF_RECORD_HOWTO = (
     "bind your worktree to the base sha above — that provenance check is the "
     "verified-wrapped tier; the base sha is given for your own reference.)")
 
+# --- Host-driven verified-wrapped kickoff brief (042-04) ------------------- #
+# The wrapped worker RUNS its item under loop.py (so the per-node brakes bind the
+# loop subprocess) and forwards loop.py's spec-040 outcome line. servo verifies
+# the loop's own recorded state before accepting the item as wrapped.
+_BRIEF_TASK_WRAPPED = (
+    "You are a worker on a servo campaign item, spawned by your host coordinator "
+    "in your own isolated git worktree. RUN this item under servo's loop.py "
+    "(`loop.py <YOUR_WORKTREE> --prompt <item task> --outcome-line <path> "
+    "<budget flags> --models <models>`) so the oracle, budget and plateau brakes "
+    "bind the loop. Start your worktree at the base sha above and do NOT pass "
+    "--allow-dirty. Stay inside your worktree; never merge, push, or run any git "
+    "landing command — servo does not land for you.")
+_BRIEF_RECORD_HOWTO_WRAPPED = (
+    "WHEN THE LOOP HALTS — BEFORE ANY COMMIT — record its outcome from the "
+    "worktree:\n"
+    "  campaign record {cid} {item} --tier wrapped --worktree <YOUR_WORKTREE> "
+    "--outcome <LOOP-040-OUTCOME-LINE> --target {target}\n"
+    "Forward loop.py's outcome line UNCHANGED — servo uses it only to find the "
+    "run (run_id) and re-renders the result, rung, iterations and cost from the "
+    "loop's own state. servo accepts the item as 'wrapped' ONLY if, at record "
+    "time: the loop state for that run_id exists in the worktree, the worktree's "
+    "content fingerprint still equals the one the loop recorded at halt, and the "
+    "loop started at the base sha above without --allow-dirty. RECORD BEFORE YOU "
+    "COMMIT: a commit moves HEAD and fails verification. Anything that fails "
+    "verification is downgraded to advisory (self-reported).")
+
 
 def _build_brief(item: dict, base_sha: Optional[str], campaign_id: str,
-                 target: Path) -> str:
-    """Render one item's host-driven advisory kickoff brief (AC1).
+                 target: Path, tier: str = "advisory") -> str:
+    """Render one item's host-driven kickoff brief (042-03 advisory / 042-04 wrapped).
 
     Carries, as DATA inside the delimited untrusted block, the item's title,
     oracle_ref, budget and models block and the authored prompt; and, in
     servo-authored instruction position, the item's base sha, the
-    `campaign record` instruction (record before any commit) and the AC4
-    runaway-limit disclosure."""
+    `campaign record` instruction (record before any commit) and the limits
+    disclosure. The wrapped variant instructs running under loop.py and recording
+    `--tier wrapped`, and discloses the AC6 brake boundary; advisory discloses the
+    runaway limit."""
+    wrapped = tier == "wrapped"
     item_id = item.get("id", "")
     base = base_sha or "unavailable (no resolvable git HEAD on the target)"
+    label = "verified-wrapped" if wrapped else "advisory"
     header = "\n".join([
-        "=== servo campaign kickoff brief (host-driven, advisory) ===",
+        f"=== servo campaign kickoff brief (host-driven, {label}) ===",
         f"campaign: {campaign_id}",
         f"item: {item_id}",
         f"base sha: {base}",
@@ -1015,14 +1171,20 @@ def _build_brief(item: dict, base_sha: Optional[str], campaign_id: str,
         f"task: {item.get('prompt', '')}",
         _ITEM_END,
     ])
-    howto = _BRIEF_RECORD_HOWTO.format(
-        cid=campaign_id, item=item_id, target=str(target))
-    limits = (
-        "LIMITS — " + ADVISORY_RUNAWAY_NOTE + ". The budget and models in the "
-        "data block are the plan's guidance only — servo does not brake an "
-        "advisory worker, so honor them yourself.")
+    task = _BRIEF_TASK_WRAPPED if wrapped else _BRIEF_TASK
+    howto_tmpl = _BRIEF_RECORD_HOWTO_WRAPPED if wrapped else _BRIEF_RECORD_HOWTO
+    howto = howto_tmpl.format(cid=campaign_id, item=item_id, target=str(target))
+    if wrapped:
+        limits = (
+            "LIMITS — " + WRAPPED_BOUNDARY_NOTE + ". Honor the budget and models "
+            "in the data block by running loop.py with them.")
+    else:
+        limits = (
+            "LIMITS — " + ADVISORY_RUNAWAY_NOTE + ". The budget and models in the "
+            "data block are the plan's guidance only — servo does not brake an "
+            "advisory worker, so honor them yourself.")
     return "\n\n".join(
-        [header, _BRIEF_TASK, _ITEM_PREAMBLE, data_block, howto, limits])
+        [header, task, _ITEM_PREAMBLE, data_block, howto, limits])
 
 
 def _pid_alive(pid: object) -> bool:
@@ -1238,22 +1400,117 @@ def _compute_escalations(plan: dict, latest: "dict[str, dict]") -> "list[dict]":
 
 # --- Dispatch one item under loop.py (AC1/AC2) ----------------------------- #
 
-def _state_cost(worktree: Path, run_id: object) -> "tuple[bool, object]":
-    """The authoritative cost from the loop's `state.json` (AC2: cost comes from
-    state.json, not re-derived). Returns `(found, cost)` — `cost` is a number (USD
-    run) or None (credit/Copilot run, whose credit spend the 040 line omits; it is
-    re-derived in 042-04). `found` is False when the state file is absent/unreadable
-    so the caller can fall back to the loop's own `--outcome-line` figure."""
+def _read_run_state(worktree: Path, run_id: object) -> Optional[dict]:
+    """Read a loop run's `<worktree>/.servo/runs/<run_id>/state.json`, or None when
+    the run_id is unusable / the file is absent / unreadable / not an object. The
+    verified-wrapped tier (042-04) uses this to locate the loop's OWN recorded
+    state (fingerprint + start head + rendered outcome) by the forwarded run_id."""
     if not isinstance(run_id, str) or not run_id:
-        return False, None
+        return None
     state_path = worktree.joinpath(*RUNS_SEGMENTS, run_id, STATE_FILE_NAME)
     try:
         state = json.loads(state_path.read_text())
     except (OSError, json.JSONDecodeError):
-        return False, None
-    if not isinstance(state, dict) or "cumulative_cost_usd" not in state:
+        return None
+    return state if isinstance(state, dict) else None
+
+
+def _state_cost(worktree: Path, run_id: object) -> "tuple[bool, object]":
+    """The authoritative cost from the loop's `state.json` (AC2: cost comes from
+    state.json, not the forwarded line). Returns `(found, cost)` — `cost` is a
+    number (USD run) or None (credit/Copilot run: `cumulative_cost_usd` is null,
+    and the credit spend is NOT converted to USD — it is bounded per-run by the
+    041-02 brake). `found` is False when the state file is absent/unreadable so the
+    caller can fall back to the loop's own `--outcome-line` figure."""
+    state = _read_run_state(worktree, run_id)
+    if state is None or "cumulative_cost_usd" not in state:
         return False, None
     return True, state.get("cumulative_cost_usd")
+
+
+def _verify_wrapped(campaign_dir: Path, item_id: str, worktree: Path,
+                    worker_outcome: dict) -> "tuple[Optional[dict], dict]":
+    """Verify a `--tier wrapped` record against the loop's OWN state (042-04).
+
+    Returns `(verified_outcome, detail)`. `verified_outcome` is the outcome
+    re-rendered from the loop's state (AC4) when ALL hold, else `None` (the caller
+    downgrades to advisory). `detail` is the entry-level `wrapped_verification`
+    block recorded either way (`verified` + a `reason` on failure). The forwarded
+    `worker_outcome` is used ONLY to locate the run (`run_id`); its field values
+    are never trusted.
+
+    Accept iff (ADR-0049):
+      1. a `loop.py` state with the forwarded `run_id` exists in the worktree;
+      2. the worktree's recomputed content fingerprint equals the loop's recorded
+         halt fingerprint (this is where a post-halt edit — AC5 — and a
+         commit-before-record — AC3 — are caught);
+      3. the loop's recorded start HEAD equals the item's base sha from the
+         persisted wrapped kickoff brief, and `--allow-dirty` was not set.
+
+    THREAT MODEL (ADR-0049 A5 — honest worker). Every input here is read from the
+    worker-controlled `<worktree>/.servo/runs/<run_id>/state.json` and the
+    fingerprint is a public `sha256` with no servo-held secret, while the base sha
+    is disclosed in the brief. So this binds "the loop's recorded state is
+    self-consistent with the worktree content at record time" — which catches a
+    COMPLIANT worker's non-compliance (post-halt edits, commit-before-record,
+    dirty/off-base starts) and lets servo take the loop's METERED result/cost
+    instead of the worker's declaration — but it does NOT prove the content came
+    from a real braked loop run. A worker that controls its worktree can fabricate
+    a self-consistent state and pass; host-driven mode holds no anchor to stop
+    that (the same residual advisory has). The ~80%-verify kill criterion covers
+    honest non-compliance (which FAILS verification), not deliberate forgery
+    (which can PASS); a host below it drops to advisory-only.
+    """
+    run_id = worker_outcome.get("run_id")
+    base: dict = {"verified": False, "run_id": run_id if isinstance(run_id, str) else None}
+
+    state = _read_run_state(worktree, run_id)
+    if state is None:
+        return None, {**base, "reason": "state_not_found"}
+
+    # (2) content fingerprint equality — recomputed with loop.py's OWN function.
+    halt_fp = state.get("halt_fingerprint")
+    if not isinstance(halt_fp, dict):
+        return None, {**base, "reason": "no_halt_fingerprint"}
+    now_fp = _load_fingerprint_fn()(worktree)
+    if not isinstance(now_fp, dict):
+        return None, {**base, "reason": "worktree_not_git"}
+    # A moved HEAD (the worker committed before recording, AC3) is a fingerprint
+    # mismatch too, but name it distinctly for diagnosis.
+    if now_fp.get("head") != halt_fp.get("head"):
+        return None, {**base, "reason": "head_moved"}
+    if now_fp != halt_fp:
+        return None, {**base, "reason": "fingerprint_mismatch"}
+
+    # (3) start head == the brief's TRUSTED base sha, and the loop ran clean.
+    brief = _read_brief_record(campaign_dir, item_id)
+    if not brief:
+        return None, {**base, "reason": "no_wrapped_brief"}
+    base_sha = brief.get("base_sha")
+    if not isinstance(base_sha, str) or not base_sha:
+        # A wrapped brief was emitted but its base sha was unresolvable (a
+        # commitless target), so there is no trusted base to verify against.
+        return None, {**base, "reason": "brief_base_sha_unresolved"}
+    if state.get("start_head") != base_sha:
+        return None, {**base, "reason": "base_sha_mismatch"}
+    if state.get("allow_dirty") is not False:
+        return None, {**base, "reason": "allow_dirty"}
+
+    # (AC4) re-render from the loop's OWN recorded outcome; authoritative cost from
+    # state.json. The worker's forwarded field values are never used.
+    rendered = state.get("outcome")
+    if not isinstance(rendered, dict):
+        return None, {**base, "reason": "no_state_outcome"}
+    rendered = dict(rendered)
+    found, cost = _state_cost(worktree, run_id)
+    if found:
+        rendered["cost_usd"] = cost
+    validated, verr = _validate_outcome(rendered)
+    if verr:
+        return None, {**base, "reason": "state_outcome_invalid"}
+    return validated, {"verified": True, "run_id": run_id, "base_sha": base_sha,
+                       "result": validated.get("result"),
+                       "cost_usd": validated.get("cost_usd")}
 
 
 def _outcome_sink_path(campaign_dir: Path, item_id: str) -> Path:
@@ -1614,14 +1871,15 @@ def main(argv: Optional[list] = None) -> int:
     p_record.add_argument(
         "--tier", choices=CLI_TIERS, default="servo",
         help=("worker tier (default: servo). advisory sets self_reported=true. "
-              "wrapped is earned by 042-04's verifier, not recordable here."))
+              "wrapped is VERIFIED against the loop's state (run_id + content "
+              "fingerprint + base sha); any failure downgrades to advisory "
+              "(042-04)."))
     p_record.add_argument(
         "--worktree", type=Path, default=None,
-        help=("the advisory worker's worktree. REQUIRED when recording an "
-              "advisory 'passed' outcome: servo re-runs the item's oracle here "
-              "and accepts the pass only if the oracle confirms it (042-03). "
-              "Ignored for a servo-tier outcome or a non-pass advisory claim "
-              "(no re-check runs)."))
+        help=("the worker's worktree. REQUIRED for --tier wrapped (servo recomputes "
+              "the content fingerprint there) and when recording an advisory "
+              "'passed' outcome (servo re-runs the item's oracle there). Ignored "
+              "for a servo-tier outcome or a non-pass advisory claim."))
     p_record.add_argument(
         "--target", type=Path, default=Path("."),
         help="target project holding .servo/ (default: current directory).")
@@ -1660,19 +1918,25 @@ def main(argv: Optional[list] = None) -> int:
 
     p_brief = sub.add_parser(
         "brief",
-        help="Emit a host-driven advisory kickoff brief per item (spec 042-03).",
+        help="Emit a host-driven kickoff brief per item (advisory 042-03 / wrapped 042-04).",
         description=(
             "Emit one kickoff brief per item (or just <item>): the item's prompt, "
             "oracle_ref, budget and models block as DATA, the item's base sha, "
-            "and the instruction to run `campaign record --tier advisory` before "
-            "any commit. The host hands this to a worker it spawns itself — servo "
-            "neither spawns nor messages host sessions. Read-only; writes "
-            "nothing."),
+            "and the record-before-commit instruction. --tier advisory (default) "
+            "is read-only and tells the worker to `campaign record --tier "
+            "advisory`. --tier wrapped tells the worker to run under loop.py and "
+            "`campaign record --tier wrapped`, and PERSISTS the emitted base sha "
+            "so the wrapped record can verify it. The host hands this to a worker "
+            "it spawns itself — servo neither spawns nor messages host sessions."),
     )
     p_brief.add_argument("id", help="campaign id.")
     p_brief.add_argument(
         "item", nargs="?", default=None,
         help="plan item id to brief (default: all items, in plan order).")
+    p_brief.add_argument(
+        "--tier", choices=("advisory", "wrapped"), default="advisory",
+        help=("brief tier (default: advisory). wrapped persists the base sha and "
+              "instructs running under loop.py + recording --tier wrapped."))
     p_brief.add_argument(
         "--target", type=Path, default=Path("."),
         help="target project holding .servo/ (default: current directory).")

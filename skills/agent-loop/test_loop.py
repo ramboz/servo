@@ -11697,5 +11697,237 @@ class OutcomeLineBackgroundTests(_GoalTargetMixin, unittest.TestCase):
         raise AssertionError(f"outcome file {path} not written within {timeout}s")
 
 
+# ===========================================================================
+# Spec 042-04 — content fingerprint at halt (ADR-0049 verified-wrapped).
+#
+# The fingerprint is computed from a REAL git worktree (DoD: not a mock). These
+# unit tests exercise `_content_fingerprint` + its helpers directly; the
+# end-to-end class runs the loop and reads state.json.
+# ===========================================================================
+
+
+def _git_commit_msg(target: Path, message: str) -> None:
+    _git_commit_all(target, message)
+
+
+class ContentFingerprintUnitTests(unittest.TestCase):
+    """`_content_fingerprint` over a real git repo — content, not status (AC1/AC5)."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-fp-")
+        self.target = Path(self.tmpdir) / "demo"
+        self.target.mkdir()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _init_committed(self):
+        (self.target / "a.txt").write_text("alpha\n")
+        (self.target / "b.txt").write_text("beta\n")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+
+    def test_non_git_target_returns_none(self):
+        (self.target / "a.txt").write_text("x")
+        self.assertIsNone(self.m._content_fingerprint(self.target))
+
+    def test_clean_repo_shape_and_head(self):
+        self._init_committed()
+        fp = self.m._content_fingerprint(self.target)
+        self.assertIsNotNone(fp)
+        self.assertEqual(fp["algo"], "sha256")
+        self.assertEqual(set(fp), {"algo", "head", "tracked_diff", "untracked"})
+        head = subprocess.run(["git", "-C", str(self.target), "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+        self.assertEqual(fp["head"], head)
+
+    def test_recompute_is_stable(self):
+        self._init_committed()
+        (self.target / "a.txt").write_text("alpha changed\n")
+        (self.target / "u.txt").write_text("untracked\n")
+        first = self.m._content_fingerprint(self.target)
+        # A servo bookkeeping write between the two computations must NOT perturb it.
+        runs = self.target / ".servo" / "runs" / "r1"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / "state.json").write_text("{}")
+        second = self.m._content_fingerprint(self.target)
+        self.assertEqual(first, second)
+
+    def test_tracked_modification_changes_tracked_diff(self):
+        self._init_committed()
+        clean = self.m._content_fingerprint(self.target)
+        (self.target / "a.txt").write_text("alpha changed\n")
+        dirty = self.m._content_fingerprint(self.target)
+        self.assertNotEqual(dirty["tracked_diff"], clean["tracked_diff"])
+        self.assertEqual(dirty["untracked"], clean["untracked"])  # no untracked change
+
+    def test_post_halt_edit_of_already_modified_file_changes_hash(self):
+        # AC5 core: a SECOND edit to an already-modified tracked file changes the
+        # fingerprint even though the `git status --porcelain` LINE is identical.
+        self._init_committed()
+        (self.target / "a.txt").write_text("first edit\n")
+        before = self.m._content_fingerprint(self.target)
+        porcelain_before = subprocess.run(
+            ["git", "-C", str(self.target), "status", "--porcelain"],
+            capture_output=True, text=True).stdout
+        (self.target / "a.txt").write_text("second edit (post-halt)\n")
+        after = self.m._content_fingerprint(self.target)
+        porcelain_after = subprocess.run(
+            ["git", "-C", str(self.target), "status", "--porcelain"],
+            capture_output=True, text=True).stdout
+        self.assertEqual(porcelain_before, porcelain_after)  # status is blind
+        self.assertNotEqual(after["tracked_diff"], before["tracked_diff"])  # content is not
+
+    def test_untracked_content_bound(self):
+        self._init_committed()
+        base = self.m._content_fingerprint(self.target)
+        (self.target / "new.txt").write_text("created by the loop\n")
+        created = self.m._content_fingerprint(self.target)
+        self.assertNotEqual(created["untracked"], base["untracked"])
+        # A post-halt edit of that untracked file changes the hash again (AC5).
+        (self.target / "new.txt").write_text("edited after halt\n")
+        edited = self.m._content_fingerprint(self.target)
+        self.assertNotEqual(edited["untracked"], created["untracked"])
+
+    def test_bookkeeping_untracked_excluded(self):
+        self._init_committed()
+        base = self.m._content_fingerprint(self.target)
+        # servo's own run artifacts + caches must not perturb the fingerprint.
+        (self.target / ".servo").mkdir(exist_ok=True)
+        (self.target / ".servo" / "x.json").write_text("{}")
+        (self.target / "__pycache__").mkdir(exist_ok=True)
+        (self.target / "__pycache__" / "m.pyc").write_bytes(b"\x00")
+        (self.target / "mod.pyc").write_bytes(b"\x00")
+        after = self.m._content_fingerprint(self.target)
+        self.assertEqual(after, base)
+
+    def test_staged_change_captured(self):
+        self._init_committed()
+        clean = self.m._content_fingerprint(self.target)
+        (self.target / "a.txt").write_text("staged change\n")
+        subprocess.run(["git", "-C", str(self.target), "add", "a.txt"],
+                       capture_output=True, text=True)
+        staged = self.m._content_fingerprint(self.target)
+        # `git diff HEAD` includes staged changes, so the fingerprint reflects it.
+        self.assertNotEqual(staged["tracked_diff"], clean["tracked_diff"])
+
+    def test_head_moves_when_committed(self):
+        # A commit (worker committing before record) moves HEAD and empties the
+        # diff → both `head` and `tracked_diff` change (AC3 record-before-commit).
+        self._init_committed()
+        (self.target / "a.txt").write_text("work\n")
+        pre = self.m._content_fingerprint(self.target)
+        _git_commit_all(self.target, "worker commit")
+        post = self.m._content_fingerprint(self.target)
+        self.assertNotEqual(post["head"], pre["head"])
+        self.assertNotEqual(post, pre)
+
+    def test_head_sha_none_without_commit(self):
+        _git_init(self.target)  # no commit yet
+        self.assertIsNone(self.m._head_sha(self.target))
+
+    def test_diff_section_bookkeeping_predicate(self):
+        self.assertTrue(self.m._diff_section_is_bookkeeping(
+            "diff --git a/.servo/x b/.servo/x"))
+        self.assertFalse(self.m._diff_section_is_bookkeeping(
+            "diff --git a/src.py b/src.py"))
+
+
+class HaltVerificationStateTests(unittest.TestCase):
+    """`_record_halt_verification` writes the fingerprint + the loop's own
+    rendered outcome into state (AC1/AC4), reading the target from state."""
+
+    def setUp(self):
+        self.m = _load_loop_module()
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-haltfp-")
+        self.target = Path(self.tmpdir) / "demo"
+        self.target.mkdir()
+        (self.target / "a.txt").write_text("x\n")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_records_fingerprint_and_outcome(self):
+        state = {"target_path": str(self.target)}
+        outcome = {"servo_outcome": 1, "result": "passed", "run_id": "r1"}
+        self.m._record_halt_verification(state, outcome)
+        self.assertEqual(state["halt_fingerprint"],
+                         self.m._content_fingerprint(self.target))
+        self.assertEqual(state["outcome"], outcome)
+
+    def test_non_git_target_fingerprint_is_none(self):
+        plain = Path(self.tmpdir) / "plain"
+        plain.mkdir()
+        state = {"target_path": str(plain)}
+        self.m._record_halt_verification(state, None)
+        self.assertIsNone(state["halt_fingerprint"])
+        self.assertNotIn("outcome", state)  # outcome None → not written
+
+
+class EndToEndVerificationStateTests(unittest.TestCase):
+    """A REAL loop run records start_head / allow_dirty / halt_fingerprint /
+    outcome into state.json, and stdout stays byte-identical without the flag."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-e2e-fp-")
+        tmp = Path(self.tmpdir)
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _passing_oracle())
+        (self.target / "src.txt").write_text("baseline\n")
+        self.bindir = tmp / "bin"
+        self.bindir.mkdir(parents=True, exist_ok=True)
+        _mock_claude_constant(self.bindir, _claude_json_payload(), tmp / "counter.txt")
+        _git_init(self.target)
+        _git_commit_all(self.target)
+        self.head = subprocess.run(
+            ["git", "-C", str(self.target), "rev-parse", "HEAD"],
+            capture_output=True, text=True).stdout.strip()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _state(self) -> dict:
+        states = list(self.target.glob(".servo/runs/*/state.json"))
+        self.assertEqual(len(states), 1, states)
+        return json.loads(states[0].read_text())
+
+    def test_fresh_run_records_verification_fields(self):
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        state = self._state()
+        self.assertEqual(state["start_head"], self.head)
+        self.assertFalse(state["allow_dirty"])
+        self.assertIsNotNone(state["halt_fingerprint"])
+        self.assertEqual(state["halt_fingerprint"]["head"], self.head)
+        # state["outcome"] is the loop's OWN 040 record (AC4 re-render source).
+        self.assertEqual(state["outcome"]["servo_outcome"], 1)
+        self.assertEqual(state["outcome"]["run_id"], state["run_id"])
+
+    def test_allow_dirty_flag_recorded(self):
+        (self.target / "src.txt").write_text("dirty before start\n")
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           "--allow-dirty", mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertTrue(self._state()["allow_dirty"])
+
+    def test_no_outcome_line_flag_stdout_unchanged_regression(self):
+        # 040-01 AC1 regression: the 042-04 state additions must not change stdout.
+        result = _run_loop(self.target, "--prompt", "x", "--max-iterations", "1",
+                           mock_bindir=self.bindir,
+                           extra_env={"SERVO_CLAUDE_TIMEOUT": "20"})
+        self.assertNotIn("servo_outcome", result.stdout)  # no --outcome-line flag
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertIn("terminal_reason", summary)
+        self.assertNotIn("halt_fingerprint", summary)  # fingerprint is state-only
+
+
 if __name__ == "__main__":
     unittest.main()
