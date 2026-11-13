@@ -1,22 +1,34 @@
 #!/usr/bin/env python3
-"""servo campaign plan + ledger CLI (spec 042-01, ADR-0049).
+"""servo campaign plan + ledger CLI (spec 042-01/02/03, ADR-0049).
 
 A **campaign** is heartbeat-style dispatch over a *planned* work list. This
-module is the file contract every later campaign mode builds on, and the A4
-oracle-coverage checkpoint: a human or a host can declare a work list
-(`campaign init`) and read one compact ledger of what each worker did and what
-it cost (`campaign record` / `campaign status`) — with no worker execution yet.
+module is the file contract every campaign mode builds on, and the A4
+oracle-coverage checkpoint: a human or a host declares a work list
+(`campaign init`) and reads one compact ledger of what each worker did and what
+it cost (`campaign record` / `campaign status`).
 
-Three subcommands:
+Subcommands:
   * `init <target> --plan <file> [--id <id>]` — validate a plan file and write
     `<target>/.servo/campaigns/<id>/plan.json` + an empty `ledger.jsonl`.
     Fail-closed: any validation error exits rc=2 with a single reason and
     writes nothing (no partial files).
-  * `record <id> <item> --outcome <line> [--tier ...] [--target <path>]` —
-    append one typed outcome (spec 040's `servo_outcome` line) under a blocking
-    `flock` + atomic write, with `tier` and `self_reported`.
+  * `record <id> <item> --outcome <line> [--tier ...] [--worktree <path>]
+    [--target <path>]` — append one typed outcome (spec 040's `servo_outcome`
+    line) under a blocking `flock` + atomic write, with `tier` and
+    `self_reported`. In the **advisory** tier a claimed `passed` is accepted
+    only after servo re-runs the item's oracle on the worker's `--worktree`
+    (042-03 AC2): an unconfirmed pass is recorded as blocked/error, never
+    passed, and every other field stays `self_reported`.
   * `status <id> [--json] [--target <path>]` — read-only read-back of each
-    item's latest outcome, the totals, and the open items.
+    item's latest outcome, the totals, and the open items. Discloses the
+    advisory runaway limit once advisory is in play (042-03 AC4).
+  * `next <id> [--target <path>]` — the episodic servo-driven serial coordinator
+    (042-02): reconcile reservations, dispatch one ready item under `loop.py`,
+    record its outcome, batch escalations, exit.
+  * `brief <id> [<item>] [--target <path>]` — emit a host-driven advisory
+    kickoff brief per item (042-03 AC1): the item's fields as DATA, its base
+    sha, and the `record`-before-commit instruction. servo neither spawns nor
+    messages the host's workers (AC5).
 
 State lives ONLY under `<target>/.servo/campaigns/`. servo never reads jig
 files: a jig reframe manifest is converted into a servo plan by jig or a human
@@ -28,11 +40,15 @@ a sibling skill. loop.py's 038 models validator is loaded dynamically via
 `models` block is validated with the exact 038 schema and rejected with the
 exact same messages (042-01 AC1). The ledger's lock + atomic-write discipline
 (ADR-0010 / ADR-0004) is mirrored from heartbeat.py's inbox rather than imported,
-so the concurrent `record` and `status` paths never load heartbeat.py. (`init`
+so the plain `record` and `status` paths never load heartbeat.py. (`init`
 does load loop.py — and thus loop.py's own gate-consumer import — to reach the
 038 validator; the mirror keeps the hot ledger paths off the heavier heartbeat
 module, and the ledger lock is deliberately blocking where the inbox lock is
-not; see `_ledger_lock`.)
+not; see `_ledger_lock`.) The dispatch verb `next` (042-02) and the advisory
+oracle re-check (042-03, only on an advisory-`passed` `record`) DO load
+heartbeat.py dynamically — both are verification/dispatch operations that reach
+its worktree-provisioning and canonical `_run_gate_json` helpers — but lazily,
+so every other `record`/`status` call keeps the hot-path invariant.
 """
 
 from __future__ import annotations
@@ -103,6 +119,30 @@ CLI_TIERS = ("servo", "advisory")
 # if loop.py's 040 schema drifts from these.
 OUTCOME_SCHEMA_VERSION = 1  # the line's `servo_outcome` field
 OUTCOME_RESULTS = ("passed", "plateau", "budget", "blocked", "error")
+
+# --- Host-driven advisory (042-03) ----------------------------------------- #
+# gate.py's exit-code contract (ADR-0002), mirrored (small value constants, like
+# the OUTCOME_* ones) for the advisory oracle re-check. A claimed `passed` is
+# accepted only when servo's own re-check returns EXIT 0; anything else is
+# recorded as blocked/error, never passed (AC2).
+GATE_EXIT_PASS = 0
+GATE_EXIT_BELOW_THRESHOLD = 1
+GATE_EXIT_ENV_ERROR = 2
+# The verdict → recorded-result map: a pass confirms, a below-threshold means the
+# oracle ran and the work does NOT pass, an oracle env-error means the oracle
+# could not evaluate the worktree at all. Each is a terminal 040 result.
+_GATE_RESULT_MAP = {
+    GATE_EXIT_PASS: ("pass", "passed"),
+    GATE_EXIT_BELOW_THRESHOLD: ("below", "blocked"),
+    GATE_EXIT_ENV_ERROR: ("env_error", "error"),
+}
+# AC4 runaway-limit disclosure. Advisory mode stops nothing in flight — it
+# enforces only the planned list, the ledger, and oracle-verified passes. Stated
+# in every `campaign brief` and (once advisory is in play) in `campaign status`,
+# never hidden. Single source of truth so the two surfaces can't drift.
+ADVISORY_RUNAWAY_NOTE = (
+    "advisory mode: nothing stops a runaway worker in flight — servo enforces "
+    "only the planned list, the ledger, and oracle-verified passes")
 
 # An item id (and a generated campaign id) is a lowercase slug.
 ITEM_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -212,9 +252,12 @@ _HEARTBEAT_MODULE = None  # lazily loaded, then cached
 
 
 def _load_heartbeat():
-    """Load heartbeat.py as a module (dynamically) and cache it, for `next`'s
-    reuse of the worktree-provisioning helpers (`_is_git_work_tree`,
-    `_remove_worktree_if_present`, `_provision_oracle`, `_git`, `_format_ceiling`).
+    """Load heartbeat.py as a module (dynamically) and cache it. Two callers reuse
+    it: `next` (042-02) for the worktree-provisioning helpers (`_is_git_work_tree`,
+    `_remove_worktree_if_present`, `_provision_oracle`, `_git`, `_format_ceiling`),
+    and the advisory oracle re-check (`_recheck_oracle`, 042-03) for the canonical
+    `_run_gate_json`. Both are dispatch/verification verbs, loaded lazily so the
+    plain `record`/`status` hot paths never pull heartbeat in.
     """
     global _HEARTBEAT_MODULE
     if _HEARTBEAT_MODULE is None:
@@ -458,19 +501,75 @@ def _cost_unit_error(unit: str, cost_usd: object) -> Optional[str]:
     return f"unknown budget unit {unit!r}"  # pragma: no cover - plan pre-validated
 
 
-def _ledger_entry(item_id: str, tier: str, outcome: dict, now_iso: str) -> dict:
+def _ledger_entry(item_id: str, tier: str, outcome: dict, now_iso: str,
+                  oracle_recheck: Optional[dict] = None) -> dict:
     """One ledger record: the typed outcome plus the campaign-layer fields.
 
     `self_reported` is DERIVED from the tier (true only for advisory), never
     taken from the caller — the accounting rule in `_status_summary` depends on
-    it (042-01 AC2)."""
-    return {
+    it (042-01 AC2).
+
+    `oracle_recheck` (042-03) is present only on an advisory record whose claimed
+    `passed` servo re-checked against the item's oracle. It is servo's OWN verdict
+    — the one field that is NOT self-reported (AC3) — and it carries the host's
+    original claim (`claimed_result`) alongside the result servo actually recorded
+    (`recorded_result`, which is also written into `outcome.result`)."""
+    entry = {
         "item": item_id,
         "tier": tier,
         "self_reported": _TIER_SELF_REPORTED[tier],
         "recorded_at": now_iso,
         "outcome": outcome,
     }
+    if oracle_recheck is not None:
+        entry["oracle_recheck"] = oracle_recheck
+    return entry
+
+
+def _recheck_oracle(worktree: Path) -> dict:
+    """Re-run the item's oracle on the worker's worktree (042-03 AC2).
+
+    Reuses heartbeat's canonical `_run_gate_json` — servo's ONE gate invocation —
+    so servo scores the oracle ITSELF rather than trusting the worker's reported
+    `result`. That is the advisory tier's whole lever: a claimed `passed` the
+    worktree's oracle does not actually support (an honest-but-wrong or
+    hallucinated pass — the realistic A5 non-compliance) is caught and downgraded.
+
+    What it does NOT do: bind the worktree's PROVENANCE. The worker supplies and
+    controls `--worktree` and everything under it (including its `.servo/` policy
+    and `oracle.sh`), so an adversarial worker can still present trivially-passing
+    content and obtain a genuine exit-0. Cryptographic worktree-provenance binding
+    (base sha + content fingerprint + record-before-commit) is the VERIFIED-WRAPPED
+    tier (042-04), not this one. This is faithful to ADR-0049 A5 — "verification
+    detects non-compliance after the fact; it cannot prevent it" — and the
+    advisory tier is the lightweight floor over Option B: servo runs the oracle
+    instead of taking the worker's word, never more. The result is still servo's
+    own (not `self_reported`) because servo ran it; `oracle_recheck.confirmed`
+    means "servo's gate.py returned pass on the named worktree", not "the item's
+    work passed the item's trusted oracle at the briefed base".
+
+    heartbeat is loaded LAZILY (only this branch pulls it in), so servo-tier and
+    non-pass advisory records keep 042-01's hot-path-off-heartbeat invariant.
+
+    `_run_gate_json` emits a verdict for every gate exit code, or None when the
+    gate cannot be run at all. Maps the exit code to the recorded result (AC2 —
+    "recorded as blocked/error, never passed"):
+      * EXIT 0 (pass)       → "passed"  (confirmed)
+      * EXIT 1 (below)      → "blocked" (oracle ran; the work does not pass)
+      * EXIT 2 (env_error)  → "error"   (oracle could not evaluate the worktree)
+      * None (uninvocable)  → `recorded_result` None; the caller refuses rc=2
+        (a servo-side gate-environment problem, not an item outcome)."""
+    verdict = _load_heartbeat()._run_gate_json(worktree)
+    if not isinstance(verdict, dict):
+        return {"kind": "uninvocable", "recorded_result": None,
+                "status": None, "composite": None, "threshold": None}
+    exit_code = verdict.get("exit_code")
+    kind, recorded = _GATE_RESULT_MAP.get(
+        exit_code, ("env_error", "error"))  # unknown code fails closed to error
+    return {"kind": kind, "recorded_result": recorded,
+            "status": verdict.get("status"),
+            "composite": verdict.get("composite"),
+            "threshold": verdict.get("threshold")}
 
 
 # --------------------------------------------------------------------------- #
@@ -542,11 +641,17 @@ def _status_summary(plan: dict, entries: "list[dict]") -> dict:
         "error": result_counts["error"],
         "credit_items": credit_items,
     }
+    # AC4: advisory mode brakes nothing in flight. `status` discloses that limit
+    # once advisory is in play (≥1 advisory entry) — never hidden — and stays
+    # quiet for a confirmed servo-only campaign.
+    advisory_active = any(
+        entry.get("tier") == "advisory" for entry in entries)
     return {
         "schema_version": SCHEMA_VERSION,
         "items": item_views,
         "totals": totals,
         "open_items": open_items,
+        "advisory_active": advisory_active,
     }
 
 
@@ -590,6 +695,9 @@ def _render_status_human(summary: dict, campaign_id: str) -> str:
         lines.append("open items: " + ", ".join(summary["open_items"]))
     else:
         lines.append("open items: none")
+    if summary.get("advisory_active"):
+        lines.append("")
+        lines.append(ADVISORY_RUNAWAY_NOTE + ".")
     return "\n".join(lines) + "\n"
 
 
@@ -716,7 +824,43 @@ def cmd_record(args: argparse.Namespace) -> int:
     cost_err = _cost_unit_error(budget_unit, outcome["cost_usd"])
     if cost_err:
         return _fail(cost_err)
-    entry = _ledger_entry(args.item, args.tier, outcome, _now_iso())
+    # 042-03 AC2: an advisory worker's CLAIM of `passed` is never taken on its
+    # word. servo re-runs the item's oracle on the worker's worktree and accepts
+    # `passed` only if the oracle confirms it; otherwise the outcome is recorded
+    # as blocked/error, never passed. (Only a claimed pass is re-checked — a
+    # non-pass claim, and every servo-tier outcome, is recorded as-is. A
+    # servo-tier outcome came from servo's own loop run, already oracle-gated.)
+    oracle_recheck = None
+    if args.tier == "advisory" and outcome.get("result") == "passed":
+        if args.worktree is None:
+            return _fail(
+                "advisory 'passed' outcome requires --worktree <path> so servo "
+                "can re-run the item's oracle (a host's claim alone is never a "
+                "pass, ADR-0049)")
+        worktree = args.worktree
+        if not worktree.is_dir():
+            return _fail(
+                f"--worktree {str(worktree)!r} does not exist or is not a "
+                f"directory; the oracle re-check cannot run")
+        verdict = _recheck_oracle(worktree)
+        if verdict["kind"] == "uninvocable":
+            return _fail(
+                f"oracle re-check could not run: gate.py is uninvocable or "
+                f"produced no verdict on {str(worktree)!r}")
+        recorded_result = verdict["recorded_result"]
+        oracle_recheck = {
+            "claimed_result": "passed",
+            "recorded_result": recorded_result,
+            "confirmed": recorded_result == "passed",
+            "status": verdict["status"],
+            "composite": verdict["composite"],
+            "threshold": verdict["threshold"],
+        }
+        # servo's verdict overwrites the claimed result so the ledger's
+        # authoritative result — what status/escalation/accounting read — is the
+        # re-checked one. The host's original claim is kept in `oracle_recheck`.
+        outcome["result"] = recorded_result
+    entry = _ledger_entry(args.item, args.tier, outcome, _now_iso(), oracle_recheck)
     # flock + atomic read-append-write — never drop or tear a record (AC2).
     with _ledger_lock(cdir):
         ledger_path = cdir / LEDGER_NAME
@@ -745,6 +889,32 @@ def cmd_status(args: argparse.Namespace) -> int:
         sys.stdout.write(json.dumps(summary, indent=2) + "\n")
     else:
         sys.stdout.write(_render_status_human(summary, args.id))
+    return 0
+
+
+def cmd_brief(args: argparse.Namespace) -> int:
+    """Emit a host-driven advisory kickoff brief per item (042-03 AC1).
+
+    Read-only: writes nothing to the ledger and spawns/messages nothing (AC5) —
+    it only reads the plan and the target's HEAD and prints text. With an item
+    id, one brief; without, one per plan item in plan order. The base sha is the
+    target's current HEAD (servo does no git ops; HEAD is the worker's base)."""
+    cdir = _campaign_dir(args.target, args.id)
+    plan = _load_plan_file(cdir)
+    if plan is None:
+        return _fail(
+            f"campaign {args.id!r} not found under "
+            f"{args.target.joinpath(*CAMPAIGNS_SEGMENTS)}")
+    items = plan.get("items", [])
+    if args.item is not None:
+        items = [it for it in items if it.get("id") == args.item]
+        if not items:
+            return _fail(
+                f"unknown item id {args.item!r} (not in this campaign's plan)")
+    base_sha = _git_head_sha(args.target)
+    briefs = [_build_brief(it, base_sha, args.id, args.target) for it in items]
+    separator = "\n\n" + ("=" * 72) + "\n\n"
+    sys.stdout.write(separator.join(briefs) + "\n")
     return 0
 
 
@@ -789,6 +959,70 @@ def _build_item_prompt(item: dict) -> str:
         _ITEM_END,
     ])
     return "\n\n".join([_ITEM_TASK, _ITEM_PREAMBLE, block])
+
+
+# --- Host-driven advisory kickoff brief (042-03 AC1) ----------------------- #
+# The brief is servo-authored text a host coordinator hands to a worker it spawns
+# itself. servo neither spawns nor messages that worker (AC5) — it only emits
+# this text and later reads the worktree. The item's authored fields and the
+# plan's budget/models reach the worker ONLY inside the delimited UNTRUSTED DATA
+# block, never as instructions (reusing `_ITEM_PREAMBLE`/`_ITEM_BEGIN`/`_ITEM_END`,
+# the same data-not-instructions treatment as `_build_item_prompt`).
+_BRIEF_TASK = (
+    "You are a worker on a servo campaign item, spawned by your host coordinator "
+    "in your own isolated git worktree. Complete the work item described in the "
+    "UNTRUSTED DATA block below until the item's oracle (scored by gate.py, at "
+    "the oracle_ref named there) passes. Stay inside your worktree; never merge, "
+    "push, or run any git landing command — servo does not land for you.")
+# `{cid}` / `{item}` / `{target}` are servo-controlled plan/CLI values (safe to
+# interpolate in instruction position); `<YOUR_WORKTREE>` / the outcome line are
+# placeholders the worker fills with its own values.
+_BRIEF_RECORD_HOWTO = (
+    "WHEN YOU HALT — BEFORE ANY COMMIT — record your outcome from the worktree:\n"
+    "  campaign record {cid} {item} --tier advisory --worktree <YOUR_WORKTREE> "
+    "--outcome <SPEC-040-OUTCOME-LINE> --target {target}\n"
+    "servo re-runs this item's oracle on <YOUR_WORKTREE> and accepts a 'passed' "
+    "result ONLY if the oracle confirms it there; an unconfirmed pass is recorded "
+    "as blocked or error, never passed. Record BEFORE you commit, so servo scores "
+    "the exact worktree state you are claiming a pass for. (Advisory mode does not "
+    "bind your worktree to the base sha above — that provenance check is the "
+    "verified-wrapped tier; the base sha is given for your own reference.)")
+
+
+def _build_brief(item: dict, base_sha: Optional[str], campaign_id: str,
+                 target: Path) -> str:
+    """Render one item's host-driven advisory kickoff brief (AC1).
+
+    Carries, as DATA inside the delimited untrusted block, the item's title,
+    oracle_ref, budget and models block and the authored prompt; and, in
+    servo-authored instruction position, the item's base sha, the
+    `campaign record` instruction (record before any commit) and the AC4
+    runaway-limit disclosure."""
+    item_id = item.get("id", "")
+    base = base_sha or "unavailable (no resolvable git HEAD on the target)"
+    header = "\n".join([
+        "=== servo campaign kickoff brief (host-driven, advisory) ===",
+        f"campaign: {campaign_id}",
+        f"item: {item_id}",
+        f"base sha: {base}",
+    ])
+    data_block = "\n".join([
+        f"{_ITEM_BEGIN} (item: {item_id})",
+        f"title: {item.get('title', '')}",
+        f"oracle_ref: {item.get('oracle_ref', '')}",
+        f"budget: {json.dumps(item.get('budget', {}))}",
+        f"models: {json.dumps(item.get('models', {}))}",
+        f"task: {item.get('prompt', '')}",
+        _ITEM_END,
+    ])
+    howto = _BRIEF_RECORD_HOWTO.format(
+        cid=campaign_id, item=item_id, target=str(target))
+    limits = (
+        "LIMITS — " + ADVISORY_RUNAWAY_NOTE + ". The budget and models in the "
+        "data block are the plan's guidance only — servo does not brake an "
+        "advisory worker, so honor them yourself.")
+    return "\n\n".join(
+        [header, _BRIEF_TASK, _ITEM_PREAMBLE, data_block, howto, limits])
 
 
 def _pid_alive(pid: object) -> bool:
@@ -1382,6 +1616,13 @@ def main(argv: Optional[list] = None) -> int:
         help=("worker tier (default: servo). advisory sets self_reported=true. "
               "wrapped is earned by 042-04's verifier, not recordable here."))
     p_record.add_argument(
+        "--worktree", type=Path, default=None,
+        help=("the advisory worker's worktree. REQUIRED when recording an "
+              "advisory 'passed' outcome: servo re-runs the item's oracle here "
+              "and accepts the pass only if the oracle confirms it (042-03). "
+              "Ignored for a servo-tier outcome or a non-pass advisory claim "
+              "(no re-check runs)."))
+    p_record.add_argument(
         "--target", type=Path, default=Path("."),
         help="target project holding .servo/ (default: current directory).")
 
@@ -1417,6 +1658,25 @@ def main(argv: Optional[list] = None) -> int:
         "--target", type=Path, default=Path("."),
         help="target project holding .servo/ (default: current directory).")
 
+    p_brief = sub.add_parser(
+        "brief",
+        help="Emit a host-driven advisory kickoff brief per item (spec 042-03).",
+        description=(
+            "Emit one kickoff brief per item (or just <item>): the item's prompt, "
+            "oracle_ref, budget and models block as DATA, the item's base sha, "
+            "and the instruction to run `campaign record --tier advisory` before "
+            "any commit. The host hands this to a worker it spawns itself — servo "
+            "neither spawns nor messages host sessions. Read-only; writes "
+            "nothing."),
+    )
+    p_brief.add_argument("id", help="campaign id.")
+    p_brief.add_argument(
+        "item", nargs="?", default=None,
+        help="plan item id to brief (default: all items, in plan order).")
+    p_brief.add_argument(
+        "--target", type=Path, default=Path("."),
+        help="target project holding .servo/ (default: current directory).")
+
     args = parser.parse_args(argv)
     if args.command == "init":
         return cmd_init(args)
@@ -1426,6 +1686,8 @@ def main(argv: Optional[list] = None) -> int:
         return cmd_status(args)
     if args.command == "next":
         return cmd_next(args)
+    if args.command == "brief":
+        return cmd_brief(args)
     return 2  # pragma: no cover - argparse requires a subcommand
 
 
