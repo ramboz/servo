@@ -26,9 +26,11 @@ Subcommands:
   * `status <id> [--json] [--target <path>]` — read-only read-back of each
     item's latest outcome, the totals, and the open items. Discloses the
     advisory runaway limit once advisory is in play (042-03 AC4).
-  * `next <id> [--target <path>]` — the episodic servo-driven serial coordinator
-    (042-02): reconcile reservations, dispatch one ready item under `loop.py`,
-    record its outcome, batch escalations, exit.
+  * `next <id> [--target <path>]` — the episodic servo-driven coordinator
+    (042-02/05): reconcile reservations, dispatch up to the plan's `max_parallel`
+    ready items (default 1, serial) under `loop.py` — bounded parallel workers run
+    at once under one `aggregate_budget` ceiling (042-05) — record each outcome,
+    batch escalations, exit.
   * `brief <id> [<item>] [--tier advisory|wrapped] [--target <path>]` — emit a
     host-driven kickoff brief per item: the item's fields as DATA, its base sha,
     and the `record`-before-commit instruction. `advisory` (042-03 AC1,
@@ -96,7 +98,7 @@ LEDGER_LOCK_NAME = ".ledger.lock"
 TMP_SUFFIX = ".tmp"
 CAMPAIGNS_SEGMENTS = (".servo", "campaigns")
 
-PLAN_TOP_KEYS = ("schema_version", "items")
+PLAN_TOP_KEYS = ("schema_version", "items", "max_parallel", "aggregate_budget")
 ITEM_REQUIRED = ("id", "title", "prompt", "oracle_ref", "budget", "models")
 # Optional per-item keys (042-02+). `escalation_scope` groups ladder-ceiling
 # escalations (AC5); omitted → the item shares the default scope. Kept separate
@@ -398,25 +400,81 @@ def _is_number(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def _validate_budget(budget: object, item_id: str) -> Optional[str]:
-    """`None` if the per-item budget is well-formed, else a single reason."""
+def _budget_shape_error(budget: object, label: str) -> Optional[str]:
+    """`None` if `budget` is a well-formed `{unit, ceiling}` object, else a single
+    reason prefixed with `label`. Shared by the per-item budget (042-01) and the
+    campaign-level `aggregate_budget` (042-05) so the two share one shape contract
+    (unit in BUDGET_UNITS, ceiling a number > 0) and cannot drift."""
     if not isinstance(budget, dict):
-        return f"item {item_id!r}: budget must be an object"
+        return f"{label} must be an object"
     missing = [k for k in BUDGET_KEYS if k not in budget]
     if missing:
-        return f"item {item_id!r}: budget missing required field(s): {missing}"
+        return f"{label} missing required field(s): {missing}"
     extra = sorted(set(budget) - set(BUDGET_KEYS))
     if extra:
-        return f"item {item_id!r}: budget has unknown field(s): {extra}"
+        return f"{label} has unknown field(s): {extra}"
     unit = budget["unit"]
     if unit not in BUDGET_UNITS:
-        return (f"item {item_id!r}: budget unit must be one of "
-                f"{list(BUDGET_UNITS)}, got {unit!r}")
+        return f"{label} unit must be one of {list(BUDGET_UNITS)}, got {unit!r}"
     ceiling = budget["ceiling"]
     if not _is_number(ceiling):
-        return f"item {item_id!r}: budget ceiling must be a number, got {ceiling!r}"
+        return f"{label} ceiling must be a number, got {ceiling!r}"
     if ceiling <= 0:
-        return f"item {item_id!r}: budget ceiling must be > 0, got {ceiling!r}"
+        return f"{label} ceiling must be > 0, got {ceiling!r}"
+    return None
+
+
+def _validate_budget(budget: object, item_id: str) -> Optional[str]:
+    """`None` if the per-item budget is well-formed, else a single reason."""
+    return _budget_shape_error(budget, f"item {item_id!r}: budget")
+
+
+def _validate_aggregate_budget(agg: object) -> Optional[str]:
+    """`None` if the plan-level `aggregate_budget` is well-formed, else a reason
+    (042-05 AC2). Same `{unit, ceiling}` shape as a per-item budget."""
+    return _budget_shape_error(agg, "aggregate_budget")
+
+
+def _validate_parallel_invariants(data: dict) -> Optional[str]:
+    """`None` if the plan's bounded-parallelism keys cohere, else a single reason
+    (042-05 AC1/AC2). Shared by `init` validation and `next`, so a hand-edited
+    plan.json still fails closed at dispatch rather than silently summing spend
+    across units.
+
+    Rules:
+      * `max_parallel`, if present, is an integer >= 1 (never a bool).
+      * `aggregate_budget`, if present, is a well-formed `{unit, ceiling}`.
+      * when `max_parallel > 1` (bounded parallelism is opted into):
+        - `aggregate_budget` is REQUIRED — there is no unbounded parallel spend;
+        - its unit must be `usd` — recorded credit spend is `cost_usd: null` in the
+          ledger (never summed to USD), so an aggregate credit ceiling could not
+          enforce the "Σ recorded spend" term of AC2 (it would be a false brake);
+        - every item must be USD-denominated — a parallel campaign is single-unit,
+          so the aggregate sum is well-defined and never mixes units."""
+    mp = data.get("max_parallel")
+    if mp is not None and (not isinstance(mp, int) or isinstance(mp, bool) or mp < 1):
+        return f"max_parallel must be an integer >= 1, got {mp!r}"
+    agg = data.get("aggregate_budget")
+    if agg is not None:
+        agg_err = _validate_aggregate_budget(agg)
+        if agg_err:
+            return agg_err
+    effective = mp if isinstance(mp, int) and not isinstance(mp, bool) else DEFAULT_MAX_PARALLEL
+    if effective > 1:
+        if agg is None:
+            return ("max_parallel > 1 requires an aggregate_budget: bounded "
+                    "parallelism needs an aggregate cost ceiling (ADR-0049)")
+        if agg.get("unit") != "usd":
+            return ("bounded parallelism requires a USD aggregate_budget: recorded "
+                    "credit spend is cost_usd:null in the ledger (never summed to "
+                    "USD), so a credit aggregate ceiling is not enforceable")
+        for item in data.get("items", []):
+            unit = (item.get("budget") or {}).get("unit") if isinstance(item, dict) else None
+            if unit != "usd":
+                return (f"bounded parallelism requires every item to be "
+                        f"USD-denominated; item "
+                        f"{item.get('id') if isinstance(item, dict) else item!r} "
+                        f"is {unit!r}-denominated")
     return None
 
 
@@ -480,6 +538,11 @@ def _validate_plan(data: object) -> "tuple[Optional[dict], Optional[str]]":
         err = _validate_item(item, idx, seen, validate_models)
         if err:
             return None, err
+    # 042-05 bounded-parallelism keys (max_parallel + aggregate_budget) and their
+    # single-unit coherence. Checked after the items so item units are known.
+    parallel_err = _validate_parallel_invariants(data)
+    if parallel_err:
+        return None, parallel_err
     return data, None
 
 
@@ -1274,6 +1337,33 @@ def _latest_outcomes(entries: "list[dict]") -> "dict[str, dict]":
     return latest
 
 
+# --- Bounded parallelism (042-05) ------------------------------------------ #
+
+def _plan_max_parallel(plan: dict) -> int:
+    """The plan's `max_parallel`, defaulting to `DEFAULT_MAX_PARALLEL` (1, serial).
+
+    Fail-safe at read: a plan.json hand-edited to a non-int / < 1 value reads back
+    as serial rather than dispatching unbounded (the init-time validator already
+    rejects such a value; this guards the loaded-plan path too)."""
+    mp = plan.get("max_parallel")
+    if isinstance(mp, int) and not isinstance(mp, bool) and mp >= 1:
+        return mp
+    return DEFAULT_MAX_PARALLEL
+
+
+def _plan_aggregate_ceiling(plan: dict) -> "tuple[object, object]":
+    """`(ceiling, unit)` of a well-formed `aggregate_budget`, else `(None, None)`.
+
+    The aggregate ceiling is the campaign-level cost cap that bounds Σ recorded
+    spend + Σ reserved per-worker ceilings of live workers (042-05 AC2). It is a
+    plan-level field because the per-item `budget.ceiling` bounds only one worker;
+    the campaign's total parallel spend needs its own declared cap (ADR-0049)."""
+    agg = plan.get("aggregate_budget")
+    if isinstance(agg, dict) and _validate_aggregate_budget(agg) is None:
+        return agg["ceiling"], agg["unit"]
+    return None, None
+
+
 # --- Reservations ---------------------------------------------------------- #
 
 def _reservations_dir(campaign_dir: Path) -> Path:
@@ -1568,18 +1658,19 @@ def _record_loop_outcome(campaign_dir: Path, item: dict, worktree: Path,
     return validated, None
 
 
-def _run_item_loop(hb, worktree: Path, prompt: str, budget: dict, models: dict,
-                   outcome_path: Path, on_spawn) -> "tuple[Optional[dict], object]":
-    """Launch `loop.py <worktree> --prompt … --outcome-line … <budget> --models …`,
-    blocking until the worker halts (AC1 "returns when that worker halts").
+def _spawn_item_loop(hb, worktree: Path, prompt: str, budget: dict, models: dict,
+                     outcome_path: Path, on_spawn) -> "Optional[subprocess.Popen]":
+    """Launch `loop.py <worktree> --prompt … --outcome-line … <budget> --models …`
+    NON-blocking, call `on_spawn(pid)`, and return the live `Popen` (or None when
+    loop.py could not start). Splitting launch from join is what lets a bounded
+    parallel wave (042-05) Popen up to `max_parallel` workers before waiting on any
+    of them; the serial path (042-02) just spawns one then joins it immediately.
 
     The argv mirrors the heartbeat's `_run_loop`: a USD budget routes to
     `--cost-ceiling`; a credit budget routes to `--host copilot --credit-ceiling`
     plus the `--max-iterations` loop.py requires on Copilot. `--outcome-line` is the
-    spec-040 sink the ledger stores. `on_spawn(pid)` is called with the live child
-    pid so the reservation records it (AC4 liveness). Returns `(summary, run_id)` —
-    `summary` is the loop's terminal stdout line (the fallback renderer source), or
-    None when loop.py could not run at all.
+    spec-040 sink the ledger stores. `on_spawn(pid)` records the live child pid in
+    the reservation (AC4 liveness).
 
     The subprocess runner resolves independently of the in-process loop-module
     import (`_load_loop_module`): `SERVO_CAMPAIGN_RUNNER_PY` overrides the spawned
@@ -1601,8 +1692,15 @@ def _run_item_loop(hb, worktree: Path, prompt: str, budget: dict, models: dict,
         proc = subprocess.Popen(
             argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     except (FileNotFoundError, OSError):
-        return None, None
+        return None
     on_spawn(proc.pid)  # the run is now live — record the pid in the reservation
+    return proc
+
+
+def _join_item_loop(proc: "subprocess.Popen") -> "tuple[Optional[dict], object]":
+    """Block until the loop halts, then parse its terminal spec-040 stdout summary
+    + run_id. `summary` is None when the loop printed no parseable terminal line
+    (the fallback renderer then has nothing, so the item stays open)."""
     out, _err = proc.communicate()  # no outer timeout — loop.py self-bounds
     summary: Optional[dict] = None
     for line in (out or "").splitlines():
@@ -1618,15 +1716,20 @@ def _run_item_loop(hb, worktree: Path, prompt: str, budget: dict, models: dict,
     return summary, (summary or {}).get("run_id")
 
 
-def _dispatch_item(campaign_dir: Path, target: Path, item: dict, hb) -> dict:
-    """Isolate → provision → run one item under loop.py → record its typed outcome.
+def _launch_item(campaign_dir: Path, target: Path, item: dict, hb) -> dict:
+    """Isolate → provision → spawn one item's `loop.py` NON-blocking, writing its
+    reservation the moment the run goes live. Returns a launch handle:
+      * `{item, status: "launched", proc, worktree, outcome_path, base_sha}` once the
+        worktree is provisioned (`proc` may be None when loop.py could not start —
+        `_join_and_record` then records it via the summary=None path, the same
+        env_error 042-02 produced);
+      * `{item, status: "env_error", reason, base_sha}` when the item could not be
+        isolated/provisioned (nothing launched; it stays open for a later wake).
 
-    Returns a dispatch summary for the coordinator decision: `{item, status,
-    run_id, result, cost_usd, base_sha, recorded}` on a run, or `{item,
-    status: "env_error", reason, base_sha}` when the item could not be
-    isolated/provisioned/recorded (no outcome recorded; the item stays open for a
-    later wake). The reservation is written when the run goes live and deleted once
-    the outcome is recorded, so it is held only while the run is live (AC4)."""
+    Splitting launch from join is the whole mechanism of bounded parallel dispatch
+    (042-05): `_dispatch_items` launches up to `max_parallel` workers with this, THEN
+    joins them, so they run at once. The serial path (`_dispatch_item`) launches one
+    and joins it immediately, byte-for-byte 042-02."""
     item_id = item["id"]
     # Early non-git guard (mirrors `_dispatch_one`): a non-git target cannot be
     # isolated into a worktree — fail cleanly with a precise reason before touching
@@ -1669,21 +1772,43 @@ def _dispatch_item(campaign_dir: Path, target: Path, item: dict, hb) -> dict:
     def _on_spawn(pid: int) -> None:
         # Capture the child pid AND its start time: the start time makes the pid a
         # reuse-proof handle, so a recycled pid (worker died, number reused, incl.
-        # across a reboot) is not mistaken for a live run (AC4).
+        # across a reboot) is not mistaken for a live run (AC4). The item's budget
+        # `ceiling` + `unit` are recorded too so the aggregate ceiling can sum the
+        # reserved per-worker ceilings of the LIVE workers (042-05 AC2).
+        budget = item.get("budget") or {}
         _write_reservation(campaign_dir, {
             "item": item_id, "pid": pid, "pid_start": _process_start(pid),
             "base_sha": base_sha, "worktree": str(worktree), "branch": branch,
             "started_at": _now_iso(),
+            "ceiling": budget.get("ceiling"), "unit": budget.get("unit"),
         })
 
     prompt = _build_item_prompt(item)
-    summary, run_id = _run_item_loop(
+    proc = _spawn_item_loop(
         hb, worktree, prompt, item["budget"], item["models"], outcome_path, _on_spawn)
+    return {"item": item_id, "status": "launched", "proc": proc,
+            "worktree": worktree, "outcome_path": outcome_path, "base_sha": base_sha}
 
-    # Record the loop's own typed outcome (tier=servo, cost from state.json). Order:
-    # the record is appended (inside `_record_loop_outcome`) BEFORE the reservation
-    # is deleted — so a crash between them leaves a recorded-not-live reservation
-    # that reconciliation simply cleans up, never a double-run.
+
+def _join_and_record(campaign_dir: Path, item: dict, handle: dict) -> dict:
+    """Block until a launched worker's loop halts, record its typed outcome
+    (tier=servo, cost from state.json), then delete the reservation. Returns the
+    dispatch summary: `{item, status: "dispatched", run_id, result, cost_usd,
+    base_sha, recorded}` on a recorded outcome, else `{item, status: "env_error",
+    reason, base_sha, run_id}` (the item stays open)."""
+    item_id = item["id"]
+    worktree = handle["worktree"]
+    outcome_path = handle["outcome_path"]
+    base_sha = handle.get("base_sha")
+    proc = handle.get("proc")
+    summary: Optional[dict] = None
+    run_id: object = None
+    if proc is not None:
+        summary, run_id = _join_item_loop(proc)
+    # Record the loop's own typed outcome. Order: the record is appended (inside
+    # `_record_loop_outcome`) BEFORE the reservation is deleted — so a crash between
+    # them leaves a recorded-not-live reservation that reconciliation simply cleans
+    # up, never a double-run.
     validated, reason = _record_loop_outcome(
         campaign_dir, item, worktree, outcome_path, summary)
     _delete_reservation(campaign_dir, item_id)
@@ -1697,6 +1822,34 @@ def _dispatch_item(campaign_dir: Path, target: Path, item: dict, hb) -> dict:
         "result": validated.get("result"), "cost_usd": validated.get("cost_usd"),
         "base_sha": base_sha, "recorded": True,
     }
+
+
+def _dispatch_item(campaign_dir: Path, target: Path, item: dict, hb) -> dict:
+    """Serial single-item dispatch (042-02): launch one worker, block until it
+    halts, record its outcome, delete the reservation. Behaviourally the N=1 case of
+    the bounded parallel wave — `_launch_item` then `_join_and_record`."""
+    handle = _launch_item(campaign_dir, target, item, hb)
+    if handle.get("status") == "env_error":
+        return handle
+    return _join_and_record(campaign_dir, item, handle)
+
+
+def _dispatch_items(campaign_dir: Path, target: Path, items: "list[dict]",
+                    hb) -> "list[dict]":
+    """Bounded parallel wave (042-05 AC1): Popen every selected item's `loop.py`
+    first (each in its own worktree, each reservation written on spawn), THEN join
+    each and record its outcome. Because all launches happen before any join, the
+    workers run concurrently. An item that fails to isolate/provision yields its
+    env_error handle and is not joined; the rest still run. Returns one dispatch
+    summary per item, in `items` order."""
+    handles = [_launch_item(campaign_dir, target, item, hb) for item in items]
+    results: "list[dict]" = []
+    for item, handle in zip(items, handles):
+        if handle.get("status") == "env_error":
+            results.append(handle)
+            continue
+        results.append(_join_and_record(campaign_dir, item, handle))
+    return results
 
 
 def _append_entries(campaign_dir: Path, entries: "list[dict]") -> None:
@@ -1738,7 +1891,11 @@ def cmd_next(args: argparse.Namespace) -> int:
 
 
 def _run_next(cdir: Path, target: Path, plan: dict) -> int:
-    """The coordinator body, run under the `_next_lock` (see `cmd_next`)."""
+    """The coordinator body, run under the `_next_lock` (see `cmd_next`).
+
+    Serial (`max_parallel` 1/unset) is 042-02's single dispatch, unchanged. Bounded
+    parallel (`max_parallel` > 1, 042-05) dispatches up to the free slots of ready
+    items at once under one aggregate ceiling."""
     try:
         entries = _read_ledger(cdir)
     except json.JSONDecodeError as exc:
@@ -1746,25 +1903,75 @@ def _run_next(cdir: Path, target: Path, plan: dict) -> int:
 
     # AC4 — reconcile stale reservations BEFORE selecting, so a killed worker's item
     # is ready again this wake (budget recovered) and a finished-but-unrecorded
-    # worker's result is promoted rather than re-run.
+    # worker's result is promoted rather than re-run. Reconciliation is per-file, so
+    # among several live workers a killed one releases only its own budget (042-05
+    # AC3); the others keep their reservations.
     reconciled = _reconcile_reservations(cdir, plan, entries)
     if reconciled:
         entries = _read_ledger(cdir)  # a promotion appended an outcome
 
     latest = _latest_outcomes(entries)
     terminal = set(latest)
-    live_reserved = {
-        record.get("item") or path.stem
-        for path, record in _read_reservations(cdir)
-        if _run_is_live(record)
-    }
+    # The live reservations (as records, so the aggregate ceiling can sum their
+    # reserved per-worker ceilings) and their item ids.
+    live_records = [(path, record) for path, record in _read_reservations(cdir)
+                    if _run_is_live(record)]
+    live_reserved = {record.get("item") or path.stem for path, record in live_records}
     ready = [item["id"] for item in plan.get("items", [])
              if item["id"] not in terminal and item["id"] not in live_reserved]
 
     # AC5 — items that plateaued at the ladder ceiling, batched by escalation scope.
     escalations = _compute_escalations(plan, latest)
+    read_block = {
+        "items": len(plan.get("items", [])),
+        "ready": ready,
+        "live_reservations": sorted(live_reserved),
+        "terminal": sorted(terminal),
+        "plateau_ceiling": [i for g in escalations for i in g["items"]],
+    }
 
-    # AC1 — dispatch at most `max_parallel` (1) ready item, in plan order.
+    max_parallel = _plan_max_parallel(plan)
+    if max_parallel == 1:
+        # 042-05 AC5 kill-criterion cap: max_parallel 1/unset is the 042-02 serial
+        # path — at most one ready item, byte-for-byte the prior behaviour.
+        dispatch_fields = _serial_dispatch(cdir, target, plan, ready)
+    else:
+        parallel_err = _validate_parallel_invariants(plan)
+        if parallel_err:
+            # Fail-closed: a plan.json hand-edited into an incoherent parallel plan
+            # (no/ credit aggregate, mixed units) never dispatches unbounded or
+            # mixed-unit spend. Record the refusal in the ledger, then exit non-zero.
+            decision = {
+                "kind": COORDINATOR_DECISION_KIND, "recorded_at": _now_iso(),
+                "max_parallel": max_parallel, "read": read_block,
+                "reconciled": reconciled, "dispatched": [], "dispatch_errors": [],
+                "aggregate": {"error": parallel_err}, "escalations": escalations,
+            }
+            _append_entries(cdir, [decision])
+            return _fail(f"parallel dispatch refused: {parallel_err}")
+        dispatch_fields = _parallel_dispatch(
+            cdir, target, plan, ready, entries, live_records, max_parallel)
+
+    # AC3 — the coordinator decision: what it read, reconciled, dispatched, escalated.
+    decision = {
+        "kind": COORDINATOR_DECISION_KIND,
+        "recorded_at": _now_iso(),
+        "max_parallel": max_parallel,
+        "read": read_block,
+        "reconciled": reconciled,
+        **dispatch_fields,
+        "escalations": escalations,
+    }
+    _append_entries(cdir, [decision])
+    _emit_escalations(escalations)
+    return 0
+
+
+def _serial_dispatch(cdir: Path, target: Path, plan: dict,
+                     ready: "list[str]") -> dict:
+    """042-02 serial dispatch: at most one ready item, in plan order. Returns the
+    decision's dispatch fields `{dispatched: dict|None, dispatch_error: dict|None}`
+    — the singular 042-02 shape (distinct from the parallel plural shape)."""
     dispatched = None
     dispatch_error = None
     if ready:
@@ -1784,29 +1991,118 @@ def _run_next(cdir: Path, target: Path, plan: dict) -> int:
                 f"{result.get('reason')} (dispatch_env_error)")
     else:
         sys.stdout.write("nothing to dispatch\n")
+    return {"dispatched": dispatched, "dispatch_error": dispatch_error}
 
-    # AC3 — the coordinator decision: what it read, reconciled, dispatched, escalated.
-    decision = {
-        "kind": COORDINATOR_DECISION_KIND,
-        "recorded_at": _now_iso(),
-        "max_parallel": DEFAULT_MAX_PARALLEL,
-        "read": {
-            "items": len(plan.get("items", [])),
-            "ready": ready,
-            "live_reservations": sorted(live_reserved),
-            "terminal": sorted(terminal),
-            "plateau_ceiling": [i for g in escalations for i in g["items"]],
-        },
-        "reconciled": reconciled,
+
+def _reserved_live(live_records: "list[tuple[Path, dict]]",
+                   items_by_id: dict) -> "tuple[float, bool]":
+    """Σ the reserved per-worker ceilings of the live workers, and whether any is
+    unknowable. `(total, unknown)`.
+
+    A live reservation written by this slice carries its item's `ceiling`
+    (`_launch_item`). For robustness — e.g. a pre-042-05 reservation that lacks the
+    field surviving a mid-campaign binary upgrade — a ceiling-less record RECOVERS
+    the item's planned ceiling from the plan by item id rather than counting 0
+    (which would under-count reserved spend and let the aggregate ceiling admit a
+    breaching worker — a fail-OPEN on a cost brake). A ceiling that is neither
+    recorded nor resolvable from the plan is reported `unknown` so the caller can
+    fail closed (dispatch nothing this wake) rather than guess."""
+    total = 0.0
+    unknown = False
+    for _path, record in live_records:
+        ceiling = record.get("ceiling")
+        if not _is_number(ceiling):
+            item = items_by_id.get(record.get("item"))
+            ceiling = (item.get("budget") or {}).get("ceiling") if isinstance(item, dict) else None
+        if _is_number(ceiling):
+            total += ceiling
+        else:
+            unknown = True
+    return total, unknown
+
+
+def _parallel_dispatch(cdir: Path, target: Path, plan: dict, ready: "list[str]",
+                       entries: "list[dict]", live_records: "list[tuple[Path, dict]]",
+                       max_parallel: int) -> dict:
+    """042-05 bounded parallel dispatch: select up to the free slots of ready items
+    in plan order — admitting each only while the aggregate ceiling holds — launch
+    them at once, record each. Returns the decision's dispatch fields
+    `{dispatched: list, dispatch_errors: list, aggregate: {...}}`.
+
+    AC2 aggregate ceiling, enforced BEFORE each dispatch:
+      enforced recorded spend (servo + verified wrapped)
+        + Σ reserved per-worker ceilings of the LIVE workers
+        + this item's ceiling
+      ≤ the aggregate ceiling.
+    A live worker reserves its FULL ceiling (worst case); on finish its reservation
+    is released and its ACTUAL spend joins the enforced total. A refused item stays
+    QUEUED (not failed) and selection STOPS in plan order (no skipping a too-big
+    high-priority item to run a cheaper later one). The aggregate ceiling is a
+    cumulative cap, so a campaign naturally stops dispatching as recorded spend
+    approaches it."""
+    ceiling, unit = _plan_aggregate_ceiling(plan)  # usd + present (invariants OK)
+    enforced_spend = _status_summary(plan, entries)["totals"]["enforced_cost_usd"]
+    items_by_id = {it["id"]: it for it in plan.get("items", [])}
+    reserved_live, reserved_unknown = _reserved_live(live_records, items_by_id)
+    free_slots = max(0, max_parallel - len(live_records))
+
+    selected: "list[dict]" = []
+    refused: "list[dict]" = []
+    projected = reserved_live
+    # Fail closed: if a live worker's reserved ceiling is unknowable (neither
+    # recorded nor resolvable from the plan), the aggregate cannot be computed
+    # safely, so dispatch nothing this wake rather than admit a possible breach.
+    ready_to_consider = [] if reserved_unknown else ready
+    if reserved_unknown:
+        refused = [{"item": iid, "reason": "reserved_ceiling_unknown"} for iid in ready]
+    for item_id in ready_to_consider:
+        if len(selected) >= free_slots:
+            break
+        item = items_by_id[item_id]
+        item_ceiling = (item.get("budget") or {}).get("ceiling") or 0
+        would_total = round(enforced_spend + projected + item_ceiling, 6)
+        if would_total > ceiling:
+            refused.append({"item": item_id, "projected_total": would_total,
+                            "ceiling": ceiling})
+            break  # plan order: stop, never skip ahead to a cheaper later item
+        selected.append(item)
+        projected = round(projected + item_ceiling, 6)
+
+    results = (_dispatch_items(cdir, target, selected, _load_heartbeat())
+               if selected else [])
+    dispatched: "list[dict]" = []
+    dispatch_errors: "list[dict]" = []
+    for res in results:
+        if res.get("status") == "dispatched":
+            dispatched.append({
+                "item": res["item"], "run_id": res.get("run_id"),
+                "result": res.get("result"), "cost_usd": res.get("cost_usd"),
+            })
+        else:
+            dispatch_errors.append({"item": res["item"], "reason": res.get("reason")})
+            _emit_breadcrumb(
+                f"item {res['item']!r} not dispatched: "
+                f"{res.get('reason')} (dispatch_env_error)")
+    if not selected:
+        sys.stdout.write(
+            "aggregate ceiling reached or slots full; nothing dispatched\n"
+            if ready else "nothing to dispatch\n")
+    return {
         "dispatched": dispatched,
-        "dispatch_error": dispatch_error,
-        "escalations": escalations,
+        "dispatch_errors": dispatch_errors,
+        "aggregate": {
+            "unit": unit, "ceiling": ceiling,
+            "enforced_spend": enforced_spend, "reserved_live": reserved_live,
+            "reserved_unknown": reserved_unknown,
+            "free_slots": free_slots, "refused": refused,
+        },
     }
-    _append_entries(cdir, [decision])
 
-    # AC5 — surface the ladder-ceiling escalations as ONE batched message (the
-    # structured record carries every scope; the human line summarizes all of them),
-    # never one message per item.
+
+def _emit_escalations(escalations: "list[dict]") -> None:
+    """AC5 — surface the ladder-ceiling escalations as ONE batched message (the
+    structured record carries every scope; the human line summarizes all of them),
+    never one message per item."""
     if escalations:
         sys.stdout.write(json.dumps({"campaign_escalations": escalations}) + "\n")
         total = sum(len(g["items"]) for g in escalations)
@@ -1815,7 +2111,6 @@ def _run_next(cdir: Path, target: Path, plan: dict) -> int:
         sys.stdout.write(
             f"escalation: {total} item(s) plateaued at the ladder ceiling across "
             f"{len(escalations)} scope(s): {groups}\n")
-    return 0
 
 
 def _emit_breadcrumb(message: str) -> None:
@@ -1901,15 +2196,19 @@ def main(argv: Optional[list] = None) -> int:
 
     p_next = sub.add_parser(
         "next",
-        help="Dispatch the next ready item under loop.py, record it, and exit.",
+        help="Dispatch ready items under loop.py (up to max_parallel), record, exit.",
         description=(
-            "The episodic serial coordinator (spec 042-02): reconcile stale "
-            "reservations, dispatch at most one ready item (max_parallel 1) in its "
-            "own worktree under loop.py with the item's budget and models block, "
-            "record the loop's own typed outcome line (tier=servo, cost from the "
-            "run's state.json), batch escalations by scope, record the coordinator "
-            "decision, and exit. A command, not a queue or daemon: servo never "
-            "merges and does no git operation beyond worktree isolation."),
+            "The episodic coordinator (spec 042-02/05): reconcile stale "
+            "reservations, dispatch up to the plan's `max_parallel` ready items "
+            "(default 1, serial) — each in its own worktree under loop.py with the "
+            "item's budget and models block — record each loop's own typed outcome "
+            "line (tier=servo, cost from the run's state.json), batch escalations by "
+            "scope, record the coordinator decision, and exit. With max_parallel > 1 "
+            "the workers run at once under one `aggregate_budget` cost ceiling, "
+            "enforced before each dispatch on Σ recorded spend + Σ reserved ceilings "
+            "of the live workers; a dispatch that would breach it is refused and the "
+            "item stays queued. A command, not a queue or daemon: servo never merges "
+            "and does no git operation beyond worktree isolation."),
     )
     p_next.add_argument("id", help="campaign id.")
     p_next.add_argument(

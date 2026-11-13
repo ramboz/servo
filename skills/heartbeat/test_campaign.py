@@ -2264,5 +2264,536 @@ class WrappedBriefTests(unittest.TestCase):
         self.assertFalse(self._briefs_dir().exists())
 
 
+# =========================================================================== #
+# Spec 042-05 — bounded parallel dispatch
+#
+#   AC1 (max_parallel plan field + bounded dispatch of N workers at once) →
+#       ParallelPlanSchemaTests + ParallelDispatchTests
+#   AC2 (aggregate ceiling enforced before each dispatch; refusal keeps queued;
+#       mixed-unit fail-closed) → ParallelPlanSchemaTests + AggregateCeilingTests
+#   AC3 (reservation held only while live; reconciled across ALL live workers —
+#       a killed worker among several releases only its own budget) →
+#       ParallelReconcileMultiWorkerTests
+#   AC4 (ledger stays consistent under concurrent record from parallel workers) →
+#       ParallelConcurrentRecordTests
+#   AC5 (max_parallel 1/unset is byte-for-byte the 042-02 serial path) →
+#       SerialPathRegressionTests
+# =========================================================================== #
+
+
+def _parallel_plan(*items, max_parallel=None, aggregate=None):
+    """A plan with optional 042-05 top-level keys."""
+    plan = _valid_plan(*items)
+    if max_parallel is not None:
+        plan["max_parallel"] = max_parallel
+    if aggregate is not None:
+        plan["aggregate_budget"] = aggregate
+    return plan
+
+
+def _usd_agg(ceiling):
+    return {"unit": "usd", "ceiling": ceiling}
+
+
+def _write_barrier_stub(path: Path, *, expected: int, cost: float = 0.5,
+                        deadline: float = 30.0) -> Path:
+    """A stub loop.py that proves N workers ran CONCURRENTLY, without a fixed
+    sleep. Each worker touches `<campaign_dir>/_barrier/started/<item>`, then polls
+    (condition-based, generous deadline) until it sees `expected` started files, and
+    records the peak count it saw to `_barrier/seen/<item>`. Under true parallelism
+    every worker sees `expected`; a serial dispatcher (which blocks joining worker 1
+    before launching worker 2) leaves worker 1 timing out at count 1 and never
+    launches the rest.
+    """
+    src = (
+        "import sys, json, pathlib, time\n"
+        "args = sys.argv[1:]\n"
+        "worktree = pathlib.Path(args[0])\n"
+        "item = worktree.name\n"
+        "campaign_dir = worktree.parent.parent\n"
+        "barrier = campaign_dir / '_barrier'\n"
+        "started = barrier / 'started'\n"
+        "seen = barrier / 'seen'\n"
+        "started.mkdir(parents=True, exist_ok=True)\n"
+        "seen.mkdir(parents=True, exist_ok=True)\n"
+        "(started / item).write_text('1')\n"
+        f"expected = {int(expected)}\n"
+        f"deadline = time.time() + {float(deadline)}\n"
+        "peak = 0\n"
+        "while time.time() < deadline:\n"
+        "    peak = max(peak, len(list(started.glob('*'))))\n"
+        "    if peak >= expected:\n"
+        "        break\n"
+        "    time.sleep(0.02)\n"
+        "(seen / item).write_text(str(peak))\n"
+        "def _opt(name):\n"
+        "    return args[args.index(name) + 1] if name in args else None\n"
+        "run_id = 'crun-' + item\n"
+        f"cost = {float(cost)}\n"
+        "runs = worktree / '.servo' / 'runs' / run_id\n"
+        "runs.mkdir(parents=True, exist_ok=True)\n"
+        "(runs / 'state.json').write_text(json.dumps({'run_id': run_id,\n"
+        "    'state_schema_version': 1, 'backend': 'claude',\n"
+        "    'cumulative_cost_usd': cost}))\n"
+        "rec = {'servo_outcome': 1, 'result': 'passed', 'rung': 0, 'rungs': 1,\n"
+        "       'iterations': 1, 'cost_usd': cost, 'composite': 0.9,\n"
+        "       'threshold': 0.5, 'run_id': run_id, 'reason': 'oracle_passed'}\n"
+        "ol = _opt('--outcome-line')\n"
+        "if ol and ol != '-':\n"
+        "    pathlib.Path(ol).write_text(json.dumps(rec) + '\\n')\n"
+        "summary = {'schema_version': 1, 'final_oracle_status': 'pass',\n"
+        "    'run_id': run_id, 'cumulative_cost_usd': cost,\n"
+        "    'terminal_reason': 'oracle_passed', 'iterations_completed': 1,\n"
+        "    'oracle_score_history': [{'iteration': 1, 'composite': 0.9,\n"
+        "        'threshold': 0.5}]}\n"
+        "print(json.dumps(summary))\n"
+        "sys.exit(0)\n"
+    )
+    path.write_text(src)
+    return path
+
+
+class ParallelPlanSchemaTests(unittest.TestCase):
+    """AC1/AC2: `max_parallel` + `aggregate_budget` plan validation, fail-closed."""
+
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+        self.addCleanup(self._td.cleanup)
+
+    def _init_plan(self, plan):
+        return _init(self.tmp, plan)
+
+    # --- defaults (helpers) ------------------------------------------------- #
+    def test_absent_max_parallel_defaults_to_one(self):
+        self.assertEqual(_cmp._plan_max_parallel(_valid_plan(_valid_item())), 1)
+
+    def test_present_max_parallel_is_read(self):
+        plan = _parallel_plan(_valid_item(), max_parallel=4, aggregate=_usd_agg(100))
+        self.assertEqual(_cmp._plan_max_parallel(plan), 4)
+
+    def test_bad_max_parallel_coerces_to_default_at_read(self):
+        # defence-in-depth: a hand-edited bad value reads back as serial (1).
+        self.assertEqual(_cmp._plan_max_parallel({"max_parallel": 0}), 1)
+        self.assertEqual(_cmp._plan_max_parallel({"max_parallel": True}), 1)
+
+    def test_aggregate_ceiling_helper(self):
+        plan = _parallel_plan(_valid_item(), max_parallel=2, aggregate=_usd_agg(50))
+        self.assertEqual(_cmp._plan_aggregate_ceiling(plan), (50, "usd"))
+        self.assertEqual(_cmp._plan_aggregate_ceiling(_valid_plan(_valid_item())),
+                         (None, None))
+
+    # --- valid plans -------------------------------------------------------- #
+    def test_valid_parallel_plan_accepted(self):
+        plan = _parallel_plan(_item("item-a"), _item("item-b"),
+                              max_parallel=3, aggregate=_usd_agg(100))
+        res = self._init_plan(plan)
+        self.assertEqual(res.returncode, 0, res.stderr)
+
+    def test_max_parallel_one_with_aggregate_is_valid_unenforced(self):
+        plan = _parallel_plan(_item("item-a"), max_parallel=1, aggregate=_usd_agg(10))
+        self.assertEqual(self._init_plan(plan).returncode, 0)
+
+    def test_absent_max_parallel_no_aggregate_still_valid(self):
+        self.assertEqual(self._init_plan(_valid_plan(_valid_item())).returncode, 0)
+
+    # --- fail-closed -------------------------------------------------------- #
+    def test_max_parallel_not_integer_rejected(self):
+        for bad in (1.5, "3", True):
+            res = self._init_plan(_parallel_plan(_valid_item(), max_parallel=bad,
+                                                 aggregate=_usd_agg(100)))
+            self.assertEqual(res.returncode, 2, bad)
+            self.assertIn("max_parallel", res.stderr)
+
+    def test_max_parallel_below_one_rejected(self):
+        res = self._init_plan(_parallel_plan(_valid_item(), max_parallel=0))
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("max_parallel", res.stderr)
+
+    def test_parallel_without_aggregate_budget_rejected(self):
+        res = self._init_plan(_parallel_plan(_valid_item(), max_parallel=3))
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("aggregate_budget", res.stderr)
+
+    def test_aggregate_budget_bad_shape_rejected(self):
+        cases = [
+            {"ceiling": 100},                       # missing unit
+            {"unit": "usd"},                        # missing ceiling
+            {"unit": "usd", "ceiling": 0},          # non-positive
+            {"unit": "pesos", "ceiling": 100},      # bad unit
+            {"unit": "usd", "ceiling": 100, "x": 1},  # unknown key
+            [100],                                  # not an object
+        ]
+        for agg in cases:
+            res = self._init_plan(_parallel_plan(_valid_item(), max_parallel=2,
+                                                 aggregate=agg))
+            self.assertEqual(res.returncode, 2, agg)
+            self.assertIn("aggregate_budget", res.stderr, agg)
+
+    def test_parallel_with_credit_aggregate_rejected(self):
+        # mixed-unit fail-closed: a credit aggregate ceiling is not enforceable
+        # (recorded credit spend is not in the ledger's summable USD totals).
+        res = self._init_plan(_parallel_plan(
+            _item("item-a"), max_parallel=2,
+            aggregate={"unit": "credit", "ceiling": 1000}))
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("USD", res.stderr)
+
+    def test_parallel_with_credit_item_rejected(self):
+        # mixed-unit fail-closed: a parallel campaign must be single-unit (USD).
+        res = self._init_plan(_parallel_plan(
+            _item("item-a", unit="usd"), _item("item-b", unit="credit"),
+            max_parallel=2, aggregate=_usd_agg(100)))
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("USD-denominated", res.stderr)
+        self.assertIn("item-b", res.stderr)
+
+    def test_unknown_top_level_key_still_rejected(self):
+        plan = _parallel_plan(_valid_item(), max_parallel=2, aggregate=_usd_agg(100))
+        plan["bogus"] = 1
+        res = self._init_plan(plan)
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("unknown top-level key", res.stderr)
+
+
+class ParallelDispatchTests(unittest.TestCase):
+    """AC1: `max_parallel` > 1 dispatches N workers at once, each in its worktree."""
+
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.log = Path(self._td.name) / "loop.log"
+        self.addCleanup(self._td.cleanup)
+
+    def _seen(self):
+        seen_dir = _campaign_dir(self.tmp) / "_barrier" / "seen"
+        if not seen_dir.is_dir():
+            return {}
+        return {p.name: int(p.read_text()) for p in seen_dir.glob("*")}
+
+    def test_three_workers_dispatched_concurrently(self):
+        plan = _parallel_plan(_item("item-a"), _item("item-b"), _item("item-c"),
+                              max_parallel=3, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        _write_barrier_stub(self.loop, expected=3)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # All three recorded (tier servo).
+        outs = _outcome_entries(self.tmp)
+        self.assertEqual({o["item"] for o in outs}, {"item-a", "item-b", "item-c"})
+        self.assertTrue(all(o["tier"] == "servo" for o in outs))
+        # CONCURRENCY PROOF: every worker saw all three started before proceeding.
+        seen = self._seen()
+        self.assertEqual(set(seen), {"item-a", "item-b", "item-c"})
+        self.assertTrue(all(v == 3 for v in seen.values()), seen)
+        # The decision lists three dispatched under max_parallel 3.
+        dec = _decision_entries(self.tmp)[-1]
+        self.assertEqual(dec["max_parallel"], 3)
+        self.assertEqual({d["item"] for d in dec["dispatched"]},
+                         {"item-a", "item-b", "item-c"})
+
+    def test_only_free_slots_dispatched_when_a_prior_worker_is_live(self):
+        # A live reservation from a (simulated) prior wave occupies one slot, so a
+        # max_parallel-2 wake dispatches only 1 more.
+        plan = _parallel_plan(_item("item-a"), _item("item-b"),
+                              max_parallel=2, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(live.terminate)
+        rdir = _reservations_dir(self.tmp)
+        rdir.mkdir(parents=True, exist_ok=True)
+        (rdir / "item-a.json").write_text(json.dumps({
+            "item": "item-a", "pid": live.pid,
+            "pid_start": _cmp._process_start(live.pid),
+            "base_sha": "0" * 40, "worktree": str(_campaign_dir(self.tmp)
+            / "worktrees" / "item-a"), "branch": "servo/campaign/item-a",
+            "started_at": "2020-01-01T00:00:00Z", "ceiling": 5.0, "unit": "usd"}))
+        _write_stub_loop(self.loop, log_path=self.log)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # Only item-b was launched (item-a is live, slot occupied).
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([c["item"] for c in calls], ["item-b"])
+
+    def test_unknown_reserved_ceiling_fails_closed(self):
+        # A live reservation lacking a ceiling for an item NOT in the plan makes the
+        # reserved-ceiling sum unknowable → fail CLOSED: dispatch nothing this wake,
+        # rather than under-count reserved spend and admit a breaching worker.
+        plan = _parallel_plan(_item("item-a"), max_parallel=3, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        live = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        self.addCleanup(live.terminate)
+        rdir = _reservations_dir(self.tmp)
+        rdir.mkdir(parents=True, exist_ok=True)
+        (rdir / "phantom.json").write_text(json.dumps({
+            "item": "phantom", "pid": live.pid,
+            "pid_start": _cmp._process_start(live.pid), "base_sha": "0" * 40,
+            "worktree": str(_campaign_dir(self.tmp) / "worktrees" / "phantom"),
+            "branch": "servo/campaign/phantom",
+            "started_at": "2020-01-01T00:00:00Z"}))   # no ceiling, phantom not in plan
+        _write_stub_loop(self.loop, log_path=self.log)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(self.log.exists(), "fail-closed: nothing dispatched")
+        dec = _decision_entries(self.tmp)[-1]
+        self.assertTrue(dec["aggregate"]["reserved_unknown"])
+        self.assertEqual(dec["dispatched"], [])
+
+
+class AggregateCeilingTests(unittest.TestCase):
+    """AC2: aggregate ceiling enforced before each dispatch; refusal keeps queued."""
+
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.log = Path(self._td.name) / "loop.log"
+        self.addCleanup(self._td.cleanup)
+
+    def _big(self, item_id, ceiling):
+        it = _item(item_id)
+        it["budget"] = {"unit": "usd", "ceiling": ceiling}
+        return it
+
+    def test_within_wave_refusal_keeps_item_queued(self):
+        # aggregate 100; A(60) fits, B(60) would push to 120 → B refused, STOP.
+        plan = _parallel_plan(self._big("item-a", 60), self._big("item-b", 60),
+                              self._big("item-c", 10),
+                              max_parallel=3, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        _write_stub_loop(self.loop, log_path=self.log,
+                         default={"result": "passed", "status": "pass", "cost": 1.0})
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([c["item"] for c in calls], ["item-a"])  # only A launched
+        outs = {o["item"] for o in _outcome_entries(self.tmp)}
+        self.assertEqual(outs, {"item-a"})
+        dec = _decision_entries(self.tmp)[-1]
+        refused = [r["item"] for r in dec["aggregate"]["refused"]]
+        self.assertIn("item-b", refused)
+
+    def test_enforced_recorded_spend_counts_against_the_ceiling(self):
+        # Pre-record 95 of enforced spend on a done item; A(10) then can't fit
+        # (95 + 10 > 100) → nothing dispatched this wake.
+        plan = _parallel_plan(self._big("done-x", 5), self._big("item-a", 10),
+                              max_parallel=2, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        _run(["record", "camp-1", "done-x", "--outcome",
+              json.dumps(_usd_outcome(run_id="rx", cost_usd=95.0)),
+              "--target", str(self.tmp)])
+        _write_stub_loop(self.loop, log_path=self.log)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(self.log.exists(), "A must not launch past the ceiling")
+        self.assertEqual(_outcome_entries(self.tmp)[-1]["item"], "done-x")
+        dec = _decision_entries(self.tmp)[-1]
+        self.assertIn("item-a", [r["item"] for r in dec["aggregate"]["refused"]])
+
+    def test_refused_item_dispatched_on_a_later_wake(self):
+        # After A finishes cheaply, a second wake admits the previously-refused B+C.
+        plan = _parallel_plan(self._big("item-a", 60), self._big("item-b", 60),
+                              self._big("item-c", 10),
+                              max_parallel=3, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        _write_stub_loop(self.loop, log_path=self.log,
+                         default={"result": "passed", "status": "pass", "cost": 1.0})
+        _next(self.tmp, self.loop)                     # wave 1 → A only
+        proc = _next(self.tmp, self.loop)              # wave 2 → B + C
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual({o["item"] for o in _outcome_entries(self.tmp)},
+                         {"item-a", "item-b", "item-c"})
+
+    def test_hand_edited_incoherent_plan_fails_closed_at_next(self):
+        # Defense-in-depth: `_load_plan_file` does not re-validate, so a plan.json
+        # hand-edited after init into an incoherent parallel plan (here: the
+        # aggregate_budget removed under max_parallel>1) must fail closed at `next` —
+        # record the refusal and dispatch NOTHING, never unbounded parallel spend.
+        plan = _parallel_plan(_item("item-a"), _item("item-b"),
+                              max_parallel=3, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        planfile = _campaign_dir(self.tmp) / "plan.json"
+        data = json.loads(planfile.read_text())
+        del data["aggregate_budget"]                   # now max_parallel>1 w/o aggregate
+        planfile.write_text(json.dumps(data))
+        _write_stub_loop(self.loop, log_path=self.log)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 2)           # fail-closed rc=2
+        self.assertFalse(self.log.exists(), "nothing may be dispatched")
+        self.assertEqual(_outcome_entries(self.tmp), [])
+        dec = _decision_entries(self.tmp)[-1]
+        self.assertIn("error", dec["aggregate"])       # refusal recorded in ledger
+        self.assertEqual(dec["dispatched"], [])
+
+
+class ParallelReconcileMultiWorkerTests(unittest.TestCase):
+    """AC3: among several live workers, a killed one releases only its own budget."""
+
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self._procs = []
+        self.addCleanup(self._td.cleanup)
+        self.addCleanup(self._terminate_all)
+
+    def _terminate_all(self):
+        for p in self._procs:
+            p.terminate()
+
+    def _live_pid(self):
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self._procs.append(p)
+        return p.pid
+
+    def _seed(self, item, pid, *, ceiling=5.0):
+        rdir = _reservations_dir(self.tmp)
+        rdir.mkdir(parents=True, exist_ok=True)
+        (rdir / (item + ".json")).write_text(json.dumps({
+            "item": item, "pid": pid, "pid_start": _cmp._process_start(pid),
+            "base_sha": "0" * 40,
+            "worktree": str(_campaign_dir(self.tmp) / "worktrees" / item),
+            "branch": "servo/campaign/" + item,
+            "started_at": "2020-01-01T00:00:00Z", "ceiling": ceiling, "unit": "usd"}))
+
+    def test_killed_among_three_releases_only_its_own(self):
+        plan = _parallel_plan(_item("item-a"), _item("item-b"), _item("item-c"),
+                              max_parallel=3, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        self._seed("item-a", self._live_pid())
+        self._seed("item-b", _dead_pid())       # the killed worker
+        self._seed("item-c", self._live_pid())
+        cdir = _campaign_dir(self.tmp)
+        loaded = _cmp._load_plan_file(cdir)
+        reconciled = _cmp._reconcile_reservations(cdir, loaded, [])
+        # Only item-b was released_requeued; the two live ones are untouched.
+        self.assertEqual([r for r in reconciled if r["action"] == "released_requeued"],
+                         [{"item": "item-b", "action": "released_requeued",
+                           "base_sha": "0" * 40}])
+        rdir = _reservations_dir(self.tmp)
+        self.assertTrue((rdir / "item-a.json").exists())
+        self.assertFalse((rdir / "item-b.json").exists())
+        self.assertTrue((rdir / "item-c.json").exists())
+
+    def test_reserved_ceiling_sum_excludes_the_killed_worker(self):
+        # The aggregate `reserved_live` term sums only the surviving live workers.
+        plan = _parallel_plan(_item("item-a"), _item("item-b"), _item("item-c"),
+                              max_parallel=3, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        self._seed("item-a", self._live_pid(), ceiling=7.0)
+        self._seed("item-b", _dead_pid(), ceiling=9.0)
+        self._seed("item-c", self._live_pid(), ceiling=4.0)
+        cdir = _campaign_dir(self.tmp)
+        live = [r for _p, r in _cmp._read_reservations(cdir) if _cmp._run_is_live(r)]
+        reserved = sum(r["ceiling"] for r in live)
+        self.assertEqual(reserved, 11.0)  # 7 + 4, NOT the dead worker's 9
+
+
+class ReservedLiveFailClosedTests(unittest.TestCase):
+    """AC2 robustness: the reserved-ceiling sum fails CLOSED, never open (a
+    ceiling-less live reservation recovers the plan ceiling, or is unknown)."""
+
+    def _rec(self, item, **over):
+        r = {"item": item, "pid": 1, "base_sha": "0" * 40, "unit": "usd"}
+        r.update(over)
+        return (Path(item), r)
+
+    def test_sums_recorded_ceilings(self):
+        live = [self._rec("item-a", ceiling=5.0), self._rec("item-b", ceiling=7.0)]
+        self.assertEqual(_cmp._reserved_live(live, {}), (12.0, False))
+
+    def test_recovers_plan_ceiling_when_reservation_lacks_one(self):
+        # A pre-042-05 reservation (no ceiling field) recovers the item's planned
+        # ceiling from the plan rather than under-counting as 0 (which would weaken
+        # the aggregate ceiling — a fail-open).
+        live = [self._rec("item-a")]  # no ceiling field
+        items_by_id = {"item-a": {"id": "item-a",
+                                  "budget": {"unit": "usd", "ceiling": 9.0}}}
+        self.assertEqual(_cmp._reserved_live(live, items_by_id), (9.0, False))
+
+    def test_unknown_when_ceiling_unresolvable(self):
+        # Neither recorded nor resolvable from the plan → unknown, so the caller
+        # fails closed (dispatches nothing) rather than guessing.
+        total, unknown = _cmp._reserved_live([self._rec("gone")], {})
+        self.assertTrue(unknown)
+
+
+class ParallelConcurrentRecordTests(unittest.TestCase):
+    """AC4: concurrent `campaign record` from parallel workers never drops a row."""
+
+    def test_concurrent_distinct_item_records_all_land(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            n = 12
+            items = [_item(f"item-{i}") for i in range(n)]
+            _init(tmp, _parallel_plan(*items, max_parallel=4, aggregate=_usd_agg(1000)))
+            procs = []
+            for i in range(n):
+                outcome = _usd_outcome(run_id=f"run-{i}", cost_usd=float(i))
+                procs.append(subprocess.Popen(
+                    [sys.executable, str(CAMPAIGN), "record", "camp-1", f"item-{i}",
+                     "--outcome", json.dumps(outcome), "--target", str(tmp)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            rcs = [p.wait() for p in procs]
+            self.assertTrue(all(rc == 0 for rc in rcs), rcs)
+            entries = _outcome_entries(tmp)
+            self.assertEqual(len(entries), n)
+            # Every item recorded exactly once; no torn/dropped line.
+            self.assertEqual({e["item"] for e in entries},
+                             {f"item-{i}" for i in range(n)})
+            # The ledger is still one valid JSON object per line.
+            text = (_campaign_dir(tmp) / "ledger.jsonl").read_text()
+            for line in text.splitlines():
+                if line.strip():
+                    self.assertIsInstance(json.loads(line), dict)
+
+
+class SerialPathRegressionTests(unittest.TestCase):
+    """AC5: `max_parallel` 1/unset is byte-for-byte the 042-02 serial path."""
+
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name) / "repo"
+        _dispatch_repo(self.tmp)
+        self.loop = Path(self._td.name) / "stub_loop.py"
+        self.log = Path(self._td.name) / "loop.log"
+        self.addCleanup(self._td.cleanup)
+
+    def _assert_serial_decision_shape(self, dec):
+        self.assertEqual(dec["max_parallel"], 1)
+        # serial decision keeps the 042-02 singular fields, not the parallel ones.
+        self.assertIn("dispatched", dec)
+        self.assertIn("dispatch_error", dec)
+        self.assertNotIn("aggregate", dec)
+        self.assertNotIn("dispatch_errors", dec)
+        # `dispatched` is a single object or None, never a list.
+        self.assertFalse(isinstance(dec["dispatched"], list))
+
+    def test_unset_max_parallel_runs_serial_single_dispatch(self):
+        plan = _valid_plan(_item("item-a"), _item("item-b"))
+        _init(self.tmp, plan)
+        _write_stub_loop(self.loop, log_path=self.log)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([c["item"] for c in calls], ["item-a"])  # one, in order
+        self._assert_serial_decision_shape(_decision_entries(self.tmp)[-1])
+        self.assertEqual(_decision_entries(self.tmp)[-1]["dispatched"]["item"], "item-a")
+
+    def test_max_parallel_one_is_identical_to_serial(self):
+        plan = _parallel_plan(_item("item-a"), _item("item-b"),
+                              max_parallel=1, aggregate=_usd_agg(100))
+        _init(self.tmp, plan)
+        _write_stub_loop(self.loop, log_path=self.log)
+        proc = _next(self.tmp, self.loop)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        calls = [json.loads(line) for line in self.log.read_text().splitlines()]
+        self.assertEqual([c["item"] for c in calls], ["item-a"])  # serial: one only
+        self._assert_serial_decision_shape(_decision_entries(self.tmp)[-1])
+
+
 if __name__ == "__main__":
     unittest.main()
