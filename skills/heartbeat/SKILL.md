@@ -182,7 +182,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/heartbeat.py" run /path/to/repo 
   --host copilot --credit-ceiling 300 --max-candidates 3 --max-iterations 5
 ```
 
-## Campaign (spec 042 — plan, ledger, serial + bounded parallel dispatch)
+## Campaign (spec 042 — plan, ledger, serial + bounded parallel dispatch, wave review)
 
 A **campaign** is heartbeat-style dispatch over a *planned* work list (ADR-0049):
 a list of independent, oracle-gated work items, each with its own `oracle_ref`,
@@ -197,7 +197,10 @@ servo re-runs each claimed pass's oracle before it enters the ledger. Slice
 wrapped` plus `record --tier wrapped`), where the host's worker runs its item
 under `loop.py` and servo verifies the loop's own recorded state (run id +
 content fingerprint + the brief's base sha) before accepting the item as
-enforced spend — closing the host-parity bundle.
+enforced spend — closing the host-parity bundle. Slice 042-06 adds the read-only
+**wave integration-review brief** (`campaign review`): one cross-wave brief over
+the recorded items' diffs for a fresh reviewer — servo produces the brief, never
+runs the reviewer (ADR-0049 A3).
 
 The helper is at `${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py`.
 
@@ -450,6 +453,33 @@ python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" brief my-campaign \
 # verified-wrapped (persists the base sha per item)
 python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" brief my-campaign \
   fix-auth --tier wrapped --target /path/to/repo
+```
+
+### `campaign.py review <id> [--output <file>] [--target <path>]`
+
+Emit **one** fresh-context integration-review brief over the wave (the items with
+a recorded outcome), for a human to hand to a reviewer before the wave's PRs
+publish — the cross-PR check a per-item oracle cannot do. **Read-only:** it
+records nothing, merges nothing, and runs no git op beyond read-only diff
+queries; servo **produces** the brief and never spawns or runs a reviewer
+(ADR-0049 A3). Per item it names the recorded outcome, the worktree path, the
+base sha, the diff range (`base..HEAD`) and the changed-file list
+(`git diff --name-status`, paths + change-type only) as **scope** — never diff
+body or any servo summary. The changed-file list surfaces same-path overlap
+(duplicated/conflicting edits); cross-file API/contract drift the reviewer must
+find by reading the diffs (the brief says so and gives the per-item `git diff`
+command). A servo-driven item's worktree is the `worktrees/<item>` convention; a
+host-driven item's is the path `campaign record --worktree` persisted (best-effort
+— the host owns its lifecycle). Writes the brief to stdout, or to `--output
+<file>`.
+
+```bash
+# the wave brief to stdout
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" review my-campaign \
+  --target /path/to/repo
+# or written to a file
+python3 "${CLAUDE_PLUGIN_ROOT}/skills/heartbeat/campaign.py" review my-campaign \
+  --output wave-review.txt --target /path/to/repo
 ```
 
 ## Q&A before running or wiring a schedule
