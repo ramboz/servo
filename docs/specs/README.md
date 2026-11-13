@@ -166,7 +166,7 @@
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-01 — plan and ledger | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-02 — servo-driven serial dispatch | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-03 — host-driven advisory | **DONE** |  |
-| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-04 — host-driven verified-wrapped | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-04 — host-driven verified-wrapped | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-05 — bounded parallel dispatch | DRAFT |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-06 — wave integration-review brief | DRAFT |  |
 
@@ -198,7 +198,7 @@
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
 - **6** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
-- **22** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
+- **24** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
 - **12** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
