@@ -453,7 +453,13 @@ class RecordTierSelfReportedTests(unittest.TestCase):
         self.assertNotEqual(self._record("wrapped").returncode, 0)
 
     def test_advisory_is_self_reported(self):
-        self.assertEqual(self._record("advisory").returncode, 0)
+        # A non-`passed` advisory claim needs no oracle re-check (042-03 re-checks
+        # only claimed passes), so this still exercises the 042-01 tier →
+        # self_reported mapping without a `--worktree`. (An advisory `passed`
+        # now requires the re-check — see RecordAdvisoryRecheck* in 042-03.)
+        self.assertEqual(
+            self._record("advisory", _usd_outcome(
+                result="plateau", reason="oracle_plateau")).returncode, 0)
         entry = _ledger_lines(self.tmp)[-1]
         self.assertEqual(entry["tier"], "advisory")
         self.assertTrue(entry["self_reported"])
@@ -1522,6 +1528,419 @@ class NextUnitContractTests(unittest.TestCase):
         self.assertEqual(rec["result"], "passed")
         self.assertEqual(rec["cost_usd"], 1.5)
         self.assertEqual(rec["run_id"], "r")
+
+
+# =========================================================================== #
+# Spec 042-03 — host-driven advisory: `campaign brief`, the advisory oracle
+# re-check in `record`, and the runaway-limit disclosure.
+#
+# The oracle re-check reuses heartbeat's canonical `_run_gate_json`, so the gate
+# is stubbed via `SERVO_HEARTBEAT_GATE_PY` (the env that runner resolves). A bare
+# worktree dir has no installed policy, so `gate_consumer.accept`'s legacy
+# no-policy adapter returns the stub's verdict as-is; `_unpriced_oracle_error`
+# returns None without a `.servo/install.json`. Brief base-sha tests use a REAL
+# git repo (`_dispatch_repo`), and one integration test runs the REAL gate.py.
+# =========================================================================== #
+
+
+def _write_stub_gate(path: Path, *, exit_code: int = 0, status: str = "pass",
+                     composite: float = 1.0, threshold: float = 0.5,
+                     marker: Optional[Path] = None) -> Path:
+    """A deterministic stand-in `gate.py` for the advisory re-check.
+
+    Emits one JSON verdict line (no `schema_version`/`kind`/`required`, so the
+    no-policy legacy adapter in `gate_consumer.accept` returns it verbatim) and
+    exits with a code that MATCHES the line's `exit_code` (the adapter requires
+    it). An optional `marker` file is touched on invocation, to prove whether the
+    re-check ran at all (AC5)."""
+    verdict = {"exit_code": exit_code, "status": status,
+               "composite": composite, "threshold": threshold, "reason": "stub"}
+    lines = ["import sys"]
+    if marker is not None:
+        lines.append(f"open({json.dumps(str(marker))}, 'w').close()")
+    lines.append(f"print({json.dumps(json.dumps(verdict))})")
+    lines.append(f"sys.exit({exit_code})")
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def _worktree_dir(root: Path, name: str = "wt") -> Path:
+    """A plain directory standing in for the host's worker worktree (the stubbed
+    gate makes a real repo/oracle unnecessary; it only needs to be writable so
+    `gate_consumer.request` can resolve its run dir)."""
+    wt = root / name
+    wt.mkdir(parents=True, exist_ok=True)
+    return wt
+
+
+def _record_adv(tmp: Path, item: str, outcome: dict, *,
+                worktree: Optional[Path] = None, gate_stub: Optional[Path] = None,
+                tier: str = "advisory", campaign_id: str = "camp-1",
+                extra_env: Optional[dict] = None) -> subprocess.CompletedProcess:
+    args = ["record", campaign_id, item, "--outcome", json.dumps(outcome),
+            "--tier", tier, "--target", str(tmp)]
+    if worktree is not None:
+        args += ["--worktree", str(worktree)]
+    env = dict(os.environ)
+    if gate_stub is not None:
+        env["SERVO_HEARTBEAT_GATE_PY"] = str(gate_stub)
+    if extra_env:
+        env.update(extra_env)
+    return subprocess.run(
+        [sys.executable, str(CAMPAIGN), *args], capture_output=True, text=True, env=env)
+
+
+def _brief(tmp: Path, *item: str, campaign_id: str = "camp-1") -> subprocess.CompletedProcess:
+    return _run(["brief", campaign_id, *item, "--target", str(tmp)])
+
+
+# --------------------------------------------------------------------------- #
+# AC1 — `campaign brief` emits a per-item kickoff brief (data-not-instructions)
+# --------------------------------------------------------------------------- #
+
+class BriefEmitsKickoffTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+        _dispatch_repo(self.tmp)  # real git repo → a resolvable base sha
+        self.item = _item("item-a", oracle_ref="oracle.sh")
+        self.assertEqual(_init(self.tmp, _valid_plan(self.item)).returncode, 0)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_brief_carries_item_fields_as_data(self):
+        res = _brief(self.tmp, "item-a")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        out = res.stdout
+        # the authored fields appear inside the delimited UNTRUSTED DATA block
+        self.assertIn(_cmp._ITEM_BEGIN, out)
+        self.assertIn(_cmp._ITEM_END, out)
+        self.assertIn("oracle.sh", out)                  # oracle_ref
+        self.assertIn('"unit": "usd"', out)              # budget block, as data
+        self.assertIn("models", out)                     # models block, as data
+        self.assertIn(self.item["prompt"], out)          # the authored prompt
+
+    def test_brief_states_base_sha(self):
+        head = subprocess.run(["git", "-C", str(self.tmp), "rev-parse", "HEAD"],
+                              capture_output=True, text=True).stdout.strip()
+        res = _brief(self.tmp, "item-a")
+        self.assertIn(head, res.stdout)
+
+    def test_brief_instructs_record_before_commit(self):
+        out = _brief(self.tmp, "item-a").stdout
+        self.assertIn("campaign record", out)
+        self.assertIn("--tier advisory", out)
+        self.assertIn("--worktree", out)
+        self.assertIn("before", out.lower())             # record-before-commit
+        self.assertIn("commit", out.lower())
+
+    def test_brief_states_item_text_is_data(self):
+        out = _brief(self.tmp, "item-a").stdout
+        self.assertIn("UNTRUSTED", out)
+        self.assertIn("not instructions", out.lower().replace("not an instruction",
+                                                               "not instructions"))
+
+    def test_brief_discloses_runaway_limit(self):
+        out = _brief(self.tmp, "item-a").stdout
+        self.assertIn(_cmp.ADVISORY_RUNAWAY_NOTE, out)
+
+    def test_brief_unknown_item_refused(self):
+        res = _brief(self.tmp, "no-such-item")
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(_ledger_lines(self.tmp), [])    # writes nothing
+
+
+class BriefAllItemsTests(unittest.TestCase):
+    def test_no_item_emits_one_brief_per_item_in_plan_order(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _dispatch_repo(tmp)
+            _init(tmp, _valid_plan(_item("alpha"), _item("beta"), _item("gamma")))
+            out = _brief(tmp).stdout
+            self.assertEqual(out.count(_cmp._ITEM_BEGIN), 3)
+            # plan order preserved
+            self.assertLess(out.index("alpha"), out.index("beta"))
+            self.assertLess(out.index("beta"), out.index("gamma"))
+
+    def test_brief_writes_nothing_to_the_ledger(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _dispatch_repo(tmp)
+            _init(tmp, _valid_plan(_item("alpha")))
+            _brief(tmp)
+            self.assertEqual(_ledger_lines(tmp), [])
+
+    def test_non_git_target_base_sha_degrades_gracefully(self):
+        # AC1 graceful degradation: a target with no resolvable git HEAD (here a
+        # plain, non-git dir) still emits a brief, exit 0, with the base sha marked
+        # unavailable rather than failing.
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)  # NOT a git repo
+            _init(tmp, _valid_plan(_item("alpha")))
+            res = _brief(tmp, "alpha")
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertIn("base sha: unavailable", res.stdout)
+            self.assertIn(_cmp._ITEM_BEGIN, res.stdout)  # the brief still renders
+
+
+# --------------------------------------------------------------------------- #
+# AC2 — advisory `record` re-runs the oracle before accepting a claimed pass
+# --------------------------------------------------------------------------- #
+
+class RecordAdvisoryRecheckTests(unittest.TestCase):
+    def setUp(self):
+        self._td = _tempfile.TemporaryDirectory()
+        self.tmp = Path(self._td.name)
+        _init(self.tmp, _valid_plan(_item("item-a", oracle_ref="oracle.sh")))
+        self.wt = _worktree_dir(self.tmp, "wt-a")
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_confirmed_pass_records_passed(self):
+        gate = _write_stub_gate(self.tmp / "gate_pass.py", exit_code=0, status="pass")
+        res = _record_adv(self.tmp, "item-a", _usd_outcome(result="passed"),
+                          worktree=self.wt, gate_stub=gate)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        entry = _ledger_lines(self.tmp)[-1]
+        self.assertEqual(entry["outcome"]["result"], "passed")
+        self.assertTrue(entry["self_reported"])          # cost/rung/reason still self-reported
+        rc = entry["oracle_recheck"]
+        self.assertTrue(rc["confirmed"])
+        self.assertEqual(rc["claimed_result"], "passed")
+        self.assertEqual(rc["recorded_result"], "passed")
+
+    def test_unconfirmed_pass_downgraded_to_blocked(self):
+        # oracle ran and did NOT pass (below threshold, exit 1) → never 'passed'.
+        gate = _write_stub_gate(self.tmp / "gate_below.py", exit_code=1,
+                                status="below_threshold", composite=0.3)
+        res = _record_adv(self.tmp, "item-a", _usd_outcome(result="passed"),
+                          worktree=self.wt, gate_stub=gate)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        entry = _ledger_lines(self.tmp)[-1]
+        self.assertEqual(entry["outcome"]["result"], "blocked")   # AC2: never passed
+        self.assertEqual(entry["oracle_recheck"]["claimed_result"], "passed")
+        self.assertFalse(entry["oracle_recheck"]["confirmed"])
+
+    def test_oracle_env_error_records_error(self):
+        # oracle ran on a real worktree but env-errored (exit 2) → cannot confirm.
+        gate = _write_stub_gate(self.tmp / "gate_env.py", exit_code=2,
+                                status="env_error")
+        res = _record_adv(self.tmp, "item-a", _usd_outcome(result="passed"),
+                          worktree=self.wt, gate_stub=gate)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        entry = _ledger_lines(self.tmp)[-1]
+        self.assertEqual(entry["outcome"]["result"], "error")
+        self.assertFalse(entry["oracle_recheck"]["confirmed"])
+
+    def test_uninvocable_gate_refuses_and_records_nothing(self):
+        # gate.py cannot run at all (no parseable verdict) → rc=2, ledger unchanged
+        # (a servo-side env problem the operator fixes & retries, not an item error).
+        missing = self.tmp / "no_such_gate.py"
+        res = _record_adv(self.tmp, "item-a", _usd_outcome(result="passed"),
+                          worktree=self.wt, gate_stub=missing)
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(_ledger_lines(self.tmp), [])
+
+    def test_passed_without_worktree_refused(self):
+        res = _record_adv(self.tmp, "item-a", _usd_outcome(result="passed"))
+        self.assertEqual(res.returncode, 2)
+        self.assertIn("worktree", res.stderr.lower())
+        self.assertEqual(_ledger_lines(self.tmp), [])
+
+    def test_passed_worktree_absent_refused(self):
+        gate = _write_stub_gate(self.tmp / "gate_pass.py")
+        res = _record_adv(self.tmp, "item-a", _usd_outcome(result="passed"),
+                          worktree=self.tmp / "does-not-exist", gate_stub=gate)
+        self.assertEqual(res.returncode, 2)
+        self.assertEqual(_ledger_lines(self.tmp), [])
+
+    def test_non_pass_claim_skips_recheck(self):
+        # A claimed plateau needs no re-check: recorded as-is, self_reported, and
+        # the gate is never invoked (marker absent).
+        marker = self.tmp / "gate_ran"
+        gate = _write_stub_gate(self.tmp / "gate_pass.py", marker=marker)
+        res = _record_adv(self.tmp, "item-a",
+                          _usd_outcome(result="plateau", reason="oracle_plateau"),
+                          worktree=self.wt, gate_stub=gate)
+        self.assertEqual(res.returncode, 0, res.stderr)
+        entry = _ledger_lines(self.tmp)[-1]
+        self.assertEqual(entry["outcome"]["result"], "plateau")
+        self.assertTrue(entry["self_reported"])
+        self.assertNotIn("oracle_recheck", entry)
+        self.assertFalse(marker.exists())                 # no re-check ran
+
+    def test_servo_tier_pass_not_rechecked(self):
+        # servo-tier outcomes come from servo's own loop run (042-02), already
+        # oracle-gated; the advisory re-check is advisory-only.
+        marker = self.tmp / "gate_ran"
+        gate = _write_stub_gate(self.tmp / "gate_pass.py", marker=marker)
+        res = _record_adv(self.tmp, "item-a", _usd_outcome(result="passed"),
+                          worktree=self.wt, gate_stub=gate, tier="servo")
+        self.assertEqual(res.returncode, 0, res.stderr)
+        entry = _ledger_lines(self.tmp)[-1]
+        self.assertEqual(entry["outcome"]["result"], "passed")
+        self.assertFalse(entry["self_reported"])
+        self.assertNotIn("oracle_recheck", entry)
+        self.assertFalse(marker.exists())
+
+
+class RecordAdvisoryRecheckRealGateTests(unittest.TestCase):
+    """Integration: the re-check wiring against the REAL gate.py (not a stub)."""
+
+    def _worktree_with_oracle(self, root: Path, exit_code: int) -> Path:
+        # A minimal real scaffold the REAL gate.py accepts: a committed oracle.sh
+        # (the gate's deterministic driver) + the `.servo/install.json` manifest
+        # gate.py requires (ADR-0002). No installed policy, so gate_consumer's
+        # no-policy path grades the oracle's own exit/score.
+        wt = _worktree_dir(root, f"wt-{exit_code}")
+        oracle = wt / "oracle.sh"
+        comp = "1.0" if exit_code == 0 else "0.1"
+        oracle.write_text("#!/usr/bin/env bash\n"
+                          f'echo "oracle: composite={comp} threshold=0.5"\n'
+                          f"exit {exit_code}\n")
+        oracle.chmod(oracle.stat().st_mode | 0o111)
+        servo = wt / ".servo"
+        servo.mkdir(parents=True, exist_ok=True)
+        (servo / "install.json").write_text(
+            json.dumps({"installed_tier": "tier-0", "components": []}))
+        return wt
+
+    def test_real_gate_confirms_passing_oracle(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _init(tmp, _valid_plan(_item("item-a")))
+            wt = self._worktree_with_oracle(tmp, 0)
+            res = _record_adv(tmp, "item-a", _usd_outcome(result="passed"), worktree=wt)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(_ledger_lines(tmp)[-1]["outcome"]["result"], "passed")
+
+    def test_real_gate_downgrades_failing_oracle(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _init(tmp, _valid_plan(_item("item-a")))
+            wt = self._worktree_with_oracle(tmp, 1)
+            res = _record_adv(tmp, "item-a", _usd_outcome(result="passed"), worktree=wt)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertNotEqual(_ledger_lines(tmp)[-1]["outcome"]["result"], "passed")
+
+
+# --------------------------------------------------------------------------- #
+# AC3 — every field but the re-checked result is self_reported; self-reported
+# cost is never enforced spend (even on a confirmed pass).
+# --------------------------------------------------------------------------- #
+
+class AdvisoryFieldsSelfReportedTests(unittest.TestCase):
+    def test_confirmed_pass_cost_not_enforced(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _init(tmp, _valid_plan(_item("item-a")))
+            wt = _worktree_dir(tmp)
+            gate = _write_stub_gate(tmp / "gate_pass.py")
+            _record_adv(tmp, "item-a", _usd_outcome(result="passed", cost_usd=9.99),
+                        worktree=wt, gate_stub=gate)
+            res = _run(["status", "camp-1", "--json", "--target", str(tmp)])
+            summary = json.loads(res.stdout)
+            # the verified pass counts as passed, but its cost is self-reported
+            self.assertEqual(summary["totals"]["enforced_cost_usd"], 0.0)
+            self.assertAlmostEqual(summary["totals"]["self_reported_cost_usd"], 9.99)
+            self.assertEqual(summary["totals"]["passed"], 1)
+
+    def test_recheck_result_is_servos_not_self_reported(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _init(tmp, _valid_plan(_item("item-a")))
+            wt = _worktree_dir(tmp)
+            gate = _write_stub_gate(tmp / "gate.py", exit_code=1,
+                                    status="below_threshold")
+            _record_adv(tmp, "item-a", _usd_outcome(result="passed"),
+                        worktree=wt, gate_stub=gate)
+            entry = _ledger_lines(tmp)[-1]
+            # the host CLAIMED passed; servo's own re-check is the recorded result
+            self.assertEqual(entry["oracle_recheck"]["claimed_result"], "passed")
+            self.assertEqual(entry["outcome"]["result"], "blocked")
+
+
+# --------------------------------------------------------------------------- #
+# AC4 — the runaway limit is disclosed in the brief AND in status, not hidden.
+# --------------------------------------------------------------------------- #
+
+class RunawayDisclosureTests(unittest.TestCase):
+    def test_status_discloses_limit_once_advisory_in_play(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _init(tmp, _valid_plan(_item("item-a")))
+            wt = _worktree_dir(tmp)
+            gate = _write_stub_gate(tmp / "gate.py")
+            _record_adv(tmp, "item-a", _usd_outcome(result="passed"),
+                        worktree=wt, gate_stub=gate)
+            human = _run(["status", "camp-1", "--target", str(tmp)]).stdout
+            self.assertIn(_cmp.ADVISORY_RUNAWAY_NOTE, human)
+            js = json.loads(_run(["status", "camp-1", "--json",
+                                  "--target", str(tmp)]).stdout)
+            self.assertTrue(js["advisory_active"])
+
+    def test_servo_only_status_stays_quiet(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _init(tmp, _valid_plan(_item("item-a")))
+            _run(["record", "camp-1", "item-a", "--outcome",
+                  json.dumps(_usd_outcome()), "--target", str(tmp)])  # servo tier
+            human = _run(["status", "camp-1", "--target", str(tmp)]).stdout
+            self.assertNotIn(_cmp.ADVISORY_RUNAWAY_NOTE, human)
+            js = json.loads(_run(["status", "camp-1", "--json",
+                                  "--target", str(tmp)]).stdout)
+            self.assertFalse(js["advisory_active"])
+
+
+# --------------------------------------------------------------------------- #
+# AC5 — servo never spawns or messages a host session in the advisory path; it
+# only writes briefs and reads worktrees (the oracle re-check is the only
+# subprocess, and no worker/loop is launched).
+# --------------------------------------------------------------------------- #
+
+class AdvisoryNoSpawnTests(unittest.TestCase):
+    def test_record_never_launches_a_worker(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _init(tmp, _valid_plan(_item("item-a")))
+            wt = _worktree_dir(tmp)
+            gate = _write_stub_gate(tmp / "gate.py")
+            # The loop stub LOGS every invocation to `runner_log`: if the advisory
+            # record path ever spawned a worker/loop (now or via a future
+            # regression that read SERVO_CAMPAIGN_RUNNER_PY), the log would appear.
+            # Non-vacuous: the stub creates the file only when actually invoked.
+            runner_log = tmp / "runner.log"
+            runner = _write_stub_loop(tmp / "stub_loop.py", log_path=runner_log)
+            res = _record_adv(
+                tmp, "item-a", _usd_outcome(result="passed"), worktree=wt,
+                gate_stub=gate,
+                extra_env={"SERVO_CAMPAIGN_RUNNER_PY": str(runner),
+                           "SERVO_CAMPAIGN_LOOP_PY": str(runner)})
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertFalse(runner_log.exists())        # no worker/loop invoked
+            # A spawned loop.py writes <worktree>/.servo/runs/<run_id>/state.json;
+            # the advisory re-check (gate.py only) never creates runs/. Its absence
+            # is the trace-based no-spawn proof.
+            self.assertFalse((wt / ".servo" / "runs").exists())
+
+    def test_brief_spawns_nothing(self):
+        with _tempfile.TemporaryDirectory() as d:
+            tmp = Path(d)
+            _dispatch_repo(tmp)
+            _init(tmp, _valid_plan(_item("item-a")))
+            runner_log = tmp / "runner.log"
+            runner = _write_stub_loop(tmp / "stub_loop.py", log_path=runner_log)
+            res = subprocess.run(
+                [sys.executable, str(CAMPAIGN), "brief", "camp-1",
+                 "--target", str(tmp)],
+                capture_output=True, text=True,
+                env={**os.environ, "SERVO_CAMPAIGN_RUNNER_PY": str(runner),
+                     "SERVO_CAMPAIGN_LOOP_PY": str(runner)})
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertFalse(runner_log.exists())        # brief invoked no worker/loop
+            self.assertEqual(_outcome_entries(tmp), [])  # and wrote no outcome
 
 
 if __name__ == "__main__":

@@ -169,8 +169,10 @@ a list of independent, oracle-gated work items, each with its own `oracle_ref`,
 outcomes. Slice 042-01 ships the **file contract** (`init` / `record` / `status`)
 every mode builds on; slice 042-02 adds **servo-driven serial dispatch**
 (`campaign next`), the enforced Claude Code baseline that runs each item itself
-under `loop.py`. Host-driven briefs and the verified / advisory tiers are later
-slices (042-03/04).
+under `loop.py`; slice 042-03 adds the **host-driven advisory** mode (`campaign
+brief` plus `record --tier advisory`), where the host spawns the workers and
+servo re-runs each claimed pass's oracle before it enters the ledger. The
+verified-wrapped tier is a later slice (042-04).
 
 The helper is at `${PLUGIN_ROOT}/skills/heartbeat/campaign.py`.
 
@@ -220,17 +222,34 @@ python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" init /path/to/repo \
   --plan campaign-plan.json --id my-campaign
 ```
 
-### `campaign.py record <id> <item> --outcome <line> [--tier servo|advisory]`
+### `campaign.py record <id> <item> --outcome <line> [--tier servo|advisory] [--worktree <path>]`
 
 Append one typed outcome — spec 040's `servo_outcome` line (`loop.py
 --outcome-line`) — to the campaign's ledger, guarded by a blocking `flock` and an
 atomic write (the heartbeat inbox discipline, but with a **blocking** lock: a
 record is unique data and is never dropped on contention or torn by a crash). The
 ledger entry adds `tier` and a **derived** `self_reported` (true only for
-`advisory`). 042-01 records `servo` or `advisory`; `wrapped` is a valid ledger
+`advisory`). The CLI records `servo` or `advisory`; `wrapped` is a valid ledger
 tier but is "verified, not declared" (ADR-0049) — earned by 042-04's run-id /
 fingerprint verifier — so the CLI does not accept `--tier wrapped` yet. The
 outcome is read from inline JSON, a file path, or `-` (stdin).
+
+**Advisory oracle re-check (host-driven, spec 042-03).** In the `advisory` tier
+a host spawns the worker itself, so its claim is never trusted on its word: when
+the forwarded outcome's `result` is `passed`, servo re-runs the item's oracle
+(`gate.py`, the canonical `_run_gate_json`) on the worker's `--worktree` and
+accepts the pass **only if the oracle confirms it**. An oracle that ran but did
+not pass is recorded as `blocked`; one that could not evaluate the worktree, as
+`error` — **never `passed`**. The ledger entry carries an `oracle_recheck` block
+(servo's own verdict: `claimed_result`, `recorded_result`, `confirmed`, and the
+re-check's own `status` / `composite` / `threshold`), and `outcome.result` is
+overwritten with the re-checked result. Every **other** field (cost, rung,
+reason) stays `self_reported` — so even a confirmed advisory pass's cost is never
+enforced spend. `--worktree` is **required** for an advisory `passed` (and the
+path must exist); a non-pass advisory claim and every `servo`-tier outcome are
+recorded as-is with no re-check. A gate that is wholly uninvocable exits rc=2 and
+leaves the ledger unchanged (an operator-fixable servo-side problem, not an item
+outcome).
 
 The **aggregate ceiling counts cost only from `servo` + verified `wrapped`
 entries**; a `self_reported` (advisory) cost is never counted as enforced spend.
@@ -246,6 +265,11 @@ rc=2 and leaves the ledger unchanged.
 ```bash
 python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" record my-campaign \
   fix-auth --outcome "$(loop.py … --outcome-line -)" --tier servo --target /path/to/repo
+
+# host-driven advisory: servo re-runs the oracle on the worker's worktree first
+python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" record my-campaign \
+  fix-auth --outcome "$WORKER_OUTCOME_LINE" --tier advisory \
+  --worktree /path/to/worker/worktree --target /path/to/repo
 ```
 
 ### `campaign.py status <id> [--json] [--target <path>]`
@@ -254,7 +278,11 @@ Read-only read-back: each item's latest outcome, the totals (enforced cost,
 passed / plateau / blocked counts) and the items still open (anything whose latest
 outcome is not `passed`, including never-recorded items). When the plan has
 credit-denominated items, `status` marks that their spend is tracked in AI credits
-(re-derived in 042-04) rather than implying `$0`. Writes nothing.
+(re-derived in 042-04) rather than implying `$0`. Once any advisory outcome is in
+the ledger (`advisory_active` in the `--json` summary), `status` also discloses
+the advisory **runaway limit** — advisory mode stops nothing in flight; servo
+enforces only the planned list, the ledger, and oracle-verified passes (042-03
+AC4). Writes nothing.
 
 ```bash
 python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" status my-campaign \
@@ -311,6 +339,28 @@ servo **never merges** and does no git operation beyond worktree isolation:
 ```bash
 python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" next my-campaign \
   --target /path/to/repo
+```
+
+### `campaign.py brief <id> [<item>] [--target <path>]`
+
+The **host-driven advisory** kickoff (spec 042-03). Emits one kickoff brief per
+plan item (or just `<item>`), for a host coordinator to hand to a worker it
+spawns itself. servo **neither spawns nor messages** those workers — in advisory
+mode it only writes briefs and later reads worktrees (`record`'s oracle
+re-check). Each brief carries, **as data inside a delimited UNTRUSTED block** (the
+same data-not-instructions framing `campaign next` uses), the item's title,
+`oracle_ref`, `budget`, `models` block and authored prompt; and, in
+servo-authored instruction position, the item's **base sha**, the instruction to
+run `campaign record --tier advisory --worktree …` before any commit (so servo's
+oracle re-check scores the exact worktree state the worker claims a pass for —
+advisory does NOT bind the worktree to the base sha; that provenance check is the
+verified-wrapped tier, 042-04), and the explicit advisory **runaway-limit**
+disclosure. Budget, model tier and the ladder reach an advisory
+worker as brief text only. Read-only: writes nothing.
+
+```bash
+python3 "${PLUGIN_ROOT}/skills/heartbeat/campaign.py" brief my-campaign \
+  --target /path/to/repo            # all items; add `fix-auth` for just one
 ```
 
 ## Q&A before running or wiring a schedule
