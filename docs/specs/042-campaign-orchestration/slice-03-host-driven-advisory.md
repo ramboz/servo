@@ -1,11 +1,10 @@
 ---
-status: REVIEWED
+status: DONE
 kind: feature
 dependencies: [042-01, 042-02]
-last_verified:
+last_verified: 2026-11-12
 arch_review: true
 frame_review: true
-claimed_by: claude/spec-042-03-advisory-4c2d8b
 ---
 
 ## Slice 042-03 — host-driven advisory
@@ -66,8 +65,8 @@ The original ACs are preserved above. Review rounds:
   convention); **frame-critique needs-changes** (the advisory re-check's
   trust-boundary claim over-reached).
 - **Round 2:** compliance / arch / frame-critique re-reviewed clean after the
-  fixes below (all PASS). Reconciliation reviewed at close (recorded alongside
-  the DONE transition).
+  fixes below (all PASS). **Reconciliation PASS** — the deviation log was verified
+  against the code (all 11 claims + the 3 deferred/noted items match).
 
 Load-bearing choices made during implementation:
 
