@@ -1513,12 +1513,18 @@ to read the persisted state's driver and ladder in the `auto` check on resume.
    refused `native_capability_unavailable`. Fix: resolve `credit_ceiling` from
    flag-or-plan (≥ 30) before the Copilot gate; extend the 016 clamp semantics to the
    credit unit.
-2. **Known-USD-priced oracle components under Copilot (ADR-0048 part 5).** The
-   `_unpriced_oracle_error` guard refuses *unknown-cost* (`unpriced_components`)
-   oracle components, not *known-USD-priced* ones. Under Copilot (`cost_ceiling` is
-   `null`) a known-priced oracle component runs with no USD bound. Fix: add a
-   `usd_priced` install-metadata marker and refuse those under Copilot absent an
-   approved USD oracle ceiling.
+2. **~~Known-USD-priced oracle components under Copilot (ADR-0048 part 5).~~** —
+   **RESOLVED 2026-11-13 (spec 043-01).** `loop.py` now reads a
+   `usd_priced_components` install marker (parallel to `unpriced_components`) and
+   refuses a marked component at the Copilot launch gate, fail-closed, with the
+   distinct reason `usd_priced_oracle_components` citing ADR-0048 part 5. This
+   slice ships the **enforcement** half (reader + refusal); the marker's
+   **auto-writer** is carried forward as a follow-up below (the slice's hazard
+   was the unenforced refusal, not the absent writer — ADR-0048 part 5 is now
+   enforceable for a marked component). *Original:* the `_unpriced_oracle_error`
+   guard refused *unknown-cost* (`unpriced_components`) components, not
+   *known-USD-priced* ones, so under Copilot (`cost_ceiling` null) a known-priced
+   component ran with no USD bound.
 3. **Cross-process `--resume` of a Copilot run.** The `backend_mismatch` guard refuses
    resuming a persisted run whose `backend != claude`, so an interrupted Copilot run
    restarts fresh. State already persists `cumulative_credits_nano` / `credit_ceiling`.
@@ -1526,8 +1532,48 @@ to read the persisted state's driver and ladder in the `auto` check on resume.
    handles the accounting).
 
 **Resolution trigger:** plan-sourced budgets are needed for spec 042 campaigns (1);
-a target ships a known-priced oracle component for a Copilot run (2); a user needs to
-resume an interrupted Copilot run (3).
+~~a target ships a known-priced oracle component for a Copilot run (2)~~ **(2) RESOLVED
+by spec 043-01**; a user needs to resume an interrupted Copilot run (3).
+
+
+## Known-USD-priced oracle under Copilot — follow-ups (spec 043-01)
+
+**Deferred (non-blocking; surfaced by 043-01's frame-critique / craft / arch reviews).**
+Spec 043-01 shipped the enforcement half (loop.py reads `usd_priced_components` and
+refuses under Copilot). These extend it; none blocks the accepted ADR-0048 part 5
+policy, which is now enforced for a marked component.
+
+1. **The marker's auto-writer.** Today `usd_priced_components` is set only by an
+   explicit registration / hand-edit of `.servo/install.json` (a narrow but
+   legitimate writer — the same project-owned surface ADR-0041 clause 5 relies on).
+   Add a `register_manifest(..., usd_priced=True)` knob in
+   `skills/_common/fidelity_eval.py` mirroring the existing `unpriced` knob, called
+   by a future self-declaring USD-priced oracle component. There is **no** price
+   *detector* (ADR-0041 Option B rejected scanning `oracle.sh`); USD pricing is only
+   ever an explicit self-declaration. Deferred to keep 043-01 bounded to loop.py.
+2. **Mid-run `usd_priced` re-check parity.** The ADR-0041 `unpriced` guard also runs
+   at the per-iteration `_invoke_gate` to catch a mid-run install/re-freeze; the
+   `usd_priced` guard is launch-only, so a Copilot run that gains the marker mid-run
+   is not re-caught. A copilot-specific mid-run re-check needs `host` threaded through
+   the host-blind `_invoke_gate` stack (gate.py cannot own it — it is host-blind and
+   the refusal is copilot-specific).
+3. **Shared validator extraction.** `_usd_priced_oracle_error` copies
+   `_unpriced_oracle_error`'s list/nonempty/unique/subset validation verbatim
+   (kept concrete per ADR-0041 clause 6's third-client bar; AC5 needs
+   `_unpriced_oracle_error` unchanged + distinct messages). The validator now spans
+   2 functions × 4 trees = 8 copies; extract a shared `_oracle_marker_error` core
+   when a third marker or a validator fix appears.
+4. **Claude `--cost-ceiling 0` + a (future) usd_priced oracle.** Under `--host claude
+   --cost-ceiling 0` the cumulative USD ceiling is disabled, yet a usd_priced
+   component proceeds (claude is out of 043-01's Copilot-only scope). Whether ADR-0005
+   clause 6's "eval cost counts against the loop ceiling" bounds a USD-priced *oracle*
+   when the cumulative ceiling is disabled — and whether such spend flows into
+   `total_cost_usd` — is a future ADR-0005 revisit.
+
+**Resolution trigger:** a USD-priced oracle component is actually built (1); a mid-run
+re-freeze under Copilot is a real path to defend (2); a third oracle marker or a
+validator fix lands (3); a target needs an unbounded-ceiling USD-priced oracle under
+claude (4).
 
 
 ## Campaign plan + ledger — deferred follow-ups (spec 042-01)
