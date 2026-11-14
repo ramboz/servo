@@ -168,7 +168,7 @@
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-03 — host-driven advisory | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-04 — host-driven verified-wrapped | **DONE** |  |
 | [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-05 — bounded parallel dispatch | **DONE** |  |
-| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-06 — wave integration-review brief | DRAFT |  |
+| [042-campaign-orchestration](042-campaign-orchestration/spec.md) | 042-06 — wave integration-review brief | **DONE** |  |
 
 ## Deferred slices
 

@@ -1622,3 +1622,29 @@ ceiling, or a reviewed credit→USD pricing contract lands; (2) a host-driven ca
 needs an aggregate cap AND a servo-side enforcement point exists; (3) a real parallel
 campaign's wave-blocking window is a problem in practice; (4) a real campaign settles
 A2 and wants `max_parallel` default raised.
+
+---
+
+## Wave integration-review brief (042-06): A3 unverified + host-driven residuals
+
+**Deferred:** `campaign review` emits a scope-only cross-wave brief, but whether an
+*emitted* brief (vs. servo running a reviewer, or the host/jig gathering the diffs)
+is the useful shape — ADR-0049 **A3** — is unverified; the slice ships deferred out
+of the parity release (a later version, like 042-05 — not a DEFERRED lifecycle
+state). Three implementation residuals: (a) a **host-driven** item's worktree is
+located only via the path `campaign record --worktree` persisted on its ledger
+entry, which is best-effort because the host owns that worktree's lifecycle (gone by
+review time ⇒ "worktree not found"); (b) an **advisory** item ran no `loop.py`, so it
+has no recorded `start_head` and its brief shows "base sha unavailable" (no diff
+range); (c) servo lists each item's changed files but does **not** compute the
+cross-item same-path intersection (names only — still scope-not-summary), leaving the
+reader to cross-reference the per-item lists. The changed-file list surfaces same-path
+overlap only, not cross-file API/contract drift.
+
+**Resolution trigger:** the ADR-0049 **A3 kill-criterion** trial (compare the emitted
+brief against the raw worktrees for a real finished wave) settles whether to keep,
+reduce `campaign review` to a worktree index, or drop it. Persisting an advisory
+item's base sha (without making the read-only advisory brief write), surviving the
+host worktree's lifecycle, and optionally computing the cross-item same-path
+intersection to reduce reviewer toil are the (a)/(b)/(c) follow-ups if that trial
+keeps the feature.

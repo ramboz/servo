@@ -288,6 +288,18 @@ gap.
 - **A4 fails.** If fewer than half of a representative campaign's items can be
   given an oracle, the campaign layer does not serve its motivating case.
   Stop at 042-01 (plan + ledger) and revisit.
+- **A3 fails.** For a finished wave, give one reviewer the emitted
+  `campaign review` brief and another the raw worktrees, and compare the
+  cross-item integration problems each finds. If the emitted brief adds no
+  measurable lift over handing the reviewer the worktrees directly — or if, for
+  the motivating host-driven case, it cannot carry the wave's diffs at all
+  (worktrees unlocatable because no `record --worktree` path was persisted, or
+  gone by review time under the host's own lifecycle) — then the *emitted-brief*
+  shape is not the useful one. Keep `campaign review` as a worktree index only,
+  or drop it and let the host/jig gather the diffs. (042-06 was built and tested
+  as the emitter; this assumption stays unverified until such a trial, which is
+  why the slice ships deferred out of the parity release — a release-sequencing
+  note; the slice itself reaches DONE, like 042-05.)
 - If parallel workers routinely conflict on shared target resources, cap
   `max_parallel` at 1 and keep only the planned-list and ledger value.
 
