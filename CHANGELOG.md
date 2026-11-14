@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.13.0](https://github.com/ramboz/servo/compare/v0.12.0...v0.13.0) (2026-11-14)
+
+
+### Features
+
+* **agent-loop:** add --outcome-line typed worker outcome for spec 040-01 ([#55](https://github.com/ramboz/servo/issues/55)) ([d475248](https://github.com/ramboz/servo/commit/d475248c03e9928d6df384cb0985843f5e3afcfa))
+* **agent-loop:** copilot AI-credit brake + supported loop launch (spec 041-02) ([#52](https://github.com/ramboz/servo/issues/52)) ([b5da04f](https://github.com/ramboz/servo/commit/b5da04fa6dfa12c962bee207ae722e6cdceb989d))
+* **agent-loop:** per-node model tiering, accounting and plateau escalation ladder ([#50](https://github.com/ramboz/servo/issues/50)) ([dbace6b](https://github.com/ramboz/servo/commit/dbace6b42452818493669386e9b5f5a12b0632fd))
+* **agent-loop:** refuse known-usd-priced oracle components under copilot (spec 043-01) ([#63](https://github.com/ramboz/servo/issues/63)) ([4bc5b3f](https://github.com/ramboz/servo/commit/4bc5b3f30409fd23a911bbe6341e6ff27acd6bba))
+* **heartbeat:** add bounded parallel campaign dispatch (spec 042-05) ([#60](https://github.com/ramboz/servo/issues/60)) ([c8b86dc](https://github.com/ramboz/servo/commit/c8b86dc533c7568a7d4fbf55337387eb4c9e461d))
+* **heartbeat:** add host-driven advisory campaign mode (spec 042-03) ([#58](https://github.com/ramboz/servo/issues/58)) ([3b4d1ed](https://github.com/ramboz/servo/commit/3b4d1ed684e47726cdd918fa61dae1a3419b1863))
+* **heartbeat:** add host-driven verified-wrapped campaign mode (spec 042-04) ([#59](https://github.com/ramboz/servo/issues/59)) ([6dfd40a](https://github.com/ramboz/servo/commit/6dfd40afe9c40c40538abfe25b219b6711d51139))
+* **heartbeat:** add wave integration-review brief (spec 042-06) ([#61](https://github.com/ramboz/servo/issues/61)) ([b1e5dc0](https://github.com/ramboz/servo/commit/b1e5dc0c790fb39af85e093162193a2f0c86a1f2))
+* **heartbeat:** campaign plan + ledger (spec 042-01) ([#56](https://github.com/ramboz/servo/issues/56)) ([49a0ded](https://github.com/ramboz/servo/commit/49a0dedf70b02ffbb90b343f08c140ed37926b80))
+* **heartbeat:** copilot whole-pass AI-credit ledger (spec 041-03) ([#53](https://github.com/ramboz/servo/issues/53)) ([7046b7b](https://github.com/ramboz/servo/commit/7046b7b350c4bb85c1465250ecf84a07dbf8d435))
+* **heartbeat:** servo-driven serial dispatch (spec 042-02) ([#57](https://github.com/ramboz/servo/issues/57)) ([8285258](https://github.com/ramboz/servo/commit/8285258ab2f18d242c4720e48ae450d6e68c3951))
+
+
+### Documentation
+
+* **bugs:** reserve 007-agent-loop-overcounts-resumed-session-cost ([455ac42](https://github.com/ramboz/servo/commit/455ac4240b3d432b073cd9dd66e293eba566215a))
+* **decisions:** accept ADR-0048 (copilot credit budget contract) ([a64a6ae](https://github.com/ramboz/servo/commit/a64a6ae08a73f3332359142099e9c10998cd715b))
+* **decisions:** accept ADR-0049 (campaign orchestration) ([af7d51e](https://github.com/ramboz/servo/commit/af7d51e2e9e116d72f0b39682e6f4097a4ccdcc0))
+* **decisions:** reserve adr-0047-per-node-model-tiering-and-escalation-ladder ([9345b7a](https://github.com/ramboz/servo/commit/9345b7a413c81e1f6ee1b052385431a635f395c2))
+* **decisions:** reserve adr-0048-copilot-credit-budget-contract ([c8c1d38](https://github.com/ramboz/servo/commit/c8c1d380dcbc8acb5907730043103878facb855c))
+* **decisions:** reserve adr-0049-campaign-orchestration ([ba1d69b](https://github.com/ramboz/servo/commit/ba1d69b1d167b7819daa79e5cf344b1dbb42bc1a))
+* **specs:** reserve 038-per-node-model-tiering ([1202137](https://github.com/ramboz/servo/commit/1202137638112cf077b747ebd7db37ad8a72d5eb))
+* **specs:** reserve 039-variance-gated-eval-judging ([1becdd8](https://github.com/ramboz/servo/commit/1becdd8b63132b2d5dbe98126d29b13be2db07e0))
+* **specs:** reserve 040-servo-wrapped-worker-outcome ([c36bc3e](https://github.com/ramboz/servo/commit/c36bc3e7320a4353676b92535f844fa94eeb5430))
+* **specs:** reserve 041-host-aware-budget-unit ([4cd95ca](https://github.com/ramboz/servo/commit/4cd95cacf8a4359ef81cdc1467379995132f626e))
+* **specs:** reserve 042-campaign-orchestration ([d21175a](https://github.com/ramboz/servo/commit/d21175a2c2ce3d95acdf16797054532829b32897))
+* **specs:** settle ADR-0048 A1–A6 with the 041-01 copilot credit probe ([#51](https://github.com/ramboz/servo/issues/51)) ([7cb24a0](https://github.com/ramboz/servo/commit/7cb24a0300f54b8b98305c71a810122c698c13e3))
+
 ## [0.12.0](https://github.com/ramboz/servo/compare/v0.11.0...v0.12.0) (2026-10-22)
 
 
