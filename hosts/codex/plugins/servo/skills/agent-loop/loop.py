@@ -286,14 +286,20 @@ REASON_PLAN_REQUIRES_CLAMP = "plan_requires_clamp"
 # starts. A `0` disable-sentinel is a VALID value (016-03 AC1 clamps it); this
 # reason is for values clamping cannot rescue.
 REASON_PLAN_VALUE_INVALID = "plan_value_invalid"
-# The four budget knobs a compiled plan can supply as run defaults, mapped to
-# the `loop.py` CLI flag they default. Loop-only brakes (context-fill / plateau)
-# are dropped under the goal driver exactly as explicit flags are (slice AC3).
+# The budget knobs a plan can supply as run defaults, mapped to the `loop.py`
+# CLI flag they default. Loop-only brakes (context-fill / plateau) are dropped
+# under the goal driver exactly as explicit flags are (slice 016-02 AC3).
+# `credit_ceiling` (spec 043-02, ADR-0048) is the Copilot-only AI-credit knob:
+# OPTIONAL, with no compiled default (the ceiling is mandatory under
+# `--host copilot`, ADR-0048 part 4) and resolved BEFORE the Copilot launch gate
+# (AC2). It never coexists with the USD `cost_ceiling_usd` in one budget — units
+# never mix (ADR-0048 part 1), enforced wrong-unit at the host gate (AC5).
 _PLAN_BUDGET_KEYS = (
     "max_iterations",
     "cost_ceiling_usd",
     "context_fill_threshold",
     "plateau_window",
+    "credit_ceiling",
 )
 
 # Slice 003-04 state-file constants (per ADR-0004).
@@ -1632,9 +1638,14 @@ def _validate_plan_budget(plan_budget: Optional[dict]) -> Optional[tuple[str, st
     is a refusal — not something to clamp. A `0` is a VALID value on the three
     clampable knobs (016-03 AC1 handles it); this only rejects what clamping
     cannot rescue: wrong type, negative `max_iterations`, `cost_ceiling_usd`
-    below 0, `context_fill_threshold` outside [0.0, 1.0], or negative
-    `plateau_window`. (`plateau_noise_floor` is a CLI-only knob — it has no
-    plan-`budget` field, per `execution_plan.py`'s schema — so it is not
+    below 0, `context_fill_threshold` outside [0.0, 1.0], negative
+    `plateau_window`, or (spec 043-02) a `credit_ceiling` below the 30-credit
+    CLI minimum (ADR-0048). The credit knob has NO `0` disable-sentinel and no
+    DEFAULT ceiling (the ceiling is mandatory under `--host copilot`), so its
+    clamp-never-disable floor is a REFUSAL here, not a clamp-to-default — the
+    credit unit's honest divergence from the USD clamp (see the slice's
+    `## Decisions needed`). (`plateau_noise_floor` is a CLI-only knob — it has
+    no plan-`budget` field, per `execution_plan.py`'s schema — so it is not
     validated here.)
 
     Returns `(reason, message)` naming the offending key on the first failure
@@ -1685,6 +1696,24 @@ def _validate_plan_budget(plan_budget: Optional[dict]) -> Optional[tuple[str, st
         if value < 0:
             return REASON_PLAN_VALUE_INVALID, (
                 f"plan budget.plateau_window must be >= 0, got {value!r}"
+            )
+    if "credit_ceiling" in plan_budget:
+        # Spec 043-02 (ADR-0048): the Copilot AI-credit ceiling. Shape check is
+        # host-agnostic (parallel to cost_ceiling_usd >= 0); the wrong-unit
+        # check — credit_ceiling only under --host copilot — is the host gate's
+        # job in main(). A value below the 30-credit CLI minimum is REFUSED (not
+        # clamped): credits have no `0` disable-sentinel and no DEFAULT ceiling,
+        # so "never disable the brake" is a refusal floor, not a clamp-up.
+        value = plan_budget["credit_ceiling"]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.credit_ceiling must be a number, got {value!r}"
+            )
+        if value < MIN_COPILOT_CREDIT_CEILING:
+            return REASON_PLAN_VALUE_INVALID, (
+                f"plan budget.credit_ceiling must be >= "
+                f"{MIN_COPILOT_CREDIT_CEILING} (the Copilot --max-ai-credits "
+                f"minimum), got {value!r}"
             )
     return None
 
@@ -5861,16 +5890,107 @@ def main(argv: Optional[list[str]] = None) -> int:
                      "foreground — detach it with your shell's nohup/&, or use "
                      "--resume for unattended continuation")
 
+    # ---- ADR-0041 accounting preflight (unpriced oracle) -------------------
+    # Hoisted above plan consumption (slice 043-02): this safety refusal — an
+    # oracle carrying unknown-USD-cost components has no bound — must fire before
+    # a plan is even read, so a bad `--plan` can never preempt it. It is host-
+    # independent (it applies to a Copilot run exactly as to a Claude one) and
+    # needs only the flags, not the plan. Moving it up shifts two orderings, both
+    # still fail-closed: a plan-read error no longer precedes an unpriced refusal,
+    # and the unpriced refusal now precedes the Copilot launch gate — so a Copilot
+    # run with no resolvable credit ceiling AND an unpriced oracle surfaces the
+    # unpriced refusal, not `native_capability_unavailable` (the oracle-safety
+    # refusal wins; the intended precedence).
+    accounting_rc = _unpriced_oracle_preflight(
+        target, cost_ceiling=args.cost_ceiling,
+        context_fill_threshold=args.context_fill_threshold,
+        run_id=args.resume or args.detached_run_id,
+    )
+    if accounting_rc is not None:
+        return accounting_rc
+
+    # ---- Plan consumption (slice 016-02/016-03, ADR-0016; hoisted by 043-02)
+    # Read `budget` + `driver` + `models` from a compiled or human_edited
+    # plan.json as run defaults for knobs the caller did not pass. Slice 043-02
+    # HOISTS this block ABOVE the Copilot launch gate (below) so a plan-sourced
+    # `credit_ceiling` is resolved BEFORE the gate — otherwise a plan-only
+    # credit ceiling would be refused `native_capability_unavailable` (AC2).
+    # With no --plan, `plan_budget` / `plan_driver` stay None and every
+    # resolution below collapses to today's args-or-default behavior (016-02
+    # AC5). Fail-closed: a missing / malformed / schema-mismatched /
+    # unrecognized-provenance plan, or a budget value the equivalent CLI flag's
+    # range would reject (incl. a `credit_ceiling` below the 30-credit minimum,
+    # 043-02 AC1), refuses rc=2 with a structured reason BEFORE any run starts
+    # (016-02 AC6; 016-03 AC2 accepts human_edited). The hoist is a no-op for the
+    # detached-child early-return below (a detached child is re-exec'd with
+    # resolved flags, never --plan). For --emit-routine-prompt it is NOT a no-op:
+    # a malformed/invalid --plan now refuses before the prompt is emitted (it was
+    # ignored on that path before) — benign and more fail-closed; the emitted
+    # prompt never consumed the plan anyway.
+    plan_budget = None
+    plan_driver = None
+    plan_models = None
+    if args.plan is not None:
+        plan, plan_err = _load_plan(args.plan.resolve())
+        if plan_err is not None:
+            return _refuse_plan(reason=plan_err[0], message=plan_err[1])
+        plan_budget = plan.get("budget") or {}
+        plan_driver = plan.get("driver")
+        if "models" in plan:
+            # Validated even when `--models` will override it: a bad plan key
+            # is a bad plan (fail-closed, 038-02 AC2).
+            plan_models, plan_models_err = _validate_models(
+                plan["models"], allow_escalation=True)
+            if plan_models_err is not None:
+                return _refuse_plan(
+                    reason=REASON_PLAN_VALUE_INVALID,
+                    message=f"plan models invalid: {plan_models_err}")
+
+        # ---- Plan-value validation (slice 016-03 AC3; 043-02 adds credit) --
+        # Fail-closed, BEFORE clamping or driver resolution: a plan-sourced
+        # budget value of the wrong type / out of the CLI flag's own range, or
+        # an unrecognized `driver` choice, refuses rc=2 naming the offending
+        # key — no run starts, no state.json written. A `0` disable-sentinel
+        # is a VALID value here (016-03 AC1 clamps it below); this only
+        # catches what clamping cannot rescue. Applies identically to a
+        # `compiled` or `human_edited` plan — no separate code path.
+        budget_err = _validate_plan_budget(plan_budget)
+        if budget_err is not None:
+            return _refuse_plan(reason=budget_err[0], message=budget_err[1])
+        if plan_driver is not None:
+            driver_err = _validate_plan_driver(plan_driver)
+            if driver_err is not None:
+                return _refuse_plan(reason=driver_err[0], message=driver_err[1])
+
+    # ---- Effective credit ceiling (slice 043-02 AC2/AC3) -------------------
+    # Resolve from flag-or-plan BEFORE the Copilot launch gate. Precedence is
+    # `_resolve_from_plan`'s — explicit --credit-ceiling flag > plan
+    # `budget.credit_ceiling` > None — i.e. ADR-0016's clamp-never-disable
+    # carried to the credit unit: the flag is the authoritative loop-driver
+    # ceiling, the plan supplies it when the flag is absent, a resolved ceiling
+    # may only clamp the loop lower (a tighter brake). The credit unit realizes
+    # "never disable" NOT by clamping a `0` disable-sentinel up to a DEFAULT
+    # (the USD path, `_clamp_plan_value`) but by refusing any ceiling below 30
+    # at validation — credits have no disable sentinel and no DEFAULT ceiling
+    # (ADR-0048 part 4 makes it mandatory). So `credit_ceiling` NEVER passes
+    # through `_clamp_plan_value`. See the slice's `## Decisions needed`.
+    credit_ceiling = _resolve_from_plan(
+        args.credit_ceiling, plan_budget, "credit_ceiling")
+
     if args.host == HOST_COPILOT:
         # Spec 041-02 (ADR-0048) — opt-in launch (AC1). `--host copilot` runs the
-        # loop ONLY with a credit ceiling (>= the CLI minimum) AND an explicit
-        # --max-iterations; otherwise ADR-0043's refusal stands (no subprocess,
-        # no state). AC5: the USD ceiling is refused here; AC7: a --models block
-        # is refused (the Copilot renders are model-neutral, spec 032-03, and
+        # loop ONLY with a credit ceiling (flag-or-plan, >= the CLI minimum) AND
+        # an explicit --max-iterations; otherwise ADR-0043's refusal stands (no
+        # subprocess, no state). Slice 043-02 AC2: the ceiling may now come from
+        # the plan, so the gate keys on the RESOLVED `credit_ceiling`, not the
+        # raw flag (max_iterations stays an explicit flag — ADR-0048 part 4).
+        # AC5: the USD ceiling is refused here (flag AND plan); AC7: a --models
+        # block is refused (Copilot renders are model-neutral, spec 032-03, and
         # servo does not tier under Copilot — ADR-0047 is Claude-only).
-        if args.credit_ceiling is None or args.max_iterations is None:
+        if credit_ceiling is None or args.max_iterations is None:
             return _refuse_copilot_capability()
-        if args.credit_ceiling < MIN_COPILOT_CREDIT_CEILING:
+        if (args.credit_ceiling is not None
+                and args.credit_ceiling < MIN_COPILOT_CREDIT_CEILING):
             parser.error(
                 f"--credit-ceiling must be >= {MIN_COPILOT_CREDIT_CEILING} "
                 "(the Copilot --max-ai-credits minimum)")
@@ -5878,6 +5998,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             parser.error(
                 "--cost-ceiling (USD) is not valid under --host copilot; use "
                 "--credit-ceiling (AI credits). Units never mix (ADR-0048).")
+        if plan_budget and "cost_ceiling_usd" in plan_budget:
+            return _refuse_plan(
+                reason=REASON_PLAN_VALUE_INVALID,
+                message="plan budget.cost_ceiling_usd (USD) is not valid under "
+                        "--host copilot; a Copilot plan carries credit_ceiling "
+                        "(AI credits). Units never mix (ADR-0048).")
         if args.models is not None:
             return _refuse_plan(
                 reason=REASON_MODELS_INVALID,
@@ -5890,11 +6016,17 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "--background (which needs /goal) are unsupported on Copilot "
                 "(ADR-0048 / 034-07 — the goal driver stays refused).")
     else:
-        # AC5: the credit ceiling is Copilot-only.
+        # AC5: the credit ceiling is Copilot-only — refused from the flag OR a plan.
         if args.credit_ceiling is not None:
             parser.error(
                 "--credit-ceiling (AI credits) is Copilot-only; under --host "
                 "claude use --cost-ceiling (USD). Units never mix (ADR-0048).")
+        if plan_budget and "credit_ceiling" in plan_budget:
+            return _refuse_plan(
+                reason=REASON_PLAN_VALUE_INVALID,
+                message="plan budget.credit_ceiling (AI credits) is Copilot-"
+                        "only; under --host claude a plan carries "
+                        "cost_ceiling_usd (USD). Units never mix (ADR-0048).")
         if args.max_ai_credits is not None:
             sys.stderr.write(
                 "loop: --max-ai-credits is a Copilot-only per-invocation cap and "
@@ -5914,14 +6046,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             return _refuse_plan(
                 reason=REASON_MODELS_INVALID,
                 message=f"--models refused: {models_err}")
-
-    accounting_rc = _unpriced_oracle_preflight(
-        target, cost_ceiling=args.cost_ceiling,
-        context_fill_threshold=args.context_fill_threshold,
-        run_id=args.resume or args.detached_run_id,
-    )
-    if accounting_rc is not None:
-        return accounting_rc
 
     # ---- Readiness preflight (slice 023-02, ADR-0029) -----------------------
     # Gates ONLY the two unattended long-horizon launch surfaces pinned by
@@ -5986,48 +6110,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             models=flag_models,
         )
 
-    # ---- Plan consumption (slice 016-02, ADR-0016) -------------------------
-    # Read `budget` + `driver` from a compiled plan.json as run defaults for
-    # knobs the caller did not pass. This is the ONLY path a plan is read on;
-    # with no --plan, `plan_budget` / `plan_driver` stay None and every
-    # resolution below collapses to today's args-or-default behavior (AC5).
-    # Fail-closed: a missing / malformed / schema-mismatched / unrecognized-
-    # provenance plan refuses rc=2 with a structured reason BEFORE any run
-    # starts (AC6; AC7 now accepts both compiled and human_edited, 016-03 AC2).
-    plan_budget = None
-    plan_driver = None
-    plan_models = None
-    if args.plan is not None:
-        plan, plan_err = _load_plan(args.plan.resolve())
-        if plan_err is not None:
-            return _refuse_plan(reason=plan_err[0], message=plan_err[1])
-        plan_budget = plan.get("budget") or {}
-        plan_driver = plan.get("driver")
-        if "models" in plan:
-            # Validated even when `--models` will override it: a bad plan key
-            # is a bad plan (fail-closed, 038-02 AC2).
-            plan_models, plan_models_err = _validate_models(
-                plan["models"], allow_escalation=True)
-            if plan_models_err is not None:
-                return _refuse_plan(
-                    reason=REASON_PLAN_VALUE_INVALID,
-                    message=f"plan models invalid: {plan_models_err}")
-
-        # ---- Plan-value validation (slice 016-03 AC3) ----------------------
-        # Fail-closed, BEFORE clamping or driver resolution: a plan-sourced
-        # budget value of the wrong type / out of the CLI flag's own range, or
-        # an unrecognized `driver` choice, refuses rc=2 naming the offending
-        # key — no run starts, no state.json written. A `0` disable-sentinel
-        # is a VALID value here (016-03 AC1 clamps it below); this only
-        # catches what clamping cannot rescue. Applies identically to a
-        # `compiled` or `human_edited` plan — no separate code path.
-        budget_err = _validate_plan_budget(plan_budget)
-        if budget_err is not None:
-            return _refuse_plan(reason=budget_err[0], message=budget_err[1])
-        if plan_driver is not None:
-            driver_err = _validate_plan_driver(plan_driver)
-            if driver_err is not None:
-                return _refuse_plan(reason=driver_err[0], message=driver_err[1])
+    # ---- Plan consumption — HOISTED above the Copilot launch gate ----------
+    # `plan_budget` / `plan_driver` / `plan_models` were loaded and validated,
+    # and the effective `credit_ceiling` resolved, just before the host gate
+    # above: slice 043-02 moved that block there so a plan-sourced credit
+    # ceiling reaches the Copilot gate (016-02/016-03 loaded the plan here
+    # originally). Nothing to read at this point.
 
     # Spec 038-02 AC1: block-level precedence, `--models` > plan `models`.
     models = flag_models if flag_models is not None else plan_models
@@ -6237,7 +6325,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         host=args.host,
         max_ai_credits=args.max_ai_credits,
         models=models,
-        credit_ceiling=args.credit_ceiling,
+        credit_ceiling=credit_ceiling,  # flag-or-plan resolved (slice 043-02)
     )
 
 

@@ -22,7 +22,15 @@ The plan **references** (never copies) the other Compile artifacts:
   - the spec-oracle overlay (spec 006) by id + AC counts, when one is installed
     (`null` for a baseline-oracle-only target).
 
-The `budget` block records `loop.py`'s public defaults — the planned, safe budget.
+The `budget` block records `loop.py`'s public defaults — the planned, safe budget:
+`max_iterations`, `cost_ceiling_usd`, `context_fill_threshold`, `plateau_window`.
+An OPTIONAL `credit_ceiling` (AI credits, spec 043-02 / ADR-0048) is the Copilot
+counterpart of `cost_ceiling_usd` — the two never coexist (units never mix,
+ADR-0048 part 1). The host-agnostic compiler does NOT emit `credit_ceiling` (a
+compiled plan is a Claude/USD plan; a credit ceiling there would read as
+wrong-unit at Run time, and ADR-0048 part 4 makes the Copilot ceiling mandatory
+with no default to compile in); a human — or a future Copilot-aware planner —
+adds it to a Copilot plan, where `loop.py` resolves and bounds it (min 30).
 Clamping a hand-edited disable-sentinel value is `loop.py`'s job at Run time
 (slice 016-03 AC1). This module's own slice 016-03 responsibility (AC4) is
 **recompile-preserve**: `compile` refuses to silently clobber a plan whose
@@ -70,6 +78,10 @@ BUDGET_MAX_ITERATIONS = 5
 BUDGET_COST_CEILING_USD = 2.0
 BUDGET_CONTEXT_FILL_THRESHOLD = 0.75
 BUDGET_PLATEAU_WINDOW = 3
+# No BUDGET_CREDIT_CEILING: the optional Copilot credit ceiling (spec 043-02 /
+# ADR-0048) has NO compiled default — the compiler emits a Claude/USD budget, and
+# ADR-0048 part 4 makes the Copilot ceiling mandatory at Run time (min 30), so
+# there is no safe default to bake in. A human / Copilot-aware planner adds it.
 
 # loop.py's default driver (003-07 flipped the default to `auto`).
 DEFAULT_DRIVER = "auto"

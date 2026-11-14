@@ -7234,6 +7234,30 @@ class PlanValueValidationTests(unittest.TestCase):
         result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
         self._assert_refused(result, "driver")
 
+    def test_plan_credit_ceiling_under_claude_refuses_wrong_unit(self):
+        # Spec 043-02 AC5: a plan carrying credit_ceiling (AI credits) under the
+        # default --host claude is refused wrong-unit — never silently converted
+        # to USD. Units never mix (ADR-0048 part 1).
+        plan = _compiled_plan(driver="loop")
+        plan["budget"]["credit_ceiling"] = 200
+        plan_path = _write_plan(self.tmp, plan)
+        result = _run_raw(self.target, "--plan", str(plan_path), "--prompt", "x")
+        self._assert_refused(result, "credit_ceiling")
+
+    def test_emit_routine_prompt_validates_plan_before_emitting(self):
+        # Spec 043-02 deviation (surfaced by the compliance/craft/arch reviews):
+        # hoisting plan consumption above the --emit-routine-prompt early return
+        # means a malformed --plan now refuses (rc=2) BEFORE a Routine prompt is
+        # emitted, where it was ignored on that path before. Benign and more
+        # fail-closed (the emitted prompt never consumed the plan); pinned here.
+        bad = self.tmp / "bad-plan.json"
+        bad.write_text("{ this is not valid json")
+        result = _run_raw(self.target, "--plan", str(bad),
+                          "--emit-routine-prompt", "--prompt", "x")
+        self.assertEqual(result.returncode, 2, msg=result.stdout)
+        summary = _stdout_json_lines(result.stdout)[-1]
+        self.assertEqual(summary["terminal_reason"], "plan_malformed")
+
     def test_zero_is_valid_not_refused(self):
         # 0 is a valid (clampable) value, not an invalid one — validation
         # must not refuse the disable sentinel; AC1's clamp handles it.
@@ -8467,6 +8491,7 @@ class CopilotCreditBrakeLaunchTests(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-brake-")
         tmp = Path(self.tmpdir)
+        self.tmp = tmp
         self.target = tmp / "demo"
         self.target.mkdir()
         _make_manifest(self.target)
@@ -8627,6 +8652,158 @@ class CopilotCreditBrakeLaunchTests(unittest.TestCase):
         self.assertEqual(self._last_summary(r)["terminal_reason"],
                          loop_mod.REASON_UNPRICED_ORACLE_COMPONENTS)
         self.assertFalse(self.counter.exists())  # refused before any copilot call
+
+    # ---- plan-sourced credit ceiling (spec 043-02) --------------------------
+    def _copilot_plan(self, *, name="plan.json", **budget):
+        """A minimal valid `plan.json` carrying only `budget` (built inline;
+        the producer is not called). `budget` kwargs are the budget block.
+        `provenance` is `human_edited`: the compiler never emits `credit_ceiling`
+        (execution_plan.py docs), so a human / Copilot-aware planner is the only
+        producer of a credit-bearing Copilot plan — loop.py treats both
+        provenances identically for budget consumption."""
+        plan = {
+            "schema_version": 1,
+            "spec_id": "043-copilot-hardening",
+            "compiled_at": "2026-11-13T00:00:00+00:00",
+            "suitability_ref": ".servo/suitability/043-copilot-hardening.json",
+            "oracle": {"path": "oracle.sh", "components": ["tests"],
+                       "threshold": 0.5},
+            "evaluation_model": None,
+            "budget": dict(budget),
+            "driver": "loop",
+            "prompt_ref": "docs/specs/043-copilot-hardening/spec.md",
+            "provenance": "human_edited",
+        }
+        return _write_plan(self.tmp, plan, name=name)
+
+    def test_plan_only_credit_ceiling_launches_under_copilot(self):
+        # AC2 (anti-horizontal-phasing): a plan budget.credit_ceiling with NO
+        # --credit-ceiling flag LAUNCHES and runs to completion under a credit
+        # brake instead of being refused native_capability_unavailable at the
+        # gate. --max-iterations stays an explicit flag (ADR-0048 part 4); only
+        # the credit ceiling is plan-sourced. (The spec's illustrative 200 is
+        # below gpt-6.1-sol's ~201.5 probe bound, which would halt
+        # credit_ceiling_insufficient; 500 shows a full run, as the flag test
+        # test_runs_and_records_credits_usd_null does.)
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        plan = self._copilot_plan(credit_ceiling=500)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "1", "--plan", str(plan),
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        st = self._state_json()
+        self.assertEqual(st["backend"], "copilot")
+        self.assertEqual(st["credit_ceiling"], 500.0)
+        self.assertIsNone(st["cost_ceiling_usd"])
+        self.assertEqual(st["cumulative_credits_nano"],
+                         50 * loop_mod.NANO_PER_CREDIT)
+
+    def test_plan_only_credit_ceiling_200_reaches_the_brake_not_the_gate(self):
+        # AC2 (anti-horizontal-phasing, the spec's literal 200): a plan-only
+        # credit_ceiling of 200 is NOT refused native_capability_unavailable at
+        # the launch gate — it LAUNCHES, invokes the worker, reveals the model
+        # at iteration 1, and only THEN halts credit_ceiling_insufficient
+        # (gpt-6.1-sol's ~201.5 bound swamps 200, ADR-0048 part 2). A brake
+        # decision (not a gate refusal) proves the --plan path reaches the
+        # credit brake end to end.
+        self._mock(5 * loop_mod.NANO_PER_CREDIT)
+        plan = self._copilot_plan(credit_ceiling=200)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "3", "--plan", str(plan),
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_CEILING_INSUFFICIENT)
+        self.assertTrue(self.counter.exists())  # a worker was invoked (launched)
+
+    def test_plan_credit_ceiling_below_minimum_refused(self):
+        # AC1: a plan credit_ceiling below the 30-credit CLI minimum is refused
+        # fail-closed (rc=2, plan_value_invalid) — the SAME floor the
+        # --credit-ceiling flag enforces — before any copilot call.
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        plan = self._copilot_plan(credit_ceiling=10)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "2", "--plan", str(plan),
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_PLAN_VALUE_INVALID)
+        self.assertIn("credit_ceiling", r.stderr)
+        self.assertFalse(self.counter.exists())  # refused before any copilot call
+
+    def test_flag_credit_ceiling_overrides_plan(self):
+        # AC3 (clamp-never-disable precedence): the explicit --credit-ceiling
+        # flag is the authoritative loop-driver ceiling; it wins over the plan.
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        plan = self._copilot_plan(credit_ceiling=500)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "1", "--credit-ceiling", "300",
+                      "--plan", str(plan), mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 0, msg=r.stderr)
+        self.assertEqual(self._state_json()["credit_ceiling"], 300.0)
+
+    def test_plan_resolved_credit_behaves_like_flag(self):
+        # AC4: a plan-resolved ceiling drives the same post-iteration halt as a
+        # flag — 250 cr/turn, ceiling 400 (above the ~201 bound), turn 2 crosses
+        # it → credit_ceiling_reached, identically to test_credit_ceiling_reached.
+        self._mock(250 * loop_mod.NANO_PER_CREDIT)
+        plan = self._copilot_plan(credit_ceiling=400)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "6", "--plan", str(plan),
+                      mock_bindir=self.bindir)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_CEILING_REACHED)
+
+    def test_plan_usd_ceiling_refused_under_copilot(self):
+        # AC5: units never mix — a plan that carries cost_ceiling_usd under
+        # --host copilot is refused (wrong unit), never silently converted or
+        # dropped, even when it also carries a valid credit_ceiling.
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        plan = self._copilot_plan(credit_ceiling=200, cost_ceiling_usd=2.0)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "1", "--plan", str(plan),
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_PLAN_VALUE_INVALID)
+        self.assertIn("cost_ceiling_usd", r.stderr)
+        self.assertFalse(self.counter.exists())
+
+    def test_plan_credit_ceiling_wrong_type_refused_under_copilot(self):
+        # AC1 shape check, ISOLATED: a non-numeric credit_ceiling is refused by
+        # _validate_plan_budget (plan_value_invalid) before the Copilot gate. Run
+        # under copilot so the wrong-unit guard (which refuses any credit_ceiling
+        # under claude, shadowing the shape check) cannot fire — only the type
+        # check can refuse a non-numeric here, so the test is non-vacuous.
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        plan = self._copilot_plan(credit_ceiling="lots")
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "2", "--plan", str(plan),
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_PLAN_VALUE_INVALID)
+        self.assertIn("credit_ceiling", r.stderr)
+        self.assertFalse(self.counter.exists())
+
+    def test_unpriced_oracle_refused_before_capability_gate_under_copilot(self):
+        # Spec 043-02 precedence (surfaced by the arch review): the ADR-0041
+        # unpriced-oracle safety preflight is hoisted above the Copilot launch
+        # gate, so a copilot run with an unpriced oracle AND no resolvable credit
+        # ceiling surfaces the oracle-safety refusal, not
+        # native_capability_unavailable — the safety refusal wins (intended).
+        self._mock(50 * loop_mod.NANO_PER_CREDIT)
+        manifest = self.target / ".servo" / "install.json"
+        data = json.loads(manifest.read_text())
+        data["components"] = ["eval:llm-judge"]
+        data["unpriced_components"] = ["eval:llm-judge"]
+        manifest.write_text(json.dumps(data))
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--max-iterations", "2", mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._last_summary(r)["terminal_reason"],
+                         loop_mod.REASON_UNPRICED_ORACLE_COMPONENTS)
+        self.assertFalse(self.counter.exists())
 
 
 class EditPermissionRelabelLoopTests(unittest.TestCase):

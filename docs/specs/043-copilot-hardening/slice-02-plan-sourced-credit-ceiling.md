@@ -1,8 +1,8 @@
 ---
-status: DRAFT
+status: DONE
 kind: feature
 dependencies: [adr-0016, adr-0048, 016-02, 041-02]
-last_verified:
+last_verified: 2026-11-13
 arch_review: true
 frame_review: true
 ---
@@ -103,3 +103,94 @@ brake end to end.
   If credits need a different clamp rule — for example because the 30-credit CLI
   minimum interacts with clamping — that is a real divergence the frame-critique
   must surface rather than assume away.
+
+### Deviation log (after reconciliation)
+
+The six ACs above are preserved as authored; no AC changed. The reviews surfaced
+framing/comment/test-coverage refinements (folded), not AC changes.
+
+Review rounds (a fresh `general-purpose` reviewer per pass):
+- **Implementation reviews — all PASS, no `[blocker]`:** frame-critique,
+  compliance, craft, arch (recorded under `reviews/slice-02-*`). The non-blocking
+  nits below were folded in this pass.
+- Reconciliation is a separate independent gate over this deviation log; by
+  ADR-0014 its verdict is captured as its own review-evidence file (sweep row
+  below), not restated in this log — so the log never asserts its own
+  reconciliation outcome.
+
+Non-blocking nits folded (from compliance / craft / arch):
+
+1. **Hoist comments corrected.** The ADR-0041 unpriced-preflight comment and the
+   plan-consumption comment over-claimed "no behavior change / no-op for
+   `--emit-routine-prompt`"; both now state the real ordering shifts (a plan-read
+   error no longer precedes the unpriced refusal; the unpriced refusal now
+   precedes the Copilot gate; a malformed `--plan` on the `--emit-routine-prompt`
+   path now refuses before emission).
+2. **AC1 shape-check isolation.** The non-numeric `credit_ceiling` test moved
+   under `--host copilot`
+   (`test_plan_credit_ceiling_wrong_type_refused_under_copilot`), where the
+   wrong-unit guard cannot shadow the shape check — so the test is non-vacuous.
+3. **Precedence pinned.**
+   `test_unpriced_oracle_refused_before_capability_gate_under_copilot` locks the
+   intended "oracle-safety refusal wins over `native_capability_unavailable`"
+   ordering under copilot.
+4. **Emit-path regression test** added
+   (`test_emit_routine_prompt_validates_plan_before_emitting`).
+5. **Test-artifact fidelity.** The `_copilot_plan` helper now stamps
+   `provenance: human_edited` (the compiler never emits `credit_ceiling`).
+
+Load-bearing choices made during implementation:
+
+1. **The credit unit does NOT reuse `_clamp_plan_value`** — Assumption A1's named
+   divergence, surfaced not assumed. ADR-0016's clamp-never-disable is realized
+   for credits as a refuse-below-30 floor in `_validate_plan_budget`, not a clamp
+   of a `0` disable-sentinel up to a default: credits have no `0` sentinel and no
+   DEFAULT ceiling (ADR-0048 part 4 makes the ceiling mandatory). No upper
+   magnitude cap (consistent with ADR-0016's 2026-07-04 amendment); `flag > plan
+   > None` precedence (`_resolve_from_plan`) prevents a plan from raising above
+   the flag. ADR-0016 was amended to record this credit-unit realization.
+2. **Plan consumption + the ADR-0041 unpriced-oracle preflight hoisted above the
+   Copilot launch gate.** The minimal reordering that both resolves a
+   plan-sourced ceiling before the gate (AC2) and keeps a fail-closed oracle-cost
+   safety refusal ahead of any plan read. Consequence: `--plan` is now consulted
+   under copilot, so a missing/malformed `--plan` refuses as a plan error rather
+   than the blanket `native_capability_unavailable`; a valid plan that supplies no
+   ceiling still refuses `native_capability_unavailable`. The hoist also moves
+   plan validation ahead of the `--emit-routine-prompt` early return (so a
+   malformed `--plan` refuses before a Routine prompt is emitted — nit 1 above)
+   and the `--_detached-run-id` detached-child early return (theoretical only: a
+   detached child is always re-exec'd with resolved flags, never `--plan`).
+3. **Illustrative `credit_ceiling: 200` vs the launch test's `500`.**
+   gpt-6.1-sol's ~201.5 overrun bound (ADR-0048 part 2 / 041-01) means 200
+   launches then halts `credit_ceiling_insufficient`; the end-to-end launch test
+   uses 500 (a completing run) and a separate test uses 200 to prove the worker is
+   invoked and reaches the *brake*, not the gate.
+4. **`execution_plan.py` stays producer-silent on `credit_ceiling`.** The
+   host-agnostic compiler emits a Claude/USD budget and never emits
+   `credit_ceiling` (it would be wrong-unit for a Claude run); a human /
+   Copilot-aware planner adds the optional key. `_budget_hash` already hashes it
+   order-independently, so a hand-added key reads as a recompile-preserve edit.
+
+Rebase note: spec 043-01 (PR #63) merged to main first; this slice was rebased
+onto it. `loop.py` auto-merged (independent code paths); the
+`docs/refinement-todo.md` conflict (both slices resolved items in the same
+section) was resolved to keep both resolutions; the host trees were regenerated
+from the merged source. #63's `usd_priced` preflight stays in `run_loop`; the
+relative order unpriced-before-`usd_priced` is preserved where both apply.
+
+### Reconciliation sweep
+
+| Artifact | Disposition | Rationale |
+|----------|-------------|-----------|
+| `skills/agent-loop/loop.py` + 3 host copies | `updated` | `credit_ceiling` added to `_PLAN_BUDGET_KEYS` + `_validate_plan_budget` (refuse `< 30`); `main()` hoists the ADR-0041 unpriced preflight + plan consumption above the Copilot gate, resolves `credit_ceiling` flag-or-plan via `_resolve_from_plan`, adds plan-side wrong-unit refusals both ways, and threads the resolved ceiling to `run_loop`. Byte-identical across the three host trees (`build_host_packages.py --check` green). |
+| `skills/execution-planner/execution_plan.py` + 3 host copies | `updated` | Docstring + budget-constants comment document the optional, Copilot-only `credit_ceiling` (no compiled default); `compile_plan` + `_budget_hash` unchanged (compiler never emits the key; hash already covers arbitrary budget keys). Byte-identical across host trees. |
+| `skills/agent-loop/test_loop.py` | `updated` | TDD coverage (witnessed red → green) of AC1–AC5 under copilot + claude, incl. the anti-horizontal-phasing launch/brake tests and the folded shape-isolation / precedence / emit-path tests. Source-only (test files never ship to host packages). |
+| `skills/agent-loop/test_copilot_capability.py` | `updated` | The `--plan` native-refusal case now uses a valid no-ceiling plan (still `native_capability_unavailable`), reflecting that `--plan` is consulted under copilot. |
+| `skills/execution-planner/test_execution_plan.py` | `updated` | Schema tests: a compiled plan has no `credit_ceiling`; `_budget_hash` accepts the optional key. |
+| `docs/decisions/adr-0016-execution-plan-artifact.md` | `updated` | AC6: the plan-shape example gains the optional Copilot `credit_ceiling` budget key + the refuse-below-minimum prose. |
+| `docs/refinement-todo.md` | `updated` | Item 1 (plan-sourced `budget.credit_ceiling`) marked **RESOLVED** in the slice's feat commit; the overstated "needed for spec 042 campaigns" trigger corrected. |
+| `docs/specs/README.md` (board) | pending close-out | Regenerated by `status-board` immediately before the DONE transition — not yet applied when this sweep was written. |
+| `docs/specs/043-…/reviews/slice-02-{compliance,craft,arch,frame-critique}.md` | `new` | The four implementation-review verdicts (all `pass`), persisted by `review.py record-review`. |
+| `docs/specs/043-…/reviews/slice-02-reconciliation.md` | `new` (pending close-out) | The reconciliation gate's verdict, persisted by `review.py record-review` once the gate passes — not yet written when this sweep was composed. |
+| `skills/quality-gate/gate.py` | `no-op` | gate.py is host-blind; credit-ceiling resolution + the wrong-unit refusals live only in loop.py's launch path. |
+| `docs/decisions/adr-0048-*.md` | `no-op` | This slice sits inside ADR-0048 (credit unit, 30-min, launch gate) and ADR-0016 (clamp-never-disable); no ADR change beyond ADR-0016's AC6 example refresh. |

@@ -350,6 +350,15 @@ class PlanBudgetDefaultsTests(unittest.TestCase):
             _, _, plan = _compile_ok(root)
             self.assertEqual(plan["budget"], EXPECTED_BUDGET)
 
+    def test_compiled_plan_has_no_credit_ceiling(self):
+        # Spec 043-02 AC1: credit_ceiling is an OPTIONAL, Copilot-only budget
+        # key. The host-agnostic compiler never emits it (the default plan is a
+        # Claude/USD plan; a credit_ceiling there would read as wrong-unit). A
+        # human or a future Copilot-aware planner adds it to a Copilot plan.
+        with tempfile.TemporaryDirectory() as d:
+            _, _, plan = _compile_ok(Path(d))
+            self.assertNotIn("credit_ceiling", plan["budget"])
+
 
 # --------------------------------------------------------------------------
 # AC5 — git-ignored, atomic, read-only over the target
@@ -717,6 +726,19 @@ class ModelsBlockPreservedTests(unittest.TestCase):
         base = execution_plan._budget_hash({"max_iterations": 5}, "loop")
         null = execution_plan._budget_hash({"max_iterations": 5}, "loop", None)
         self.assertNotEqual(null, base)
+
+    def test_budget_hash_accepts_optional_credit_ceiling(self):
+        # Spec 043-02 AC1: credit_ceiling is a recognized OPTIONAL budget key.
+        # A hand-added credit_ceiling changes the canonical budget hash (so a
+        # Copilot plan's budget edit is detected as drift, exactly like any
+        # other budget edit) and the digest stays key-order independent.
+        base = execution_plan._budget_hash({"max_iterations": 5}, "loop")
+        a = execution_plan._budget_hash(
+            {"max_iterations": 5, "credit_ceiling": 200}, "loop")
+        b = execution_plan._budget_hash(
+            {"credit_ceiling": 200, "max_iterations": 5}, "loop")
+        self.assertNotEqual(a, base)
+        self.assertEqual(a, b)
 
     def test_hand_added_null_models_refuses_recompile(self):
         # loop.py refuses `models: null`; the planner must treat the key as an
