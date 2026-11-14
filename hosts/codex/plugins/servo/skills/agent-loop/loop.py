@@ -201,6 +201,15 @@ REASON_TARGET_NOT_DIRECTORY = "target_not_directory"
 REASON_MANIFEST_MISSING = "manifest_missing"
 REASON_UNPRICED_COMPONENTS_INVALID = "unpriced_components_invalid"
 REASON_UNPRICED_ORACLE_COMPONENTS = "unpriced_oracle_components"
+# Spec 043-01 (ADR-0048 part 5) — companion to the ADR-0041 unpriced reasons
+# above. The unpriced reasons refuse an *unknown*-cost component under any host
+# (unknown cost can never be accounted). These refuse a *known*-USD-priced
+# component only under `--host copilot`, where there is no USD bound (the credit
+# ceiling bounds the worker's Copilot session only, never oracle USD spend). The
+# strings are distinct from the unpriced ones so the two refusals stay
+# separately identifiable in output and tests (043-01 AC5).
+REASON_USD_PRICED_COMPONENTS_INVALID = "usd_priced_components_invalid"
+REASON_USD_PRICED_ORACLE_COMPONENTS = "usd_priced_oracle_components"
 REASON_ORACLE_MISSING = "oracle_missing"
 REASON_STATE_MISSING = "state_missing"
 REASON_STATE_SCHEMA_MISMATCH = "state_schema_mismatch"
@@ -1813,6 +1822,102 @@ def _unpriced_oracle_preflight(
 ) -> Optional[int]:
     """Render an accounting refusal without launching or writing any state."""
     err = _unpriced_oracle_error(target)
+    if err is None:
+        return None
+    reason, message = err
+    return _refuse_preflight(
+        run_id=run_id if run_id is not None else _generate_preflight_run_id(),
+        reason=reason, message=message,
+        cost_ceiling=cost_ceiling if cost_ceiling is not None else DEFAULT_COST_CEILING_USD,
+        context_fill_threshold=(
+            context_fill_threshold if context_fill_threshold is not None
+            else DEFAULT_CONTEXT_FILL_THRESHOLD
+        ),
+    )
+
+
+def _usd_priced_oracle_error(target: Path) -> Optional[tuple[str, str]]:
+    """ADR-0048 part 5 companion to `_unpriced_oracle_error` (ADR-0041).
+
+    Reads the `usd_priced_components` install marker — oracle components *known*
+    to bill in USD, e.g. an API-priced eval judge. Validation mirrors the
+    `unpriced_components` validator exactly (a unique list of nonempty names, a
+    subset of the registered `components`), and a malformed marker fails closed.
+    The two markers are independent keys, so the two refusals stay separately
+    identifiable (043-01 AC5).
+
+    This is a host-agnostic *reader*: it reports what the marker says, never
+    *when* the refusal bites. The caller (`_usd_priced_oracle_preflight`) owns
+    the policy — the refusal fires only under `--host copilot`, where there is
+    no USD bound. Under `--host claude` a non-null `cost_ceiling` bounds the same
+    component (ADR-0005 clause 6), so this marker is not a refusal there.
+    """
+    if not target.is_dir():
+        return None  # Existing target preflight owns missing/non-directory errors.
+    manifest = target / ".servo" / "install.json"
+
+    def invalid(detail: str) -> tuple[str, str]:
+        return REASON_USD_PRICED_COMPONENTS_INVALID, (
+            f"cannot establish USD accounting from usd_priced_components in "
+            f".servo/install.json at {manifest}: {detail}; repair installation "
+            f"registration before launch (ADR-0048 part 5)"
+        )
+
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return invalid(f"manifest unreadable or malformed: {exc}")
+    if not isinstance(data, dict):
+        return invalid("manifest must be a JSON object")
+    if "usd_priced_components" not in data:
+        return None
+    marker = data["usd_priced_components"]
+    if (
+        not isinstance(marker, list)
+        or any(not isinstance(name, str) or not name.strip() for name in marker)
+        or len(set(marker)) != len(marker)
+    ):
+        return invalid("marker must be a unique list of nonempty component names")
+    components = data.get("components")
+    if (
+        not isinstance(components, list)
+        or any(not isinstance(name, str) or not name.strip() for name in components)
+        or not set(marker).issubset(components)
+    ):
+        return invalid("marker names must belong to the registered components list")
+    if marker:
+        return REASON_USD_PRICED_ORACLE_COMPONENTS, (
+            f"--host copilot launch refused: usd_priced_components in "
+            f".servo/install.json at {manifest}: {', '.join(marker)}. These "
+            f"oracle components bill in USD, but a Copilot run has no USD bound — "
+            f"the credit ceiling bounds the worker's Copilot session only, never "
+            f"oracle USD spend. ADR-0048 part 5 refuses this (resolved Open "
+            f"Question 5: no separate USD oracle ceiling is approved). Run the "
+            f"oracle under --host claude with a --cost-ceiling, or remove the "
+            f"USD-priced component."
+        )
+    return None
+
+
+def _usd_priced_oracle_preflight(
+    target: Path, *, host: str = HOST_CLAUDE,
+    cost_ceiling: Optional[float] = None,
+    context_fill_threshold: Optional[float] = None,
+    run_id: Optional[str] = None,
+) -> Optional[int]:
+    """Render the ADR-0048 part 5 refusal, gated to `--host copilot`.
+
+    Fires only under Copilot, where there is no USD bound. Under `--host claude`
+    (the default) this is a no-op even for a malformed marker: the hazard this
+    slice closes — unbounded oracle USD spend — exists only when no USD ceiling
+    is in effect, and a claude run always carries one (explicit or defaulted).
+    Writes no state (mirrors `_unpriced_oracle_preflight`).
+    """
+    if host != HOST_COPILOT:
+        return None
+    err = _usd_priced_oracle_error(target)
     if err is None:
         return None
     reason, message = err
@@ -3655,6 +3760,25 @@ def run_loop(
     )
     if accounting_rc is not None:
         return accounting_rc
+
+    # Spec 043-01 (ADR-0048 part 5): under `--host copilot` there is no USD
+    # bound (the credit ceiling bounds the worker's Copilot session only), so an
+    # oracle carrying a known-USD-priced component would spend USD unbounded.
+    # Refuse at launch, fail-closed, naming the component(s). Checked after the
+    # ADR-0041 unpriced (unknown-cost) refusal above — the stricter host-agnostic
+    # rule takes precedence when both markers are present. A no-op under
+    # `--host claude`, where a non-null `cost_ceiling` bounds the component (AC4).
+    # `run_loop` is the sole Copilot launch chokepoint: Copilot forces the loop
+    # driver (the goal/background surfaces are refused earlier, and
+    # --emit-routine-prompt runs no oracle — it emits a prompt and exits), so
+    # enforcing here covers both the CLI (`main` → `run_loop`) and direct
+    # programmatic entry.
+    usd_priced_rc = _usd_priced_oracle_preflight(
+        target, host=host, cost_ceiling=cost_ceiling,
+        context_fill_threshold=context_fill_threshold, run_id=resume_run_id,
+    )
+    if usd_priced_rc is not None:
+        return usd_priced_rc
 
     _install_signal_handlers()
 
