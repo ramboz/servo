@@ -8806,6 +8806,259 @@ class CopilotCreditBrakeLaunchTests(unittest.TestCase):
         self.assertFalse(self.counter.exists())
 
 
+def _mock_copilot_cumulative(
+    bindir, deltas, counter_file, *, session_id="copilot-resume-sess",
+    statuses=None, otel_flags=None, args_log=None, acc_file=None,
+):
+    """A mock `copilot` whose usage `totalNanoAiu` is SESSION-CUMULATIVE across
+    every invocation — INCLUDING across a process boundary (the running total
+    lives in a shared `acc_file`), exactly as a resumed Copilot billing session
+    reports (ADR-0048 A2). Invocation n (1-based) spends `deltas[n-1]` nano: the
+    usage file reports the session-cumulative total, while the OTel span reports
+    that invocation's OWN delta, so the fail-closed Σ-vs-delta gate reconciles on
+    both the fresh (expected == total) and resumed (expected == total − prior)
+    paths.
+
+    The terminal event carries a STABLE `session_id`, so the loop persists it and
+    a later `--resume` passes it to the worker and sets `resumed=True` — which is
+    what makes the cross-process session-delta path fire (the default copilot
+    fixture emits no session id, so pre-043-03 brake tests only ever ran fresh).
+
+    `statuses[n-1]` overrides that invocation's `aiCreditsStatus` (default
+    "complete"); `otel_flags[n-1] == 0` suppresses that invocation's OTel export
+    — both let a test exercise the fail-closed telemetry path on a RESUMED
+    iteration.
+    """
+    bindir.mkdir(parents=True, exist_ok=True)
+    if statuses is None:
+        statuses = ["complete"] * len(deltas)
+    if otel_flags is None:
+        otel_flags = [1] * len(deltas)
+    if acc_file is None:
+        acc_file = bindir / "copilot_acc.txt"
+    jsonl_file = bindir / "copilot_jsonl.txt"
+    jsonl_file.write_text(
+        _copilot_jsonl_fixture(_COPILOT_VERDICT_TEXT, session_id=session_id))
+    deltas_arr = " ".join(str(int(d)) for d in deltas)
+    status_arr = " ".join(statuses)
+    otel_arr = " ".join(str(int(f)) for f in otel_flags)
+    log_cmd = ""
+    if args_log is not None:
+        log_cmd = (
+            f'for a in "$@"; do printf "%s\\037" "$a" >> \'{args_log}\'; done\n'
+            f'printf "\\036" >> \'{args_log}\'\n'
+        )
+    usage_fmt = (
+        '{"totalNanoAiu": %s, "aiCreditsStatus": "%s", '
+        '"currentModel": "gpt-6.1-sol", "totalPremiumRequestCost": 1, '
+        '"tokenDetails": {"input": 1000, "cache_read": 0, "cache_write": 0, '
+        '"output": 50}, "codeChanges": {"filesModifiedCount": 1, '
+        '"linesAdded": 5, "linesRemoved": 0}}'
+    )
+    otel_fmt = (
+        '{"type": "span", "name": "chat gpt-6.1-sol", "attributes": '
+        '{"github.copilot.nano_aiu": %s, "gen_ai.usage.input_tokens": 1000, '
+        '"gen_ai.usage.output_tokens": 50}}'
+    )
+    body = (
+        "#!/usr/bin/env bash\n"
+        'if [ "$1" = "--version" ]; then echo "1.0.110-1"; exit 0; fi\n'
+        f"deltas=({deltas_arr})\n"
+        f"statuses=({status_arr})\n"
+        f"otelflags=({otel_arr})\n"
+        f"counter_file='{counter_file}'\n"
+        f"acc_file='{acc_file}'\n"
+        'if [ -f "$counter_file" ]; then n=$(cat "$counter_file"); else n=0; fi\n'
+        "n=$((n + 1))\n"
+        'echo "$n" > "$counter_file"\n'
+        "idx=$((n - 1))\n"
+        "delta=${deltas[$idx]}\n"
+        "status=${statuses[$idx]}\n"
+        "otelflag=${otelflags[$idx]}\n"
+        'if [ -f "$acc_file" ]; then acc=$(cat "$acc_file"); else acc=0; fi\n'
+        "acc=$((acc + delta))\n"
+        'echo "$acc" > "$acc_file"\n'
+        f"{log_cmd}"
+        'usage_out=""\n'
+        'prev=""\n'
+        'for a in "$@"; do\n'
+        '  if [ "$prev" = "--usage-output-file" ]; then usage_out="$a"; fi\n'
+        '  prev="$a"\n'
+        "done\n"
+        'if [ -n "$usage_out" ]; then\n'
+        f"  printf '{usage_fmt}' \"$acc\" \"$status\" > \"$usage_out\"\n"
+        "fi\n"
+        'if [ "$otelflag" = "1" ] && [ -n "$COPILOT_OTEL_FILE_EXPORTER_PATH" ]; then\n'
+        f"  printf '{otel_fmt}' \"$delta\" > \"$COPILOT_OTEL_FILE_EXPORTER_PATH\"\n"
+        "fi\n"
+        f"cat '{jsonl_file}'\n"
+    )
+    copilot = bindir / "copilot"
+    copilot.write_text(body)
+    _make_executable(copilot)
+    return copilot
+
+
+class CopilotCrossProcessResumeTests(unittest.TestCase):
+    """Spec 043-03 — cross-process `--resume` of a Copilot run.
+
+    Two-phase, a REAL two-process run->resume producing a REAL persisted
+    state.json (a fresh copilot run halts, then a second `loop.py` process
+    `--resume`s it) — NON-git target (see setUp: git is orthogonal to the credit
+    brake, and a git target would trip the 031-01 edit-permission relabel). The
+    mock copilot reports SESSION-CUMULATIVE `totalNanoAiu` across the process
+    boundary (ADR-0048 A2), so these exercise the session-delta credit brake
+    end-to-end on a resumed run — a path previously only unit-tested."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="servo-copilot-resume-")
+        tmp = Path(self.tmpdir)
+        self.tmp = tmp
+        self.target = tmp / "demo"
+        self.target.mkdir()
+        _make_manifest(self.target)
+        _make_oracle(self.target, _below_threshold_oracle())
+        # Non-git target (like the 003-04 resume and copilot-brake tests): the
+        # edit-signal is uncomputable, so the orthogonal 031-01 edit-permission
+        # relabel never fires and a below-threshold run halts cleanly at the
+        # iteration cap (rc=0). This slice exercises the credit brake across a
+        # resume, not the edit-permission wall.
+        self.bindir = tmp / "bin"
+        self.counter = tmp / "counter.txt"
+        self.args_log = tmp / "args.log"
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _state(self):
+        import glob
+        files = glob.glob(str(self.target / ".servo" / "runs" / "*" / "state.json"))
+        return json.loads(Path(files[0]).read_text()) if files else None
+
+    def _summary(self, result):
+        return _stdout_json_lines(result.stdout)[-1]
+
+    def _fresh(self, deltas, *, ceiling="500", statuses=None, otel_flags=None):
+        """Phase 1: a fresh copilot run, 1 iteration, that halts resumably."""
+        _mock_copilot_cumulative(
+            self.bindir, deltas, self.counter, statuses=statuses,
+            otel_flags=otel_flags, args_log=self.args_log)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", ceiling, "--max-iterations", "1",
+                      mock_bindir=self.bindir)
+        return r
+
+    def test_resume_continues_credits_from_persisted_baseline(self):
+        # AC1 + AC2 (headline): a fresh run spends 50cr and halts; the resume
+        # spends 40cr more. The final cumulative is 90cr EXACTLY — not 40
+        # (reset-to-zero) and not 140 (double-count of the session-cumulative
+        # total). This is the load-bearing session-delta premise end-to-end.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        st1 = self._state()
+        self.assertEqual(st1["backend"], "copilot")
+        self.assertEqual(st1["cumulative_credits_nano"], 50 * cr)
+        self.assertEqual(st1["current_session_id"], "copilot-resume-sess")
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 0, msg=r2.stderr)
+        st2 = self._state()
+        self.assertEqual(st2["cumulative_credits_nano"], 90 * cr)  # AC2
+        self.assertEqual(st2["credit_ceiling"], 500.0)
+        self.assertEqual(st2["iteration_count"], 2)
+        self.assertIsNone(st2["cost_ceiling_usd"])  # units never mix
+
+    def test_resume_passes_resume_flag_to_same_session(self):
+        # AC1 / A1: the fresh iteration runs NO --resume (empty session); the
+        # resumed iteration invokes `copilot --resume=<session_id>`, so the
+        # worker resumes the SAME billing session — the ground of the
+        # session-cumulative premise (ADR-0048 A2).
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 0, msg=r2.stderr)
+        argvs = _read_args_log(self.args_log)
+        self.assertEqual(len(argvs), 2)
+        self.assertFalse(any(a.startswith("--resume") for a in argvs[0]))
+        self.assertTrue(
+            any(a.startswith("--resume") and "copilot-resume-sess" in a
+                for a in argvs[1]), msg=argvs[1])
+
+    def test_resume_post_iteration_ceiling_halt(self):
+        # AC3: the post-iteration ceiling halt still fires on a resumed run.
+        # 250cr/turn, ceiling 400 (above the ~201 bound): the fresh turn spends
+        # 250 (cumulative 250 < 400), the resumed turn crosses it (cumulative
+        # 500 > 400) → credit_ceiling_reached.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([250 * cr, 250 * cr], ceiling="400")
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "400", "--max-iterations", "6",
+                       mock_bindir=self.bindir)
+        self.assertEqual(self._summary(r2)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_CEILING_REACHED)
+        self.assertEqual(self._state()["cumulative_credits_nano"], 500 * cr)
+
+    def test_resume_pre_iteration_credit_floor_halt(self):
+        # AC3: the pre-iteration >=30-credit floor still fires on a resumed run.
+        # The fresh turn spends 480 of a 500 ceiling; the resume sees <30cr of
+        # headroom and halts credit_ceiling_reached BEFORE invoking the worker
+        # (the shared counter stays at 1 — no second copilot invocation).
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([480 * cr, 10 * cr], ceiling="500")
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(self._summary(r2)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_CEILING_REACHED)
+        self.assertEqual(int(self.counter.read_text().strip()), 1)
+
+    def test_resume_fail_closed_on_partial_telemetry(self):
+        # AC3: fail-closed on partial telemetry still fires on a resumed run —
+        # the resumed invocation reports a non-"complete" aiCreditsStatus, so the
+        # run halts credit_usage_unavailable with cumulative null (never 0),
+        # identical to a fresh copilot run.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr], statuses=["complete", "partial"])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 2, msg=r2.stderr)
+        last = self._summary(r2)
+        self.assertEqual(last["terminal_reason"],
+                         loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+        self.assertIsNone(last["cumulative_credits"])
+
+    def test_resume_honors_credit_ceiling_override(self):
+        # Spec 043-03: a Copilot resume requires --credit-ceiling (main()'s
+        # opt-in gate), so it is honored as an override (symmetric with
+        # --cost-ceiling) rather than silently ignored — a re-passed 600 raises
+        # the persisted 500.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr], ceiling="500")
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self.assertEqual(self._state()["credit_ceiling"], 500.0)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "600", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 0, msg=r2.stderr)
+        self.assertEqual(self._state()["credit_ceiling"], 600.0)
+
+
 class EditPermissionRelabelLoopTests(unittest.TestCase):
     """AC1/AC5/AC8: a walled loop-driver run (git target, runner never edits,
     oracle below threshold) relabels to edit_permission_unavailable, rc=2, with

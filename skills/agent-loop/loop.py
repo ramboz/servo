@@ -190,9 +190,28 @@ REASON_CREDIT_CEILING_REACHED = "credit_ceiling_reached"
 REASON_CREDIT_USAGE_UNAVAILABLE = "credit_usage_unavailable"
 REASON_CREDIT_CEILING_INSUFFICIENT = "credit_ceiling_insufficient"
 REASON_CREDIT_BOUND_UNAVAILABLE = "credit_bound_unavailable"
+# Spec 043-03: a Copilot `--resume` whose persisted session baseline
+# (`cumulative_credits_nano`) is unsound cannot re-establish the session-delta
+# accounting (ADR-0048 A2), so it fails closed rather than resuming unsoundly.
+REASON_CREDIT_BASELINE_UNAVAILABLE = "credit_baseline_unavailable"
 REASON_CONTEXT_FULL = "context_full"
 REASON_INTERRUPTED = "interrupted"
 REASON_ORACLE_PLATEAU = "oracle_plateau"
+# Spec 043-03: the halt reasons from which a Copilot run's persisted
+# `cumulative_credits_nano` is a SOUND session-cumulative total — the last
+# iteration's spend was credit-accounted before the halt finalized (the
+# iteration cap and plateau fire after `_apply_copilot_credit_iteration`; the
+# credit ceiling halts post-accumulation or pre-invocation; the context gate
+# halts pre-invocation). A Copilot resume is allowed only from one of these.
+# Any other halt — an interruption (which finalizes BEFORE the accumulation,
+# orphaning in-flight spend), an uncaught kill (no clean finalize), or a
+# fail-closed error — leaves a stale-or-null baseline and is refused (AC5).
+_COPILOT_RESUMABLE_HALTS = frozenset({
+    REASON_MAX_ITERATIONS_REACHED,
+    REASON_CREDIT_CEILING_REACHED,
+    REASON_ORACLE_PLATEAU,
+    REASON_CONTEXT_FULL,
+})
 REASON_VERDICT_SCHEMA_MISMATCH = "verdict_schema_mismatch"
 REASON_CLAUDE_INVOCATION_FAILED = "claude_invocation_failed"
 REASON_GATE_INVOCATION_FAILED = "gate_invocation_failed"
@@ -3855,22 +3874,99 @@ def run_loop(
                 context_fill_threshold=refusal_threshold,
             )
 
-        # Unmarked version-1 state retains its historical Claude interpretation.
-        # The September native prototype did not persist a backend discriminator.
+        # Spec 043-03 (ADR-0048): a persisted run resumes only under the SAME
+        # backend. A same-backend Copilot resume is now allowed — its credit
+        # state (`cumulative_credits_nano` / `credit_ceiling`) persists in
+        # state.json, so the run picks up where it halted instead of restarting
+        # and re-spending the budget. Only a genuine backend CHANGE stays refused
+        # (`backend_mismatch`): resuming a copilot run as claude, or a claude run
+        # as copilot. Unmarked version-1 state keeps its historical Claude
+        # interpretation; the September native prototype marked
+        # state_schema_version == 2 with NO backend discriminator, so it matches
+        # no current host and can never resume. `--resume-anyway` cannot convert
+        # backend identity (ADR-0043), so it does not waive this.
+        discriminators = [
+            state.get(key) for key in ("backend", "host")
+            if state.get(key) is not None
+        ]
+        persisted_backend = discriminators[0] if discriminators else HOST_CLAUDE
+        backend_consistent = all(d == persisted_backend for d in discriminators)
         if (
-            any(state.get(key, HOST_CLAUDE) != HOST_CLAUDE for key in ("backend", "host"))
-            or state.get("state_schema_version") == 2
+            state.get("state_schema_version") == 2
+            or not backend_consistent
+            or persisted_backend != host
         ):
             return _refuse_preflight(
                 run_id=resume_run_id,
                 reason="backend_mismatch",
                 message=(
-                    "native or non-Claude state cannot resume through Claude; "
-                    "--resume-anyway cannot convert backend identity (ADR-0043)"
+                    "cannot resume across a backend change: the persisted "
+                    f"backend does not match --host {host!r}, or the run predates "
+                    "backend tagging; --resume-anyway cannot convert backend "
+                    "identity (ADR-0043). A same-backend resume is allowed "
+                    "(spec 043-03)."
                 ),
                 cost_ceiling=refusal_ceiling,
                 context_fill_threshold=refusal_threshold,
             )
+
+        # Spec 043-03 AC5 (ADR-0048 A2): a Copilot resume re-establishes the
+        # session-delta baseline from the persisted cumulative credit total, so
+        # the first resumed iteration's spend is `new session-cumulative
+        # totalNanoAiu − baseline`. Two conditions must hold for that baseline to
+        # be a sound re-establishment; either failing refuses fail-closed rather
+        # than resuming with an unsound credit total:
+        #   (1) The persisted value is a non-negative integer — not null (a prior
+        #       fail-closed halt wrote null, never 0), absent, boolean, or
+        #       negative.
+        #   (2) The run halted on a CLEAN, credit-accounted terminal reason
+        #       (`_COPILOT_RESUMABLE_HALTS`). After an interruption the credit
+        #       accumulation is SKIPPED — the interrupt checkpoint finalizes and
+        #       bumps `iteration_count` BEFORE `_apply_copilot_credit_iteration`
+        #       — and an uncaught kill leaves the in-flight invocation's spend
+        #       orphaned on the billing session (ADR-0048 A3: a killed invocation
+        #       writes no usage file). In both cases the persisted baseline is a
+        #       STALE lower bound: the first resumed iteration's session-cumulative
+        #       `totalNanoAiu` would carry un-accounted spend, so `expected =
+        #       new − baseline` either breaks the per-call OTel reconciliation
+        #       (if the orphan reappears) or silently under-counts the budget (if
+        #       it does not) — and which occurs is unverified (041-01 probed
+        #       resume-after-clean-end, not resume-after-kill). Fail closed until a
+        #       resume-after-kill probe grounds it (deferred — refinement-todo).
+        if host == HOST_COPILOT:
+            baseline = state.get("cumulative_credits_nano")
+            if (not isinstance(baseline, int) or isinstance(baseline, bool)
+                    or baseline < 0):
+                return _refuse_preflight(
+                    run_id=resume_run_id,
+                    reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
+                    message=(
+                        "cannot resume under --host copilot: the persisted "
+                        "session credit baseline "
+                        f"(cumulative_credits_nano={baseline!r}) is not a sound "
+                        "session-cumulative total; refusing rather than resuming "
+                        "with an unsound credit total (spec 043-03 AC5)"
+                    ),
+                    cost_ceiling=refusal_ceiling,
+                    context_fill_threshold=refusal_threshold,
+                )
+            halt = state.get("last_terminal_reason")
+            if halt not in _COPILOT_RESUMABLE_HALTS:
+                return _refuse_preflight(
+                    run_id=resume_run_id,
+                    reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
+                    message=(
+                        "cannot resume under --host copilot: resume is supported "
+                        "only from a clean, credit-accounted progress halt "
+                        "(iteration cap, credit ceiling, plateau, or context), but "
+                        f"this run halted on {halt!r}. An interrupted or killed run "
+                        "in particular orphans its in-flight spend (ADR-0048 A3), "
+                        "leaving a stale credit baseline. Restart fresh rather than "
+                        "resuming with an unsound credit total (spec 043-03 AC5)"
+                    ),
+                    cost_ceiling=refusal_ceiling,
+                    context_fill_threshold=refusal_threshold,
+                )
 
         # Slice 003-06 AC7: a goal-driven run cannot be resumed (detachment is
         # 003-08). Such a state carries `driver: "goal"`; refuse with a clear
@@ -3929,6 +4025,15 @@ def run_loop(
             state["max_iterations"] = max_iterations
         if cost_ceiling is not None:
             state["cost_ceiling_usd"] = cost_ceiling
+        # Spec 043-03: a Copilot resume requires --credit-ceiling (main()'s opt-in
+        # gate re-applies on resume, validated >= the 30-credit minimum), so honor
+        # it as an override — symmetric with cost_ceiling above — rather than
+        # silently keeping the persisted value. The `is not None` guard scopes this
+        # to Copilot: credit_ceiling is Copilot-only and mandatory there, and is
+        # always None under --host claude (where this no-ops and the state carries
+        # no credit_ceiling key).
+        if credit_ceiling is not None:
+            state["credit_ceiling"] = credit_ceiling
         if context_fill_threshold is not None:
             state["context_fill_threshold"] = context_fill_threshold
         if plateau_window is not None:

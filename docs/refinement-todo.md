@@ -1528,21 +1528,64 @@ to read the persisted state's driver and ladder in the `auto` check on resume.
    guard refused *unknown-cost* (`unpriced_components`) components, not
    *known-USD-priced* ones, so under Copilot (`cost_ceiling` null) a known-priced
    component ran with no USD bound.
-3. **Cross-process `--resume` of a Copilot run.** The `backend_mismatch` guard refuses
-   resuming a persisted run whose `backend != claude`, so an interrupted Copilot run
-   restarts fresh. State already persists `cumulative_credits_nano` / `credit_ceiling`.
-   Fix: allow resume for `backend == copilot` (the intra-run session-delta already
-   handles the accounting).
+3. **~~Cross-process `--resume` of a Copilot run.~~** — **RESOLVED 2026-11-14 (spec
+   043-03), scoped to CLEAN halts.** The `backend_mismatch` guard is narrowed to refuse
+   only a genuine backend *change* (copilot resumed as claude, or claude as copilot) and
+   the September v2 prototype; a same-backend `backend == copilot` resume is now allowed
+   **when the run halted cleanly** (iteration cap / credit ceiling / plateau / context),
+   so it picks up from its persisted `cumulative_credits_nano` instead of restarting
+   fresh. The load-bearing premise — that the persisted total is the **session-cumulative**
+   credit figure at halt, so `delta = new_cumulative − baseline` is correct across the
+   process boundary — **holds for a clean halt** (ADR-0048 A2's billed-probe
+   session-cumulative result + the telescoping of servo's per-iteration delta
+   accumulation, confirmed end-to-end by a cross-process resume test with a
+   session-cumulative mock copilot). The frame-critique established it does **not** hold
+   after an **interruption or kill**: credit accumulation runs *after* the interrupt
+   checkpoint and a killed invocation writes no usage file (A3), so the in-flight spend is
+   orphaned and the persisted baseline is a **stale lower bound**. AC5 therefore fails
+   closed (`credit_baseline_unavailable`) on both a null/absent/negative baseline AND a
+   non-clean halt (`last_terminal_reason` ∉ `_COPILOT_RESUMABLE_HALTS`). *Original:* the
+   guard refused resuming a persisted run whose `backend != claude`, so an interrupted
+   Copilot run restarted fresh even though state persists `cumulative_credits_nano` /
+   `credit_ceiling`.
 
 **Resolution trigger:** (1) RESOLVED by 043-02 — note its stated trigger
 ("plan-sourced budgets are needed for spec 042 campaigns") was inaccurate: campaign
 dispatch passes flat `--credit-ceiling` flags, not a `--plan` file, so 043-02 is a
 `--plan`-path completeness fix, not a campaign enabler (043-02's own framing);
 ~~a target ships a known-priced oracle component for a Copilot run (2)~~ **(2) RESOLVED
-by spec 043-01**; a user needs to resume an interrupted Copilot run (3).
+by spec 043-01**; ~~a user needs to resume an interrupted Copilot run (3)~~ **(3) RESOLVED
+by spec 043-03** (scoped to clean halts; interrupted/killed runs fail closed — see the
+follow-ups below).
 
 
-## Known-USD-priced oracle under Copilot — follow-ups (spec 043-01)
+## Copilot cross-process resume — follow-ups (spec 043-03)
+
+**Deferred (non-blocking; surfaced during 043-03's review rounds). The slice ships sound
+clean-halt resume + fail-closed refusal of interrupted/killed runs; these extend it.**
+
+1. **Resume-after-kill grounding (billed probe).** 043-03 fails closed on a Copilot resume
+   whose run was interrupted or killed, because the in-flight invocation's spend is
+   orphaned on the billing session (ADR-0048 A3: a killed invocation writes no usage file),
+   leaving the persisted `cumulative_credits_nano` a stale lower bound. Whether a subsequent
+   `copilot --resume` of that *same* session reports a `totalNanoAiu` that **carries** the
+   orphaned spend (→ the delta could be recovered) or **drops** it (→ an unavoidable
+   under-count) is unverified — ADR-0048 A2 probed resume-after-clean-end, A3 probed
+   kill→no-usage-file but never resumed the killed session. A 041-style billed probe
+   (kill an invocation mid-run, then `--resume` its session and observe `totalNanoAiu`)
+   would ground whichever outcome is real and could lift the interrupted-run refusal.
+   **Resolution trigger:** a user needs interrupted/slept-machine Copilot resume AND a
+   billed probe is authorized (ADR-0048-style ≤N-credit owner approval).
+
+2. **Claude-version resume gate is reachable on a Copilot resume.** Enabling copilot resume
+   newly exposes it to the resume-path `claude_version_mismatch` guard (`_get_claude_version`
+   persisted at launch, re-probed on resume). For a Copilot worker the claude CLI version is
+   irrelevant, so a claude auto-update between a fresh Copilot run and its resume spuriously
+   refuses `claude_version_mismatch` (fail-safe, `--resume-anyway`-bypassable). Fix: host-gate
+   the claude-version check (skip it, or probe `copilot --version` instead) under
+   `--host copilot`. Kept out of 043-03 to stay scoped to the resume guard + credit
+   accounting. **Resolution trigger:** a real Copilot resume trips the spurious refusal, or
+   the host-aware version forensics are generalized.
 
 **Deferred (non-blocking; surfaced by 043-01's frame-critique / craft / arch reviews).**
 Spec 043-01 shipped the enforcement half (loop.py reads `usd_priced_components` and
