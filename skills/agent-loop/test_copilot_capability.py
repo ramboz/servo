@@ -31,6 +31,21 @@ class NativeCapabilityRefusalTests(unittest.TestCase):
         return rc, json.loads(stdout.getvalue()), stderr.getvalue()
 
     def test_all_launch_surfaces_refuse_without_dispatch_or_writes(self):
+        # Spec 043-02: `--plan` is now CONSULTED under copilot (a plan can supply
+        # the credit ceiling). A plan that supplies NO credit ceiling still
+        # cannot satisfy the native contract, so it refuses
+        # native_capability_unavailable exactly like the flag-only surfaces. The
+        # plan lives OUTSIDE self.target so the no-writes assertion still holds.
+        # (A missing / malformed plan now refuses as a plan error, not this
+        # blanket native refusal — covered in test_loop.py's plan-under-copilot
+        # tests; the invariant here is the no-dispatch/no-writes refusal.)
+        plan_dir = tempfile.TemporaryDirectory(prefix="servo-native-plan-")
+        self.addCleanup(plan_dir.cleanup)
+        no_ceiling_plan = Path(plan_dir.name) / "plan.json"
+        no_ceiling_plan.write_text(json.dumps({
+            "schema_version": 1, "provenance": "compiled",
+            "budget": {"max_iterations": 5},
+        }))
         for flags in (
             ["--prompt", "x"],
             ["--driver", "loop", "--prompt", "x"],
@@ -39,7 +54,7 @@ class NativeCapabilityRefusalTests(unittest.TestCase):
             ["--emit-routine-prompt", "--prompt", "x"],
             ["--resume", "native-run"],
             ["--resume", "native-run", "--resume-anyway"],
-            ["--plan", str(self.target / "nonexistent-plan.json"), "--prompt", "x"],
+            ["--plan", str(no_ceiling_plan), "--prompt", "x"],
             ["--cost-ceiling", "0", "--context-fill-threshold", "0", "--prompt", "x"],
             ["--max-ai-credits", "30", "--prompt", "x"],
             ["--_detached-run-id", "native-run", "--prompt", "x"],

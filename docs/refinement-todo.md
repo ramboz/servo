@@ -1506,13 +1506,16 @@ to read the persisted state's driver and ladder in the `auto` check on resume.
 
 **Deferred (all fail-closed; surfaced by 041-02's compliance review):**
 
-1. **Plan-sourced `budget.credit_ceiling`.** AC1 allows the credit ceiling from a
-   plan's `budget.credit_ceiling`, but only the `--credit-ceiling` flag is wired —
-   `_PLAN_BUDGET_KEYS` / `_resolve_from_plan` / `_validate_plan_budget` omit it, and
-   the Copilot launch gate runs before plan-budget resolution. A plan-only ceiling is
-   refused `native_capability_unavailable`. Fix: resolve `credit_ceiling` from
-   flag-or-plan (≥ 30) before the Copilot gate; extend the 016 clamp semantics to the
-   credit unit.
+1. ~~**Plan-sourced `budget.credit_ceiling`.**~~ **RESOLVED 2026-11-13 by slice
+   043-02.** `_PLAN_BUDGET_KEYS` / `_resolve_from_plan` / `_validate_plan_budget` now
+   recognize and bound `credit_ceiling` (below the 30-credit minimum is refused
+   fail-closed), the plan-load block is hoisted above the Copilot launch gate so a
+   plan-only ceiling resolves before it (launches, not `native_capability_unavailable`),
+   and ADR-0016's clamp-never-disable is carried to the credit unit as a
+   refuse-below-minimum floor — no clamp-to-default, since credits have no `0` disable
+   sentinel and no default ceiling. Units stay apart: a plan `credit_ceiling` under
+   `--host claude` (or `cost_ceiling_usd` under copilot) is refused wrong-unit, never
+   converted. ADR-0016's plan-shape example now shows the key.
 2. **~~Known-USD-priced oracle components under Copilot (ADR-0048 part 5).~~** —
    **RESOLVED 2026-11-13 (spec 043-01).** `loop.py` now reads a
    `usd_priced_components` install marker (parallel to `unpriced_components`) and
@@ -1531,7 +1534,10 @@ to read the persisted state's driver and ladder in the `auto` check on resume.
    Fix: allow resume for `backend == copilot` (the intra-run session-delta already
    handles the accounting).
 
-**Resolution trigger:** plan-sourced budgets are needed for spec 042 campaigns (1);
+**Resolution trigger:** (1) RESOLVED by 043-02 — note its stated trigger
+("plan-sourced budgets are needed for spec 042 campaigns") was inaccurate: campaign
+dispatch passes flat `--credit-ceiling` flags, not a `--plan` file, so 043-02 is a
+`--plan`-path completeness fix, not a campaign enabler (043-02's own framing);
 ~~a target ships a known-priced oracle component for a Copilot run (2)~~ **(2) RESOLVED
 by spec 043-01**; a user needs to resume an interrupted Copilot run (3).
 

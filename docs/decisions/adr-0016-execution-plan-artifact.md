@@ -75,6 +75,24 @@ artifact, and Servo Run consumes it. The plan is the durable Compile→Run hando
 }
 ```
 
+The `budget` block above is a Claude/USD plan. Under a Copilot run (`--host
+copilot`; spec 043-02 / [ADR-0048](adr-0048-copilot-credit-budget-contract.md))
+the block instead carries an optional **AI-credit** ceiling in place of the USD
+one — the two unit knobs never coexist (units never mix, ADR-0048 part 1):
+
+```json
+  "budget": {"max_iterations": 5, "credit_ceiling": 200,
+             "context_fill_threshold": 0.75, "plateau_window": 3}
+```
+
+`credit_ceiling` has no compiled default: the host-agnostic compiler emits
+`cost_ceiling_usd`, and a human (or a Copilot-aware planner) adds `credit_ceiling`
+(minimum 30 credits) to a Copilot plan. `loop.py` resolves it from the plan
+before the Copilot launch gate and governs it under the same clamp-never-disable
+rule as `cost_ceiling_usd`, realized for the credit unit as a refuse-below-minimum
+floor rather than a clamp-to-default — credits have no `0` disable sentinel and no
+default ceiling (slice 043-02).
+
 The plan references the other Compile artifacts — oracle path, spec-oracle id,
 and the **suitability verdict** (`.servo/suitability/<spec-id>.json`, spec 015) —
 by identity rather than copying them, same discipline as ADR-0004 referencing the
