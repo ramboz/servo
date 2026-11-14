@@ -1564,18 +1564,30 @@ follow-ups below).
 **Deferred (non-blocking; surfaced during 043-03's review rounds). The slice ships sound
 clean-halt resume + fail-closed refusal of interrupted/killed runs; these extend it.**
 
-1. **Resume-after-kill grounding (billed probe).** 043-03 fails closed on a Copilot resume
-   whose run was interrupted or killed, because the in-flight invocation's spend is
-   orphaned on the billing session (ADR-0048 A3: a killed invocation writes no usage file),
-   leaving the persisted `cumulative_credits_nano` a stale lower bound. Whether a subsequent
-   `copilot --resume` of that *same* session reports a `totalNanoAiu` that **carries** the
-   orphaned spend (→ the delta could be recovered) or **drops** it (→ an unavoidable
-   under-count) is unverified — ADR-0048 A2 probed resume-after-clean-end, A3 probed
-   kill→no-usage-file but never resumed the killed session. A 041-style billed probe
-   (kill an invocation mid-run, then `--resume` its session and observe `totalNanoAiu`)
-   would ground whichever outcome is real and could lift the interrupted-run refusal.
-   **Resolution trigger:** a user needs interrupted/slept-machine Copilot resume AND a
-   billed probe is authorized (ADR-0048-style ≤N-credit owner approval).
+1. **Resume-after-kill grounding** — **GROUNDED 2026-11-14 by a billed probe (≈11.18 cr of
+   the ≤150-credit owner authorization); verdict: the resumed cumulative CARRIES the
+   orphaned spend → the kill-path refusal CAN be lifted by a follow-up slice.** A 041-style
+   probe killed a Copilot invocation mid-run (SIGKILL after 2 completed `chat` calls; the
+   usage file stayed **0 bytes** — A3 re-confirmed) then `copilot --resume`d the *same*
+   session: the resumed usage `totalNanoAiu` equalled **pre-kill spend + resume spend,
+   exactly** (`R − N = 3,854,540,000 nano = P`, zero residual; identical
+   `gen_ai.conversation.id`; `aiCreditsStatus=complete`; model `gpt-6.1-sol`). So on a
+   kill-halt resume servo could recover a sound baseline from the resumed session's own
+   usage read instead of its stale persisted `cumulative_credits_nano` — and servo's
+   `_copilot_iteration_nano` `expected = R − prior` reconciles exactly against the OTel Σ
+   *when given the true prior* (the only reason it fails closed today is the stale persisted
+   baseline, not missing data). Full methodology + redacted telemetry:
+   `docs/specs/043-copilot-hardening/evidence/resume-after-kill/`. **Remaining — a future
+   slice, NOT done here (the probe was measurement-only, no production code changed):**
+   replace the kill-path fail-closed with baseline-recovery-from-resumed-telemetry (treat
+   `R` as the authoritative session-cumulative + the invocation OTel Σ as the iteration
+   spend), keeping fail-closed as the fallback when the resumed read is missing/partial or
+   `--resume` itself errors (a kill *can* leave an unresumable session; n=1 clean resume
+   here). *Original:* whether the resumed `totalNanoAiu` carries or drops the orphaned
+   spend was unverified — ADR-0048 A2 probed resume-after-clean-end, A3 probed
+   kill→no-usage-file but never resumed the killed session. **Resolution trigger:** a user
+   needs interrupted/slept-machine Copilot resume (grounding done — the lift is now an
+   implementation slice, no further probe required).
 
 2. **Claude-version resume gate is reachable on a Copilot resume.** Enabling copilot resume
    newly exposes it to the resume-path `claude_version_mismatch` guard (`_get_claude_version`

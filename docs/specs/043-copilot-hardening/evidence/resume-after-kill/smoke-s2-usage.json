@@ -1,0 +1,139 @@
+{
+  "totalPremiumRequestCost": 2,
+  "totalUserRequests": 2,
+  "totalNanoAiu": 5969130000,
+  "aiCreditsStatus": "complete",
+  "tokenDetails": {
+    "input": {
+      "tokenCount": 6
+    },
+    "cache_read": {
+      "tokenCount": 19918
+    },
+    "cache_write": {
+      "tokenCount": 23019
+    },
+    "output": {
+      "tokenCount": 14
+    }
+  },
+  "totalApiDurationMs": 7941,
+  "sessionStartTime": "2026-11-14T21:44:48.836Z",
+  "codeChanges": {
+    "linesAdded": 0,
+    "linesRemoved": 0,
+    "filesModifiedCount": 0,
+    "filesModified": []
+  },
+  "modelMetrics": {
+    "gpt-6.1-sol": {
+      "requests": {
+        "count": 2,
+        "cost": 2
+      },
+      "usage": {
+        "inputTokens": 42943,
+        "outputTokens": 14,
+        "cacheReadTokens": 19918,
+        "cacheWriteTokens": 23019,
+        "reasoningTokens": 0
+      },
+      "cacheExpiresAt": "2026-11-14T22:15:09.470Z",
+      "totalNanoAiu": 5969130000,
+      "aiCreditsStatus": "complete",
+      "tokenDetails": {
+        "input": {
+          "tokenCount": 6
+        },
+        "cache_read": {
+          "tokenCount": 19918
+        },
+        "cache_write": {
+          "tokenCount": 23019
+        },
+        "output": {
+          "tokenCount": 14
+        }
+      }
+    }
+  },
+  "agentMetrics": {
+    "main": {
+      "totalApiDurationMs": 7941,
+      "totalNanoAiu": 5969130000,
+      "modelMetrics": {
+        "gpt-6.1-sol": {
+          "requests": {
+            "count": 2,
+            "cost": 2
+          },
+          "usage": {
+            "inputTokens": 42943,
+            "outputTokens": 14,
+            "cacheReadTokens": 19918,
+            "cacheWriteTokens": 23019,
+            "reasoningTokens": 0
+          },
+          "totalNanoAiu": 5969130000,
+          "tokenDetails": {
+            "input": {
+              "tokenCount": 6
+            },
+            "cache_read": {
+              "tokenCount": 19918
+            },
+            "cache_write": {
+              "tokenCount": 23019
+            },
+            "output": {
+              "tokenCount": 14
+            }
+          }
+        }
+      }
+    }
+  },
+  "providerModelMetrics": [
+    {
+      "provider": {
+        "id": "copilot",
+        "label": "GitHub Copilot",
+        "kind": "copilot"
+      },
+      "modelId": "gpt-6.1-sol",
+      "metrics": {
+        "requests": {
+          "count": 2,
+          "cost": 2
+        },
+        "usage": {
+          "inputTokens": 42943,
+          "outputTokens": 14,
+          "cacheReadTokens": 19918,
+          "cacheWriteTokens": 23019,
+          "reasoningTokens": 0
+        },
+        "totalNanoAiu": 5969130000,
+        "aiCreditsStatus": "complete",
+        "tokenDetails": {
+          "input": {
+            "tokenCount": 6
+          },
+          "cache_read": {
+            "tokenCount": 19918
+          },
+          "cache_write": {
+            "tokenCount": 23019
+          },
+          "output": {
+            "tokenCount": 14
+          }
+        }
+      },
+      "modelDisplayName": "GPT-6.1 Sol"
+    }
+  ],
+  "currentModel": "gpt-6.1-sol",
+  "lastCallInputTokens": 21489,
+  "lastCallOutputTokens": 7
+}
