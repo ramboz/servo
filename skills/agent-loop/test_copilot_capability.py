@@ -125,6 +125,155 @@ class NativeCapabilityRefusalTests(unittest.TestCase):
                 )
                 self.assertEqual(state_path.read_text(), raw)
 
+    def test_claude_state_refuses_copilot_resume(self):
+        # Spec 043-03 AC4 (the new direction the narrowed guard must also refuse):
+        # a persisted CLAUDE run cannot resume as copilot — a genuine backend
+        # CHANGE stays refused with the existing `backend_mismatch` reason, before
+        # any claude-version probe and with the state file untouched.
+        run_id = "claude-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        for fields in (
+            {"backend": "claude", "state_schema_version": 1},
+            {"state_schema_version": 1},  # unmarked v1 == claude
+        ):
+            with self.subTest(fields=fields):
+                raw = json.dumps(fields)
+                state_path.write_text(raw)
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+                    with patch.object(
+                        loop, "_get_claude_version", side_effect=AssertionError("probe")
+                    ):
+                        rc = loop.run_loop(
+                            self.target, host="copilot", prompt=None,
+                            max_iterations=None, cost_ceiling=None,
+                            context_fill_threshold=None, credit_ceiling=500,
+                            resume_run_id=run_id, resume_anyway=True,
+                        )
+                self.assertEqual(rc, 2)
+                self.assertEqual(
+                    json.loads(stdout.getvalue())["terminal_reason"], "backend_mismatch")
+                self.assertEqual(state_path.read_text(), raw)
+
+    def test_unsound_credit_baseline_value_refuses_copilot_resume(self):
+        # Spec 043-03 AC5: a same-backend copilot resume whose persisted session
+        # baseline VALUE is unsound — null (a prior fail-closed halt wrote null,
+        # never 0), absent, boolean, float, or negative — cannot re-establish the
+        # session-delta baseline (ADR-0048 A2), so it fails closed
+        # `credit_baseline_unavailable` before any probe or worker call. Each case
+        # carries a CLEAN `last_terminal_reason`, so the refusal is unambiguously
+        # the value check, not the staleness check below (non-vacuous isolation).
+        # (A bare backend-matched copilot resume reaches THIS guard, proving the
+        # backend guard was narrowed to allow copilot -> copilot.)
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        clean = {"backend": "copilot", "state_schema_version": 1,
+                 "last_terminal_reason": "max_iterations_reached"}
+        cases = [{**clean, "cumulative_credits_nano": v} for v in (None, -5, True, 1.5)]
+        cases.append(dict(clean))  # cumulative_credits_nano absent entirely
+        for fields in cases:
+            with self.subTest(baseline=fields.get("cumulative_credits_nano", "ABSENT")):
+                raw = json.dumps(fields)
+                state_path.write_text(raw)
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+                    with patch.object(
+                        loop, "_get_claude_version", side_effect=AssertionError("probe")
+                    ):
+                        rc = loop.run_loop(
+                            self.target, host="copilot", prompt=None,
+                            max_iterations=None, cost_ceiling=None,
+                            context_fill_threshold=None, credit_ceiling=500,
+                            resume_run_id=run_id, resume_anyway=True,
+                        )
+                self.assertEqual(rc, 2)
+                self.assertEqual(
+                    json.loads(stdout.getvalue())["terminal_reason"],
+                    "credit_baseline_unavailable")
+                self.assertEqual(state_path.read_text(), raw)
+
+    def test_interrupted_or_killed_copilot_run_refuses_resume(self):
+        # Spec 043-03 AC5 (staleness — the frame-critique's load-bearing case): a
+        # copilot run whose baseline VALUE is a valid non-negative int but which
+        # did NOT halt on a clean, credit-accounted terminal reason cannot be
+        # soundly resumed. On an interruption the credit accumulation is SKIPPED
+        # (the interrupt checkpoint finalizes + bumps iteration_count BEFORE
+        # `_apply_copilot_credit_iteration`), and an uncaught kill leaves the
+        # in-flight invocation's spend orphaned on the billing session (ADR-0048
+        # A3: a killed invocation writes no usage file). Either way the persisted
+        # baseline is a STALE lower bound, so the resume fails closed
+        # `credit_baseline_unavailable` rather than resuming with an unsound total
+        # (whose first resumed iteration would either break the OTel-vs-delta
+        # reconciliation or silently under-count). This is the slice's own
+        # motivating "interrupted run" scenario, made fail-closed.
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        # "" is the literal signature a killed Copilot iteration leaves on disk
+        # (`_normalize_copilot_result` hardcodes terminal_reason=""); None is a
+        # run killed before iteration 1 finalized; "interrupted" is the trapped
+        # SIGINT/SIGTERM checkpoint; "oracle_evaluation_refused" / "completed"
+        # stand in for other non-progress reasons — all disjoint from the clean
+        # resumable set.
+        for halt in ("interrupted", "", "completed", None, "oracle_evaluation_refused"):
+            fields = {"backend": "copilot", "state_schema_version": 1,
+                      "cumulative_credits_nano": 50_000_000_000,
+                      "last_terminal_reason": halt}
+            with self.subTest(last_terminal_reason=halt):
+                raw = json.dumps(fields)
+                state_path.write_text(raw)
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+                    with patch.object(
+                        loop, "_get_claude_version", side_effect=AssertionError("probe")
+                    ):
+                        rc = loop.run_loop(
+                            self.target, host="copilot", prompt=None,
+                            max_iterations=None, cost_ceiling=None,
+                            context_fill_threshold=None, credit_ceiling=500,
+                            resume_run_id=run_id, resume_anyway=True,
+                        )
+                self.assertEqual(rc, 2)
+                self.assertEqual(
+                    json.loads(stdout.getvalue())["terminal_reason"],
+                    "credit_baseline_unavailable")
+                self.assertEqual(state_path.read_text(), raw)
+
+    def test_sound_copilot_state_passes_backend_and_baseline_guards(self):
+        # Spec 043-03 AC1: a same-backend copilot resume with a SOUND baseline (a
+        # valid non-negative int AND a clean, credit-accounted halt reason) is NOT
+        # refused by the narrowed backend guard or the AC5 baseline/staleness
+        # guards — it proceeds past them to the claude-version forensic check
+        # (proven by the patched probe firing). In-process complement to the e2e
+        # cross-process resume (test_loop.py).
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        for halt in ("max_iterations_reached", "credit_ceiling_reached",
+                     "oracle_plateau", "context_full"):
+            state_path.write_text(json.dumps({
+                "backend": "copilot", "state_schema_version": 1,
+                "cumulative_credits_nano": 0, "last_terminal_reason": halt,
+                "driver": "loop",
+            }))
+            with self.subTest(last_terminal_reason=halt):
+                with contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with patch.object(
+                        loop, "_get_claude_version",
+                        side_effect=AssertionError("reached-version-check"),
+                    ):
+                        with self.assertRaises(AssertionError) as ctx:
+                            loop.run_loop(
+                                self.target, host="copilot", prompt=None,
+                                max_iterations=None, cost_ceiling=None,
+                                context_fill_threshold=None, credit_ceiling=500,
+                                resume_run_id=run_id, resume_anyway=True,
+                            )
+                self.assertEqual(str(ctx.exception), "reached-version-check")
+
     def test_new_foreground_and_background_goal_states_identify_claude(self):
         state = loop._build_goal_state(
             run_id="goal-run", target=self.target, prompt="x", max_turns=1,
