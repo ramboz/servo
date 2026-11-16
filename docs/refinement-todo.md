@@ -1599,20 +1599,28 @@ clean-halt resume + fail-closed refusal of interrupted/killed runs; these extend
    probed kill→no-usage-file but never resumed the killed session. **Resolution trigger:** a
    user needs interrupted/slept-machine Copilot resume — RESOLVED (grounded + lifted by 043-04).
 
-2. **`credit_usage_unavailable` kill-resume recovery is deferred (spec 043-04).** 043-04
-   recovers `interrupted` / `""` halts but NOT `credit_usage_unavailable` (a killed worker /
+2. **`credit_usage_unavailable` kill-resume recovery** — **RESOLVED by spec 043-05 (option (a)).**
+   043-04 recovered `interrupted` / `""` halts but NOT `credit_usage_unavailable` (a killed worker /
    partial report): that halt always nulls its persisted baseline (both the invoke-failure and
-   the `_apply` partial-report paths set `cumulative_credits_nano = None`), so there is no sound
+   the `_apply` partial-report paths set `cumulative_credits_nano = None`), so there was no sound
    lower bound `B` to anchor the fork-fresh guard `R − N ≥ B` — recovery could not distinguish a
-   genuine resume from a `--resume` that forked a fresh session, so it stays fail-closed. This is
-   the probe's *direct* killed-worker scenario, but note a fresh run whose FIRST invocation is
-   killed also has no `current_session_id` and is preflight-refused anyway; the reachable gap is
-   a killed worker on a LATER iteration (a prior session exists, but its baseline was nulled).
-   Fix options: (a) persist a last-sound-cumulative alongside the null on a killed-worker halt to
-   serve as `B`; or (b) an independent session-continuity signal (compare the resumed
-   `conversation.id` if Copilot ever exposes it in the event stream). **Resolution trigger:** a
-   user needs to resume a Copilot run whose worker was killed mid-iteration (not interrupted),
-   or (b) becomes available.
+   genuine resume from a `--resume` that forked a fresh session, so it stayed fail-closed. This is
+   the probe's *direct* killed-worker scenario; a fresh run whose FIRST invocation is killed also
+   has no `current_session_id` and is preflight-refused anyway, so the reachable gap is a killed
+   worker on a LATER iteration (a prior session exists, but its baseline was nulled).
+   **DONE by 043-05 (option (a)):** the last CLEAN cumulative is persisted as
+   `last_sound_cumulative_nano` (written only from a sound value, before BOTH null sites; never
+   clobbered by a subsequent null — the repeated-kill invariant), and 043-04's recovery floor is
+   sourced from it (`_copilot_recovery_floor`) when `cumulative_credits_nano` is null. A parallel
+   preflight branch (`_COPILOT_LAST_SOUND_RECOVERABLE_HALTS`) admits the resume given a session +
+   a sound last-sound floor; the recovery arithmetic and the `R − N > 0 and R − N ≥ L` guard are
+   043-04's, unchanged. `L` is a sound lower bound on the pre-halt total (orphaned/partial spend
+   is only additive, so `L ≤ P`), and the `> 0` clause carries fork-fresh rejection regardless of
+   `L` — identical soundness to 043-04's `B`. **Option (b) (an independent session-continuity
+   signal — compare the resumed `conversation.id` if Copilot ever exposes it in the event stream)
+   remains a deferred future SIMPLIFICATION** that could retire the floor heuristic. **Resolution
+   trigger (for (b)):** Copilot exposes a resumable `conversation.id` in its event stream, or a
+   probe validates the fork-fresh-id premise directly.
 
 3. **Claude-version resume gate is reachable on a Copilot resume.** Enabling copilot resume
    newly exposes it to the resume-path `claude_version_mismatch` guard (`_get_claude_version`

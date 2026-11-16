@@ -6,7 +6,7 @@ use_cases: []
 
 # Spec 043: Copilot hardening
 
-> **Status: DONE — all four slices shipped.**
+> **Status: reopened for slice 043-05 — four slices shipped, 043-05 in flight.**
 > Spec 041-02's compliance review deferred three fail-closed follow-ups
 > (043-01/02/03, all DONE). 043-03's own review rounds then deferred a
 > **resume-after-kill grounding** probe, which was run and merged (2026-11-14,
@@ -14,11 +14,16 @@ use_cases: []
 > verdict — the resumed Copilot session's cumulative carries the orphaned pre-kill
 > spend **exactly** — grounded **043-04**, which lifts 043-03's kill-path
 > fail-closed by recovering the baseline from the resumed read (with a fork-fresh
-> guard `R − N > 0 and R − N ≥ B`). All four harden servo's Copilot host contract.
+> guard `R − N > 0 and R − N ≥ B`). **043-05** then lifts the one interrupt/kill
+> case 043-04 left deferred — `credit_usage_unavailable` (a killed worker /
+> partial report), which nulls its baseline — by persisting the last clean
+> cumulative as a sound fork-fresh floor and reusing 043-04's recovery. All five
+> harden servo's Copilot host contract.
 > **No new ADR** — [ADR-0048](../../decisions/adr-0048-copilot-credit-budget-contract.md)
-> part 5 and its resolved Open Question 5 decide 043-01; 043-02, 043-03 and 043-04
-> sit inside the ADR-0016 / ADR-0048 envelope. Build order:
-> **043-01 → 043-02 → 043-03 → 043-04** (043-04 narrows 043-03's resume guard).
+> part 5 and its resolved Open Question 5 decide 043-01; 043-02, 043-03, 043-04
+> and 043-05 sit inside the ADR-0016 / ADR-0048 envelope. Build order:
+> **043-01 → 043-02 → 043-03 → 043-04 → 043-05** (each resume slice narrows the
+> previous one's guard).
 
 ## Overview
 
@@ -61,6 +66,16 @@ parity release. This spec authors them as vertical slices:
   fail-closed as the fallback for a missing/partial read or an unresumable
   session. This slice narrows 043-03's `_COPILOT_RESUMABLE_HALTS` guard to admit
   the recoverable interrupt/kill case.
+- **043-05 — recover the kill-resume baseline from a persisted sound floor.** The
+  follow-up 043-04 explicitly deferred. 043-04 recovers `interrupted` / `""`
+  halts but not `credit_usage_unavailable` (a worker hard-killed mid-iteration /
+  a partial report), because that halt nulls `cumulative_credits_nano`, leaving
+  no sound floor `B` for the fork-fresh guard. This slice persists the last clean
+  cumulative as `last_sound_cumulative_nano` (written only from a sound value,
+  before each null) and sources 043-04's recovery floor from it — reusing the
+  recovery arithmetic and guard unchanged, only the floor source differs. Option
+  (a) of refinement-todo item 043-03-follow-up #2; option (b) (a
+  session-continuity signal) stays deferred.
 
 ### Boundaries
 
@@ -125,6 +140,11 @@ parity release. This spec authors them as vertical slices:
   interrupt/kill halt, recovering the credit baseline from the resumed session's
   first usage read (`R`, probe-grounded) and keeping fail-closed as the fallback
   for a missing/partial read or an unresumable session. `frame_review`.
+- [043-05 — recover the kill-resume baseline from a persisted sound floor](slice-05-credit-usage-unavailable-resume.md)
+  — lift the `credit_usage_unavailable` case 043-04 deferred: persist the last
+  clean cumulative as `last_sound_cumulative_nano` before each null and source
+  043-04's fork-fresh floor from it, so a killed-worker resume recovers via the
+  resumed read `R` under the same guard. `frame_review`.
 
 Dependencies: ADR-0048 (DONE), ADR-0041 (DONE), ADR-0016 (DONE), spec 041-02
-(DONE), spec 016-02 (DONE), spec 043-03 (DONE). No new ADR.
+(DONE), spec 016-02 (DONE), spec 043-03 (DONE), spec 043-04 (DONE). No new ADR.
