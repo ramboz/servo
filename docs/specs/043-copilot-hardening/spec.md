@@ -6,16 +6,19 @@ use_cases: []
 
 # Spec 043: Copilot hardening
 
-> **Status: DRAFT, slices authored.**
-> Three deferred fail-closed follow-ups from spec 041-02's compliance review,
-> recorded in [`docs/refinement-todo.md`](../../refinement-todo.md) under
-> "Copilot credit brake — deferred follow-ups (spec 041-02)". Each is a future
-> `loop.py` change that hardens servo's Copilot host contract. **No new ADR** —
-> [ADR-0048](../../decisions/adr-0048-copilot-credit-budget-contract.md) part 5
-> and its resolved Open Question 5 already decide 043-01; 043-02 and 043-03 sit
-> inside the ADR-0016 / ADR-0048 envelope. Suggested build order by impact:
-> **043-01 → 043-02 → 043-03**. The three touch different code paths and are
-> otherwise independent.
+> **Status: DONE — all four slices shipped.**
+> Spec 041-02's compliance review deferred three fail-closed follow-ups
+> (043-01/02/03, all DONE). 043-03's own review rounds then deferred a
+> **resume-after-kill grounding** probe, which was run and merged (2026-11-14,
+> [`evidence/resume-after-kill/`](evidence/resume-after-kill/README.md)); its
+> verdict — the resumed Copilot session's cumulative carries the orphaned pre-kill
+> spend **exactly** — grounded **043-04**, which lifts 043-03's kill-path
+> fail-closed by recovering the baseline from the resumed read (with a fork-fresh
+> guard `R − N > 0 and R − N ≥ B`). All four harden servo's Copilot host contract.
+> **No new ADR** — [ADR-0048](../../decisions/adr-0048-copilot-credit-budget-contract.md)
+> part 5 and its resolved Open Question 5 decide 043-01; 043-02, 043-03 and 043-04
+> sit inside the ADR-0016 / ADR-0048 envelope. Build order:
+> **043-01 → 043-02 → 043-03 → 043-04** (043-04 narrows 043-03's resume guard).
 
 ## Overview
 
@@ -47,7 +50,17 @@ parity release. This spec authors them as vertical slices:
   re-spends its budget, even though its `cumulative_credits_nano` /
   `credit_ceiling` already persist in `state.json`. This slice narrows the guard
   to allow a same-backend Copilot resume, relying on the persisted session-delta
-  credit accounting (ADR-0048 A2).
+  credit accounting (ADR-0048 A2). Scoped to **clean** halts; an interrupt/kill
+  halt fails closed (`credit_baseline_unavailable`), deferred pending a probe.
+- **043-04 — lift the Copilot kill-resume fail-closed.** The follow-up the
+  resume-after-kill billed probe recommended. The probe grounded that a
+  SIGKILL'd Copilot session, resumed, reports a session-cumulative
+  `totalNanoAiu` that carries the orphaned pre-kill spend exactly, so 043-03's
+  interrupt/kill fail-closed can be **lifted** by recovering the baseline from
+  the resumed read (`R`) instead of the stale persisted value — keeping
+  fail-closed as the fallback for a missing/partial read or an unresumable
+  session. This slice narrows 043-03's `_COPILOT_RESUMABLE_HALTS` guard to admit
+  the recoverable interrupt/kill case.
 
 ### Boundaries
 
@@ -107,6 +120,11 @@ parity release. This spec authors them as vertical slices:
   — narrow the `backend_mismatch` guard to allow `--resume` when the persisted
   `backend == copilot`, relying on the persisted session-delta credit
   accounting. `frame_review`.
+- [043-04 — lift the Copilot kill-resume fail-closed](slice-04-lift-copilot-kill-resume.md)
+  — narrow 043-03's `_COPILOT_RESUMABLE_HALTS` guard to admit a recoverable
+  interrupt/kill halt, recovering the credit baseline from the resumed session's
+  first usage read (`R`, probe-grounded) and keeping fail-closed as the fallback
+  for a missing/partial read or an unresumable session. `frame_review`.
 
 Dependencies: ADR-0048 (DONE), ADR-0041 (DONE), ADR-0016 (DONE), spec 041-02
-(DONE), spec 016-02 (DONE). No new ADR.
+(DONE), spec 016-02 (DONE), spec 043-03 (DONE). No new ADR.

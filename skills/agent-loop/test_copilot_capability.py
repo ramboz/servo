@@ -194,32 +194,30 @@ class NativeCapabilityRefusalTests(unittest.TestCase):
                     "credit_baseline_unavailable")
                 self.assertEqual(state_path.read_text(), raw)
 
-    def test_interrupted_or_killed_copilot_run_refuses_resume(self):
-        # Spec 043-03 AC5 (staleness — the frame-critique's load-bearing case): a
-        # copilot run whose baseline VALUE is a valid non-negative int but which
-        # did NOT halt on a clean, credit-accounted terminal reason cannot be
-        # soundly resumed. On an interruption the credit accumulation is SKIPPED
-        # (the interrupt checkpoint finalizes + bumps iteration_count BEFORE
-        # `_apply_copilot_credit_iteration`), and an uncaught kill leaves the
-        # in-flight invocation's spend orphaned on the billing session (ADR-0048
-        # A3: a killed invocation writes no usage file). Either way the persisted
-        # baseline is a STALE lower bound, so the resume fails closed
-        # `credit_baseline_unavailable` rather than resuming with an unsound total
-        # (whose first resumed iteration would either break the OTel-vs-delta
-        # reconciliation or silently under-count). This is the slice's own
-        # motivating "interrupted run" scenario, made fail-closed.
+    def test_non_recoverable_non_clean_halt_refuses_resume(self):
+        # Spec 043-03 AC5 / 043-04: a copilot run that halted on a non-clean reason
+        # which is NOT a recoverable interrupt/kill signature stays fail-closed
+        # `credit_baseline_unavailable`. `None` is a run that committed no
+        # iteration (no guaranteed resumable session — not recoverable);
+        # "credit_usage_unavailable" is a killed worker / partial report that
+        # always nulls its baseline, so it has no sound floor for the fork-fresh
+        # guard (043-04 keeps it fail-closed, deferred); "completed" /
+        # "oracle_evaluation_refused" stand in for other non-progress reasons;
+        # "credit_bound_unavailable" / "credit_ceiling_insufficient" are the
+        # structural/config refusals (not interrupt/kill). All carry a session id,
+        # so the refusal is unambiguously the non-recoverability, not a missing
+        # session. The on-disk state is unchanged by the refusal (branch C mutates
+        # only the in-memory dict). (043-04 flips "interrupted" / "" to the recovery
+        # path — see test_recoverable_interrupt_kill_halt_admits_resume.)
         run_id = "copilot-run"
         state_path = self.target / ".servo/runs" / run_id / "state.json"
         state_path.parent.mkdir(parents=True)
-        # "" is the literal signature a killed Copilot iteration leaves on disk
-        # (`_normalize_copilot_result` hardcodes terminal_reason=""); None is a
-        # run killed before iteration 1 finalized; "interrupted" is the trapped
-        # SIGINT/SIGTERM checkpoint; "oracle_evaluation_refused" / "completed"
-        # stand in for other non-progress reasons — all disjoint from the clean
-        # resumable set.
-        for halt in ("interrupted", "", "completed", None, "oracle_evaluation_refused"):
+        for halt in (None, "credit_usage_unavailable", "completed",
+                     "oracle_evaluation_refused", "credit_bound_unavailable",
+                     "credit_ceiling_insufficient"):
             fields = {"backend": "copilot", "state_schema_version": 1,
                       "cumulative_credits_nano": 50_000_000_000,
+                      "current_session_id": "sess-abc",
                       "last_terminal_reason": halt}
             with self.subTest(last_terminal_reason=halt):
                 raw = json.dumps(fields)
@@ -240,6 +238,114 @@ class NativeCapabilityRefusalTests(unittest.TestCase):
                     json.loads(stdout.getvalue())["terminal_reason"],
                     "credit_baseline_unavailable")
                 self.assertEqual(state_path.read_text(), raw)
+
+    def test_recoverable_interrupt_kill_halt_admits_resume(self):
+        # Spec 043-04 AC1: a copilot run that halted on a recoverable interrupt/
+        # kill reason — "interrupted" (trapped SIGINT/SIGTERM) or "" (the SIGKILL
+        # kill signature) — that persisted a resumable `current_session_id` AND a
+        # sound non-negative-int stale baseline is NO LONGER refused at preflight.
+        # The recovery of the baseline from the resumed read R is deferred to the
+        # first resumed iteration, so preflight proceeds PAST the credit guard to
+        # the claude-version probe (which the patch fires). The persisted baseline
+        # is a stale lower bound — recovery recovers R, but keeps it as the
+        # fork-fresh floor. (credit_usage_unavailable is NOT recoverable — it
+        # always nulls its baseline; see test_non_recoverable_non_clean_halt.)
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        for halt in ("interrupted", ""):
+            fields = {"backend": "copilot", "state_schema_version": 1,
+                      "cumulative_credits_nano": 50_000_000_000,
+                      "current_session_id": "sess-abc",
+                      "last_terminal_reason": halt, "driver": "loop"}
+            with self.subTest(last_terminal_reason=halt):
+                state_path.write_text(json.dumps(fields))
+                with contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with patch.object(
+                        loop, "_get_claude_version",
+                        side_effect=AssertionError("reached-version-check"),
+                    ):
+                        with self.assertRaises(AssertionError) as ctx:
+                            loop.run_loop(
+                                self.target, host="copilot", prompt=None,
+                                max_iterations=None, cost_ceiling=None,
+                                context_fill_threshold=None, credit_ceiling=500,
+                                resume_run_id=run_id, resume_anyway=True,
+                            )
+                self.assertEqual(str(ctx.exception), "reached-version-check")
+
+    def test_recoverable_halt_with_unsound_baseline_refuses(self):
+        # Spec 043-04 AC3 (fork-fresh guard, frame-critique R2): a recoverable
+        # interrupt/kill halt whose persisted baseline is NOT a sound non-negative
+        # int (null / absent / negative / bool) cannot anchor the fork-fresh floor
+        # (`R − N >= baseline`), so it is refused credit_baseline_unavailable at
+        # preflight rather than resuming with a blind guard — even though it has a
+        # session id.
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        for halt in ("interrupted", ""):
+            for baseline in (None, -5, True):
+                fields = {"backend": "copilot", "state_schema_version": 1,
+                          "cumulative_credits_nano": baseline,
+                          "current_session_id": "sess-abc",
+                          "last_terminal_reason": halt}
+                with self.subTest(last_terminal_reason=halt, baseline=baseline):
+                    state_path.write_text(json.dumps(fields))
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout), \
+                            contextlib.redirect_stderr(io.StringIO()):
+                        with patch.object(
+                            loop, "_get_claude_version",
+                            side_effect=AssertionError("probe"),
+                        ):
+                            rc = loop.run_loop(
+                                self.target, host="copilot", prompt=None,
+                                max_iterations=None, cost_ceiling=None,
+                                context_fill_threshold=None, credit_ceiling=500,
+                                resume_run_id=run_id, resume_anyway=True,
+                            )
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(
+                        json.loads(stdout.getvalue())["terminal_reason"],
+                        "credit_baseline_unavailable")
+
+    def test_recoverable_halt_without_session_id_refuses(self):
+        # Spec 043-04 AC3: a recoverable interrupt/kill halt whose persisted
+        # `current_session_id` is empty/absent has NO reachable billing session —
+        # the orphaned-spend session is unreachable, and a fresh invocation would
+        # silently abandon it. So it is refused `credit_baseline_unavailable` at
+        # preflight (before any worker call or version probe), not recovered.
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        for halt in ("interrupted", ""):
+            for sess in ("", None, "ABSENT"):
+                fields = {"backend": "copilot", "state_schema_version": 1,
+                          "cumulative_credits_nano": 50_000_000_000,
+                          "last_terminal_reason": halt}
+                if sess != "ABSENT":
+                    fields["current_session_id"] = sess
+                with self.subTest(last_terminal_reason=halt, session=sess):
+                    state_path.write_text(json.dumps(fields))
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout), \
+                            contextlib.redirect_stderr(io.StringIO()):
+                        with patch.object(
+                            loop, "_get_claude_version",
+                            side_effect=AssertionError("probe"),
+                        ):
+                            rc = loop.run_loop(
+                                self.target, host="copilot", prompt=None,
+                                max_iterations=None, cost_ceiling=None,
+                                context_fill_threshold=None, credit_ceiling=500,
+                                resume_run_id=run_id, resume_anyway=True,
+                            )
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(
+                        json.loads(stdout.getvalue())["terminal_reason"],
+                        "credit_baseline_unavailable")
 
     def test_sound_copilot_state_passes_backend_and_baseline_guards(self):
         # Spec 043-03 AC1: a same-backend copilot resume with a SOUND baseline (a
