@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: DONE
 kind: feature
 dependencies: [043-04]
 last_verified: 2026-11-16
@@ -252,3 +252,102 @@ contract holds in both branches.
   rejects fork-fresh and below-floor reads, as 043-04's does on `B`). The
   last-sound persistence is itself additive: it writes a new field only from an
   already-sound value, immediately before a null the halt already performs.
+
+### Deviation log (after reconciliation)
+
+The six ACs are preserved; the implementation matched the spec's stated technical
+approach. The review rounds drove one test-coverage addition and one documentation
+refinement, recorded below.
+
+Review rounds (a fresh `general-purpose` reviewer per pass):
+- **Compliance: R1 needs-changes → R2 pass.** R1's sole `[blocker]`: AC3 requires
+  the last-sound floor stamped at **both** null sites, but the **invoke-failure**
+  null site (the `claude_data is None` Copilot branch — the SIGKILL/OOM production
+  path) had no non-vacuous test; the `_apply` partial-report site was already
+  covered. Closed by adding `test_invoke_failure_persists_last_sound_floor_at_real_site`
+  (a real iteration-2 invoke failure via `fail_on=2`, asserting the stamp at the
+  real site). R2 re-verified all six ACs and the fix; host-sync byte-identical.
+- **Craft: R1 needs-changes → R2 pass.** R1 raised the **same** invoke-failure-site
+  coverage blocker (closed as above) plus two nits, both logged not changed (below).
+  R2 empirically confirmed the new test non-vacuous (deleting only the site-2 persist
+  line fails it while the faked-kill e2e still passes) and the nits reasonable to log.
+- **Frame-critique: R1 pass** (`frame_review: true`, load-bearing). The premise —
+  `last_sound_cumulative_nano` (L), whenever the floor, is a sound non-negative int
+  ≤ the true pre-halt session-cumulative P — is grounded against the committed code:
+  L written only from sound values; L ≤ P by ADR-0048 A2 additivity (the server
+  cumulative is monotone, orphaned/partial spend only additive); L the tightest
+  watermark by monotonicity; session-consistency closed (L is stamped before the
+  `current_session_id` update, and `--models` is refused under Copilot so no
+  split-judge reset). The `> 0` clause carries fork-fresh rejection regardless of L.
+  R1 added one **non-blocking** note — the DoR over-attributed the partial-report
+  sub-case to the resume-after-kill probe; it rests on A2 additivity (the probe
+  grounds the invoke-failure sub-case directly) — applied; no Goal/AC/guard change.
+- **No arch review** — a capability extension within ADR-0048, no module boundary
+  or public-contract change (`arch_review: false`, like 043-03 / 043-04).
+- Reconciliation is a separate independent gate over this deviation log; by ADR-0014
+  its verdict is its own review-evidence file (sweep row below), not restated here.
+
+Load-bearing choices made during implementation:
+
+1. **Persist the last clean cumulative as `last_sound_cumulative_nano`, from a sound
+   value only.** `_persist_last_sound_cumulative` copies `cumulative_credits_nano`
+   to the floor field iff it is a sound non-negative int, immediately before BOTH
+   null sites (the `_apply` partial-report path and the invoke-failure path). A
+   subsequent null (a failed recovery invocation re-nulling an already-null baseline)
+   finds an unsound value and writes nothing — the repeated-kill invariant preserves
+   the genuine floor. The field is added to the Copilot state scaffold (absent ⇒
+   unsound).
+
+2. **Source 043-04's recovery floor from the last-sound via `_copilot_recovery_floor`.**
+   It returns the live `cumulative_credits_nano` when sound (so every normal / 043-03
+   clean-resume / 043-04 interrupt-kill path is byte-identical) and falls back to
+   `last_sound_cumulative_nano` only when the live baseline is null — the 043-05
+   first resumed iteration. The fork-fresh guard `R − N > 0 and R − N >= floor` and
+   the absolute `cumulative = R` recovery are 043-04's, unchanged.
+
+3. **A parallel preflight branch (`_COPILOT_LAST_SOUND_RECOVERABLE_HALTS =
+   {credit_usage_unavailable}`); the 043-04 branch untouched.** It is a SEPARATE set
+   because the 043-04 branch requires a sound `cumulative_credits_nano` (null here);
+   this branch requires a sound `last_sound_cumulative_nano`. It admits the resume
+   given a session id + a sound floor, else fails closed with distinct messages
+   (no-session vs no-floor), mirroring 043-04's refusals.
+
+4. **The pre-iteration cap also sources the floor (null-baseline crash fix).** The
+   `credit_usage_unavailable` halt leaves `cumulative_credits_nano` null, so the
+   pre-iteration `--max-ai-credits` cap computation (`ceiling - cumulative`) would
+   raise on the first resumed iteration. It now subtracts `_copilot_recovery_floor`,
+   a bounded one-shot looseness (043-04 A2, with L in place of B) that the
+   per-invocation cap still bounds; after recovery the cumulative is exactly R.
+
+5. **On recovery success the floor is retired.** `_apply_copilot_credit_iteration`
+   pops `last_sound_cumulative_nano` alongside the one-shot
+   `credit_baseline_recovery_pending` flag — the baseline is now exactly R.
+
+Noted, not changed (deviation-log record):
+- **DRY: `baseline_sound` ↔ `_is_sound_nano`** (craft R1 nit, R2-confirmed): the
+  preflight's inline `baseline_sound` predicate duplicates `_is_sound_nano`; left
+  inline because unifying it would edit 043-04's shipped recovery branch (git blame:
+  the lines are from 043-04's `fc9c311`), which AC6 scope discipline protects.
+- **`_simulate_kill(null_baseline=True)` hand-mutates the null-site effect** (craft
+  R1 nit, R2-confirmed): kept as a shortcut for the resume-half e2e; its precondition
+  ("the persist-half has its own coverage") is now satisfied by the new real-site
+  invoke-failure test plus the partial-report `_apply` test.
+- **DoR partial-report attribution** (frame-critique R1 note, applied): tightened to
+  credit ADR-0048 A2 additivity for the partial-report sub-case; the probe grounds
+  the invoke-failure sub-case directly.
+
+### Reconciliation sweep
+
+| Artifact | Disposition | Rationale |
+|----------|-------------|-----------|
+| `skills/agent-loop/loop.py` + 3 host copies | `updated` | Added `_COPILOT_LAST_SOUND_RECOVERABLE_HALTS = {credit_usage_unavailable}`; helpers `_is_sound_nano` / `_persist_last_sound_cumulative` / `_copilot_recovery_floor`; a `last_sound_cumulative_nano` state field; a parallel preflight recovery branch; stamped the floor before BOTH null sites; sourced the pre-iteration cap and the recover-guard floor from `_copilot_recovery_floor`; retire the floor on recovery. The 043-03 clean-resume and 043-04 interrupt/kill branches are value-preserving-unchanged (the floor-source swap returns the live baseline when sound). Byte-identical across the three host trees (`build_host_packages.py --check` green). |
+| `skills/agent-loop/test_loop.py` | `updated` | TDD (witnessed red→green): `CopilotRecoveryFloorTests` (helper + floor + persist/no-clobber/monotone-watermark); `CopilotBrakeHelperTests` partial-report persist / no-clobber / retire-on-recovery; `CopilotCrossProcessResumeTests` e2e recovery to R=105cr, fork-fresh refusal, and the real-invoke-failure-site floor stamp (the craft/compliance R1 blocker fix); `_simulate_kill(null_baseline=True)`. Source-only. |
+| `skills/agent-loop/test_copilot_capability.py` | `updated` | Dropped `credit_usage_unavailable` from the non-recoverable refusal loop (now conditionally recoverable); added the 043-05 preflight admit test + no-floor / no-session fail-closed tests; comment taxonomy updated (branch C→D). Source-only. |
+| `docs/specs/043-…/slice-05-credit-usage-unavailable-resume.md` | `new` | The slice: Goal / 6 ACs / DoR / DoD / anti-horizontal-phasing / `## Decisions needed` (the L ≤ P soundness proof) / `## Assumptions` (A1–A3) / this deviation log + sweep. `arch_review: false`, `frame_review: true`; walked DRAFT → … → REVIEWED (RECONCILED + DONE + board regen pending close-out). |
+| `docs/specs/043-…/spec.md` | `updated` | Reopened the DONE rollup for 043-05: status note, Overview bullet, Slices list, Build order, dependencies (`+ 043-04`). |
+| `docs/refinement-todo.md` | `updated` | 043-03-follow-up item #2 marked **RESOLVED by 043-05 (option (a))**; option (b) (a session-continuity signal) carried forward as a deferred future simplification. |
+| `docs/specs/README.md` (board) | pending close-out | Regenerated by `workflow.py status-board` immediately before the DONE transition. |
+| `docs/specs/043-…/reviews/slice-05-{compliance,craft,frame-critique}.md` | `new` | The three implementation-review verdicts (final round), persisted by `review.py record-review`. No arch review (`arch_review: false`). |
+| `docs/specs/043-…/reviews/slice-05-reconciliation.md` | `new` (pending close-out) | The reconciliation gate's verdict, persisted once it passes. |
+| `skills/quality-gate/gate.py` | `no-op` | gate.py is host-blind; the resume floor + credit recovery live only in loop.py's resume path. |
+| `docs/decisions/adr-0048-*.md` | `no-op` | A capability extension within ADR-0048 (credit unit, session-delta A2, fail-closed A3) — no ADR change. |
