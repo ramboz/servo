@@ -212,6 +212,52 @@ _COPILOT_RESUMABLE_HALTS = frozenset({
     REASON_ORACLE_PLATEAU,
     REASON_CONTEXT_FULL,
 })
+# Spec 043-04 (grounded by the resume-after-kill billed probe,
+# docs/specs/043-copilot-hardening/evidence/resume-after-kill/): the halts from
+# which a Copilot run's persisted `cumulative_credits_nano` is a STALE lower
+# bound (an interrupt/kill orphaned the in-flight iteration's spend) but the
+# billing session is intact and resumable. 043-03 fail-closed these; 043-04
+# instead recovers the sound baseline from the resumed session's first usage
+# read R — the server-side session-cumulative total, which the probe verified
+# CARRIES the orphaned pre-kill spend exactly (R − N = P, zero residual) — and
+# falls back to the SAME `credit_baseline_unavailable` refusal when the resumed
+# read is missing/partial, the resume invocation errors, OR the recovered prior
+# `R − N` falls BELOW the persisted stale baseline (the fork-fresh guard, below).
+#   - REASON_INTERRUPTED: a trapped SIGINT/SIGTERM; the interrupt checkpoint
+#     finalizes BEFORE `_apply_copilot_credit_iteration` (the slept-machine /
+#     Ctrl-C case — the resolution trigger). The persisted baseline is the last
+#     CLEAN cumulative (a stale int).
+#   - "" : loop.py itself SIGKILL'd mid-run between an iteration's atomic state
+#     write (which stamps the per-iteration copilot terminal_reason "" and the
+#     accumulated cumulative) and the clean finalize that would overwrite it —
+#     043-03's representative kill signature. >= 1 committed iteration ⇒ the
+#     session exists AND a sound stale baseline was persisted ⇒ resumable.
+# Both carry a sound non-negative-int stale baseline B — REQUIRED, because the
+# recovery's fork-fresh guard reconciles against it: a genuine resume reports a
+# session-cumulative R whose recovered prior `R − N` equals the true pre-halt
+# total (>= B, since B is a stale lower bound), while a `copilot --resume` that
+# SILENTLY FORKS A FRESH session (e.g. the id expired during a long sleep)
+# reports R = N for its own first invocation, so its recovered prior `R − N` is
+# exactly 0 → fail closed (the guard rejects a non-positive recovered prior
+# directly, so a fork-fresh is caught even at B == 0; see `_copilot_iteration_nano`).
+# Without a sound B the floor half of the guard is blind, so a recoverable halt
+# whose baseline is null/absent is refused at preflight (frame-critique R2).
+# NOT in the set, each fail-closed as in 043-03:
+#   - `None`: the initial `last_terminal_reason` of a run that committed no
+#     iteration — no guaranteed session, and no accounted progress to preserve.
+#   - REASON_CREDIT_USAGE_UNAVAILABLE (a killed worker / partial report): the
+#     loop ALWAYS persists a null baseline here (both the invoke-failure and the
+#     partial-report paths null `cumulative_credits_nano`), so there is no sound
+#     B to anchor the fork-fresh guard — recovery could not tell a genuine resume
+#     from a fork-fresh, so it stays fail-closed. Lifting it needs an independent
+#     session-continuity signal (deferred — refinement-todo 043-04 follow-up).
+# Recovery additionally requires a persisted `current_session_id` (checked at
+# preflight): without one the orphaned session is unreachable and a fresh
+# invocation would silently abandon it.
+_COPILOT_BASELINE_RECOVERABLE_HALTS = frozenset({
+    REASON_INTERRUPTED,
+    "",
+})
 REASON_VERDICT_SCHEMA_MISMATCH = "verdict_schema_mismatch"
 REASON_CLAUDE_INVOCATION_FAILED = "claude_invocation_failed"
 REASON_GATE_INVOCATION_FAILED = "gate_invocation_failed"
@@ -2988,7 +3034,7 @@ def _sum_otel_call_nano(otel_path: Path) -> Optional[int]:
 
 def _copilot_iteration_nano(
     usage_path: Path, otel_path: Path, *, resumed: bool,
-    prior_cumulative_nano: Optional[int],
+    prior_cumulative_nano: Optional[int], recover: bool = False,
 ) -> "tuple[Optional[int], Optional[str]]":
     """The invocation's OWN credit spend in exact nano-AIU, fail-closed
     (041-02 AC3 / ADR-0048 part 3).
@@ -3006,9 +3052,59 @@ def _copilot_iteration_nano(
 
     `prior_cumulative_nano` is the session's spend before this invocation, used
     only when `resumed`. Spend is never read as 0; a bad report halts the run.
+
+    Spec 043-04 — `recover` mode (the first resumed iteration of an interrupt/
+    kill-halted run): the persisted `prior` is a stale LOWER BOUND (the in-flight
+    iteration's spend is orphaned), so the normal `totalNanoAiu - prior` equality
+    reconciliation would spuriously fail. Instead this trusts the two
+    independently-authoritative readings the resume-after-kill probe grounded:
+    the session-cumulative `totalNanoAiu` (R) and the per-invocation OTel Σ (N).
+    It requires a complete read (R present, `aiCreditsStatus == "complete"`, OTel
+    Σ present) and returns N as the iteration spend — the caller
+    (`_apply_copilot_credit_iteration`) sets the cumulative to R absolutely.
+
+    The fork-fresh guard (frame-critique R2): `prior` is NOT ignored — it is the
+    FLOOR the recovered prior must clear. A genuine `--resume` of the orphaned
+    session reports R whose recovered prior `R − N` equals the true pre-halt
+    total, which is `>= prior` because `prior` is a stale lower bound. A
+    `copilot --resume` that silently FORKS A FRESH session (e.g. the id expired
+    during a long sleep — servo cannot verify session continuity, the id is not
+    in Copilot's event stream) reports R = N for that fresh session's own first
+    invocation, so its recovered prior `R − N` is exactly 0. So recovery commits
+    to R only when the recovered prior is **positive AND clears the stale floor**
+    (`R − N > 0 and R − N >= prior`): the `> 0` clause rejects the fork-fresh
+    signature directly (closing the `prior == 0` corner that `>= prior` alone
+    would miss), the floor rejects a recovered prior below the stale lower bound.
+    On any missing/partial read, or a recovered prior failing either, it fails
+    closed with `REASON_CREDIT_BASELINE_UNAVAILABLE` (the DISTINCT recovery-path
+    reason), never a silent unsound resume.
     """
     usage = _parse_copilot_usage(usage_path)
     nano = usage["nano_aiu"]
+    if recover:
+        # The fail-closed fallback: every not-recovered branch returns the
+        # distinct baseline reason so the caller halts credit_baseline_unavailable.
+        if nano is None or usage["ai_credits_status"] != "complete":
+            return None, REASON_CREDIT_BASELINE_UNAVAILABLE
+        otel_nano = _sum_otel_call_nano(otel_path)
+        if otel_nano is None:
+            return None, REASON_CREDIT_BASELINE_UNAVAILABLE
+        # Fork-fresh guard: the recovered prior `R − N` must be POSITIVE and clear
+        # the persisted stale lower bound `B`. A `--resume` that silently forks a
+        # FRESH session reports R == N for its own first invocation, so its
+        # recovered prior is exactly 0 — the fork-fresh signature. The `<= 0`
+        # clause rejects that signature DIRECTLY, so it is caught even when
+        # `B == 0` (a prior iteration that accounted to a 0 cumulative — code
+        # admits a 0-nano `chat` span), where `>= B` alone would degenerate to
+        # `R − N >= 0` and admit it (frame-critique R2). The only genuine resume
+        # this refuses is the degenerate `B == 0` + zero-orphan case, where the
+        # true prior is 0 and there is nothing to recover — a harmless fail-closed.
+        # (`prior_cumulative_nano` is a sound non-negative int here — preflight
+        # branch B requires it — so the `or 0` is only defensive.)
+        recovered_prior = nano - otel_nano
+        if recovered_prior <= 0 or recovered_prior < (prior_cumulative_nano or 0):
+            return None, REASON_CREDIT_BASELINE_UNAVAILABLE
+        return otel_nano, None
     if nano is None:
         return None, REASON_CREDIT_USAGE_UNAVAILABLE
     if usage["ai_credits_status"] != "complete":
@@ -3092,16 +3188,32 @@ def _apply_copilot_credit_iteration(
     if credit_error is not None or iter_nano is None:
         # AC3: a missing / partial usage report, or a span file that disagrees
         # with it, halts the run; spend is unknown (null), never read as 0.
+        # Spec 043-04: preserve the DISTINCT recovery reason
+        # (`credit_baseline_unavailable`) when a recovery read was partial — the
+        # caller / tests tell the two fail-closed paths apart. Clear the one-shot
+        # recovery flag on this fail-closed exit too (state hygiene).
         state["cumulative_credits_nano"] = None
+        state.pop("credit_baseline_recovery_pending", None)
+        halt_reason = credit_error or REASON_CREDIT_USAGE_UNAVAILABLE
         sys.stderr.write(
             f"loop: iteration {iteration}: credit spend unavailable "
-            f"({credit_error or REASON_CREDIT_USAGE_UNAVAILABLE}) — halting, "
-            "reported null not 0\n")
-        return _halt(REASON_CREDIT_USAGE_UNAVAILABLE), None
+            f"({halt_reason}) — halting, reported null not 0\n")
+        return _halt(halt_reason), None
 
     cap_nano = round((iter_credit_cap or 0) * NANO_PER_CREDIT)
     iter_overrun_nano = max(0, iter_nano - cap_nano)
-    state["cumulative_credits_nano"] += iter_nano
+    if claude_data.get("copilot_baseline_recovered"):
+        # Spec 043-04: this is the first resumed iteration of an interrupt/kill
+        # resume. The resumed read R (`copilot_session_cumulative_nano`) is the
+        # authoritative session-cumulative that carries the orphaned pre-kill
+        # spend (probe: R − N = P); set the cumulative to R ABSOLUTELY, discarding
+        # the stale/null persisted baseline. `iter_nano` is the honest OTel Σ (N),
+        # used for the overrun / accounting exactly as a fresh iteration. The flag
+        # is one-shot — clear it so later iterations resume the normal delta path.
+        state["cumulative_credits_nano"] = claude_data["copilot_session_cumulative_nano"]
+        state.pop("credit_baseline_recovery_pending", None)
+    else:
+        state["cumulative_credits_nano"] += iter_nano
 
     model = claude_data.get("copilot_current_model")
     bound = _copilot_overrun_bound(model)
@@ -3224,6 +3336,7 @@ def _parse_copilot_jsonl(stdout: str) -> tuple[Optional[dict], str]:
 def _normalize_copilot_result(
     terminal_event: dict, result_text: str, session_id: str, usage: dict,
     *, iteration_nano: Optional[int] = None, credit_error: Optional[str] = None,
+    baseline_recovered: bool = False, session_cumulative_nano: Optional[int] = None,
 ) -> dict:
     """Normalize Copilot's JSONL + usage into `_invoke_claude`'s result-dict shape.
 
@@ -3281,6 +3394,13 @@ def _normalize_copilot_result(
         "copilot_iteration_nano": iteration_nano,
         "copilot_credit_error": credit_error,
         "copilot_current_model": usage.get("current_model"),
+        # Spec 043-04: a kill-resume baseline recovery. `copilot_baseline_recovered`
+        # is True only when the first resumed iteration recovered the baseline from
+        # this read (R complete, OTel Σ present); then `copilot_session_cumulative_nano`
+        # is R exactly, which `_apply_copilot_credit_iteration` sets as the cumulative
+        # absolutely (discarding the stale/null persisted value).
+        "copilot_baseline_recovered": baseline_recovered,
+        "copilot_session_cumulative_nano": session_cumulative_nano,
     }
 
 
@@ -3291,6 +3411,7 @@ def _invoke_copilot(
     agent_name: Optional[str] = None,
     max_ai_credits: Optional[float] = None,
     prior_cumulative_nano: Optional[int] = None,
+    recover_baseline: bool = False,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Copilot loop-driver invocation (slice 032-05 AC1), the `_invoke_claude`
     peer under `--host copilot`.
@@ -3370,15 +3491,25 @@ def _invoke_copilot(
         # 041-02 AC2/AC3: the invocation's own credit spend (session-delta on a
         # resumed session), fail-closed on a non-`complete` status, a missing
         # OTel export, or a per-call Σ that disagrees with the reported spend.
+        # Spec 043-04: on the first resumed iteration of an interrupt/kill-halted
+        # run (`recover_baseline`), the spend is the OTel Σ and the baseline is
+        # recovered from this read's session-cumulative R (see `recover=` mode).
         iteration_nano, credit_error = _copilot_iteration_nano(
             usage_path, otel_path,
             resumed=session_id is not None,
             prior_cumulative_nano=prior_cumulative_nano,
+            recover=recover_baseline,
         )
+        # `recovered` is True only when a recovery was requested AND this read was
+        # complete enough to reconcile (credit_error is None): then R (the
+        # session-cumulative usage total) is authoritative and carried to the brake.
+        recovered = recover_baseline and credit_error is None
         resolved_session = _extract_copilot_session_id(terminal_event) or (session_id or "")
         return _normalize_copilot_result(
             terminal_event, result_text, resolved_session, usage,
             iteration_nano=iteration_nano, credit_error=credit_error,
+            baseline_recovered=recovered,
+            session_cumulative_nano=(usage["nano_aiu"] if recovered else None),
         ), None
     finally:
         for _p in (usage_path, otel_path):
@@ -3398,6 +3529,7 @@ def _invoke_claude(
     max_ai_credits: Optional[float] = None,
     role_args: Optional[list] = None,
     prior_cumulative_nano: Optional[int] = None,
+    recover_baseline: bool = False,
 ) -> tuple[Optional[dict], Optional[str]]:
     """Invoke `claude -p --output-format json --max-budget-usd <budget> "<prompt>"`.
 
@@ -3445,6 +3577,7 @@ def _invoke_claude(
             timeout_seconds=timeout_seconds, session_id=session_id,
             agent_name=agent_name, max_ai_credits=max_ai_credits,
             prior_cumulative_nano=prior_cumulative_nano,
+            recover_baseline=recover_baseline,
         )
     cmd: list[str] = ["claude", "-p", "--output-format", "json"]
     cmd.extend(["--max-budget-usd", f"{max_budget_usd:.6f}"])
@@ -3910,59 +4043,110 @@ def run_loop(
                 context_fill_threshold=refusal_threshold,
             )
 
-        # Spec 043-03 AC5 (ADR-0048 A2): a Copilot resume re-establishes the
-        # session-delta baseline from the persisted cumulative credit total, so
-        # the first resumed iteration's spend is `new session-cumulative
-        # totalNanoAiu − baseline`. Two conditions must hold for that baseline to
-        # be a sound re-establishment; either failing refuses fail-closed rather
-        # than resuming with an unsound credit total:
-        #   (1) The persisted value is a non-negative integer — not null (a prior
-        #       fail-closed halt wrote null, never 0), absent, boolean, or
-        #       negative.
-        #   (2) The run halted on a CLEAN, credit-accounted terminal reason
-        #       (`_COPILOT_RESUMABLE_HALTS`). After an interruption the credit
-        #       accumulation is SKIPPED — the interrupt checkpoint finalizes and
-        #       bumps `iteration_count` BEFORE `_apply_copilot_credit_iteration`
-        #       — and an uncaught kill leaves the in-flight invocation's spend
-        #       orphaned on the billing session (ADR-0048 A3: a killed invocation
-        #       writes no usage file). In both cases the persisted baseline is a
-        #       STALE lower bound: the first resumed iteration's session-cumulative
-        #       `totalNanoAiu` would carry un-accounted spend, so `expected =
-        #       new − baseline` either breaks the per-call OTel reconciliation
-        #       (if the orphan reappears) or silently under-counts the budget (if
-        #       it does not) — and which occurs is unverified (041-01 probed
-        #       resume-after-clean-end, not resume-after-kill). Fail closed until a
-        #       resume-after-kill probe grounds it (deferred — refinement-todo).
+        # Spec 043-03 AC5 / 043-04: on a Copilot resume the first resumed
+        # iteration's credit baseline comes from one of three disjoint sources,
+        # keyed on how the run halted:
+        #   (A) CLEAN halt (`_COPILOT_RESUMABLE_HALTS` — iteration cap, credit
+        #       ceiling, plateau, context): the persisted `cumulative_credits_nano`
+        #       is a SOUND session-cumulative total (the last iteration was
+        #       credit-accounted before the halt finalized), so resume via it. It
+        #       must be a non-negative integer — not null (a prior fail-closed halt
+        #       wrote null, never 0), absent, boolean, or negative (043-03 AC5
+        #       value check); else fail closed.
+        #   (B) RECOVERABLE interrupt/kill halt (`_COPILOT_BASELINE_RECOVERABLE_HALTS`
+        #       — interrupted / ""): the interrupt checkpoint finalized before the
+        #       credit accumulation, so the persisted baseline is a STALE lower
+        #       bound — but the billing session is intact and the resume-after-kill
+        #       probe grounded that the resumed read R carries the orphaned spend
+        #       EXACTLY. So defer the baseline to the first resumed iteration, which
+        #       recovers it from R (`credit_baseline_recovery_pending`). This
+        #       REQUIRES both (i) a persisted `current_session_id` — without one the
+        #       orphaned session is unreachable and a fresh invocation would
+        #       silently abandon it — and (ii) a SOUND non-negative-int persisted
+        #       baseline, which the first resumed iteration uses as the floor its
+        #       recovered prior `R − N` must clear (the fork-fresh guard); either
+        #       missing fails closed (043-04 AC3). The stale baseline is kept as-is
+        #       (it is the pre-iteration cap's best lower bound until R is known).
+        #   (C) EVERY OTHER non-clean halt (None — an uncommitted run with no
+        #       guaranteed session; credit_usage_unavailable — always nulls its
+        #       baseline, so no sound floor for the fork-fresh guard; the
+        #       structural/config refusals credit_bound_unavailable /
+        #       credit_ceiling_insufficient; a prior credit_baseline_unavailable;
+        #       etc.): stays fail-closed, exactly as 043-03 shipped.
         if host == HOST_COPILOT:
-            baseline = state.get("cumulative_credits_nano")
-            if (not isinstance(baseline, int) or isinstance(baseline, bool)
-                    or baseline < 0):
-                return _refuse_preflight(
-                    run_id=resume_run_id,
-                    reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
-                    message=(
-                        "cannot resume under --host copilot: the persisted "
-                        "session credit baseline "
-                        f"(cumulative_credits_nano={baseline!r}) is not a sound "
-                        "session-cumulative total; refusing rather than resuming "
-                        "with an unsound credit total (spec 043-03 AC5)"
-                    ),
-                    cost_ceiling=refusal_ceiling,
-                    context_fill_threshold=refusal_threshold,
-                )
             halt = state.get("last_terminal_reason")
-            if halt not in _COPILOT_RESUMABLE_HALTS:
+            baseline = state.get("cumulative_credits_nano")
+            baseline_sound = (
+                isinstance(baseline, int) and not isinstance(baseline, bool)
+                and baseline >= 0)
+            session_id = state.get("current_session_id")
+            has_session = isinstance(session_id, str) and bool(session_id)
+            if halt in _COPILOT_RESUMABLE_HALTS:
+                state.pop("credit_baseline_recovery_pending", None)
+                if not baseline_sound:
+                    return _refuse_preflight(
+                        run_id=resume_run_id,
+                        reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
+                        message=(
+                            "cannot resume under --host copilot: the persisted "
+                            "session credit baseline "
+                            f"(cumulative_credits_nano={baseline!r}) is not a sound "
+                            "session-cumulative total; refusing rather than resuming "
+                            "with an unsound credit total (spec 043-03 AC5)"
+                        ),
+                        cost_ceiling=refusal_ceiling,
+                        context_fill_threshold=refusal_threshold,
+                    )
+            elif halt in _COPILOT_BASELINE_RECOVERABLE_HALTS:
+                if not has_session:
+                    return _refuse_preflight(
+                        run_id=resume_run_id,
+                        reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
+                        message=(
+                            "cannot resume under --host copilot: this run halted on "
+                            f"{halt!r} (an interrupt/kill) but persisted no resumable "
+                            "current_session_id, so the orphaned billing session is "
+                            "unreachable and the baseline cannot be recovered from a "
+                            "resumed read; restart fresh (spec 043-04 AC3)"
+                        ),
+                        cost_ceiling=refusal_ceiling,
+                        context_fill_threshold=refusal_threshold,
+                    )
+                if not baseline_sound:
+                    # The recovery's fork-fresh guard reconciles the recovered
+                    # prior `R − N` against this stale baseline as a floor, so a
+                    # sound non-negative-int baseline is REQUIRED. A null/absent
+                    # baseline leaves the guard blind (a fork-fresh R=N would pass
+                    # a 0 floor), so fail closed rather than resume unverifiably
+                    # (frame-critique R2). In practice this is unreachable for the
+                    # recoverable halts — both persist the last clean cumulative —
+                    # but it keeps the guard total.
+                    return _refuse_preflight(
+                        run_id=resume_run_id,
+                        reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
+                        message=(
+                            "cannot resume under --host copilot: this run halted on "
+                            f"{halt!r} (an interrupt/kill) but its persisted baseline "
+                            f"(cumulative_credits_nano={baseline!r}) is not a sound "
+                            "lower bound to anchor the fork-fresh recovery guard; "
+                            "restart fresh (spec 043-04 AC3)"
+                        ),
+                        cost_ceiling=refusal_ceiling,
+                        context_fill_threshold=refusal_threshold,
+                    )
+                state["credit_baseline_recovery_pending"] = True
+            else:
+                state.pop("credit_baseline_recovery_pending", None)
                 return _refuse_preflight(
                     run_id=resume_run_id,
                     reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
                     message=(
                         "cannot resume under --host copilot: resume is supported "
                         "only from a clean, credit-accounted progress halt "
-                        "(iteration cap, credit ceiling, plateau, or context), but "
-                        f"this run halted on {halt!r}. An interrupted or killed run "
-                        "in particular orphans its in-flight spend (ADR-0048 A3), "
-                        "leaving a stale credit baseline. Restart fresh rather than "
-                        "resuming with an unsound credit total (spec 043-03 AC5)"
+                        "(iteration cap, credit ceiling, plateau, or context) or a "
+                        "recoverable interrupt/kill halt, but this run halted on "
+                        f"{halt!r}. Restart fresh rather than resuming with an "
+                        "unsound credit total (spec 043-03 AC5 / 043-04)"
                     ),
                     cost_ceiling=refusal_ceiling,
                     context_fill_threshold=refusal_threshold,
@@ -4364,6 +4548,14 @@ def run_loop(
             role_args=_role_args(role_cfg),
             prior_cumulative_nano=(
                 state["cumulative_credits_nano"] if host == HOST_COPILOT else None),
+            # Spec 043-04: the first resumed iteration of an interrupt/kill-halted
+            # Copilot run recovers its baseline from this read (the persisted one
+            # is stale). The flag is set in preflight and cleared on recovery; it
+            # only ever fires on a resuming invocation (session_id_arg present).
+            recover_baseline=(
+                host == HOST_COPILOT
+                and bool(state.get("credit_baseline_recovery_pending"))
+                and session_id_arg is not None),
         )
         # Snapshot immediately AFTER the invoke returns, BEFORE the gate runs —
         # so the delta brackets only the runner turn, excluding the later gate
@@ -4392,11 +4584,19 @@ def run_loop(
             # Spec 041-02 AC3: under Copilot a failed / timed-out invocation
             # leaves no usable credit report — halt `credit_usage_unavailable`
             # with spend null, not the generic `claude_invocation_failed`.
-            invoke_fail_reason = (
-                REASON_CREDIT_USAGE_UNAVAILABLE if host == HOST_COPILOT
-                else REASON_CLAUDE_INVOCATION_FAILED)
+            # Spec 043-04 AC3: when this was the recovery invocation of an
+            # interrupt/kill resume, the `--resume` itself errored / the session
+            # is unresumable — halt with the DISTINCT `credit_baseline_unavailable`
+            # (the orphaned spend is never silently dropped by starting fresh).
             if host == HOST_COPILOT:
+                invoke_fail_reason = (
+                    REASON_CREDIT_BASELINE_UNAVAILABLE
+                    if state.get("credit_baseline_recovery_pending")
+                    else REASON_CREDIT_USAGE_UNAVAILABLE)
                 state["cumulative_credits_nano"] = None
+                state.pop("credit_baseline_recovery_pending", None)
+            else:
+                invoke_fail_reason = REASON_CLAUDE_INVOCATION_FAILED
             rung_crumb = None
             if ladder and rung >= 1:
                 rung_crumb = _rung_failure_breadcrumb(

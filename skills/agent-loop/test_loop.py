@@ -7981,9 +7981,119 @@ class CopilotCreditGateTests(unittest.TestCase):
         finally:
             shutil.rmtree(d, ignore_errors=True)
 
+    # --- Spec 043-04: recover=True (the kill-resume recovery arithmetic) ---
 
-def _copilot_result(iter_nano, *, model="gpt-6.1-sol", credit_error=None, text="ok"):
-    """A `_normalize_copilot_result`-shaped dict for brake-helper unit tests."""
+    def test_recover_mode_returns_otel_sum_not_delta(self):
+        # 043-04 AC2: in recovery mode the iteration spend is the per-invocation
+        # OTel Σ (N) trusted DIRECTLY — not the stale-baseline delta R−prior. For
+        # Run B, R = 37,175,690,000 (session-cumulative) and the OTel Σ =
+        # 24,282,650,000; recovery returns the OTel Σ regardless of `prior`.
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-b-usage.json", _EV_041 / "run-b-otel.jsonl",
+            resumed=True, prior_cumulative_nano=0, recover=True)
+        self.assertIsNone(err)
+        self.assertEqual(nano, 24282650000)
+
+    def test_recover_mode_floor_accepts_recovered_prior_at_baseline(self):
+        # 043-04 (fork-fresh floor, frame-critique R2): recovery commits to R only
+        # when the recovered prior R − N clears the persisted stale baseline. Run
+        # B's R − N = 12,893,040,000; a baseline exactly at that value is the
+        # boundary — it still recovers (>=, not >).
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-b-usage.json", _EV_041 / "run-b-otel.jsonl",
+            resumed=True, prior_cumulative_nano=12893040000, recover=True)
+        self.assertIsNone(err)
+        self.assertEqual(nano, 24282650000)
+
+    def test_recover_mode_floor_rejects_fork_fresh(self):
+        # 043-04 (fork-fresh floor): a recovered prior R − N BELOW the stale
+        # baseline means the resumed read did not carry the orphan — the signature
+        # of a `--resume` that forked a fresh session (R = N → R − N = 0, or here a
+        # baseline above the recovered prior). Fail closed credit_baseline_unavailable.
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-b-usage.json", _EV_041 / "run-b-otel.jsonl",
+            resumed=True, prior_cumulative_nano=20_000_000_000, recover=True)
+        self.assertIsNone(nano)
+        self.assertEqual(err, loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+
+    def test_recover_mode_rejects_fork_fresh_at_zero_baseline(self):
+        # 043-04 (fork-fresh floor, frame-critique R2): the B == 0 corner. Run A
+        # is a FRESH session where R == N (37... no: run-a R = OTel Σ =
+        # 12,893,040,000), so the recovered prior R − N = 0 — the exact fork-fresh
+        # signature. With a baseline of 0, a bare `R − N >= B` floor would admit it
+        # (0 >= 0); the `R − N > 0` clause rejects the signature DIRECTLY, so a
+        # fork-fresh is caught even when the stale baseline is 0.
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-a-usage.json", _EV_041 / "run-a-otel.jsonl",
+            resumed=True, prior_cumulative_nano=0, recover=True)
+        self.assertIsNone(nano)
+        self.assertEqual(err, loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+
+    def test_recover_mode_rejects_n_greater_than_r(self):
+        # 043-04 AC3: an OTel Σ (N) exceeding the session-cumulative R (R − N < 0)
+        # is incoherent telemetry — fail closed baseline (subsumed by the floor,
+        # since any baseline >= 0 > a negative recovered prior).
+        d = tempfile.mkdtemp()
+        try:
+            u = Path(d) / "u.json"
+            u.write_text(json.dumps(
+                {"totalNanoAiu": 1000000000, "aiCreditsStatus": "complete"}))
+            nano, err = loop_mod._copilot_iteration_nano(
+                u, _EV_041 / "run-b-otel.jsonl", resumed=True,
+                prior_cumulative_nano=0, recover=True)
+            self.assertIsNone(nano)
+            self.assertEqual(err, loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_recover_mode_partial_status_fails_closed_baseline(self):
+        # 043-04 AC3: a partial resumed read fails closed with the DISTINCT
+        # baseline reason, not the usage reason.
+        d = tempfile.mkdtemp()
+        try:
+            u = Path(d) / "u.json"
+            u.write_text(json.dumps(
+                {"totalNanoAiu": 5000000000, "aiCreditsStatus": "partial"}))
+            nano, err = loop_mod._copilot_iteration_nano(
+                u, _EV_041 / "run-a-otel.jsonl", resumed=True,
+                prior_cumulative_nano=0, recover=True)
+            self.assertIsNone(nano)
+            self.assertEqual(err, loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_recover_mode_missing_otel_fails_closed_baseline(self):
+        # 043-04 AC3: a resumed read with no parseable OTel Σ fails closed
+        # credit_baseline_unavailable (R alone is not enough — the iteration
+        # spend N comes from the OTel span).
+        nano, err = loop_mod._copilot_iteration_nano(
+            _EV_041 / "run-b-usage.json", Path("/nonexistent/otel.jsonl"),
+            resumed=True, prior_cumulative_nano=0, recover=True)
+        self.assertIsNone(nano)
+        self.assertEqual(err, loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+
+    def test_recover_mode_missing_usage_fails_closed_baseline(self):
+        # 043-04 AC3: an absent/non-integer totalNanoAiu fails closed baseline.
+        d = tempfile.mkdtemp()
+        try:
+            u = Path(d) / "u.json"
+            u.write_text(json.dumps({"aiCreditsStatus": "complete"}))
+            nano, err = loop_mod._copilot_iteration_nano(
+                u, _EV_041 / "run-b-otel.jsonl", resumed=True,
+                prior_cumulative_nano=0, recover=True)
+            self.assertIsNone(nano)
+            self.assertEqual(err, loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+
+
+def _copilot_result(iter_nano, *, model="gpt-6.1-sol", credit_error=None, text="ok",
+                    baseline_recovered=False, session_cumulative_nano=None):
+    """A `_normalize_copilot_result`-shaped dict for brake-helper unit tests.
+
+    Spec 043-04: `baseline_recovered` / `session_cumulative_nano` mirror the
+    recovery fields `_normalize_copilot_result` stamps on a kill-resume recovery
+    (R is authoritative; the cumulative is set to it absolutely)."""
     return {
         "type": "result", "subtype": "success", "is_error": False,
         "session_id": "", "total_cost_usd": 0.0, "terminal_reason": "",
@@ -7993,6 +8103,8 @@ def _copilot_result(iter_nano, *, model="gpt-6.1-sol", credit_error=None, text="
         "copilot_iteration_nano": iter_nano,
         "copilot_credit_error": credit_error,
         "copilot_current_model": model,
+        "copilot_baseline_recovered": baseline_recovered,
+        "copilot_session_cumulative_nano": session_cumulative_nano,
     }
 
 
@@ -8060,6 +8172,32 @@ class CopilotBrakeHelperTests(unittest.TestCase):
             st, sp, _copilot_result(400 * loop_mod.NANO_PER_CREDIT), cap=100.0)
         self.assertIsNone(rc)
         self.assertTrue(st["overrun_exceeds_bound"])
+
+    # --- Spec 043-04: recovery sets the cumulative to R absolutely ---
+
+    def test_recovery_sets_absolute_cumulative(self):
+        # 043-04 AC2: on recovery the cumulative is set to R (the authoritative
+        # session-cumulative), NOT prior += iter_nano. A stale prior of 10cr with
+        # a recovered R of 100cr and a 40cr OTel iteration spend ends at 100cr —
+        # not 50cr — and the one-shot recovery flag is cleared.
+        cr = loop_mod.NANO_PER_CREDIT
+        st, sp = self._state(ceiling=500.0, cumulative_nano=10 * cr)
+        st["credit_baseline_recovery_pending"] = True
+        rc, acc = self._apply(st, sp, _copilot_result(
+            40 * cr, baseline_recovered=True, session_cumulative_nano=100 * cr))
+        self.assertIsNone(rc)
+        self.assertEqual(st["cumulative_credits_nano"], 100 * cr)
+        self.assertEqual(acc["cost_native"], {"unit": "ai_credits", "value": 40.0})
+        self.assertNotIn("credit_baseline_recovery_pending", st)
+
+    def test_non_recovery_still_increments(self):
+        # 043-04 AC5: without the recovery marker the normal path is unchanged —
+        # prior (10cr) += iter_nano (40cr) = 50cr, not an absolute set.
+        cr = loop_mod.NANO_PER_CREDIT
+        st, sp = self._state(ceiling=500.0, cumulative_nano=10 * cr)
+        rc, acc = self._apply(st, sp, _copilot_result(40 * cr))
+        self.assertIsNone(rc)
+        self.assertEqual(st["cumulative_credits_nano"], 50 * cr)
 
 
 class CopilotJsonlParseTests(unittest.TestCase):
@@ -8808,7 +8946,7 @@ class CopilotCreditBrakeLaunchTests(unittest.TestCase):
 
 def _mock_copilot_cumulative(
     bindir, deltas, counter_file, *, session_id="copilot-resume-sess",
-    statuses=None, otel_flags=None, args_log=None, acc_file=None,
+    statuses=None, otel_flags=None, args_log=None, acc_file=None, fail_on=None,
 ):
     """A mock `copilot` whose usage `totalNanoAiu` is SESSION-CUMULATIVE across
     every invocation — INCLUDING across a process boundary (the running total
@@ -8827,7 +8965,9 @@ def _mock_copilot_cumulative(
     `statuses[n-1]` overrides that invocation's `aiCreditsStatus` (default
     "complete"); `otel_flags[n-1] == 0` suppresses that invocation's OTel export
     — both let a test exercise the fail-closed telemetry path on a RESUMED
-    iteration.
+    iteration. `fail_on` (1-based) makes that invocation emit no parseable event
+    and exit non-zero — an unresumable/errored `--resume`, writing no telemetry
+    (spec 043-04 fallback: the resume invocation itself fails).
     """
     bindir.mkdir(parents=True, exist_ok=True)
     if statuses is None:
@@ -8871,6 +9011,8 @@ def _mock_copilot_cumulative(
         'if [ -f "$counter_file" ]; then n=$(cat "$counter_file"); else n=0; fi\n'
         "n=$((n + 1))\n"
         'echo "$n" > "$counter_file"\n'
+        f'if [ "$n" = "{fail_on if fail_on is not None else ""}" ]; then '
+        'echo "garbage not json"; exit 1; fi\n'
         "idx=$((n - 1))\n"
         "delta=${deltas[$idx]}\n"
         "status=${statuses[$idx]}\n"
@@ -8938,15 +9080,49 @@ class CopilotCrossProcessResumeTests(unittest.TestCase):
     def _summary(self, result):
         return _stdout_json_lines(result.stdout)[-1]
 
-    def _fresh(self, deltas, *, ceiling="500", statuses=None, otel_flags=None):
+    def _fresh(self, deltas, *, ceiling="500", statuses=None, otel_flags=None,
+               fail_on=None):
         """Phase 1: a fresh copilot run, 1 iteration, that halts resumably."""
         _mock_copilot_cumulative(
             self.bindir, deltas, self.counter, statuses=statuses,
-            otel_flags=otel_flags, args_log=self.args_log)
+            otel_flags=otel_flags, args_log=self.args_log, fail_on=fail_on)
         r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
                       "--credit-ceiling", ceiling, "--max-iterations", "1",
                       mock_bindir=self.bindir)
         return r
+
+    def _simulate_kill(self, halt, *, orphan_cr=0, fork_fresh=False):
+        """Spec 043-04: mutate the persisted phase-1 state into an interrupt/kill
+        halt. Sets `last_terminal_reason`; and (orphan_cr > 0) adds that many
+        credits to the mock's shared billing-session accumulator WITHOUT
+        accumulating them into the persisted `cumulative_credits_nano` — exactly
+        the orphaned in-flight spend a kill leaves (ADR-0048 A3). The resumed
+        read R then carries the orphan (R = stale_baseline + orphan + resume
+        spend), while the persisted baseline stays a stale lower bound.
+
+        `fork_fresh=True` instead models a `copilot --resume` that SILENTLY FORKS
+        A FRESH session (e.g. the id expired during a long sleep): the billing
+        accumulator is reset to 0, so the resumed read reports R = N (the fresh
+        session's own first-invocation spend). The recovered prior R − N is then
+        0, below the stale baseline — the fork-fresh guard must catch it."""
+        import glob
+        cr = loop_mod.NANO_PER_CREDIT
+        sp = glob.glob(
+            str(self.target / ".servo" / "runs" / "*" / "state.json"))[0]
+        st = json.loads(Path(sp).read_text())
+        st["last_terminal_reason"] = halt
+        Path(sp).write_text(json.dumps(st))
+        acc = self.bindir / "copilot_acc.txt"
+        if fork_fresh:
+            acc.write_text("0")
+        elif orphan_cr:
+            acc.write_text(str(int(acc.read_text().strip()) + orphan_cr * cr))
+
+    def _per_iter(self, result, iteration):
+        for line in _stdout_json_lines(result.stdout):
+            if line.get("iteration") == iteration:
+                return line
+        return None
 
     def test_resume_continues_credits_from_persisted_baseline(self):
         # AC1 + AC2 (headline): a fresh run spends 50cr and halts; the resume
@@ -9057,6 +9233,148 @@ class CopilotCrossProcessResumeTests(unittest.TestCase):
                        mock_bindir=self.bindir)
         self.assertEqual(r2.returncode, 0, msg=r2.stderr)
         self.assertEqual(self._state()["credit_ceiling"], 600.0)
+
+    # --- Spec 043-04: lift the kill-resume fail-closed ---
+
+    def test_kill_resume_recovers_baseline_from_resumed_read(self):
+        # 043-04 AC1 + AC2 (headline): a run halts at 50cr, then is INTERRUPTED
+        # with 15cr orphaned on the billing session (ADR-0048 A3) — the persisted
+        # baseline stays a stale 50cr while the server billed 65cr. On resume the
+        # resumed read R carries the orphan: R = 65 (session total at resume) + 40
+        # (this invocation) = 105cr; the per-invocation OTel Σ = 40cr. Recovery
+        # sets the cumulative to R = 105cr EXACTLY (the probe's R−N=P):
+        #   - NOT credit_usage_unavailable, which the stale-baseline delta
+        #     105−50 = 55 ≠ 40 OTel would have produced (the 043-03 refusal reason);
+        #   - NOT 90cr (50 + 40), which would silently drop the 15cr orphan.
+        # The run proceeds (rc=0) and records the honest 40cr iteration spend.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self.assertEqual(self._state()["cumulative_credits_nano"], 50 * cr)
+        self._simulate_kill("interrupted", orphan_cr=15)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 0, msg=r2.stderr)
+        self.assertEqual(self._state()["cumulative_credits_nano"], 105 * cr)
+        self.assertEqual(self._per_iter(r2, 2)["cost_native"],
+                         {"unit": "ai_credits", "value": 40.0})
+
+    def test_kill_resume_recovers_from_empty_string_kill_signature(self):
+        # 043-04 AC1: "" is the per-iteration copilot terminal_reason a SIGKILL of
+        # loop.py leaves persisted mid-run (043-03's representative kill
+        # signature). It too recovers from R, same arithmetic.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self._simulate_kill("", orphan_cr=15)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 0, msg=r2.stderr)
+        self.assertEqual(self._state()["cumulative_credits_nano"], 105 * cr)
+
+    def test_kill_resume_post_iteration_ceiling_on_recovered_baseline(self):
+        # 043-04 AC4: the post-iteration ceiling halt reads the RECOVERED
+        # cumulative R, exactly like a fresh run. Halt at 50cr, orphan 300cr
+        # (billing session now 350), resume spends 100 → R = 450 > the 400 ceiling
+        # → credit_ceiling_reached on the recovered baseline, not on the stale 50.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 100 * cr], ceiling="400")
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self._simulate_kill("interrupted", orphan_cr=300)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "400", "--max-iterations", "6",
+                       mock_bindir=self.bindir)
+        self.assertEqual(self._summary(r2)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_CEILING_REACHED)
+        self.assertEqual(self._state()["cumulative_credits_nano"], 450 * cr)
+
+    def test_kill_resume_fail_closed_on_partial_read(self):
+        # 043-04 AC3: a recoverable interrupt/kill halt whose RESUMED read is
+        # partial (aiCreditsStatus != complete) cannot recover R, so it fails
+        # closed credit_baseline_unavailable — the DISTINCT recovery-path reason,
+        # not credit_usage_unavailable — never a silent unsound resume.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr], statuses=["complete", "partial"])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self._simulate_kill("interrupted", orphan_cr=15)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 2, msg=r2.stderr)
+        last = self._summary(r2)
+        self.assertEqual(last["terminal_reason"],
+                         loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+        self.assertIsNone(last["cumulative_credits"])
+
+    def test_kill_resume_fail_closed_on_unresumable_session(self):
+        # 043-04 AC3: a recoverable interrupt/kill halt whose RESUME INVOCATION
+        # itself errors (an unresumable/corrupt session — the probe's flagged n=1
+        # risk) fails closed credit_baseline_unavailable, never silently starting
+        # a fresh session that would abandon the orphaned spend.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr], fail_on=2)
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self._simulate_kill("interrupted", orphan_cr=15)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 2, msg=r2.stderr)
+        self.assertEqual(self._summary(r2)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+
+    def test_kill_resume_fail_closed_on_fork_fresh_session(self):
+        # 043-04 AC3 (fork-fresh guard, frame-critique R2): the load-bearing
+        # failure the recovery MUST catch. If `copilot --resume` silently FORKS A
+        # FRESH session (the id expired during a long sleep — the slept-machine
+        # resolution-trigger case), the resumed read is complete and truthful but
+        # reports a FRESH low total: R = N (its own first invocation), so the
+        # recovered prior R − N = 0 < the stale baseline B = 50cr. servo cannot
+        # verify session continuity (the session id is not in Copilot's event
+        # stream), so the `R − N >= B` floor is the guard: recovery fails closed
+        # credit_baseline_unavailable rather than silently dropping the orphan and
+        # under-counting the budget (which an un-floored R−N>=0 guard would do,
+        # since a fresh session trivially satisfies R − N = 0 >= 0).
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self.assertEqual(self._state()["cumulative_credits_nano"], 50 * cr)
+        self._simulate_kill("interrupted", fork_fresh=True)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 2, msg=r2.stderr)
+        last = self._summary(r2)
+        self.assertEqual(last["terminal_reason"],
+                         loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+        self.assertIsNone(last["cumulative_credits"])
+
+    def test_clean_halt_resume_unchanged_by_recovery_path(self):
+        # 043-04 AC5: a clean halt (max_iterations_reached) still resumes via the
+        # persisted baseline — NOT the recovery path. A clean halt with an orphan
+        # on the billing session must NOT recover (it would mask a real
+        # reconciliation failure): the stale-delta 105−50 = 55 ≠ 40 OTel → the
+        # 043-03 runtime guard halts credit_usage_unavailable, as before.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        # leave last_terminal_reason = max_iterations_reached (clean); inject an
+        # orphan the clean path is NOT licensed to absorb.
+        self._simulate_kill("max_iterations_reached", orphan_cr=15)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 2, msg=r2.stderr)
+        self.assertEqual(self._summary(r2)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
 
 
 class EditPermissionRelabelLoopTests(unittest.TestCase):

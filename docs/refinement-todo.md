@@ -1555,7 +1555,8 @@ dispatch passes flat `--credit-ceiling` flags, not a `--plan` file, so 043-02 is
 `--plan`-path completeness fix, not a campaign enabler (043-02's own framing);
 ~~a target ships a known-priced oracle component for a Copilot run (2)~~ **(2) RESOLVED
 by spec 043-01**; ~~a user needs to resume an interrupted Copilot run (3)~~ **(3) RESOLVED
-by spec 043-03** (scoped to clean halts; interrupted/killed runs fail closed — see the
+by spec 043-03** (clean halts) **and extended by spec 043-04** (interrupt/kill halts now
+recover the baseline from the resumed read R, keeping fail-closed as the fallback — see the
 follow-ups below).
 
 
@@ -1564,7 +1565,10 @@ follow-ups below).
 **Deferred (non-blocking; surfaced during 043-03's review rounds). The slice ships sound
 clean-halt resume + fail-closed refusal of interrupted/killed runs; these extend it.**
 
-1. **Resume-after-kill grounding** — **GROUNDED 2026-11-14 by a billed probe (≈11.18 cr of
+1. **Resume-after-kill grounding + lift** — **RESOLVED by spec 043-04** (the lift is
+   implemented: an interrupt/kill-halted Copilot resume now recovers its credit baseline
+   from the resumed read R, keeping fail-closed as the fallback). **GROUNDED 2026-11-14 by a
+   billed probe (≈11.18 cr of
    the ≤150-credit owner authorization); verdict: the resumed cumulative CARRIES the
    orphaned spend → the kill-path refusal CAN be lifted by a follow-up slice.** A 041-style
    probe killed a Copilot invocation mid-run (SIGKILL after 2 completed `chat` calls; the
@@ -1577,19 +1581,40 @@ clean-halt resume + fail-closed refusal of interrupted/killed runs; these extend
    `_copilot_iteration_nano` `expected = R − prior` reconciles exactly against the OTel Σ
    *when given the true prior* (the only reason it fails closed today is the stale persisted
    baseline, not missing data). Full methodology + redacted telemetry:
-   `docs/specs/043-copilot-hardening/evidence/resume-after-kill/`. **Remaining — a future
-   slice, NOT done here (the probe was measurement-only, no production code changed):**
-   replace the kill-path fail-closed with baseline-recovery-from-resumed-telemetry (treat
+   `docs/specs/043-copilot-hardening/evidence/resume-after-kill/`. **DONE by 043-04:** the
+   kill-path fail-closed is replaced with baseline-recovery-from-resumed-telemetry (treat
    `R` as the authoritative session-cumulative + the invocation OTel Σ as the iteration
-   spend), keeping fail-closed as the fallback when the resumed read is missing/partial or
-   `--resume` itself errors (a kill *can* leave an unresumable session; n=1 clean resume
-   here). *Original:* whether the resumed `totalNanoAiu` carries or drops the orphaned
-   spend was unverified — ADR-0048 A2 probed resume-after-clean-end, A3 probed
-   kill→no-usage-file but never resumed the killed session. **Resolution trigger:** a user
-   needs interrupted/slept-machine Copilot resume (grounding done — the lift is now an
-   implementation slice, no further probe required).
+   spend), keeping fail-closed as the fallback when the resumed read is missing/partial
+   (`aiCreditsStatus != complete` / absent `totalNanoAiu` / absent OTel Σ), when `--resume`
+   itself errors / the session is unresumable, or when no resumable `current_session_id`
+   is persisted (the probe's flagged "a kill *can* leave an unresumable session"; n=1 clean
+   resume here). The recovery is scoped to `_COPILOT_BASELINE_RECOVERABLE_HALTS`
+   (`interrupted` / `""` — each carries a sound stale baseline that anchors the fork-fresh
+   guard); `None`, `credit_usage_unavailable`, and the structural refusals stay fail-closed.
+   043-04's frame-critique (R1→R2) added a **fork-fresh guard** `R − N ≥ B`: a
+   `copilot --resume` of an expired id that silently forks a FRESH session reports a complete
+   but wrong-session read (`R = N`, so `R − N = 0 < B`) → fail closed, since servo cannot
+   verify session continuity directly. *Original:* whether the resumed `totalNanoAiu` carries
+   or drops the orphaned spend was unverified — ADR-0048 A2 probed resume-after-clean-end, A3
+   probed kill→no-usage-file but never resumed the killed session. **Resolution trigger:** a
+   user needs interrupted/slept-machine Copilot resume — RESOLVED (grounded + lifted by 043-04).
 
-2. **Claude-version resume gate is reachable on a Copilot resume.** Enabling copilot resume
+2. **`credit_usage_unavailable` kill-resume recovery is deferred (spec 043-04).** 043-04
+   recovers `interrupted` / `""` halts but NOT `credit_usage_unavailable` (a killed worker /
+   partial report): that halt always nulls its persisted baseline (both the invoke-failure and
+   the `_apply` partial-report paths set `cumulative_credits_nano = None`), so there is no sound
+   lower bound `B` to anchor the fork-fresh guard `R − N ≥ B` — recovery could not distinguish a
+   genuine resume from a `--resume` that forked a fresh session, so it stays fail-closed. This is
+   the probe's *direct* killed-worker scenario, but note a fresh run whose FIRST invocation is
+   killed also has no `current_session_id` and is preflight-refused anyway; the reachable gap is
+   a killed worker on a LATER iteration (a prior session exists, but its baseline was nulled).
+   Fix options: (a) persist a last-sound-cumulative alongside the null on a killed-worker halt to
+   serve as `B`; or (b) an independent session-continuity signal (compare the resumed
+   `conversation.id` if Copilot ever exposes it in the event stream). **Resolution trigger:** a
+   user needs to resume a Copilot run whose worker was killed mid-iteration (not interrupted),
+   or (b) becomes available.
+
+3. **Claude-version resume gate is reachable on a Copilot resume.** Enabling copilot resume
    newly exposes it to the resume-path `claude_version_mismatch` guard (`_get_claude_version`
    persisted at launch, re-probed on resume). For a Copilot worker the claude CLI version is
    irrelevant, so a claude auto-update between a fresh Copilot run and its resume spuriously
