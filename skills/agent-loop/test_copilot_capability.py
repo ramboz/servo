@@ -195,24 +195,24 @@ class NativeCapabilityRefusalTests(unittest.TestCase):
                 self.assertEqual(state_path.read_text(), raw)
 
     def test_non_recoverable_non_clean_halt_refuses_resume(self):
-        # Spec 043-03 AC5 / 043-04: a copilot run that halted on a non-clean reason
-        # which is NOT a recoverable interrupt/kill signature stays fail-closed
-        # `credit_baseline_unavailable`. `None` is a run that committed no
-        # iteration (no guaranteed resumable session — not recoverable);
-        # "credit_usage_unavailable" is a killed worker / partial report that
-        # always nulls its baseline, so it has no sound floor for the fork-fresh
-        # guard (043-04 keeps it fail-closed, deferred); "completed" /
-        # "oracle_evaluation_refused" stand in for other non-progress reasons;
-        # "credit_bound_unavailable" / "credit_ceiling_insufficient" are the
-        # structural/config refusals (not interrupt/kill). All carry a session id,
-        # so the refusal is unambiguously the non-recoverability, not a missing
-        # session. The on-disk state is unchanged by the refusal (branch C mutates
-        # only the in-memory dict). (043-04 flips "interrupted" / "" to the recovery
-        # path — see test_recoverable_interrupt_kill_halt_admits_resume.)
+        # Spec 043-03 AC5 / 043-04 / 043-05: a copilot run that halted on a
+        # non-clean reason which is NOT a recoverable interrupt/kill signature
+        # stays fail-closed `credit_baseline_unavailable`. `None` is a run that
+        # committed no iteration (no guaranteed resumable session — not
+        # recoverable); "completed" / "oracle_evaluation_refused" stand in for
+        # other non-progress reasons; "credit_bound_unavailable" /
+        # "credit_ceiling_insufficient" are the structural/config refusals (not
+        # interrupt/kill). All carry a session id, so the refusal is unambiguously
+        # the non-recoverability, not a missing session. The on-disk state is
+        # unchanged by the refusal (branch D mutates only the in-memory dict).
+        # ("interrupted" / "" are 043-04's recovery path; "credit_usage_unavailable"
+        # is 043-05's — conditionally recoverable given a session + a sound
+        # last_sound_cumulative_nano floor — so both are tested separately, not
+        # here.)
         run_id = "copilot-run"
         state_path = self.target / ".servo/runs" / run_id / "state.json"
         state_path.parent.mkdir(parents=True)
-        for halt in (None, "credit_usage_unavailable", "completed",
+        for halt in (None, "completed",
                      "oracle_evaluation_refused", "credit_bound_unavailable",
                      "credit_ceiling_insufficient"):
             fields = {"backend": "copilot", "state_schema_version": 1,
@@ -346,6 +346,112 @@ class NativeCapabilityRefusalTests(unittest.TestCase):
                     self.assertEqual(
                         json.loads(stdout.getvalue())["terminal_reason"],
                         "credit_baseline_unavailable")
+
+    def test_usage_unavailable_halt_with_last_sound_admits_resume(self):
+        # Spec 043-05 AC1: a copilot run that halted on credit_usage_unavailable (a
+        # killed worker on iteration >= 2 / a partial report) — which NULLED the
+        # live baseline — but persisted a resumable current_session_id AND a sound
+        # last_sound_cumulative_nano floor is NO LONGER refused at preflight.
+        # Recovery is deferred to the first resumed iteration (floor = last_sound),
+        # so preflight proceeds PAST the credit guard to the claude-version probe
+        # (which the patch fires). The 043-04 branch would refuse this (its floor is
+        # the null live baseline); the separate 043-05 branch admits it.
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        fields = {"backend": "copilot", "state_schema_version": 1,
+                  "cumulative_credits_nano": None,            # the halt nulled it
+                  "last_sound_cumulative_nano": 50_000_000_000,  # sound floor
+                  "current_session_id": "sess-abc",
+                  "last_terminal_reason": "credit_usage_unavailable",
+                  "driver": "loop"}
+        state_path.write_text(json.dumps(fields))
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            with patch.object(
+                loop, "_get_claude_version",
+                side_effect=AssertionError("reached-version-check"),
+            ):
+                with self.assertRaises(AssertionError) as ctx:
+                    loop.run_loop(
+                        self.target, host="copilot", prompt=None,
+                        max_iterations=None, cost_ceiling=None,
+                        context_fill_threshold=None, credit_ceiling=500,
+                        resume_run_id=run_id, resume_anyway=True,
+                    )
+        self.assertEqual(str(ctx.exception), "reached-version-check")
+
+    def test_usage_unavailable_halt_without_last_sound_refuses(self):
+        # Spec 043-05 AC4(b): a credit_usage_unavailable halt whose persisted
+        # last_sound_cumulative_nano is NOT a sound non-negative int (null / absent
+        # / negative / bool / float) has no floor to anchor the fork-fresh guard, so
+        # it is refused credit_baseline_unavailable at preflight — even with a
+        # session id (non-vacuous isolation of the floor check from the session
+        # check).
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        for floor in (None, -5, True, 1.5, "ABSENT"):
+            fields = {"backend": "copilot", "state_schema_version": 1,
+                      "cumulative_credits_nano": None,
+                      "current_session_id": "sess-abc",
+                      "last_terminal_reason": "credit_usage_unavailable"}
+            if floor != "ABSENT":
+                fields["last_sound_cumulative_nano"] = floor
+            with self.subTest(last_sound=floor):
+                state_path.write_text(json.dumps(fields))
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with patch.object(
+                        loop, "_get_claude_version",
+                        side_effect=AssertionError("probe"),
+                    ):
+                        rc = loop.run_loop(
+                            self.target, host="copilot", prompt=None,
+                            max_iterations=None, cost_ceiling=None,
+                            context_fill_threshold=None, credit_ceiling=500,
+                            resume_run_id=run_id, resume_anyway=True,
+                        )
+                self.assertEqual(rc, 2)
+                self.assertEqual(
+                    json.loads(stdout.getvalue())["terminal_reason"],
+                    "credit_baseline_unavailable")
+
+    def test_usage_unavailable_halt_without_session_id_refuses(self):
+        # Spec 043-05 AC4(a): a credit_usage_unavailable halt whose persisted
+        # current_session_id is empty/absent (e.g. a FIRST-iteration kill) has no
+        # reachable billing session, so it is refused credit_baseline_unavailable at
+        # preflight — distinct from the no-floor refusal — even with a sound floor.
+        run_id = "copilot-run"
+        state_path = self.target / ".servo/runs" / run_id / "state.json"
+        state_path.parent.mkdir(parents=True)
+        for sess in ("", None, "ABSENT"):
+            fields = {"backend": "copilot", "state_schema_version": 1,
+                      "cumulative_credits_nano": None,
+                      "last_sound_cumulative_nano": 50_000_000_000,
+                      "last_terminal_reason": "credit_usage_unavailable"}
+            if sess != "ABSENT":
+                fields["current_session_id"] = sess
+            with self.subTest(session=sess):
+                state_path.write_text(json.dumps(fields))
+                stdout = io.StringIO()
+                with contextlib.redirect_stdout(stdout), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    with patch.object(
+                        loop, "_get_claude_version",
+                        side_effect=AssertionError("probe"),
+                    ):
+                        rc = loop.run_loop(
+                            self.target, host="copilot", prompt=None,
+                            max_iterations=None, cost_ceiling=None,
+                            context_fill_threshold=None, credit_ceiling=500,
+                            resume_run_id=run_id, resume_anyway=True,
+                        )
+                self.assertEqual(rc, 2)
+                self.assertEqual(
+                    json.loads(stdout.getvalue())["terminal_reason"],
+                    "credit_baseline_unavailable")
 
     def test_sound_copilot_state_passes_backend_and_baseline_guards(self):
         # Spec 043-03 AC1: a same-backend copilot resume with a SOUND baseline (a

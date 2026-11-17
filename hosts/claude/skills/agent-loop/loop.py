@@ -242,21 +242,38 @@ _COPILOT_RESUMABLE_HALTS = frozenset({
 # directly, so a fork-fresh is caught even at B == 0; see `_copilot_iteration_nano`).
 # Without a sound B the floor half of the guard is blind, so a recoverable halt
 # whose baseline is null/absent is refused at preflight (frame-critique R2).
-# NOT in the set, each fail-closed as in 043-03:
+# NOT in `_COPILOT_BASELINE_RECOVERABLE_HALTS` (each handled elsewhere):
 #   - `None`: the initial `last_terminal_reason` of a run that committed no
 #     iteration — no guaranteed session, and no accounted progress to preserve.
-#   - REASON_CREDIT_USAGE_UNAVAILABLE (a killed worker / partial report): the
-#     loop ALWAYS persists a null baseline here (both the invoke-failure and the
-#     partial-report paths null `cumulative_credits_nano`), so there is no sound
-#     B to anchor the fork-fresh guard — recovery could not tell a genuine resume
-#     from a fork-fresh, so it stays fail-closed. Lifting it needs an independent
-#     session-continuity signal (deferred — refinement-todo 043-04 follow-up).
-# Recovery additionally requires a persisted `current_session_id` (checked at
-# preflight): without one the orphaned session is unreachable and a fresh
-# invocation would silently abandon it.
+#     Stays fail-closed, as in 043-03.
+#   - REASON_CREDIT_USAGE_UNAVAILABLE (a killed worker / partial report): this
+#     halt ALWAYS nulls `cumulative_credits_nano` (both the invoke-failure and the
+#     partial-report paths), so it carries no live baseline to anchor the
+#     fork-fresh guard. 043-04 deferred it; spec 043-05 RECOVERS it via a separate
+#     path (`_COPILOT_LAST_SOUND_RECOVERABLE_HALTS`, below): the last CLEAN
+#     cumulative is persisted as `last_sound_cumulative_nano` before each null and
+#     serves as the fork-fresh floor `L` — a sound lower bound on the pre-halt
+#     session-cumulative `P` (orphaned/partial spend is only additive, so L <= P),
+#     reusing 043-04's exact recovery arithmetic and guard. The continuity-signal
+#     path (option (b): compare a resumed `conversation.id` if Copilot ever exposes
+#     it) stays a deferred future SIMPLIFICATION (refinement-todo) that could
+#     retire the floor heuristic.
+# Recovery (either path) additionally requires a persisted `current_session_id`
+# (checked at preflight): without one the orphaned session is unreachable and a
+# fresh invocation would silently abandon it.
 _COPILOT_BASELINE_RECOVERABLE_HALTS = frozenset({
     REASON_INTERRUPTED,
     "",
+})
+# Spec 043-05: the halt that nulls `cumulative_credits_nano` but (on iteration
+# >= 2) leaves a resumable session and a persisted last-clean cumulative. Its
+# recovery is 043-04's, with the fork-fresh floor sourced from the sound
+# `last_sound_cumulative_nano` instead of the (null) live baseline — see the
+# parallel preflight branch and `_copilot_recovery_floor`. Kept a SEPARATE set
+# because the 043-04 branch requires a sound `cumulative_credits_nano`, which is
+# null here; this branch requires a sound `last_sound_cumulative_nano`.
+_COPILOT_LAST_SOUND_RECOVERABLE_HALTS = frozenset({
+    REASON_CREDIT_USAGE_UNAVAILABLE,
 })
 REASON_VERDICT_SCHEMA_MISMATCH = "verdict_schema_mismatch"
 REASON_CLAUDE_INVOCATION_FAILED = "claude_invocation_failed"
@@ -1218,6 +1235,11 @@ def _build_initial_state(
         state["cumulative_cost_usd"] = None
         state["credit_ceiling"] = credit_ceiling
         state["cumulative_credits_nano"] = 0
+        # Spec 043-05: the last CLEAN cumulative, persisted (from a sound value
+        # only) immediately before a fail-closed halt nulls `cumulative_credits_nano`,
+        # so a `credit_usage_unavailable` resume has a sound fork-fresh floor `L`.
+        # Absent/None ⇒ unsound ⇒ that resume is preflight-refused.
+        state["last_sound_cumulative_nano"] = None
         # Filled reactively once iteration 1 reveals the admin-pinned worker
         # model (041-01 A6): the per-model overrun bound, in AI credits.
         state["credit_bound"] = None
@@ -3100,7 +3122,10 @@ def _copilot_iteration_nano(
         # this refuses is the degenerate `B == 0` + zero-orphan case, where the
         # true prior is 0 and there is nothing to recover — a harmless fail-closed.
         # (`prior_cumulative_nano` is a sound non-negative int here — preflight
-        # branch B requires it — so the `or 0` is only defensive.)
+        # guarantees the floor: the 043-04 branch requires a sound
+        # `cumulative_credits_nano`; the 043-05 branch requires a sound
+        # `last_sound_cumulative_nano`, which the caller passes as the floor when
+        # the live baseline is null — so the `or 0` is only defensive.)
         recovered_prior = nano - otel_nano
         if recovered_prior <= 0 or recovered_prior < (prior_cumulative_nano or 0):
             return None, REASON_CREDIT_BASELINE_UNAVAILABLE
@@ -3160,6 +3185,46 @@ def _copilot_overrun_bound(model: Optional[str]) -> Optional[float]:
     return (1 + COPILOT_OVERRUN_C) * per_call_max
 
 
+def _is_sound_nano(value: object) -> bool:
+    """A sound non-negative credit-nano scalar: a real int (not bool), >= 0.
+    Shared sound-check for a persisted credit baseline / last-sound floor
+    (spec 043-05); absent (None) or any non-int is unsound."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _persist_last_sound_cumulative(state: dict) -> None:
+    """Spec 043-05: before a Copilot fail-closed halt NULLS
+    `cumulative_credits_nano`, preserve the last CLEAN cumulative as the sound
+    recovery floor `last_sound_cumulative_nano` — but ONLY when the current value
+    is itself sound. Never clobber a genuine floor with a null: a repeated kill on
+    a failed recovery invocation re-nulls an already-null baseline with no clean
+    iteration between, and the first-persisted floor must survive (the second null
+    finds an unsound value and writes nothing). Because `cumulative_credits_nano`
+    is monotone non-decreasing among its sound values within a run, the floor is
+    always the highest clean watermark seen — the tightest sound lower bound."""
+    current = state.get("cumulative_credits_nano")
+    if _is_sound_nano(current):
+        state["last_sound_cumulative_nano"] = current
+
+
+def _copilot_recovery_floor(state: dict) -> Optional[int]:
+    """Spec 043-05: the sound lower-bound floor the recover-mode fork-fresh guard
+    (`R − N >= floor`) reconciles against, and the base of the first resumed
+    iteration's pre-iteration cap. Normally the persisted session baseline
+    `cumulative_credits_nano` (a sound stale `B` for an interrupt/kill resume,
+    043-04). But a `credit_usage_unavailable` halt NULLS that baseline, so there
+    fall back to `last_sound_cumulative_nano` — the last clean cumulative, a sound
+    non-negative int <= the true pre-halt session-cumulative (orphaned/partial
+    spend is only additive). On every normal (non-recovery) iteration
+    `cumulative_credits_nano` is sound, so this returns it unchanged; the fallback
+    fires only on the 043-05 first resumed iteration, where preflight has
+    guaranteed a sound `last_sound_cumulative_nano`."""
+    cumulative = state.get("cumulative_credits_nano")
+    if _is_sound_nano(cumulative):
+        return cumulative
+    return state.get("last_sound_cumulative_nano")
+
+
 def _apply_copilot_credit_iteration(
     state: dict, state_path: Path, claude_data: dict, *,
     iteration: int, iter_credit_cap: Optional[float], agent_name: str,
@@ -3192,6 +3257,10 @@ def _apply_copilot_credit_iteration(
         # (`credit_baseline_unavailable`) when a recovery read was partial — the
         # caller / tests tell the two fail-closed paths apart. Clear the one-shot
         # recovery flag on this fail-closed exit too (state hygiene).
+        # Spec 043-05: stamp the last CLEAN cumulative as the sound fork-fresh
+        # floor BEFORE nulling, so a later `credit_usage_unavailable` resume can
+        # recover. Writes only from a sound value (never clobbers a genuine floor).
+        _persist_last_sound_cumulative(state)
         state["cumulative_credits_nano"] = None
         state.pop("credit_baseline_recovery_pending", None)
         halt_reason = credit_error or REASON_CREDIT_USAGE_UNAVAILABLE
@@ -3210,8 +3279,11 @@ def _apply_copilot_credit_iteration(
         # the stale/null persisted baseline. `iter_nano` is the honest OTel Σ (N),
         # used for the overrun / accounting exactly as a fresh iteration. The flag
         # is one-shot — clear it so later iterations resume the normal delta path.
+        # Spec 043-05: retire the last-sound floor too — the baseline is now the
+        # exact R, so the floor has served its one-shot purpose (state hygiene).
         state["cumulative_credits_nano"] = claude_data["copilot_session_cumulative_nano"]
         state.pop("credit_baseline_recovery_pending", None)
+        state.pop("last_sound_cumulative_nano", None)
     else:
         state["cumulative_credits_nano"] += iter_nano
 
@@ -4043,8 +4115,8 @@ def run_loop(
                 context_fill_threshold=refusal_threshold,
             )
 
-        # Spec 043-03 AC5 / 043-04: on a Copilot resume the first resumed
-        # iteration's credit baseline comes from one of three disjoint sources,
+        # Spec 043-03 AC5 / 043-04 / 043-05: on a Copilot resume the first resumed
+        # iteration's credit baseline comes from one of four disjoint sources,
         # keyed on how the run halted:
         #   (A) CLEAN halt (`_COPILOT_RESUMABLE_HALTS` — iteration cap, credit
         #       ceiling, plateau, context): the persisted `cumulative_credits_nano`
@@ -4067,12 +4139,21 @@ def run_loop(
         #       recovered prior `R − N` must clear (the fork-fresh guard); either
         #       missing fails closed (043-04 AC3). The stale baseline is kept as-is
         #       (it is the pre-iteration cap's best lower bound until R is known).
-        #   (C) EVERY OTHER non-clean halt (None — an uncommitted run with no
-        #       guaranteed session; credit_usage_unavailable — always nulls its
-        #       baseline, so no sound floor for the fork-fresh guard; the
-        #       structural/config refusals credit_bound_unavailable /
-        #       credit_ceiling_insufficient; a prior credit_baseline_unavailable;
-        #       etc.): stays fail-closed, exactly as 043-03 shipped.
+        #   (C) RECOVERABLE killed-worker halt (`_COPILOT_LAST_SOUND_RECOVERABLE_HALTS`
+        #       — credit_usage_unavailable): a killed worker on iteration >= 2 / a
+        #       partial report NULLED `cumulative_credits_nano`, but the last CLEAN
+        #       cumulative was persisted as `last_sound_cumulative_nano` before the
+        #       null. Recover exactly as (B), with the fork-fresh floor sourced from
+        #       that last-sound value (spec 043-05). REQUIRES (i) a persisted
+        #       `current_session_id` and (ii) a SOUND `last_sound_cumulative_nano`;
+        #       either missing fails closed. The live baseline stays null — the
+        #       pre-iteration cap and guard both source the floor via
+        #       `_copilot_recovery_floor`.
+        #   (D) EVERY OTHER non-clean halt (None — an uncommitted run with no
+        #       guaranteed session; the structural/config refusals
+        #       credit_bound_unavailable / credit_ceiling_insufficient; a prior
+        #       credit_baseline_unavailable; etc.): stays fail-closed, as 043-03
+        #       shipped.
         if host == HOST_COPILOT:
             halt = state.get("last_terminal_reason")
             baseline = state.get("cumulative_credits_nano")
@@ -4130,6 +4211,49 @@ def run_loop(
                             f"(cumulative_credits_nano={baseline!r}) is not a sound "
                             "lower bound to anchor the fork-fresh recovery guard; "
                             "restart fresh (spec 043-04 AC3)"
+                        ),
+                        cost_ceiling=refusal_ceiling,
+                        context_fill_threshold=refusal_threshold,
+                    )
+                state["credit_baseline_recovery_pending"] = True
+            elif halt in _COPILOT_LAST_SOUND_RECOVERABLE_HALTS:
+                # Spec 043-05: a `credit_usage_unavailable` halt (a killed worker
+                # on iteration >= 2 / a partial report) NULLED `cumulative_credits_nano`,
+                # but persisted the last CLEAN cumulative as `last_sound_cumulative_nano`
+                # before the null. Recover exactly as the 043-04 branch above, with the
+                # fork-fresh floor sourced from that last-sound value instead of the
+                # (null) live baseline. REQUIRES both (i) a resumable
+                # `current_session_id` — without one the orphaned session is unreachable
+                # (a first-iteration kill persists none) — and (ii) a SOUND
+                # `last_sound_cumulative_nano` floor; either missing fails closed with a
+                # distinct message. The stale live baseline stays null; the pre-iteration
+                # cap and the recovery guard both source the floor via
+                # `_copilot_recovery_floor`.
+                last_sound = state.get("last_sound_cumulative_nano")
+                if not has_session:
+                    return _refuse_preflight(
+                        run_id=resume_run_id,
+                        reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
+                        message=(
+                            "cannot resume under --host copilot: this run halted on "
+                            f"{halt!r} (a killed worker / partial report) but persisted "
+                            "no resumable current_session_id (e.g. a first-iteration "
+                            "kill), so the orphaned billing session is unreachable and "
+                            "the baseline cannot be recovered; restart fresh (spec 043-05)"
+                        ),
+                        cost_ceiling=refusal_ceiling,
+                        context_fill_threshold=refusal_threshold,
+                    )
+                if not _is_sound_nano(last_sound):
+                    return _refuse_preflight(
+                        run_id=resume_run_id,
+                        reason=REASON_CREDIT_BASELINE_UNAVAILABLE,
+                        message=(
+                            "cannot resume under --host copilot: this run halted on "
+                            f"{halt!r} (a killed worker / partial report), which nulled "
+                            "the credit baseline, and persisted no sound "
+                            f"last_sound_cumulative_nano (={last_sound!r}) to anchor the "
+                            "fork-fresh recovery guard; restart fresh (spec 043-05)"
                         ),
                         cost_ceiling=refusal_ceiling,
                         context_fill_threshold=refusal_threshold,
@@ -4463,9 +4587,15 @@ def run_loop(
         # Pre-iteration budget floor (slice 003-02 AC4 / spec 041-02 AC2).
         iter_credit_cap = None
         if host == HOST_COPILOT:
+            # Spec 043-05: a `credit_usage_unavailable` resume enters its first
+            # iteration with `cumulative_credits_nano` null, so source the floor
+            # via `_copilot_recovery_floor` (the sound `last_sound_cumulative_nano`
+            # when the live baseline is null — else the live baseline unchanged).
+            # A bounded one-shot looseness (043-04 A2): R is unknowable until the
+            # invocation returns, bounded by the per-invocation --max-ai-credits.
             remaining_nano = (
                 round(state["credit_ceiling"] * NANO_PER_CREDIT)
-                - state["cumulative_credits_nano"])
+                - _copilot_recovery_floor(state))
             if remaining_nano < MIN_COPILOT_CREDIT_CEILING * NANO_PER_CREDIT:
                 # Fewer than 30 credits left — below the CLI's cap minimum, so
                 # no further invocation can be bounded (041-01).
@@ -4547,11 +4677,15 @@ def run_loop(
             max_ai_credits=(iter_credit_cap if host == HOST_COPILOT else max_ai_credits),
             role_args=_role_args(role_cfg),
             prior_cumulative_nano=(
-                state["cumulative_credits_nano"] if host == HOST_COPILOT else None),
-            # Spec 043-04: the first resumed iteration of an interrupt/kill-halted
-            # Copilot run recovers its baseline from this read (the persisted one
-            # is stale). The flag is set in preflight and cleared on recovery; it
-            # only ever fires on a resuming invocation (session_id_arg present).
+                _copilot_recovery_floor(state) if host == HOST_COPILOT else None),
+            # Spec 043-04 / 043-05: the first resumed iteration of an interrupt/kill
+            # -halted Copilot run recovers its baseline from this read (the persisted
+            # one is stale, or null for a credit_usage_unavailable halt). The floor
+            # the guard reconciles `R − N` against comes via `_copilot_recovery_floor`
+            # — the live baseline when sound (043-04), else the persisted
+            # `last_sound_cumulative_nano` (043-05); on a normal iteration the live
+            # baseline is sound, so this is unchanged. The flag is set in preflight and
+            # cleared on recovery; it only ever fires on a resuming invocation.
             recover_baseline=(
                 host == HOST_COPILOT
                 and bool(state.get("credit_baseline_recovery_pending"))
@@ -4593,6 +4727,11 @@ def run_loop(
                     REASON_CREDIT_BASELINE_UNAVAILABLE
                     if state.get("credit_baseline_recovery_pending")
                     else REASON_CREDIT_USAGE_UNAVAILABLE)
+                # Spec 043-05: stamp the last CLEAN cumulative as the sound
+                # fork-fresh floor BEFORE nulling (writes only from a sound value,
+                # so a failed recovery invocation re-nulling an already-null
+                # baseline does NOT clobber the genuine floor).
+                _persist_last_sound_cumulative(state)
                 state["cumulative_credits_nano"] = None
                 state.pop("credit_baseline_recovery_pending", None)
             else:

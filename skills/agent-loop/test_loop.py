@@ -8087,6 +8087,73 @@ class CopilotCreditGateTests(unittest.TestCase):
             shutil.rmtree(d, ignore_errors=True)
 
 
+class CopilotRecoveryFloorTests(unittest.TestCase):
+    """Spec 043-05 — the last-sound floor helpers: `_is_sound_nano`,
+    `_persist_last_sound_cumulative`, `_copilot_recovery_floor`."""
+
+    def test_is_sound_nano_accepts_non_negative_ints_only(self):
+        for v in (0, 1, 50_000_000_000):
+            self.assertTrue(loop_mod._is_sound_nano(v), msg=repr(v))
+        for v in (None, -1, True, False, 1.5, "5", [], {}):
+            self.assertFalse(loop_mod._is_sound_nano(v), msg=repr(v))
+
+    def test_recovery_floor_prefers_sound_live_baseline(self):
+        # When `cumulative_credits_nano` is sound it IS the floor — the last-sound
+        # fallback is ignored. This is every normal / clean-resume / 043-04
+        # iteration, so the floor is unchanged from before 043-05.
+        cr = loop_mod.NANO_PER_CREDIT
+        self.assertEqual(
+            loop_mod._copilot_recovery_floor(
+                {"cumulative_credits_nano": 7 * cr,
+                 "last_sound_cumulative_nano": 3 * cr}), 7 * cr)
+
+    def test_recovery_floor_falls_back_to_last_sound_when_baseline_unsound(self):
+        # A credit_usage_unavailable halt NULLS the live baseline; the floor then
+        # comes from last_sound. Also covers a non-null-but-unsound live baseline.
+        cr = loop_mod.NANO_PER_CREDIT
+        self.assertEqual(
+            loop_mod._copilot_recovery_floor(
+                {"cumulative_credits_nano": None,
+                 "last_sound_cumulative_nano": 50 * cr}), 50 * cr)
+        self.assertEqual(
+            loop_mod._copilot_recovery_floor(
+                {"cumulative_credits_nano": -5,
+                 "last_sound_cumulative_nano": 50 * cr}), 50 * cr)
+
+    def test_recovery_floor_none_when_neither_sound(self):
+        self.assertIsNone(loop_mod._copilot_recovery_floor(
+            {"cumulative_credits_nano": None}))
+
+    def test_persist_last_sound_writes_only_from_sound_value(self):
+        cr = loop_mod.NANO_PER_CREDIT
+        st = {"cumulative_credits_nano": 50 * cr}
+        loop_mod._persist_last_sound_cumulative(st)
+        self.assertEqual(st["last_sound_cumulative_nano"], 50 * cr)
+
+    def test_persist_last_sound_does_not_clobber_floor_with_null(self):
+        # The repeated-kill invariant: a second null (cumulative already None) with
+        # no clean iteration between must NOT overwrite the genuine floor.
+        cr = loop_mod.NANO_PER_CREDIT
+        st = {"cumulative_credits_nano": None,
+              "last_sound_cumulative_nano": 50 * cr}
+        loop_mod._persist_last_sound_cumulative(st)
+        self.assertEqual(st["last_sound_cumulative_nano"], 50 * cr)
+
+    def test_persist_last_sound_absent_when_never_sound(self):
+        st = {"cumulative_credits_nano": None}
+        loop_mod._persist_last_sound_cumulative(st)
+        self.assertNotIn("last_sound_cumulative_nano", st)
+
+    def test_persist_last_sound_advances_watermark_monotonically(self):
+        # Each write from a (monotone non-decreasing) sound cumulative raises the
+        # watermark — so the floor is always the HIGHEST clean cumulative seen.
+        cr = loop_mod.NANO_PER_CREDIT
+        st = {"cumulative_credits_nano": 50 * cr,
+              "last_sound_cumulative_nano": 30 * cr}
+        loop_mod._persist_last_sound_cumulative(st)
+        self.assertEqual(st["last_sound_cumulative_nano"], 50 * cr)
+
+
 def _copilot_result(iter_nano, *, model="gpt-6.1-sol", credit_error=None, text="ok",
                     baseline_recovered=False, session_cumulative_nano=None):
     """A `_normalize_copilot_result`-shaped dict for brake-helper unit tests.
@@ -8198,6 +8265,50 @@ class CopilotBrakeHelperTests(unittest.TestCase):
         rc, acc = self._apply(st, sp, _copilot_result(40 * cr))
         self.assertIsNone(rc)
         self.assertEqual(st["cumulative_credits_nano"], 50 * cr)
+
+    # --- Spec 043-05: last-sound floor persisted at the partial-report null site ---
+
+    def test_partial_report_persists_last_sound_floor_before_null(self):
+        # 043-05 AC3: the _apply partial-report path stamps the last CLEAN
+        # cumulative as the sound fork-fresh floor BEFORE nulling the live
+        # baseline, so a later credit_usage_unavailable resume can recover.
+        cr = loop_mod.NANO_PER_CREDIT
+        st, sp = self._state(cumulative_nano=50 * cr)
+        rc, acc = self._apply(st, sp, _copilot_result(
+            None, credit_error=loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE))
+        self.assertEqual(rc, loop_mod.EXIT_ENV_ERROR)
+        self.assertIsNone(st["cumulative_credits_nano"])      # nulled (never 0)
+        self.assertEqual(st["last_sound_cumulative_nano"], 50 * cr)  # floor stamped
+
+    def test_partial_report_does_not_clobber_last_sound_with_null(self):
+        # 043-05 AC3 (repeated-kill invariant): a second null with cumulative
+        # already None (no clean iteration between — a failed recovery invocation)
+        # must NOT overwrite the genuine floor.
+        cr = loop_mod.NANO_PER_CREDIT
+        st, sp = self._state(cumulative_nano=50 * cr)
+        self._apply(st, sp, _copilot_result(
+            None, credit_error=loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE))
+        self.assertEqual(st["last_sound_cumulative_nano"], 50 * cr)
+        self.assertIsNone(st["cumulative_credits_nano"])
+        # second kill, cumulative already null:
+        self._apply(st, sp, _copilot_result(
+            None, credit_error=loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE))
+        self.assertEqual(st["last_sound_cumulative_nano"], 50 * cr)  # preserved
+
+    def test_recovery_retires_last_sound_floor(self):
+        # 043-05 AC3: on recovery the cumulative is set to R exactly, so the
+        # one-shot floor is popped (state hygiene) alongside the recovery flag.
+        cr = loop_mod.NANO_PER_CREDIT
+        st, sp = self._state(ceiling=500.0)
+        st["cumulative_credits_nano"] = None   # the credit_usage_unavailable halt nulled it
+        st["last_sound_cumulative_nano"] = 50 * cr
+        st["credit_baseline_recovery_pending"] = True
+        rc, acc = self._apply(st, sp, _copilot_result(
+            40 * cr, baseline_recovered=True, session_cumulative_nano=105 * cr))
+        self.assertIsNone(rc)
+        self.assertEqual(st["cumulative_credits_nano"], 105 * cr)
+        self.assertNotIn("last_sound_cumulative_nano", st)
+        self.assertNotIn("credit_baseline_recovery_pending", st)
 
 
 class CopilotJsonlParseTests(unittest.TestCase):
@@ -9091,7 +9202,8 @@ class CopilotCrossProcessResumeTests(unittest.TestCase):
                       mock_bindir=self.bindir)
         return r
 
-    def _simulate_kill(self, halt, *, orphan_cr=0, fork_fresh=False):
+    def _simulate_kill(self, halt, *, orphan_cr=0, fork_fresh=False,
+                       null_baseline=False):
         """Spec 043-04: mutate the persisted phase-1 state into an interrupt/kill
         halt. Sets `last_terminal_reason`; and (orphan_cr > 0) adds that many
         credits to the mock's shared billing-session accumulator WITHOUT
@@ -9104,13 +9216,23 @@ class CopilotCrossProcessResumeTests(unittest.TestCase):
         A FRESH session (e.g. the id expired during a long sleep): the billing
         accumulator is reset to 0, so the resumed read reports R = N (the fresh
         session's own first-invocation spend). The recovered prior R − N is then
-        0, below the stale baseline — the fork-fresh guard must catch it."""
+        0, below the stale baseline — the fork-fresh guard must catch it.
+
+        `null_baseline=True` (spec 043-05) models a `credit_usage_unavailable`
+        halt (a killed worker on iteration >= 2 / a partial report): it moves the
+        persisted `cumulative_credits_nano` into `last_sound_cumulative_nano` (the
+        sound floor the real null-site stamps) and NULLS the live baseline — so the
+        recovery floor must come from the persisted last-sound, not the (null)
+        baseline."""
         import glob
         cr = loop_mod.NANO_PER_CREDIT
         sp = glob.glob(
             str(self.target / ".servo" / "runs" / "*" / "state.json"))[0]
         st = json.loads(Path(sp).read_text())
         st["last_terminal_reason"] = halt
+        if null_baseline:
+            st["last_sound_cumulative_nano"] = st["cumulative_credits_nano"]
+            st["cumulative_credits_nano"] = None
         Path(sp).write_text(json.dumps(st))
         acc = self.bindir / "copilot_acc.txt"
         if fork_fresh:
@@ -9375,6 +9497,84 @@ class CopilotCrossProcessResumeTests(unittest.TestCase):
         self.assertEqual(r2.returncode, 2, msg=r2.stderr)
         self.assertEqual(self._summary(r2)["terminal_reason"],
                          loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+
+    # --- Spec 043-05: lift the credit_usage_unavailable kill-resume fail-closed ---
+
+    def test_usage_unavailable_resume_recovers_from_last_sound_floor(self):
+        # 043-05 (headline): a worker killed on a LATER iteration halts
+        # credit_usage_unavailable, which NULLS the persisted baseline — but the
+        # last clean 50cr was stamped as last_sound_cumulative_nano before the
+        # null. On resume the resumed read R carries the orphan (R = 50 + 15 + 40
+        # = 105cr) and the recovery floor comes from the last-sound 50cr: recovered
+        # prior 65 > 0 and >= 50 → recover to R = 105cr EXACTLY (the probe's
+        # R−N=P), NOT 90 (which would drop the 15cr orphan) and NOT a stale-delta
+        # credit_usage_unavailable refusal. 043-04 kept this halt fail-closed; the
+        # persisted last-sound floor is the only new ingredient.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self.assertEqual(self._state()["cumulative_credits_nano"], 50 * cr)
+        self._simulate_kill("credit_usage_unavailable", orphan_cr=15,
+                            null_baseline=True)
+        st = self._state()
+        self.assertIsNone(st["cumulative_credits_nano"])             # nulled by the halt
+        self.assertEqual(st["last_sound_cumulative_nano"], 50 * cr)  # floor persisted
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 0, msg=r2.stderr)
+        self.assertEqual(self._state()["cumulative_credits_nano"], 105 * cr)
+        self.assertEqual(self._per_iter(r2, 2)["cost_native"],
+                         {"unit": "ai_credits", "value": 40.0})
+        # hygiene: the one-shot floor is retired on recovery
+        self.assertNotIn("last_sound_cumulative_nano", self._state())
+
+    def test_usage_unavailable_resume_fail_closed_on_fork_fresh(self):
+        # 043-05 (fork-fresh guard, reused from 043-04): if `copilot --resume`
+        # silently forks a FRESH session, R = N → recovered prior 0, which fails
+        # BOTH the > 0 clause and the >= 50cr last-sound floor → fail closed
+        # credit_baseline_unavailable, never dropping the orphan. The floor comes
+        # from last_sound (the live baseline is null here), proving the 043-05
+        # path inherits 043-04's guard intact.
+        cr = loop_mod.NANO_PER_CREDIT
+        r1 = self._fresh([50 * cr, 40 * cr])
+        self.assertEqual(r1.returncode, 0, msg=r1.stderr)
+        self._simulate_kill("credit_usage_unavailable", fork_fresh=True,
+                            null_baseline=True)
+        run_id = _find_only_run_id(self.target)
+        r2 = _run_loop(self.target, "--resume", run_id, "--host", "copilot",
+                       "--credit-ceiling", "500", "--max-iterations", "2",
+                       mock_bindir=self.bindir)
+        self.assertEqual(r2.returncode, 2, msg=r2.stderr)
+        last = self._summary(r2)
+        self.assertEqual(last["terminal_reason"],
+                         loop_mod.REASON_CREDIT_BASELINE_UNAVAILABLE)
+        self.assertIsNone(last["cumulative_credits"])
+
+    def test_invoke_failure_persists_last_sound_floor_at_real_site(self):
+        # 043-05 AC3 (invoke-failure null site, loop.py ~4734 — the headline
+        # SIGKILL/OOM production path): a REAL killed-worker invoke failure on
+        # iteration 2 (iteration 1 succeeded, so the live cumulative is a sound
+        # 50cr) stamps last_sound_cumulative_nano = 50cr BEFORE nulling the
+        # baseline, and persists a resumable session id — leaving exactly the
+        # state a 043-05 resume recovers from. Exercised through the REAL site (a
+        # genuine iteration-2 `claude_data is None`), not _simulate_kill's
+        # hand-mutation: deleting the persist call at the invoke-failure site
+        # fails THIS test (the resume e2e above fakes the floor, so it would not).
+        cr = loop_mod.NANO_PER_CREDIT
+        _mock_copilot_cumulative(self.bindir, [50 * cr, 40 * cr], self.counter,
+                                 args_log=self.args_log, fail_on=2)
+        r = _run_loop(self.target, "--host", "copilot", "--prompt", "x",
+                      "--credit-ceiling", "500", "--max-iterations", "2",
+                      mock_bindir=self.bindir)
+        self.assertEqual(r.returncode, 2, msg=r.stderr)
+        self.assertEqual(self._summary(r)["terminal_reason"],
+                         loop_mod.REASON_CREDIT_USAGE_UNAVAILABLE)
+        st = self._state()
+        self.assertIsNone(st["cumulative_credits_nano"])              # nulled (never 0)
+        self.assertEqual(st["last_sound_cumulative_nano"], 50 * cr)   # stamped at the REAL site
+        self.assertEqual(st["current_session_id"], "copilot-resume-sess")  # resumable
 
 
 class EditPermissionRelabelLoopTests(unittest.TestCase):
