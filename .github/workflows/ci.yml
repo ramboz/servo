@@ -7,7 +7,11 @@ name: CI
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: the latest image (26.04) dropped the prebuilt
+    # Python 3.9 (EOL Oct 2025). 24.04 still ships both our macOS-compatible 3.9
+    # floor (ADR-0020) and 3.12. Do not revert to ubuntu-latest without a 3.9
+    # install path, or the floor leg breaks at runner setup.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
