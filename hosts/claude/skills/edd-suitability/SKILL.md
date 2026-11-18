@@ -115,15 +115,59 @@ is never an exit 1, and a failed analysis never leaves a torn artifact.
 
 | Verdict | Meaning | Next step |
 |---|---|---|
-| `suitable` | EDD-shaped **and** has a compilable test/CI signal | proceed to Compile |
+| `suitable` | EDD-shaped **and** has a compilable signal — a test/CI signal **or** a reviewed, frozen eval component ([ADR-0036](../../docs/decisions/adr-0036-frozen-evals-satisfy-suitability-signal.md)) | proceed to Compile |
 | `needs_evidence` | EDD-shaped but missing **blocking** evidence | acquire it, re-analyze |
 | `unsuitable` | not EDD-shaped (success is irreducibly human taste) | route to a human / jig |
 
 Fail-closed: indeterminate input never yields `suitable`. The `missing_evidence`
-checklist is load-bearing only for `needs_evidence`; each item is
-`{kind, detail, blocking}` keyed to the closed taxonomy
+checklist is load-bearing for `needs_evidence` **and** for the judged-only
+`suitable` case (ADR-0036): a reviewed, frozen eval as the *sole* signal still
+yields `suitable` but carries a standing **non-blocking advisory** recommending a
+deterministic counterweight (the ADR-0033 reward-hacking lesson). **Blocking
+items still never appear on `suitable`**, and `unsuitable` still carries an empty
+list. Each item is `{kind, detail, blocking}` keyed to the closed taxonomy
 `tests · lint · ci · oracle_signal · reference_set` (extended only by a schema
 bump, never an open string).
+
+## The eval-signal leg (ADR-0036 / spec 030-01)
+
+`has_signal` is a test/CI signal **or** a reviewed, frozen eval component. The
+eval leg is read purely from the two manifests servo already writes — never by
+parsing `oracle.sh`:
+
+1. **Installed** — the component name is in `<target>/.servo/install.json`'s
+   `components` list (written by `fidelity_eval.register_manifest`, removed
+   symmetrically at uninstall).
+2. **Approved + frozen, with reviewed provenance** — the component's frozen
+   `<target>/.servo/<dir>/config.json` carries `approval_status: "approved"`,
+   `approval_provenance: "reviewed"`, `approved_content_hash`, and a non-empty
+   `hashes` map. The dir alias is closed: `design_fidelity` →
+   `.servo/design-eval/`, `content_fidelity` → `.servo/content-fidelity/`, else
+   `.servo/<component>/` (eval-authoring, dir == name).
+
+**Only `reviewed` provenance credits.** A `self_approved` or provenance-less
+freeze (today's `content_fidelity` / eval-authoring stamps), an unapproved or
+unfrozen config, an unregistered component, or an unreadable/malformed
+`config.json` all contribute nothing — fail-closed, never an env-error (ADR-0036
+guardrail 4). Suitability reads the *recorded* approval facts; it never re-hashes
+the frozen artifacts (staleness stays score-time authority via `validate_freeze`).
+
+**Judged-only advisory.** When a reviewed frozen eval is the *sole* signal (no
+tests, no CI), the verdict is still `suitable`, but the artifact carries a
+non-blocking advisory recommending a deterministic counterweight, and the
+deciding reason code is `evaluable_acs_with_eval_signal` (distinct from
+`evaluable_acs_with_signal`) so `--explain` / `reasons` make the judged-only
+case auditable.
+
+**Scope boundary.** This widens only the *signal* leg. `suitable` still requires
+`n_evaluable >= 1`, which `oracle_plan classify` derives from the AC *text* by a
+token-based family match. A design-led target benefits iff it carries ≥1 AC the
+classifier recognises as deterministic (e.g. "the built `dist/index.html` file
+is present" → `file_presence`); a spec whose ACs are all residual
+(visual-fidelity, or behavioural prose that misses the keyword families) is
+refused — never `suitable` — because an all-judge oracle with no deterministic
+anchor is the reward-hacking case ADR-0015 and ADR-0036 guardrail 5 stay
+cautious about.
 
 ## Re-run after acquiring evidence
 

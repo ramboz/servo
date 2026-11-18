@@ -364,5 +364,88 @@ class SharedACGrammarDocsTests(unittest.TestCase):
         self.assertIn("oracle_plan.py classify", suitability_text)
 
 
+
+# ---------------------------------------------------------------------------
+# Slice 030-01 — eval-signal docs + render_human advisory surfacing (AC5)
+# ---------------------------------------------------------------------------
+
+SIG_EVAL_BASE = {"tests": False, "lint": False, "ci": False, "language": "python"}
+
+
+def _write_eval_target(root: Path, component: str = "design_fidelity") -> Path:
+    """A target with no deterministic signal + a reviewed, frozen, registered
+    eval component (the judged-only case)."""
+    target = root / "target"
+    servo = target / ".servo"
+    servo.mkdir(parents=True)
+    (servo / "install.json").write_text(json.dumps(
+        {"schema_version": 1, "signals": SIG_EVAL_BASE,
+         "components": [component], "weights": {}}
+    ))
+    d = servo / {"design_fidelity": "design-eval"}.get(component, component)
+    d.mkdir(parents=True)
+    (d / "config.json").write_text(json.dumps({
+        "approval_status": "approved",
+        "approval_provenance": "reviewed",
+        "hashes": {"score.py": "abc"},
+        "approved_content_hash": "deadbeef",
+    }))
+    return target
+
+
+class EvalSignalDocsTests(unittest.TestCase):
+    def test_skill_md_documents_the_eval_signal_leg_and_both_manifests(self):
+        body = _skill_text()
+        self.assertIn("ADR-0036", body)
+        collapsed = " ".join(body.split())
+        # The eval leg named.
+        self.assertIn("reviewed, frozen eval", collapsed)
+        # Its reviewed-provenance requirement.
+        self.assertIn("approval_provenance", body)
+        # The two manifest sources: install.json `components` + the eval config.
+        self.assertIn("components", body)
+        self.assertIn("config.json", body)
+
+    def test_skill_md_retires_the_empty_on_suitable_absolute(self):
+        collapsed = " ".join(_skill_text().split())
+        # `suitable` may carry non-blocking advisory items only.
+        self.assertIn("non-blocking advisory", collapsed)
+        # Blocking items still never appear on `suitable`.
+        self.assertIn("Blocking items still never appear on", collapsed)
+
+    def test_decide_docstring_mentions_the_advisory(self):
+        doc = _load_suitability().decide.__doc__ or ""
+        self.assertIn("advisory", doc.lower())
+
+
+class RenderHumanAdvisoryTests(unittest.TestCase):
+    def test_render_human_surfaces_advisory_on_suitable(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _write_eval_target(root)
+            spec = root / "spec.md"
+            spec.write_text("# Spec\n\n1. an AC\n")
+            plan = _stub_oracle_plan(root, n_checks=2, n_residual=0)
+            res = _run_cli(target, spec, oracle_plan=plan)  # human (no --json)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertFalse(res.stdout.lstrip().startswith("{"))
+            self.assertIn("SUITABLE", res.stdout)
+            # The standing non-blocking advisory is surfaced on a suitable verdict.
+            self.assertIn("advisory", res.stdout.lower())
+            self.assertIn("counterweight", res.stdout.lower())
+
+    def test_render_human_suitable_with_deterministic_signal_has_no_advisory(self):
+        # A deterministic-signal suitable verdict prints no advisory block
+        # (unchanged from pre-030-01).
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root, SIG_TESTS)
+            spec = root / "spec.md"
+            spec.write_text("# Spec\n\n1. an AC\n")
+            plan = _stub_oracle_plan(root, n_checks=2, n_residual=0)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertIn("SUITABLE", res.stdout)
+            self.assertNotIn("advisory", res.stdout.lower())
+
 if __name__ == "__main__":
     unittest.main()
