@@ -15,175 +15,204 @@ Proposed (2026-11-18)
 
 Servo's suitability gate (`/servo:edd-suitability`, ADR-0015) calls a spec
 `suitable` only when **both** legs hold: `has_signal` — an executable gate the
-oracle can run at all — **and** `n_evaluable >= 1` — the spec-006 classifier
-(`oracle_plan.py classify`) mapped at least one acceptance criterion to a
-**deterministic** check family, not `residual_judgment`. The two legs guard
-different things: `has_signal` asks "is there a gate to run"; `n_evaluable` asks
-"is there at least one criterion we can verify *deterministically*." The gate is
-fail-closed because EDD's risk is asymmetric (ADR-0015): running the loop against
-a spec that cannot be meaningfully evaluated burns budget and produces a green
-oracle that means nothing — a **false pass**, the worst failure for an
-unattended system. ADR-0018 names the exact shape of that risk at Compile:
+oracle can run at all — **and** `n_evaluable >= 1` — at least one acceptance
+criterion backed by a **deterministic** check, not a stochastic judge. The two
+legs guard different things: `has_signal` asks "is there a gate to run";
+`n_evaluable` asks "is there at least one criterion we can verify
+*deterministically*." The gate is fail-closed because EDD's risk is asymmetric
+(ADR-0015): running the loop against a spec that cannot be meaningfully evaluated
+produces a green oracle that means nothing — a **false pass**, the worst failure
+for an unattended system. ADR-0018 names the exact shape of that risk at Compile:
 **"all-residual ACs + a vacuous oracle."**
 
 Spec 030-01 (ADR-0036) widened the **`has_signal`** leg to
-`tests OR ci OR reviewed_frozen_eval` — a reviewed, frozen eval component now
-counts as a signal. It deliberately left `n_evaluable` untouched: ADR-0036 scopes
-itself to the `has_signal` input set, and its guardrail 5 keeps a
-deterministic-counterweight advisory **non-blocking** precisely so the judge
+`tests OR ci OR reviewed_frozen_eval`. It deliberately left `n_evaluable`
+untouched: ADR-0036 scopes itself to the signal input set, and its guardrail 5
+keeps a deterministic counterweight **non-blocking** precisely so the judge
 cannot stand alone — "servo's posture has always been to pair non-deterministic
 evaluation with deterministic checks rather than let a single judge carry the
 oracle."
 
-This leaves a real gap, now measured. A pure **build-to-redline** design target
+This leaves a real, measured gap. A pure **build-to-redline** design target
 (e.g. vellum's workflow) is **all-residual**: its acceptance criteria are
 fidelity/measurement matches against a redline, scored by the model-judge
-(`servo:design-eval`). Running servo's actual classifier on vellum's own worked
-timer redline maps **6/6 of those criteria to `residual_judgment`**
-(`n_evaluable = 0`); only appended build/structural ACs (`npm run build` exits 0
-→ `command`; `dist/index.html` present → `file_presence`) are evaluable. So after
-030-01 such a target has a `has_signal` (the eval) but `n_evaluable = 0`, and
-suitability returns **`needs_evidence`, never `suitable`**.
+(`servo:design-eval`). So after 030-01 it has a `has_signal` (the eval) but
+`n_evaluable = 0`, and suitability returns **`needs_evidence`, never
+`suitable`**. The question this ADR settles: **how should a design-led target
+earn evaluability** — by crediting the stochastic judge, or some other way?
 
-The question this ADR settles: **should a reviewed, frozen eval also credit the
-`n_evaluable` (evaluability) leg**, so an all-residual design target can be
-`suitable`? Structurally, an all-residual target is *exactly* the shape ADR-0018
-built the gate to refuse — so the decision turns on one thing: **is a reviewed,
-frozen model-judge a "vacuous oracle," or a real evaluability basis?**
+Two facts about the deterministic landscape, both verified by running servo's
+real classifier (`oracle_plan.py classify`) and reading the code, shape the
+answer:
 
-The judge is genuinely more than taste. `servo:design-eval` is frozen and
-hashed (`definition_hash` pins judge, decoding, samples, threshold, case set),
-n-sampled with a conservative lower bound (`mean − k·stderr`), env-error-honest
-(never a silent zero), reference-anchored, and reviewed-provenance-gated
-(`approval_provenance: "reviewed"`, a distinct-approver re-enumeration). But it
-carries servo's own **documented, un-closed** residuals: a frozen, n-sampled,
-hashed design-eval once scored a **nine-divergence UI at 0.7998 vs 0.80**
-(ADR-0033) — "the machinery lends a rigged rubric the appearance of rigor"; the
-omission path has **no reviewer-free floor** ("in a detached loop with none, a
-rigged score still passes"); and `reviewed` is a **self-reported** string
-(ADR-0036 guardrail 4; OQ6 open). These residuals bite hardest in exactly the
-**autonomous, no-distinct-reviewer** mode where the suitability gate matters
-most.
+1. **AC text alone cannot carry design fidelity.** Of eight natural redline ACs
+   run through the classifier, only presence (`"the start button is present"` →
+   `file_presence`) and text (`"the timer text contains '00:00'"` →
+   `text_invariant`) classify deterministically; **all six fidelity-substantive
+   phrasings** (font-family, background-color, font-size, width, color-match,
+   visual-faithfulness) fall through to `residual_judgment`. So a deterministic
+   *AC-text* rung on a design target is a **presence/text anchor orthogonal to
+   visual fidelity** — a page can pass every presence/text AC while being
+   visually broken. A text-AC rung satisfies `n_evaluable` on paper without
+   putting any deterministic floor under *fidelity*.
+
+2. **Servo already has a judge-free deterministic fidelity check — but it lives
+   in a component, not in AC text.** The static-source-contract observer
+   (`skills/design-eval/static_contract.py`) runs deterministic
+   (`family: command`) checks of a build against a redline source contract — real
+   fidelity verification with no model judge. But it is installed as an oracle
+   **component**, and today only *deterministic AC text* counts toward
+   `n_evaluable`; the observer's deterministic value is therefore **uncounted**.
+   (It also hard-requires a `vellum-confirmed-source` producer closure that
+   ships with vellum, not servo — so it is reachable for targets that carry that
+   closure, vellum today, not for an arbitrary design target.)
+
+The decision thus turns on two linked questions: should the **stochastic vision
+judge** satisfy `n_evaluable` (reject — see below), and should a **deterministic
+component** like the static-source-contract observer satisfy it so its real
+fidelity floor counts?
+
+The vision eval is genuinely more than taste — frozen/hashed, n-sampled with a
+conservative lower bound, env-error-honest, reference-anchored,
+reviewed-provenance-gated. But it carries servo's own **documented, un-closed**
+residuals: a frozen, n-sampled, hashed design-eval once scored a
+**nine-divergence UI at 0.7998 vs 0.80** (ADR-0033) — "the machinery lends a
+rigged rubric the appearance of rigor"; the omission path has **no reviewer-free
+floor** ("in a detached loop with none, a rigged score still passes"); and
+`reviewed` is a **self-reported** string (ADR-0036 guardrail 4; OQ6 open). These
+residuals bite hardest in exactly the autonomous mode the suitability gate
+protects — which is why the judge must not become the evaluability basis.
 
 ## Decision Options Considered
 
-### Option A: the eval credits `has_signal` only; evaluability needs a deterministic rung (chosen)
-A reviewed, frozen eval remains a **signal and a composite component**; it does
-**not** satisfy `n_evaluable`. A design-led target reaches `suitable` by pairing
-the eval with a **deterministic rung** — servo's judge-free static-source-contract
-observer (`skills/design-eval/static_contract.py`), a token-lint, or a DOM/CSS
-assertion — whose ACs classify deterministically and satisfy `n_evaluable`. A
-pure fidelity-only target (no deterministic rung) stays `needs_evidence` until
-instrumented.
-- **Pros:** keeps a deterministic floor under every `suitable` verdict — the
-  exact thing `n_evaluable` guards (ADR-0018); upholds servo's on-record posture
-  that the judge is one component, never the sole gate (ADR-0005, ADR-0033,
-  ADR-0036 guardrail 5); the judge's gameability residuals never become the sole
-  thing the loop optimizes against; closes the gap with machinery servo already
-  ships; no change to the gate's trust model.
-- **Cons:** a pure fidelity-only target — where the design match is genuinely the
-  *only* acceptance and no deterministic rung is meaningful — is refused until an
-  author adds one; shifts an instrumentation burden onto design-target authors.
+### Option A: `n_evaluable` keeps requiring a deterministic *AC*; design targets add one
+No gate change. A design target reaches `suitable` by writing a deterministic AC.
+- **Pros:** simplest; no new gate surface; the deterministic floor is a real,
+  author-reviewed criterion in the spec.
+- **Cons:** on a design target the only deterministic AC text available is
+  **presence/text** (fact 1) — a thin anchor **orthogonal to fidelity**, so
+  fidelity still rests entirely on the stochastic judge; and the one real
+  judge-free fidelity check servo ships (the static-source-contract observer,
+  fact 2) stays **uncounted** because it is a component, not AC text. A target
+  that *is* properly instrumented with a deterministic fidelity rung is still
+  refused unless its author also writes a fig-leaf presence AC.
 
-### Option B: credit the reviewed, frozen judge toward `n_evaluable`
-Admit an all-residual target on the judge alone.
+### Option B: credit the stochastic vision judge toward `n_evaluable`
+Admit an all-residual target on the model-judge alone.
 - **Pros:** admits the thinnest design targets with no extra instrumentation;
-  symmetric with ADR-0036's motivation (removing false refusals of design-led
-  targets); the eval is falsifiable, not taste, so refusing it arguably
-  mis-describes it; ADR-0005 foresaw "promoting a triaged subset of
-  `residual_judgment` into frozen eval components."
+  the eval is falsifiable, not taste; ADR-0005 foresaw "promoting a triaged
+  subset of `residual_judgment` into frozen eval components."
 - **Cons:** removes the **last deterministic anchor** — the loop would optimize
   against a stochastic judge with no deterministic floor, which *is* the
-  "all-residual + vacuous oracle" false-pass shape ADR-0018 refuses; contradicts
-  servo's composite posture; puts the full weight of the gate on the most
-  gameable surface in the autonomous mode where its defenses are weakest (the
-  0.7998 field report is a *judged-only* false pass); leans the evaluability leg
-  on the self-reported `reviewed` string (OQ6); and moves opposite to ADR-0036's
-  kill criteria, which are built to tighten against false *passes*, not to loosen.
+  "all-residual + vacuous oracle" false-pass shape ADR-0018 refuses; puts the
+  gate's full weight on the most gameable surface in the autonomous mode where
+  its defenses are weakest (the 0.7998 field report is a *judged-only* false
+  pass); leans the evaluability leg on the self-reported `reviewed` string
+  (OQ6); and moves opposite to ADR-0036's kill criteria, which tighten against
+  false *passes*, not loosen.
 
-### Option C: credit `n_evaluable` from a deterministic *component*, not the judge
-Let a deterministic component installed in the oracle (e.g. a static-source-contract
-component in `install.json`) satisfy `n_evaluable`, even when the spec's AC text is
-all-residual — as 030-01 did for `has_signal`.
-- **Pros:** admits a design target instrumented with a deterministic rung-component
-  without forcing the author to phrase it as AC text; keeps a real deterministic
-  check as the anchor (same posture as A).
-- **Cons:** a gate change that drifts `n_evaluable` from "a deterministic AC in the
-  spec" to "a deterministic component installed" — a subtle widening; only helps
-  the narrow case of a rung-component present but not surfaced as an AC. A
-  refinement of A, not a different posture.
+### Option C: a deterministic *component* satisfies `n_evaluable`; the stochastic judge never does (chosen)
+`n_evaluable` is satisfied by at least one **deterministic check**, expressed
+**either** as a deterministic AC (classified by `oracle_plan`) **or** as a
+deterministic **component** installed in the oracle — one whose checks are in
+deterministic families (e.g. the static-source-contract observer's
+`family: command` checks). A **stochastic model-judge** component (the vision
+eval) **never** satisfies `n_evaluable`; it stays a `has_signal` source and a
+fidelity component only. This mirrors how 030-01 widened `has_signal` to read
+components, applied to the evaluability leg — but strictly for *deterministic*
+components.
+- **Pros:** gives a design target a **real deterministic fidelity floor** (the
+  static-source-contract observer) that actually counts toward evaluability —
+  not the presence/text fig leaf of Option A; keeps the stochastic judge out of
+  the evaluability leg entirely (upholds ADR-0005/0033/0036-guardrail-5); counts
+  deterministic value wherever it lives (AC text *or* component), closing the
+  fact-2 gap where a well-instrumented target's deterministic rung went
+  uncounted.
+- **Cons:** a gate change — the gate must read `install.json` components and
+  **classify each component's checks as deterministic vs stochastic**, correctly
+  excluding the vision eval; that classification is new surface and a new place
+  to get the judge/deterministic line wrong. And the static-source-contract
+  observer needs the vellum producer closure, so C admits *vellum-style* design
+  targets, not every design target — a closure-less target still needs a
+  deterministic AC (Option A's path).
 
 ## Recommended Decision
 
-**Option A.** A reviewed, frozen eval credits `has_signal` (ADR-0036) and is a
-first-class composite component, but it does **not** satisfy the `n_evaluable`
-leg. Evaluability requires a deterministic check. A design-led target reaches
-`suitable` by pairing the vision eval with a **deterministic rung** — the
-judge-free static-source-contract observer servo already ships, a token-lint, or
-a DOM/CSS assertion — whose criteria classify deterministically. A pure
-fidelity-only target stays `needs_evidence` — correctly: an all-residual spec
-whose only oracle is a lone stochastic judge is the false-pass shape ADR-0015 and
-ADR-0018 built the gate to refuse, and the judge's un-closed gameability residuals
-land hardest in exactly the unattended mode the gate protects. This is not a new
-restriction; it is the gate working as intended, with ADR-0036's signal-leg
-widening left fully intact.
+**Option C.** Evaluability (`n_evaluable >= 1`) is satisfied by at least one
+**deterministic check** — a deterministic AC *or* a deterministic component
+installed in the oracle (checks in deterministic families; the static-source-
+contract observer is the design-fidelity instance). A **stochastic vision eval
+never satisfies `n_evaluable`** — it remains a `has_signal` source and a fidelity
+*component*, never the evaluability basis (this rejects Option B). A design-led
+target reaches `suitable` by pairing the vision eval (fidelity signal/component)
+with a deterministic static-source-contract component (the deterministic floor),
+which is reachable for targets that carry the producer closure (vellum today).
 
-Option C (crediting `n_evaluable` from a deterministic component) is a possible
-future refinement if real design targets commonly carry a deterministic
-rung-component that is not surfaced as an AC; it is deferred until that is
-observed, because it changes the `n_evaluable` semantics and the AC-text path
-(Option A) already admits a properly-instrumented design target today.
+This preserves the deterministic anchor the `n_evaluable` leg exists to guard
+(ADR-0015/0018) and servo's "the judge is one component, never the sole gate"
+posture (ADR-0005/0033/0036), while giving design targets a path to `suitable`
+that puts a **real, judge-free fidelity floor** under the verdict — not the
+presence/text fig leaf Option A would. The honest limit stands: an all-residual
+target with **no** deterministic check of any kind — neither a deterministic AC
+nor a deterministic component — stays `needs_evidence`, correctly, because a spec
+whose only oracle is a lone stochastic judge is exactly the false pass the gate
+exists to refuse.
+
+Implementation is a follow-up spec/slice: teach the gate to credit `n_evaluable`
+from a component whose checks are in deterministic families, and to exclude a
+model-judge component from that credit. The judge/deterministic classification is
+the load-bearing piece of that slice (see Kill criteria).
 
 ## Consequences
 
 **Becomes easier:**
-- Every `suitable` verdict keeps a deterministic floor, so a green oracle still
-  means something — the loop never optimizes against a lone model-judge.
-- servo's composite posture stays coherent: the judge is a signal and component,
-  never the evaluability basis, so no new, more-gameable trust surface is opened.
-- Design-led targets have a clear, supported path to `suitable`: add a
-  deterministic rung (static-source-contract), with the vision eval as the
-  fidelity component.
+- A design target instrumented with a deterministic static-source-contract
+  component reaches `suitable` with a **real deterministic fidelity floor**, not
+  a presence/text fig leaf.
+- `n_evaluable` recognizes deterministic value wherever it lives — AC text or
+  component — fixing the gap where a well-instrumented target's judge-free
+  fidelity rung went uncounted.
+- The vision eval stays a reviewed fidelity component and `has_signal` source,
+  never the evaluability basis — the composite posture holds.
 
 **Becomes harder:**
-- A pure fidelity-only design target (no meaningful deterministic rung) is
-  refused (`needs_evidence`) until an author instruments one — real friction for
-  the thinnest design targets.
-- Design-target authors carry the burden of adding a deterministic rung; docs and
-  tooling should point them at the static-source-contract observer so the path is
-  discoverable.
+- A gate change: the gate must read `install.json` components and classify each
+  component's checks as deterministic vs stochastic, correctly excluding the
+  vision eval from the `n_evaluable` credit — new surface, and the one place the
+  judge/deterministic line must not be crossed.
+- The static-source-contract observer needs the vellum producer closure, so C
+  admits vellum-style targets, not every design target; a closure-less design
+  target still needs a deterministic AC. The gap is narrowed, not fully closed.
 
 ## Assumptions
 
-- `servo:design-eval`'s gameability residuals are real and bite hardest in the
-  autonomous, no-distinct-reviewer mode — grounded in ADR-0033's field report
-  (0.7998 vs 0.80 on a nine-divergence UI), ADR-0036 guardrail 4, and the
-  ADR-0036 frame-critique, not asserted here.
-- servo ships a judge-free deterministic rung usable by a design target
-  (static-source-contract observer, `skills/design-eval/static_contract.py`), and
-  its criteria classify as a deterministic family in `oracle_plan.py classify`.
-  Confirm both at implementation time — if no deterministic rung is actually
-  reachable for a real design target, the first Kill criterion fires.
+- The static-source-contract observer's checks are deterministic and judge-free
+  (`family: command`) — grounded in `skills/design-eval/static_contract.py` and
+  `examples/static-source-contract.md`; confirm the installed `checks.json`
+  family at implementation time.
+- The gate can reliably distinguish a deterministic component from the stochastic
+  vision-eval component (by check family / component type in `install.json`).
+  Confirm the component metadata actually supports this distinction before
+  implementing — if it cannot, the first Kill criterion fires.
 
 ## Kill criteria
 
-- A real class of design-led targets has **no meaningful deterministic rung**
-  (fidelity is irreducibly the only acceptance; static-source-contract /
-  token-lint / DOM assertions add nothing checkable), so refusing them is a pure
-  false refusal with no constructive path. Then crediting the judge (Option B) or
-  a deterministic component (Option C) becomes the lesser evil. Trigger: field
-  evidence that instrumenting a deterministic rung is infeasible for a real
-  target class.
-- The design-eval's gameability residuals are **closed** — a structural,
-  reviewer-free anti-omission floor, enforced distinct-reviewer re-enumeration,
-  and doctoring detection. Then "too gameable to be an evaluability basis"
-  weakens and Option B/C should be revisited.
+- The gate **cannot** reliably tell a deterministic component from the stochastic
+  eval component (so crediting components risks crediting the judge by mistake).
+  Then C collapses into B's risk — abandon component-crediting and fall back to
+  Option A (a deterministic AC is required).
+- **No** real design target carries a deterministic component (the
+  static-source-contract closure proves too rare to matter). Then C helps no one
+  in practice, and the design-target gap is closable only via a deterministic AC
+  (Option A) or stays open pending a generalized judge-free fidelity rung.
 
 ## Open questions
 
-- Is Option C (credit `n_evaluable` from a deterministic component) worth the
-  gate change, or does requiring a deterministic AC (Option A) suffice? Deferred
-  until usage shows design targets carry rung-components not surfaced as ACs.
-- Should servo's docs/skills for design targets actively prescribe the
-  static-source-contract rung so the "add a deterministic rung" path is
-  discoverable? A docs/skill follow-up, not part of this decision.
+- The exact classification mechanism — how the gate decides a component is
+  deterministic vs stochastic (check `family` in `install.json`? a component-type
+  field? the `approval_provenance`/judge markers?) — is an implementation detail
+  for the follow-up slice, but it is the slice's load-bearing risk.
+- Does a generic (non-vellum) design target have any judge-free deterministic
+  fidelity rung available, or only targets with the vellum producer closure? If
+  only vellum, is generalizing that static-source-contract producer path a
+  worthwhile larger follow-up? Out of scope here.
