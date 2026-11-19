@@ -136,9 +136,59 @@ token-based family match. A design-led target benefits iff it carries ≥1 AC th
 classifier recognises as deterministic (e.g. "the built `dist/index.html` file
 is present" → `file_presence`); a spec whose ACs are all residual
 (visual-fidelity, or behavioural prose that misses the keyword families) is
-refused — never `suitable` — because an all-judge oracle with no deterministic
-anchor is the reward-hacking case ADR-0015 and ADR-0036 guardrail 5 stay
-cautious about.
+refused — never `suitable` via the AC leg — because an all-judge oracle with no
+deterministic anchor is the reward-hacking case ADR-0015 and ADR-0036 guardrail
+5 stay cautious about. An all-residual *design* spec can instead earn
+evaluability from its own deterministic required-policy fidelity floor — see the
+next section ([ADR-0050](../../docs/decisions/adr-0050-eval-is-signal-not-evaluability.md)
+/ spec 044).
+
+## The required-policy evaluability leg (ADR-0050 / spec 044)
+
+`n_evaluable` is satisfied by at least one deterministic **AC** (above) **or** a
+deterministic, **spec-attributed required-policy check** — the judge-free
+static-source-contract observer (`family: command`, ADR-0046), which renders the
+built app and compares computed CSS against the redline within tolerance. This is
+how a pure build-to-redline design target (all fidelity ACs, `n_evaluable == 0`
+from AC text) earns evaluability: it pairs its reviewed, frozen eval (the
+`has_signal` fidelity *signal*, 030-01) with its own static-source-contract check
+(the deterministic `n_evaluable` fidelity *floor*).
+
+**The stochastic `design_fidelity` judge NEVER satisfies `n_evaluable`** (ADR-0050
+rejects crediting the judge): it stays a `has_signal` source and fidelity
+component only. The evaluability credit reads only the deterministic
+required-policy check plan, never `install.json`'s quality `components`.
+
+**Attribution — a spec declares its own floor.** A design spec attributes the
+floor to itself with a frontmatter binding, a target-relative path to the sealed
+static-source-contract dir:
+
+```yaml
+fidelity_contract: spec/oracle/static
+```
+
+The credit fires **iff** the analyzed spec declares `fidelity_contract` **and**
+the declared path resolves to a **live, enforceable** floor — a committed seal
+pinned to the current `oracle.sh` (L1) **and** installed as a required component
+in `.servo/required-policy.json` (L2), mirroring what the score-time oracle
+enforces (`driver_seal` / `required_runtime`). A committed
+`approval_status: "approved"` label alone never suffices; a missing / draft /
+unsealed / stale-`oracle.sh`-pin / not-installed floor fails closed, so a
+`suitable` verdict never admits a loop whose oracle would env-error or green on
+the judge alone. An **undeclared** spec is never credited (no target-global
+credit a spec inherits for free). The declaration is **per-spec opt-in**, an
+affirmative, reviewable attribution under servo's honest-author model — sound by
+construction within the single-redline-per-target (vellum) closure; a spec that
+deliberately mis-declares another spec's redline is caught by **spec review**,
+not the gate (the gate cannot — and by the judge-exclusion must not — compute
+whether a redline corresponds to a spec's fidelity goals). The synthetic
+`spec_id: "static"` / `source_spec_path: "spec/static.md"` in the static
+`checks.json` play **no** part in attribution.
+
+A `suitable` verdict reached this way names its evaluability source in the
+decided reason code (`evaluable_required_policy_with_eval_signal` /
+`evaluable_required_policy_with_signal`) and in the `--explain` trace
+(`policy_evaluable=True`), so the case is auditable.
 
 ## Re-run after acquiring evidence
 

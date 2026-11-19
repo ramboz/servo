@@ -447,5 +447,37 @@ class RenderHumanAdvisoryTests(unittest.TestCase):
             self.assertIn("SUITABLE", res.stdout)
             self.assertNotIn("advisory", res.stdout.lower())
 
+
+class RequiredPolicyEvaluabilityDocsTests(unittest.TestCase):
+    """AC6 — SKILL.md + decide() docstring document the ADR-0050 / 044 leg."""
+
+    def test_skill_md_documents_the_required_policy_evaluability_leg(self):
+        body = _skill_text()
+        collapsed = " ".join(body.split())
+        self.assertIn("ADR-0050", body)
+        # n_evaluable from a deterministic AC OR a required-policy check.
+        self.assertIn("required-policy", collapsed.lower())
+        # The attribution binding.
+        self.assertIn("fidelity_contract", body)
+        # The judge never satisfies n_evaluable.
+        self.assertIn("design_fidelity", body)
+        self.assertIn("NEVER satisfies `n_evaluable`", body)
+
+    def test_skill_md_documents_the_two_layer_liveness_and_attribution(self):
+        collapsed = " ".join(_skill_text().split())
+        # Live, enforceable floor — not a committed label alone.
+        self.assertIn("live, enforceable", collapsed)
+        self.assertIn("oracle.sh", collapsed)
+        # Per-spec opt-in; undeclared never credited.
+        self.assertIn("undeclared", collapsed.lower())
+        self.assertIn("honest-author", collapsed.lower())
+
+    def test_decide_docstring_names_the_policy_evaluability_source(self):
+        doc = _load_suitability().decide.__doc__ or ""
+        collapsed = " ".join(doc.split())
+        self.assertIn("required-policy", collapsed.lower())
+        self.assertIn("ADR-0050", doc)
+
+
 if __name__ == "__main__":
     unittest.main()

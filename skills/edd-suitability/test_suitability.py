@@ -26,6 +26,7 @@ classifier.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import os
@@ -1331,6 +1332,627 @@ class EvalSignalReconCoverageTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("eval_signal=True", r.stdout)
             self.assertIn("evaluable_acs_with_eval_signal", r.stdout)
+
+
+# ==========================================================================
+# Slice 044-01 — required-policy-evaluable (ADR-0050)
+#
+# `n_evaluable` is additionally satisfied by a deterministic, spec-attributed
+# required-policy check — the judge-free static-source-contract floor — bound to
+# the spec by a `fidelity_contract` frontmatter declaration and credited only
+# when the floor is LIVE: L1 (committed seal + current `oracle.sh` hash-pin) AND
+# L2 (installed as a required component whose entry equals the committed
+# binding). The stochastic `design_fidelity` judge NEVER credits `n_evaluable`.
+# Non-`fidelity_contract` specs stay byte-identical.
+# ==========================================================================
+
+_CONTRACT_DIR = "spec/oracle/static"
+_CONTRACT_CHECKS = _CONTRACT_DIR + "/checks.json"
+_POLICY_CODES = (
+    "evaluable_required_policy_with_eval_signal",
+    "evaluable_required_policy_with_signal",
+)
+_RP_VALID = "valid"  # sentinel: use the valid required_policy (avoid B006)
+
+
+def _oracle_hash(content: str) -> str:
+    return "sha256:" + hashlib.sha256(content.encode()).hexdigest()
+
+
+def _write_oracle_sh(target: Path, content: str = "#!/bin/sh\necho oracle\n") -> str:
+    (target / "oracle.sh").write_text(content)
+    return _oracle_hash(content)
+
+
+def _static_binding(check_ids, oracle_hash, *, checks_path=_CONTRACT_CHECKS):
+    """A plausible approved_required_binding (committed + installed shape)."""
+    evaluator = {"path": "tools/static/static_contract.py",
+                 "hash": "sha256:" + "e" * 64}
+    return {
+        "schema_version": 1,
+        "kind": "approved_required_binding",
+        "component": "static_source_contract",
+        "checks_path": checks_path,
+        "config_hash": "sha256:" + "c" * 64,
+        "enabled": True,
+        "required_ids": sorted(check_ids),
+        "source_identity": {"path": "spec/static.md", "hash": "sha256:" + "a" * 64},
+        "evaluator": evaluator,
+        "evaluator_artifacts": [
+            {"path": "oracle.sh", "hash": oracle_hash},
+            {"path": "tools/static/static_contract.py", "hash": "sha256:" + "e" * 64},
+        ],
+        "fragment_hash": "sha256:" + "f" * 64,
+        "required_runtime": {"path": ".servo/required_runtime.py",
+                             "hash": "sha256:" + "d" * 64},
+        "driver_hash": "sha256:" + "b" * 64,
+        "threshold_default": "0.5",
+    }
+
+
+def _set_required_policy_pin(target: Path, present: bool = True) -> None:
+    manifest_path = target / ".servo" / "install.json"
+    manifest = json.loads(manifest_path.read_text())
+    if present:
+        manifest["required_policy"] = {"schema_version": 1,
+                                       "hash": "sha256:" + "0" * 64}
+    else:
+        manifest.pop("required_policy", None)
+    manifest_path.write_text(json.dumps(manifest))
+
+
+def _write_static_contract(
+    target: Path, *,
+    check_ids=("APP-font",), family="command", required=True,
+    required_policy=_RP_VALID, approval_status="approved",
+    include_binding=True, binding_required_ids=None,
+    checks_raw=None, write_checks=True,
+    pin_oracle=True, oracle_hash=None,
+    write_policy=True, policy_kind="required_policy",
+    policy_binding="match", install_pin=True,
+    contract_dir=_CONTRACT_DIR,
+):
+    """Write a (by default LIVE) static-source-contract on `target`.
+
+    Default: a committed, sealed `checks.json` whose binding pins the current
+    `oracle.sh` (L1), plus a runtime `.servo/required-policy.json` registering it
+    as a required component with the committed binding, and an `install.json`
+    `required_policy` pin (L2). Each knob neuters exactly one predicate for the
+    AC4 mutation fixtures. Returns the committed binding dict.
+    """
+    if oracle_hash is None:
+        oracle_hash = _write_oracle_sh(target)
+    else:
+        # Write a real oracle.sh but pin a (caller-supplied, possibly stale) hash.
+        _write_oracle_sh(target)
+    ids = list(check_ids)
+    bind_ids = binding_required_ids if binding_required_ids is not None else ids
+    binding = _static_binding(bind_ids, oracle_hash,
+                              checks_path=contract_dir + "/checks.json")
+    if not pin_oracle:
+        binding["evaluator_artifacts"] = [
+            a for a in binding["evaluator_artifacts"] if a["path"] != "oracle.sh"]
+    checks = [{"id": cid, "family": family, "required": required,
+               "timeout": 180, "command": ["x"],
+               "evaluator_artifacts": [], "refusal_exit_codes": [2]}
+              for cid in ids]
+    plan = {
+        "schema_version": 1, "spec_id": "static",
+        "source_spec_path": "spec/static.md",
+        "source_hash": "sha256:" + "a" * 64,
+        "checks": checks, "residual_judgment": [],
+        "approved_content_hash": "sha256:" + "c" * 64,
+    }
+    if required_policy == _RP_VALID:
+        plan["required_policy"] = {"schema_version": 1, "enabled": True}
+    elif required_policy is not None:
+        plan["required_policy"] = required_policy
+    if approval_status is not None:
+        plan["approval_status"] = approval_status
+    if include_binding:
+        plan["approved_required_binding"] = binding
+    cdir = target / Path(*contract_dir.split("/"))
+    cdir.mkdir(parents=True, exist_ok=True)
+    if write_checks:
+        (cdir / "checks.json").write_text(
+            checks_raw if checks_raw is not None else json.dumps(plan))
+    servo = target / ".servo"
+    servo.mkdir(parents=True, exist_ok=True)
+    if write_policy:
+        component = dict(binding)
+        if policy_binding == "mismatch":
+            component = dict(binding, config_hash="sha256:" + "9" * 64)
+        elif policy_binding == "wrong_path":
+            component = dict(binding, checks_path="spec/oracle/other/checks.json")
+        policy = {"schema_version": 1, "kind": policy_kind,
+                  "components": [component], "runtime_hash": "sha256:" + "d" * 64}
+        (servo / "required-policy.json").write_text(json.dumps(policy))
+    _set_required_policy_pin(target, present=install_pin)
+    return binding
+
+
+def _make_fc_spec(root: Path, *, fidelity_contract=None,
+                  dir_name="015-edd-suitability",
+                  body="1. the UI matches the mockup\n") -> Path:
+    """A spec whose leading frontmatter optionally declares `fidelity_contract`."""
+    spec_dir = root / dir_name
+    spec_dir.mkdir(parents=True, exist_ok=True)
+    fm = ""
+    if fidelity_contract is not None:
+        fm = f"---\nstatus: DRAFT\nfidelity_contract: {fidelity_contract}\n---\n\n"
+    spec = spec_dir / "spec.md"
+    spec.write_text(f"{fm}# Spec\n\n## Acceptance Criteria\n\n{body}")
+    return spec
+
+
+def _vellum_target(root: Path, *, static=True) -> Path:
+    """A design-led target: no tests/CI, a reviewed+frozen design_fidelity eval
+    (has_signal via 030-01), and (by default) a LIVE static contract."""
+    target = _make_target(root, SIG_EVAL_BASE)
+    _write_install(target, SIG_EVAL_BASE, ["design_fidelity"])
+    _write_eval_config(target, "design_fidelity")
+    if static:
+        _write_static_contract(target)
+    return target
+
+
+# --------------------------------------------------------------------------
+# AC1 — a declared, LIVE static contract → suitable (the vellum pairing)
+# --------------------------------------------------------------------------
+
+class RequiredPolicyPositiveTests(unittest.TestCase):
+    def test_declared_live_contract_all_residual_is_suitable(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root)
+            spec = _make_fc_spec(root, fidelity_contract="spec/oracle/static")
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)  # ALL residual
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target).read_text())
+            self.assertEqual(art["verdict"], "suitable", art)
+            codes = [r["code"] for r in art["reasons"]]
+            self.assertIn("evaluable_required_policy_with_eval_signal", codes)
+            self.assertNotIn("evaluable_acs_with_eval_signal", codes)
+            # No blocking item at all — in particular NO reference_set (the policy
+            # check supplies evaluability).
+            self.assertEqual(_blocking_kinds(art), set())
+            kinds = {it["kind"] for it in art["missing_evidence"]}
+            self.assertNotIn("reference_set", kinds)
+            # The eval is the sole signal → the counterweight advisory stands.
+            self.assertTrue({"tests", "ci"}.issubset(_advisory_kinds(art)))
+            # `ac_counts.evaluable` keeps the AC count (0), not the +1 total.
+            self.assertEqual(art["inputs"]["ac_counts"]["evaluable"], 0)
+
+    def test_explain_trace_shows_policy_evaluable(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root)
+            spec = _make_fc_spec(root, fidelity_contract="spec/oracle/static")
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+            env = dict(os.environ)
+            env["SERVO_SUITABILITY_ORACLE_PLAN"] = str(plan)
+            r = subprocess.run(
+                [sys.executable, str(SUITABILITY), "analyze", str(target),
+                 "--spec", str(spec), "--explain"],
+                capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("policy_evaluable=True", r.stdout)
+            self.assertIn("evaluable_required_policy_with_eval_signal", r.stdout)
+
+    def test_human_summary_names_the_policy_floor(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root)
+            spec = _make_fc_spec(root, fidelity_contract="spec/oracle/static")
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertIn("required-policy fidelity check", res.stdout)
+
+    def test_mixed_evaluable_ac_and_live_contract_keeps_ac_code(self):
+        # The mixed case: a spec with >=1 evaluable AC AND a declared live floor.
+        # Evaluability is already met by the AC, so the policy credit is a
+        # NON-DECISIVE bonus — the decided code stays AC-based
+        # (`evaluable_acs_with_eval_signal`), not a policy code, and
+        # `ac_counts.evaluable` keeps the real AC count. The `_facts` suffix still
+        # honestly notes the policy check. Exercises the `policy_only_evaluable ==
+        # False` branch when policy_evaluable is True.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root)
+            spec = _make_fc_spec(root, fidelity_contract="spec/oracle/static")
+            plan = _stub_oracle_plan(root, n_checks=1, n_residual=1)  # 1 real AC
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target).read_text())
+            self.assertEqual(art["verdict"], "suitable", art)
+            codes = [r["code"] for r in art["reasons"]]
+            self.assertIn("evaluable_acs_with_eval_signal", codes)  # AC-decided
+            for c in _POLICY_CODES:
+                self.assertNotIn(c, codes)
+            self.assertEqual(art["inputs"]["ac_counts"]["evaluable"], 1)
+            # The reason's facts suffix still notes the policy check honestly.
+            self.assertIn("required-policy fidelity check",
+                          art["reasons"][0]["message"])
+
+
+# --------------------------------------------------------------------------
+# AC2 — the stochastic design_fidelity judge ALONE never credits n_evaluable
+# --------------------------------------------------------------------------
+
+class JudgeNeverCreditsEvaluableTests(unittest.TestCase):
+    def test_design_fidelity_alone_no_contract_stays_needs_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root, static=False)  # judge only, no floor
+            spec = _make_fc_spec(root, fidelity_contract=None)
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target).read_text())
+            # has_signal via 030-01, but zero evaluable ACs + no policy credit.
+            self.assertEqual(art["verdict"], "needs_evidence", art)
+            codes = [r["code"] for r in art["reasons"]]
+            self.assertIn("signal_without_evaluable_acs", codes)
+            self.assertIn("reference_set", _blocking_kinds(art))
+            for c in _POLICY_CODES:
+                self.assertNotIn(c, codes)
+
+
+# --------------------------------------------------------------------------
+# AC3 — the automatic / target-global leak is closed (an UNDECLARED spec is
+#       never credited by a co-located contract); the declaration discriminates
+# --------------------------------------------------------------------------
+
+class RequiredPolicyAttributionTests(unittest.TestCase):
+    def test_undeclared_spec_not_credited_by_colocated_contract(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root)  # a LIVE contract sits on the target
+            spec = _make_fc_spec(root, fidelity_contract=None, dir_name="unrelated")
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1, spec_id=None)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target, "unrelated").read_text())
+            self.assertEqual(art["verdict"], "needs_evidence", art)
+            self.assertIn("reference_set", _blocking_kinds(art))
+
+    def test_declaration_is_the_discriminator(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root)
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1, spec_id=None)
+            declaring = _make_fc_spec(root, fidelity_contract="spec/oracle/static",
+                                      dir_name="declaring")
+            undeclared = _make_fc_spec(root, fidelity_contract=None,
+                                       dir_name="undeclared")
+            _run_cli(target, declaring, oracle_plan=plan)
+            _run_cli(target, undeclared, oracle_plan=plan)
+            a = json.loads(_artifact_path(target, "declaring").read_text())
+            b = json.loads(_artifact_path(target, "undeclared").read_text())
+            self.assertEqual(a["verdict"], "suitable", a)
+            self.assertEqual(b["verdict"], "needs_evidence", b)
+
+
+# --------------------------------------------------------------------------
+# AC3b — the honest-author residual, fenced: a DELIBERATELY declaring second
+#        spec is credited (documented, not a bug — the gate cannot compute
+#        AC↔redline correspondence; that is an author-declared, reviewable claim)
+# --------------------------------------------------------------------------
+
+class HonestAuthorResidualTests(unittest.TestCase):
+    def test_second_declaring_spec_is_credited_documented_residual(self):
+        # DOCUMENTED honest-author residual (ADR-0050): the gate credits ANY spec
+        # that declares `fidelity_contract` + a live floor. Distinguishing the
+        # design spec from an unrelated one on a shared target is the author's
+        # reviewable claim, caught by spec review — sound by construction only
+        # within the single-redline-per-target closure. Pinned so a future change
+        # to the attribution boundary is visible.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root)  # the target's ONE redline (for spec A)
+            spec_b = _make_fc_spec(root, fidelity_contract="spec/oracle/static",
+                                   dir_name="spec-b")  # an unrelated spec B
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1, spec_id=None)
+            _run_cli(target, spec_b, oracle_plan=plan)
+            art = json.loads(_artifact_path(target, "spec-b").read_text())
+            self.assertEqual(art["verdict"], "suitable", art)  # the residual, by design
+
+
+# --------------------------------------------------------------------------
+# AC4 — fail-closed (two-layer). Each fixture neuters ONE predicate so the DoD
+#       mutation-check holds (the baseline below proves non-vacuity: intact ⇒
+#       credited, any single break ⇒ not credited).
+# --------------------------------------------------------------------------
+
+class RequiredPolicyFailClosedTests(unittest.TestCase):
+    def _target(self, root):
+        return _vellum_target(root, static=False)
+
+    def _assert_not_credited(self, target, *, fc="spec/oracle/static"):
+        root = target.parent
+        spec = _make_fc_spec(root, fidelity_contract=fc)
+        plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+        res = _run_cli(target, spec, oracle_plan=plan)
+        self.assertEqual(res.returncode, 0, res.stderr)  # never an env-error
+        art = json.loads(_artifact_path(target).read_text())
+        self.assertNotEqual(art["verdict"], "suitable", art)
+        codes = [r["code"] for r in art["reasons"]]
+        for c in _POLICY_CODES:
+            self.assertNotIn(c, codes)
+        return art
+
+    def test_baseline_live_contract_is_credited(self):
+        # Non-vacuity anchor: with every predicate intact, the credit DOES fire.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target)
+            spec = _make_fc_spec(root, fidelity_contract="spec/oracle/static")
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+            _run_cli(target, spec, oracle_plan=plan)
+            art = json.loads(_artifact_path(target).read_text())
+            self.assertEqual(art["verdict"], "suitable", art)
+
+    # L1 — committed seal + oracle.sh liveness.
+    def test_a_no_checks_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, write_checks=False)
+            self._assert_not_credited(target)
+
+    def test_b_malformed_checks_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, checks_raw="{ not json ]")
+            self._assert_not_credited(target)
+
+    def test_c_required_policy_absent_or_disabled(self):
+        for rp in (None, {"schema_version": 1, "enabled": False}):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = self._target(root)
+                _write_static_contract(target, required_policy=rp)
+                self._assert_not_credited(target)
+
+    def test_d_approval_status_not_approved(self):
+        for status in ("draft", "pending", None):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = self._target(root)
+                _write_static_contract(target, approval_status=status)
+                self._assert_not_credited(target)
+
+    def test_e_not_command_or_not_required_or_empty(self):
+        for kw in (dict(family="file_presence"), dict(required=False),
+                   dict(check_ids=())):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = self._target(root)
+                _write_static_contract(target, **kw)
+                self._assert_not_credited(target)
+
+    def test_f_unsafe_declared_path(self):
+        for bad in ("../evil", "/etc/passwd", "spec/../../../etc", ".."):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = self._target(root)
+                _write_static_contract(target)  # a live contract exists elsewhere
+                self._assert_not_credited(target, fc=bad)
+
+    def test_g_binding_absent_or_required_ids_mismatch(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, include_binding=False)
+            self._assert_not_credited(target)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, binding_required_ids=["OTHER"])
+            self._assert_not_credited(target)
+
+    def test_h_oracle_pin_absent_stale_or_regenerated(self):
+        # absent pin row
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, pin_oracle=False)
+            self._assert_not_credited(target)
+        # stale pin hash
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, oracle_hash="sha256:" + "7" * 64)
+            self._assert_not_credited(target)
+        # oracle.sh regenerated after sealing (the airtight honest-drift case)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target)
+            _write_oracle_sh(target, "#!/bin/sh\necho regenerated\n")
+            self._assert_not_credited(target)
+
+    # L2 — installed as a live required component.
+    def test_i_not_installed_as_required_component(self):
+        # required-policy.json absent
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, write_policy=False)
+            self._assert_not_credited(target)
+        # install.json has no required_policy pin
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, install_pin=False)
+            self._assert_not_credited(target)
+        # installed entry differs from committed binding (config drift)
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, policy_binding="mismatch")
+            self._assert_not_credited(target)
+        # installed component points at a different checks.json
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, policy_binding="wrong_path")
+            self._assert_not_credited(target)
+        # wrong policy kind
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target, policy_kind="something_else")
+            self._assert_not_credited(target)
+
+    # Defensive sub-branch witnesses (craft R1 completeness nit): corrupt one
+    # field of an otherwise-live contract so each guard is non-vacuous.
+    def _corrupt_json(self, target, rel, mutate):
+        p = target / Path(*rel.split("/"))
+        data = json.loads(p.read_text())
+        mutate(data)
+        p.write_text(json.dumps(data))
+
+    def test_j_binding_kind_wrong(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target)
+            self._corrupt_json(
+                target, "spec/oracle/static/checks.json",
+                lambda pl: pl["approved_required_binding"].update(kind="x"))
+            self._assert_not_credited(target)
+
+    def test_k_malformed_required_policy_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target)
+            (target / ".servo" / "required-policy.json").write_text("{ not json ]")
+            self._assert_not_credited(target)
+
+    def test_l_components_not_a_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target)
+            self._corrupt_json(
+                target, ".servo/required-policy.json",
+                lambda pl: pl.update(components={"not": "a list"}))
+            self._assert_not_credited(target)
+
+    def test_m_non_string_check_id(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = self._target(root)
+            _write_static_contract(target)
+            self._corrupt_json(
+                target, "spec/oracle/static/checks.json",
+                lambda pl: pl["checks"][0].update(id=123))
+            self._assert_not_credited(target)
+
+
+# --------------------------------------------------------------------------
+# AC5 — non-`fidelity_contract` behavior is byte-identical (the regression fence)
+# --------------------------------------------------------------------------
+
+class RequiredPolicyByteIdentityTests(unittest.TestCase):
+    def test_no_declaration_byte_identical_with_without_static(self):
+        sig = {"tests": True, "lint": True, "ci": False, "language": "python"}
+
+        def run(with_static):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = _make_target(root, sig)
+                _write_install(target, sig, [])
+                if with_static:
+                    _write_static_contract(target)
+                spec = _make_fc_spec(root, fidelity_contract=None)  # NO declaration
+                plan = _stub_oracle_plan(root, n_checks=2, n_residual=1)
+                _run_cli(target, spec, oracle_plan=plan)
+                art = json.loads(_artifact_path(target).read_text())
+                art.pop("analyzed_at", None)  # the only non-deterministic field
+                return art
+
+        self.assertEqual(run(False), run(True))
+
+    def test_declared_but_not_live_is_byte_identical_to_undeclared(self):
+        # A spec declaring `fidelity_contract` whose floor is NOT live credits
+        # nothing, so its artifact matches the same spec with no declaration.
+        def run(declare, live):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = _vellum_target(root, static=False)
+                if live is not None:
+                    _write_static_contract(target, approval_status=live)
+                fc = "spec/oracle/static" if declare else None
+                spec = _make_fc_spec(root, fidelity_contract=fc)
+                plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+                _run_cli(target, spec, oracle_plan=plan)
+                art = json.loads(_artifact_path(target).read_text())
+                art.pop("analyzed_at", None)
+                return art
+
+        undeclared = run(False, None)
+        declared_draft = run(True, "draft")  # declared, but the floor is unapproved
+        self.assertEqual(undeclared, declared_draft)
+
+
+# --------------------------------------------------------------------------
+# Direct-helper unit tests — frontmatter reader + path safety
+# --------------------------------------------------------------------------
+
+class FidelityContractHelperTests(unittest.TestCase):
+    def _spec(self, root, text):
+        p = root / "s.md"
+        p.write_text(text)
+        return p
+
+    def test_frontmatter_scalar_variants(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            cases = {
+                "---\nfidelity_contract: spec/oracle/static\n---\n": "spec/oracle/static",
+                "---\nfidelity_contract: \"spec/oracle/static\"\n---\n": "spec/oracle/static",
+                "---\nfidelity_contract: spec/oracle/static  # the floor\n---\n":
+                    "spec/oracle/static",
+                "---\nstatus: DRAFT\nfidelity_contract: a/b\n---\n": "a/b",
+                "# no frontmatter\nfidelity_contract: x\n": None,
+                "---\nother: y\n---\n": None,
+                "---\nfidelity_contract:\n---\n": None,  # empty value
+                "---\nno closing fence\nfidelity_contract: x\n": None,
+                # Indented (nested under a parent) is NOT a top-level scalar.
+                "---\nparent:\n  fidelity_contract: nested\n---\n": None,
+            }
+            for text, expected in cases.items():
+                got = suitability._read_frontmatter_scalar(
+                    self._spec(root, text), "fidelity_contract")
+                self.assertEqual(got, expected, text)
+
+    def test_safe_target_relpath_rejects_traversal_and_absolute(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d)
+            for bad in ("..", "../x", "/abs", "a/../../b", "a/./b", "", "a\\b"):
+                self.assertIsNone(suitability._safe_target_relpath(bad, target), bad)
+            ok = suitability._safe_target_relpath("spec/oracle/static", target)
+            self.assertIsNotNone(ok)
+
+    def test_required_policy_evaluable_true_on_live_contract(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root)
+            spec = _make_fc_spec(root, fidelity_contract="spec/oracle/static")
+            manifest = json.loads((target / ".servo" / "install.json").read_text())
+            self.assertTrue(
+                suitability._required_policy_evaluable(target, spec, manifest))
+            # Undeclared spec → False (never raises).
+            plain = _make_fc_spec(root, fidelity_contract=None, dir_name="plain")
+            self.assertFalse(
+                suitability._required_policy_evaluable(target, plain, manifest))
+
 
 if __name__ == "__main__":
     unittest.main()
