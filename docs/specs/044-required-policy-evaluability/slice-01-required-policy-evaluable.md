@@ -1,9 +1,8 @@
 ---
-status: RECONCILED
+status: DONE
 dependencies: [adr-0050]
 last_verified: 2026-11-19
 frame_review: true
-claimed_by: claude/neval-from-required-check-2f5e9f
 ---
 
 ## Slice 044-01 — required-policy-evaluable

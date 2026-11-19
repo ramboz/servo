@@ -174,6 +174,7 @@
 | [043-copilot-hardening](043-copilot-hardening/spec.md) | 043-03 — cross-process resume of a Copilot run | **DONE** |  |
 | [043-copilot-hardening](043-copilot-hardening/spec.md) | 043-04 — lift the Copilot kill-resume fail-closed | **DONE** |  |
 | [043-copilot-hardening](043-copilot-hardening/spec.md) | 043-05 — recover the Copilot kill-resume baseline from a persisted sound floor | **DONE** |  |
+| [044-required-policy-evaluability](044-required-policy-evaluability/spec.md) | 044-01 — required-policy-evaluable | **DONE** |  |
 
 ## Deferred slices
 
@@ -203,7 +204,7 @@
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
 - **6** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
-- **33** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
+- **34** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
 - **12** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
