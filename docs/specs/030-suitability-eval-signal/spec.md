@@ -1,5 +1,5 @@
 ---
-status: DRAFT
+status: DONE
 skill:
 use_cases: []
 ---
@@ -36,6 +36,56 @@ recommending a deterministic counterweight (the ADR-0033 reward-hacking
 lesson). One lean slice: the `suitability.py` rule inputs, the advisory, the
 doc updates, and the regression fence that today's tests/ci behavior is
 byte-identical.
+
+**Scope boundary — this widens the *signal* leg, not the *evaluable-AC* leg
+(frame-critique 2026-11-17, two rounds).** `suitable` has two conditions —
+`n_evaluable >= 1` **AND** `has_signal` (`suitability.py` rule 1). This slice
+widens only the second: a reviewed frozen eval satisfies `has_signal`. It does
+**not** touch `n_evaluable`, which `oracle_plan classify` derives from the AC
+*text* by a **token/keyword-based** family match (file-presence / command /
+text-invariant / lint / …) — a **pre-existing** property of spec 006 this slice
+does not change. So whether a design-led target benefits is gated by how its ACs
+are *phrased*, independent of the eval:
+
+- A design-led target that carries **≥1 AC whose text the classifier recognises
+  as deterministic** — verified against the real classifier: "the built
+  `dist/index.html` file **is present**" → `file_presence`; "running
+  `npm run build` **exits 0**" → `command`; "the rendered HTML **contains**
+  'Sign in'" → `text_invariant` — *alongside* its visual-fidelity ACs gets
+  `n_evaluable >= 1`, so the eval supplies the missing signal and the verdict
+  flips to `suitable` (pinned end-to-end through the **real** classifier by
+  **AC7**).
+- A spec whose ACs are **all residual** — visual-fidelity prose ("matches the
+  mockup / redline / Figma"), **and** behavioural prose that misses the keyword
+  families (verified: "the component mounts", "no console errors", "the build
+  produces output" all classify `residual_judgment` today — the match is
+  lexical, not semantic) — classifies to `n_evaluable == 0` and is **refused —
+  never `suitable`** (pinned by **AC6**). Precisely (the eval does *not* leave
+  such a target's verdict untouched): with the eval as its only signal it is
+  `needs_evidence` (rule 3 `signal_without_evaluable_acs` + the blocking
+  `reference_set` item — "add one deterministic AC"); **without** any signal it
+  is the terminal `unsuitable` (rule 4 `all_acs_residual_no_signal` — "route to
+  a human, not EDD-shaped"). So the eval **upgrades a terminal `unsuitable` to a
+  recoverable `needs_evidence`** — a small bonus (it lifts a *false terminal*
+  refusal on a target that has a reviewed eval and only lacks a deterministic
+  anchor) — while still withholding `suitable`. This is correct and by design:
+  the eval is a *gate*, not an *anchor* — an all-judge oracle with zero
+  deterministic ACs is precisely the gameable, reward-hacking case ADR-0015
+  (fail-closed) and ADR-0036 guardrail 5 stay cautious about. (The
+  `unsuitable → needs_evidence` delta is on a testless target class that AC3's
+  byte-identity fence does *not* cover, so **AC6** asserts it explicitly.)
+
+**Open question this slice surfaces (does not resolve).** Whether widening
+`has_signal` *alone* unblocks vellum's build-to-redline population depends on
+whether those specs, as actually authored, carry ≥1 classifier-recognised AC —
+which **cannot be verified from here** (no representative vellum spec is in this
+repo). If they are predominantly all-residual, then crediting the eval toward
+*evaluability* itself (the `n_evaluable` leg) is load-bearing for the motivating
+population and must follow **soon**, not distantly. That is a larger, separate
+decision — a stronger judge-reliance claim than ADR-0036 makes, needing its own
+frame — explicitly **out of scope** here. This slice widens the signal leg (a
+necessary step either way) and **names** that open question rather than hiding
+it behind an optimistic "realistic targets obviously qualify" assumption.
 
 Current state (probed 2026-08-30):
 

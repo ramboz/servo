@@ -133,7 +133,7 @@
 | [028-design-eval-policy-honesty](028-design-eval-policy-honesty/spec.md) | 028-03 — catalogue-reenumerator | **DONE** |  |
 | [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-01 — manual-capture | **DONE** |  |
 | [029-design-eval-reachability](029-design-eval-reachability/spec.md) | 029-02 — subagent-advisory | **DONE** |  |
-| [030-suitability-eval-signal](030-suitability-eval-signal/spec.md) | 030-01 — eval-component-signal | DRAFT | DoR gates on ADR-0036 acceptance (Proposed 2026-08-30). |
+| [030-suitability-eval-signal](030-suitability-eval-signal/spec.md) | 030-01 — eval-component-signal | **DONE** | ADR-0036: a reviewed+frozen eval is a 3rd `has_signal` source (manifest-read, reviewed-provenance-only); judged-only ⇒ suitable + counterweight advisory; tests/ci byte-identical. Widens the signal leg only — crediting the eval toward `n_evaluable` for all-residual design specs is a named follow-up (frame-critique, 3 rounds; AC6/AC7). |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-01 — loop-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-02 — goal-driver-relabel | **DONE** |  |
 | [031-edit-permission-wall-diagnosis](031-edit-permission-wall-diagnosis/spec.md) | 031-03 — goal-driver-advisory-preflight | DEFERRED |  |
@@ -203,7 +203,7 @@
 Advisory (ADR-0040 auditability — never blocks). Regenerated from `reviews/slice-*.md` `substrate:` fields.
 
 - **6** pass(es) recorded `not-shown` (selection step did not run — the kill-criterion-1 defect signal).
-- **32** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
+- **33** pass(es) recorded `non-interactive` (declared no-orchestrator / CI).
 - **12** shown-and-declined anomaly(ies) (a high-confidence richer skill was shown and not applied):
   - `033-heartbeat-handoff-recovery/slice-01-craft.md` — applied `pr-review`; declined: scout-pr-review
   - `034-copilot-installed-runtime/slice-04-arch.md` — applied `unknown`; declined: arch-review
