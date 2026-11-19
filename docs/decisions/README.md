@@ -55,6 +55,7 @@
 - [ADR-0047: Per-node model tiering and the plateau escalation ladder](adr-0047-per-node-model-tiering-and-escalation-ladder.md) — servo's loop runs one node at a time: a `runner` that edits and a read-only `judge`, alternating through `claude -p`, scored by `gate.py` after every iteration. (2026-11-10, Accepted)
 - [ADR-0048: Copilot AI-credit budget contract for the native loop](adr-0048-copilot-credit-budget-contract.md) — servo refuses its native loop on GitHub Copilot CLI (ADR-0043). (2026-11-11, Accepted)
 - [ADR-0049: Campaigns: bounded dispatch over a planned work list](adr-0049-campaign-orchestration.md) — In a recorded two-day multi-session campaign on Copilot CLI, a coordinator spawned 15 worker sessions to remediate a two-repo audit. (2026-11-11, Accepted)
+- [ADR-0050: a reviewed eval is a signal, not an evaluability basis](adr-0050-eval-is-signal-not-evaluability.md) — Servo's suitability gate (`/servo:edd-suitability`, ADR-0015) calls a spec `suitable` only when **both** legs hold: `has_signal` — an executable gate the oracle can run at all — **and** `n_evaluable >= 1` — the spec-006 classifier (`oracle_plan.py classify`) mapped at least one acceptance criterion to a **deterministic** check family, not `residual_judgment`. (2026-11-18, Proposed)
 
 ## Pending
 
