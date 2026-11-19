@@ -72,8 +72,10 @@ Never exits 1; never leaves a torn artifact.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -111,6 +113,31 @@ _EVAL_COMPONENT_DIRS = {
     "content_fidelity": "content-fidelity",
 }
 
+# Spec 044 / ADR-0050 — the required-policy *evaluability* leg.
+# A design spec attributes a deterministic required-policy fidelity floor (the
+# static-source-contract check) to itself by declaring this frontmatter scalar,
+# a target-relative path to the dir holding the sealed `checks.json`. The gate
+# then credits `n_evaluable` iff that path resolves to a *live, enforceable*
+# floor (the two-layer L1/L2 check in `_required_policy_evaluable`). The
+# stochastic `design_fidelity` judge never credits `n_evaluable` — it stays a
+# `has_signal` source + fidelity component only (030-01, unchanged).
+FIDELITY_CONTRACT_KEY = "fidelity_contract"
+_STATIC_CHECKS_BASENAME = "checks.json"
+_FRONTMATTER_FENCE = "---"
+
+# Reason codes whose decided rule means evaluability came from a required-policy
+# fidelity check (not an evaluable AC). Surfaced in `render_human`.
+_POLICY_EVALUABLE_REASON_CODES = (
+    "evaluable_required_policy_with_eval_signal",
+    "evaluable_required_policy_with_signal",
+)
+# Reason codes whose decided rule means the oracle *signal* is the judged-only
+# eval (so `render_human` surfaces the deterministic-counterweight advisory).
+_EVAL_SIGNAL_REASON_CODES = (
+    "evaluable_acs_with_eval_signal",
+    "evaluable_required_policy_with_eval_signal",
+)
+
 # Closed `kind` taxonomy for missing_evidence items (slice 015-02), mirroring
 # ADR-0002's closed-`reason` posture. An input that maps to no known kind is
 # never emitted as an open string — the set is extended only by a deliberate
@@ -129,6 +156,14 @@ class EnvError(Exception):
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _policy_credit(policy_evaluable: bool) -> int:
+    """The `n_evaluable` credit for an attributed required-policy fidelity floor:
+    **+1 presence** (ADR-0050 / 044), not the internal CSS-property count.
+    Centralized (ADR-0002, third caller) so `analyze`, the rule table, and the
+    `--explain` trace cannot drift on the credit's value."""
+    return 1 if policy_evaluable else 0
 
 
 # ---------------------------------------------------------------------------
@@ -214,13 +249,21 @@ def _missing_evidence(signals: dict, *, has_signal: bool, n_evaluable: int,
 
 
 def _facts(n_evaluable: int, n_residual: int, *, det_signal: bool,
-           eval_signal: bool) -> str:
+           eval_signal: bool, policy_evaluable: bool = False) -> str:
     if det_signal:
         signal_phrase = "a test/CI signal"
     elif eval_signal:
         signal_phrase = "a reviewed frozen eval signal"
     else:
         signal_phrase = "no test/CI signal"
+    if policy_evaluable:
+        # Honest breakdown: `n_evaluable` folds in the +1 required-policy credit,
+        # so report the AC count and the policy check separately (spec 044).
+        ac_evaluable = n_evaluable - 1
+        return (
+            f"{ac_evaluable} evaluable AC(s) + 1 required-policy fidelity check, "
+            f"{n_residual} residual AC(s), {signal_phrase}"
+        )
     return (
         f"{n_evaluable} evaluable AC(s), {n_residual} residual AC(s), "
         f"{signal_phrase}"
@@ -228,9 +271,9 @@ def _facts(n_evaluable: int, n_residual: int, *, det_signal: bool,
 
 
 def _rule_table(n_evaluable: int, n_residual: int, *, det_signal: bool,
-                eval_signal: bool) -> list:
+                eval_signal: bool, policy_evaluable: bool = False) -> list:
     """The ordered, first-match suitability rule table (ADR-0015 / 015-01,
-    widened by ADR-0036 / 030-01).
+    widened by ADR-0036 / 030-01 and ADR-0050 / 044).
 
     Returns ``[(matched, verdict, code, message), ...]``. The final rule's
     predicate is ``True`` — the fail-closed catch-all. Shared by `decide()`
@@ -238,27 +281,41 @@ def _rule_table(n_evaluable: int, n_residual: int, *, det_signal: bool,
     for `--explain`), so the table is defined exactly once.
 
     `has_signal` is ``det_signal OR eval_signal``. The single "signal present →
-    suitable" rule names its *source* in the code/message: a deterministic
-    signal keeps the pre-030-01 `evaluable_acs_with_signal` code (byte-identical
-    artifacts, AC3); a judged-only signal (eval but no tests/CI) takes the
-    distinct `evaluable_acs_with_eval_signal` code so `reasons` / `--explain`
-    make the case auditable (AC1). The table stays five rules.
+    suitable" rule names its *source* in the code/message along two axes — the
+    oracle signal (deterministic vs eval) and the *evaluability* source
+    (evaluable AC vs required-policy fidelity check). `n_evaluable` is the total;
+    the `+1` required-policy credit (spec 044) is distinguished by
+    `policy_evaluable`. When evaluability comes *only* from the policy check
+    (zero evaluable ACs), the rule takes a distinct
+    `evaluable_required_policy_with_*` code so `reasons` / `--explain` make the
+    case auditable; with >=1 evaluable AC the AC-based code stays (byte-identical,
+    the policy credit then a non-decisive bonus). The table stays five rules.
     """
     has_signal = det_signal or eval_signal
     eval_only = has_signal and not det_signal
-    if eval_only:
+    # Evaluability credited only by the required-policy fidelity check (no
+    # evaluable AC): name a distinct rule code.
+    ac_evaluable = n_evaluable - _policy_credit(policy_evaluable)
+    policy_only_evaluable = policy_evaluable and ac_evaluable < 1
+    if policy_only_evaluable and eval_only:
+        signal_code = "evaluable_required_policy_with_eval_signal"
+        signal_message = (
+            "EDD-shaped: a deterministic required-policy fidelity check supplies "
+            "evaluability and a reviewed, frozen eval component supplies the "
+            "oracle signal (a deterministic counterweight is advised)"
+        )
+    elif policy_only_evaluable:
+        signal_code = "evaluable_required_policy_with_signal"
+        signal_message = (
+            "EDD-shaped: a deterministic required-policy fidelity check supplies "
+            "evaluability and a compilable test/CI signal is present"
+        )
+    elif eval_only:
         signal_code = "evaluable_acs_with_eval_signal"
         signal_message = (
             "EDD-shaped: evaluable ACs and a reviewed, frozen eval component "
             "are both present (the judged eval is the oracle signal; a "
             "deterministic counterweight is advised)"
-        )
-        # Rule 3 fires for n_evaluable == 0 WITH a signal; when that signal is
-        # the eval (no tests/CI), the message must not claim "a test/CI signal"
-        # — that contradicts the `_facts` suffix "a reviewed frozen eval signal".
-        no_evaluable_message = (
-            "a reviewed, frozen eval signal exists but no evaluable ACs to "
-            "gate on"
         )
     else:
         signal_code = "evaluable_acs_with_signal"
@@ -266,6 +323,16 @@ def _rule_table(n_evaluable: int, n_residual: int, *, det_signal: bool,
             "EDD-shaped: evaluable ACs and a compilable test/CI signal are both "
             "present"
         )
+    # Rule 3 (n_evaluable == 0 WITH a signal) fires only when there is no AC AND
+    # no policy credit, so its message depends on the signal source only. When
+    # that signal is the eval (no tests/CI), the message must not claim "a
+    # test/CI signal" — that contradicts the `_facts` suffix.
+    if eval_only:
+        no_evaluable_message = (
+            "a reviewed, frozen eval signal exists but no evaluable ACs to "
+            "gate on"
+        )
+    else:
         # The exact pre-030-01 string — rule 3's deterministic-signal case is in
         # the AC3 byte-identity golden, so this must not change.
         no_evaluable_message = (
@@ -309,19 +376,23 @@ def _rule_table(n_evaluable: int, n_residual: int, *, det_signal: bool,
 
 
 def build_trace(signals: dict, *, n_evaluable: int, n_residual: int,
-                eval_signal: bool = False) -> dict:
+                eval_signal: bool = False, policy_evaluable: bool = False) -> dict:
     """Ordered rule trace for `--explain` (slice 015-04 AC3).
 
     Renders every rule in table order with its boolean predicate and marks the
     single rule that `decide()` would act on (`decided: true` — the first match).
     Pure; carries the inputs the rules keyed on so a verdict is debuggable
     without reading the rule-table source. `eval_signal` (ADR-0036 / 030-01) is
-    surfaced so `--explain` shows which signal source decided a judged-only case.
+    surfaced so `--explain` shows which signal source decided a judged-only case;
+    `policy_evaluable` (ADR-0050 / 044) is surfaced so `--explain` shows when the
+    evaluability came from a required-policy fidelity check. `n_evaluable` is the
+    total, including the `+1` policy credit.
     """
     det_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)
     has_signal = det_signal or eval_signal
     rules = _rule_table(n_evaluable, n_residual, det_signal=det_signal,
-                        eval_signal=eval_signal)
+                        eval_signal=eval_signal,
+                        policy_evaluable=policy_evaluable)
     rendered = []
     decided = False
     for matched, verdict, code, _message in rules:
@@ -340,6 +411,7 @@ def build_trace(signals: dict, *, n_evaluable: int, n_residual: int,
             "n_residual": n_residual,
             "has_signal": has_signal,
             "eval_signal": eval_signal,
+            "policy_evaluable": policy_evaluable,
             "signals": {
                 k: signals.get(k) for k in ("tests", "lint", "ci", "language")
             },
@@ -349,15 +421,19 @@ def build_trace(signals: dict, *, n_evaluable: int, n_residual: int,
 
 
 def decide(signals: dict, *, n_evaluable: int, n_residual: int,
-           eval_signal: bool = False) -> dict:
+           eval_signal: bool = False, policy_evaluable: bool = False) -> dict:
     """Return ``{"verdict", "reasons": [...], "missing_evidence": [...]}``.
 
-    Pure: no IO, no clock. A `suitable` verdict requires an evaluable AC and a
-    signal — `has_signal = deterministic_signal OR eval_signal`, where
-    `eval_signal` (ADR-0036 / 030-01) is a reviewed, frozen eval component
-    computed upstream in `analyze`. Everything else is fail-closed. The table is
-    ordered and first-match — exactly one rule fires and names itself (and its
-    signal *source*) in `reasons`.
+    Pure: no IO, no clock. A `suitable` verdict requires evaluability and a
+    signal. Evaluability (`n_evaluable >= 1`) is satisfied by a deterministic AC
+    **or** a deterministic, spec-attributed required-policy fidelity check
+    (`policy_evaluable`, ADR-0050 / 044 — the `+1` credit folded into
+    `n_evaluable` upstream in `analyze`); the stochastic judge never satisfies it.
+    The signal is `has_signal = deterministic_signal OR eval_signal`, where
+    `eval_signal` (ADR-0036 / 030-01) is a reviewed, frozen eval component.
+    Everything else is fail-closed. The table is ordered and first-match —
+    exactly one rule fires and names itself (and its evaluability + signal
+    *sources*) in `reasons`.
 
     The `missing_evidence` list is load-bearing for `needs_evidence` and for the
     judged-only `suitable` case (ADR-0036): a deterministic-signal `suitable`
@@ -372,9 +448,10 @@ def decide(signals: dict, *, n_evaluable: int, n_residual: int,
     has_signal = det_signal or eval_signal
     eval_only = has_signal and not det_signal
     facts = _facts(n_evaluable, n_residual, det_signal=det_signal,
-                   eval_signal=eval_signal)
+                   eval_signal=eval_signal, policy_evaluable=policy_evaluable)
     rules = _rule_table(n_evaluable, n_residual, det_signal=det_signal,
-                        eval_signal=eval_signal)
+                        eval_signal=eval_signal,
+                        policy_evaluable=policy_evaluable)
 
     for matched, verdict, code, message in rules:
         if matched:
@@ -505,6 +582,205 @@ def _eval_signal(target: Path, components) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Required-policy evaluability (spec 044 / ADR-0050)
+# ---------------------------------------------------------------------------
+
+def _load_json_file(path: Path):
+    """Parse a JSON file; return the value, or None if missing / unreadable /
+    malformed. Fail-closed — never raises (so a bad artifact contributes no
+    credit rather than an env-error)."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _file_sha256(path: Path) -> str | None:
+    """`evidence_io.bundle.file_hash` format (`sha256:<hex>`) for `path`, or
+    None when unreadable — the shape the sealed binding's `oracle.sh` pin uses."""
+    try:
+        return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _read_frontmatter_scalar(spec_path: Path, key: str) -> str | None:
+    """Return a single top-level scalar `key: value` from the spec's leading
+    `---` YAML frontmatter block, or None.
+
+    Minimal and stdlib-only (no PyYAML dependency — servo's Python 3.9 floor):
+    reads only the first fence block, matches a `key: value` line, strips
+    surrounding quotes and an unquoted trailing ` # comment`. An absent block,
+    an absent key, or an unreadable file returns None, so the credit never fires
+    and a spec with no binding stays byte-identical to pre-044 (AC5)."""
+    try:
+        text = spec_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != _FRONTMATTER_FENCE:
+        return None
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == _FRONTMATTER_FENCE:
+            end = i
+            break
+    if end is None:
+        return None
+    # Top-level only: no leading indentation (a `key:` nested under a parent
+    # mapping is not a top-level scalar and must not match — craft R1).
+    pattern = re.compile(r"^" + re.escape(key) + r"[ \t]*:[ \t]*(.+?)[ \t]*$")
+    for line in lines[1:end]:
+        match = pattern.match(line)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if (len(value) >= 2 and value[0] in "\"'" and value[-1] == value[0]):
+            return value[1:-1] or None
+        comment = value.find(" #")
+        if comment != -1:
+            value = value[:comment].rstrip()
+        return value or None
+    return None
+
+
+def _safe_target_relpath(value: str, target: Path) -> Path | None:
+    """Resolve a target-relative POSIX path safely, or None.
+
+    Rejects a non-string, empty, absolute, traversal (`..`), `.`/empty-segment,
+    NUL, brace or backslash value; the result must stay within `target`."""
+    if (not isinstance(value, str) or not value or "\\" in value
+            or "\x00" in value or "{" in value or "}" in value):
+        return None
+    segments = value.split("/")
+    if any(seg in ("", ".", "..") for seg in segments):
+        return None
+    candidate = target / Path(*segments)
+    try:
+        if not candidate.resolve().is_relative_to(target.resolve()):
+            return None
+    except (OSError, ValueError):
+        return None
+    return candidate
+
+
+def _oracle_pin_matches(binding: dict, target: Path) -> bool:
+    """True iff `binding`'s `evaluator_artifacts` carry exactly one `oracle.sh`
+    row whose hash equals the *current* `<target>/oracle.sh` — the live driver
+    pin `static_contract.py::driver_seal` checks (L1). Closes the honest-drift
+    case of an `oracle.sh` regenerated after sealing (stale pin → score-time
+    env-error)."""
+    artifacts = binding.get("evaluator_artifacts")
+    if not isinstance(artifacts, list):
+        return False
+    pins = [a for a in artifacts
+            if isinstance(a, dict) and a.get("path") == "oracle.sh"]
+    if len(pins) != 1:
+        return False
+    live = _file_sha256(target / "oracle.sh")
+    return live is not None and pins[0].get("hash") == live
+
+
+def _required_policy_evaluable(target: Path, spec_path: Path,
+                               manifest: dict) -> bool:
+    """True iff the spec under analysis declares a `fidelity_contract` binding
+    (ADR-0050 / spec 044) that resolves to a *live, enforceable* deterministic
+    required-policy fidelity floor — the judge-free static-source-contract check.
+
+    Two liveness layers, fail-closed on every indeterminate branch (a committed
+    `approval_status: "approved"` label alone never suffices — spec 044 R2):
+
+    - **L1 — committed seal + `oracle.sh` liveness** (`<target>/<contract>/checks.json`):
+      an `enabled` + `approved` `required_policy` plan with >=1 `family: command`
+      `required` check and an `approved_required_binding` whose `required_ids`
+      match the checks and whose `evaluator_artifacts` pin the current
+      `oracle.sh` (mirrors `static_contract.py::driver_seal`).
+    - **L2 — installed as a live required component** (`<target>/.servo/required-policy.json`):
+      the static check is a registered required component whose entry *equals*
+      the committed binding — the `plan.approved_required_binding == entry`
+      identity `required_runtime.oracle` enforces at score time — with
+      `install.json` carrying a `required_policy` pin.
+
+    The full cryptographic seal (config / fragment / `runtime_hash` pins) stays
+    score-time authority; the gate mirrors only the honest-drift-relevant facts.
+    The guarantee is *no false green*: L2 forces the check into the required
+    components, so any residual seal drift the gate does not mirror degrades to a
+    score-time env-error (`required_runtime.outcome`), never a silent judge-only
+    pass. Attribution is author-declared under an honest-author threat model,
+    sound by construction within the single-redline-per-target closure; an
+    *undeclared* spec is never credited. Returns only True / False — never an
+    env-error, never a torn artifact. The stochastic `design_fidelity` judge is
+    excluded by construction (this reads only the deterministic check plan +
+    its install manifests, never `install.json`'s quality `components`)."""
+    declared = _read_frontmatter_scalar(spec_path, FIDELITY_CONTRACT_KEY)
+    if not declared:
+        return False
+    contract_dir = _safe_target_relpath(declared, target)
+    if contract_dir is None:
+        return False
+    checks_path = contract_dir / _STATIC_CHECKS_BASENAME
+    plan = _load_json_file(checks_path)
+    if not isinstance(plan, dict):
+        return False
+
+    # L1 — committed seal + oracle.sh liveness.
+    if plan.get("required_policy") != {"schema_version": 1, "enabled": True}:
+        return False
+    if plan.get("approval_status") != "approved":
+        return False
+    checks = plan.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return False
+    for check in checks:
+        if (not isinstance(check, dict) or check.get("family") != "command"
+                or check.get("required") is not True):
+            return False
+    check_ids = [c.get("id") for c in checks]
+    if any(not isinstance(cid, str) or not cid for cid in check_ids):
+        return False
+    check_ids = sorted(check_ids)
+    binding = plan.get("approved_required_binding")
+    if (not isinstance(binding, dict)
+            or binding.get("kind") != "approved_required_binding"):
+        return False
+    req_ids = binding.get("required_ids")
+    if (not isinstance(req_ids, list)
+            or any(not isinstance(x, str) for x in req_ids)
+            or sorted(req_ids) != check_ids):
+        return False
+    if not _oracle_pin_matches(binding, target):
+        return False
+
+    # L2 — installed as a live required component.
+    if "required_policy" not in manifest:
+        return False
+    policy = _load_json_file(target / ".servo" / "required-policy.json")
+    if not isinstance(policy, dict) or policy.get("kind") != "required_policy":
+        return False
+    components = policy.get("components")
+    if not isinstance(components, list):
+        return False
+    try:
+        checks_resolved = checks_path.resolve()
+    except (OSError, ValueError):
+        return False
+    for entry in components:
+        if not isinstance(entry, dict):
+            continue
+        entry_checks = entry.get("checks_path")
+        if not isinstance(entry_checks, str) or not entry_checks:
+            continue
+        try:
+            entry_resolved = (target / entry_checks).resolve()
+        except (OSError, ValueError):
+            continue
+        # Installed == committed: the exact score-time identity (no false green).
+        if entry_resolved == checks_resolved and entry == binding:
+            return True
+    return False
+
+
 def _classify(spec_path: Path, oracle_plan_path: Path) -> dict:
     """Obtain the 006 AC classification for `spec_path` via subprocess.
 
@@ -550,25 +826,38 @@ def _classify(spec_path: Path, oracle_plan_path: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def analyze(target: Path, spec_path: Path, *, oracle_plan_path: Path) -> tuple:
-    """Run the analysis. Returns ``(spec_id, artifact_dict, eval_signal)``.
+    """Run the analysis. Returns
+    ``(spec_id, artifact_dict, eval_signal, policy_evaluable)``.
 
     Raises EnvError before any artifact is written (the caller persists only on
     success, so a failed analysis never leaves a torn artifact). `eval_signal`
-    is returned so the CLI can thread it into the `--explain` trace without
-    re-reading the manifest; it is deliberately NOT persisted into the artifact
-    (keeping tests/CI artifacts byte-identical to pre-030-01 — AC3).
+    (ADR-0036) and `policy_evaluable` (ADR-0050 / 044) are returned so the CLI
+    can thread them into the `--explain` trace without re-reading the manifest;
+    neither is persisted into the artifact (keeping tests/CI and
+    no-`fidelity_contract` artifacts byte-identical to pre-slice — AC3 / AC5).
     """
     manifest = _load_manifest(target)
     signals = manifest["signals"]
     eval_signal = _eval_signal(target, manifest.get("components"))
+    # ADR-0050 / 044: a deterministic, spec-attributed required-policy fidelity
+    # check (the static-source-contract) credits the *evaluability* leg. Computed
+    # here (IO) and threaded into the pure `decide` as a kwarg (mirrors 030-01's
+    # `eval_signal`). Read-only; never the stochastic `design_fidelity` judge.
+    policy_evaluable = _required_policy_evaluable(target, spec_path, manifest)
     plan = _classify(spec_path, oracle_plan_path)
-    n_evaluable = len(plan.get("checks", []))
+    n_evaluable_acs = len(plan.get("checks", []))
     n_residual = len(plan.get("residual_judgment", []))
     spec_id = plan.get("spec_id") or spec_path.parent.name
+    # Total evaluability = deterministic ACs + a single required-policy fidelity
+    # floor credit (+1 presence, not the internal CSS-property count). The
+    # artifact's `ac_counts.evaluable` below keeps the *AC* count — the policy
+    # credit is surfaced only via the decided reason code and `--explain`, never
+    # persisted, so a non-`fidelity_contract` spec stays byte-identical (AC5).
+    n_evaluable = n_evaluable_acs + _policy_credit(policy_evaluable)
 
     decision = decide(
         signals, n_evaluable=n_evaluable, n_residual=n_residual,
-        eval_signal=eval_signal,
+        eval_signal=eval_signal, policy_evaluable=policy_evaluable,
     )
 
     artifact = {
@@ -581,15 +870,16 @@ def analyze(target: Path, spec_path: Path, *, oracle_plan_path: Path) -> tuple:
         "spec_id": spec_id,
         "analyzed_at": iso_now(),
         # Echoed inputs for auditability / the 015-04 `--explain` view. The eval
-        # signal is intentionally absent here — see AC3 (byte-identity).
+        # signal and the required-policy credit are intentionally absent here —
+        # see AC3 / AC5 (byte-identity).
         "inputs": {
             "signals": {
                 k: signals.get(k) for k in ("tests", "lint", "ci", "language")
             },
-            "ac_counts": {"evaluable": n_evaluable, "residual": n_residual},
+            "ac_counts": {"evaluable": n_evaluable_acs, "residual": n_residual},
         },
     }
-    return spec_id, artifact, eval_signal
+    return spec_id, artifact, eval_signal, policy_evaluable
 
 
 def write_artifact(target: Path, spec_id: str, artifact: dict) -> Path:
@@ -631,13 +921,12 @@ def render_human(artifact: dict, out_path: Path) -> str:
     missing = artifact.get("missing_evidence", [])
     blocking = [it for it in missing if it.get("blocking")]
     advisory = [it for it in missing if not it.get("blocking")]
-    # Key the judged-only block on the DECIDED reason code, not on
-    # advisory-presence — so a future deterministic-signal `suitable` that gains
-    # an advisory item can never print a false "sole signal" line.
-    judged_only = any(
-        r.get("code") == "evaluable_acs_with_eval_signal"
-        for r in artifact.get("reasons", [])
-    )
+    # Key the judged-only / policy-evaluable blocks on the DECIDED reason code,
+    # not on advisory-presence — so a future deterministic-signal `suitable` that
+    # gains an advisory item can never print a false "sole signal" line.
+    codes = [r.get("code") for r in artifact.get("reasons", [])]
+    judged_only = any(c in _EVAL_SIGNAL_REASON_CODES for c in codes)
+    policy_evaluable = any(c in _POLICY_EVALUABLE_REASON_CODES for c in codes)
     if verdict == "needs_evidence":
         for it in blocking:
             lines.append(f"  ✗ blocking [{it['kind']}] {it['detail']}")
@@ -654,19 +943,28 @@ def render_human(artifact: dict, out_path: Path) -> str:
         for reason in artifact.get("reasons", []):
             lines.append(f"  · {reason['message']}")
         lines.append("  → route to a human / jig; this is not EDD-shaped.")
-    elif verdict == "suitable" and judged_only:
-        # Judged-only: a reviewed, frozen eval is the sole signal — surface the
-        # standing deterministic-counterweight advisory (ADR-0036 / 030-01).
-        lines.append(
-            "  ✓ suitable via a reviewed, frozen eval component (the sole "
-            "signal)"
-        )
-        for it in advisory:
-            lines.append(f"  · advisory [{it['kind']}] {it['detail']}")
-        lines.append(
-            "  → suitable now; adding a deterministic component (test / CI) is "
-            "a recommended reward-hacking counterweight, not required."
-        )
+    elif verdict == "suitable" and (judged_only or policy_evaluable):
+        # Evaluability via a deterministic required-policy fidelity check
+        # (ADR-0050 / 044): name the basis so a `suitable` with zero evaluable
+        # ACs is auditable from the human summary.
+        if policy_evaluable:
+            lines.append(
+                "  ✓ suitable: a deterministic required-policy fidelity check "
+                "(the static-source-contract floor) supplies evaluability"
+            )
+        if judged_only:
+            # Judged-only: a reviewed, frozen eval is the sole signal — surface
+            # the standing deterministic-counterweight advisory (ADR-0036/030-01).
+            lines.append(
+                "  ✓ suitable via a reviewed, frozen eval component (the sole "
+                "signal)"
+            )
+            for it in advisory:
+                lines.append(f"  · advisory [{it['kind']}] {it['detail']}")
+            lines.append(
+                "  → suitable now; adding a deterministic component (test / CI) "
+                "is a recommended reward-hacking counterweight, not required."
+            )
     lines.append(f"  artifact → {out_path}")
     return "\n".join(lines)
 
@@ -678,6 +976,7 @@ def render_trace(trace: dict) -> str:
         "  rule trace (ordered, first-match):",
         f"    inputs: evaluable={inp['n_evaluable']} residual={inp['n_residual']} "
         f"has_signal={inp['has_signal']} eval_signal={inp['eval_signal']} "
+        f"policy_evaluable={inp.get('policy_evaluable', False)} "
         f"(tests={inp['signals'].get('tests')} ci={inp['signals'].get('ci')} "
         f"lint={inp['signals'].get('lint')})",
     ]
@@ -700,7 +999,7 @@ def _run_analyze(args: argparse.Namespace) -> int:
     )
 
     try:
-        spec_id, artifact, eval_signal = analyze(
+        spec_id, artifact, eval_signal, policy_evaluable = analyze(
             target, spec_path, oracle_plan_path=oracle_plan_path
         )
     except EnvError as exc:
@@ -714,11 +1013,15 @@ def _run_analyze(args: argparse.Namespace) -> int:
     trace = None
     if args.explain:
         inputs = artifact["inputs"]["ac_counts"]
+        # `ac_counts.evaluable` is the AC-only count; the rule table keys on the
+        # total, so re-add the required-policy credit (not persisted — AC5).
+        n_total = inputs["evaluable"] + _policy_credit(policy_evaluable)
         trace = build_trace(
             artifact["inputs"]["signals"],
-            n_evaluable=inputs["evaluable"],
+            n_evaluable=n_total,
             n_residual=inputs["residual"],
             eval_signal=eval_signal,
+            policy_evaluable=policy_evaluable,
         )
 
     if args.json:
