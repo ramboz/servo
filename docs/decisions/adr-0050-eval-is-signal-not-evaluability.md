@@ -167,10 +167,15 @@ under test, not in the decision record.
   judge-free required-policy check at the fixed path
   `<target>/spec/oracle/static/checks.json`, reliably readable by the gate
   (verified against the code); its absence is fail-closed (`n_evaluable` stays 0).
-- The check's redline can be **attributed** to a specific spec (e.g. via its
-  `source_spec_path`/`spec_id` or an explicit binding), so the credit can be scoped
-  to the spec under analysis. Confirm the attribution handle at implementation —
-  if none exists, the first Kill criterion fires.
+- The check's redline can be **attributed** to the spec under analysis, so the
+  credit can be scoped to it. A handle plausibly exists — the single-redline-per-
+  target identity (vellum's case: one target carries one redline for one design
+  spec, so the correspondence holds by construction), or an explicit binding the
+  slice adds. It is **not** the static contract's own `source_spec_path`/`spec_id`:
+  those are synthetic redline literals (`"static"` / `spec/static.md`), not a
+  feature-spec handle, and collide in name with the feature-spec `source_spec_path`
+  in `oracle_plan`/`required_runtime` — do not attribute via them. Confirm the
+  handle at implementation; if none can be sealed, the first Kill criterion fires.
 
 ## Kill criteria
 
