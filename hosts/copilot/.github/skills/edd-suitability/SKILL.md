@@ -116,7 +116,8 @@ bump, never an open string).
 
 ## The eval-signal leg (ADR-0036 / spec 030-01)
 
-`has_signal` is a test/CI signal **or** a reviewed, frozen eval component. The
+`has_signal` is a test/CI signal **or** a reviewed, frozen eval component **or**
+a live required-policy check (spec 044-02, below). The
 eval leg is read purely from the two manifests servo already writes — never by
 parsing `oracle.sh`:
 
@@ -200,9 +201,24 @@ whether a redline corresponds to a spec's fidelity goals). The synthetic
 `checks.json` play **no** part in attribution.
 
 A `suitable` verdict reached this way names its evaluability source in the
-decided reason code (`evaluable_required_policy_with_eval_signal` /
-`evaluable_required_policy_with_signal`) and in the `--explain` trace
+decided reason code (`evaluable_required_policy_with_signal`, used whenever
+evaluability comes only from the policy check) and in the `--explain` trace
 (`policy_evaluable=True`), so the case is auditable.
+
+**The same live check also satisfies `has_signal` (spec 044-02).** `has_signal`
+is a test/CI signal **or** a reviewed frozen eval (030-01) **or** a **live,
+enforceable required-policy check** — the same `fidelity_contract` + L1/L2 floor
+that satisfies `n_evaluable`. A live required-policy check is a deterministic
+executable gate the score-time oracle runs, strictly safer than the stochastic
+eval signal, so a **static-contract-only** target (no tests/CI, no eval, a live
+floor, all-residual ACs) is `suitable`, with the message "supplies both the
+evaluability and the oracle signal". One `policy_evaluable` boolean supplies both
+legs, so it never satisfies the signal leg while leaving evaluability unmet; a
+non-live floor yields no signal; the judge never credits it. Because the policy
+check is itself the deterministic counterweight, the judged-only advisory does
+not fire when it is live (the vellum pairing keeps `suitable`, with code
+`evaluable_required_policy_with_signal`). Specs with no `fidelity_contract` are
+unchanged.
 
 ## Re-run after acquiring evidence
 
