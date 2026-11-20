@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.14.0](https://github.com/ramboz/servo/compare/v0.13.0...v0.14.0) (2026-11-20)
+
+
+### Features
+
+* **edd-suitability:** credit a live required-policy check as a has_signal source (spec 044-02) ([#75](https://github.com/ramboz/servo/issues/75)) ([17b9ae9](https://github.com/ramboz/servo/commit/17b9ae9e7fca90772cd341c0976233bfd3b131b6))
+* **edd-suitability:** credit a reviewed, frozen eval component as a has_signal source (spec 030-01) ([#72](https://github.com/ramboz/servo/issues/72)) ([6cc670b](https://github.com/ramboz/servo/commit/6cc670b3414251fcc8517269eaef8c4621738343))
+* **edd-suitability:** credit n_evaluable from a spec-attributed required-policy check (spec 044-01) ([#74](https://github.com/ramboz/servo/issues/74)) ([f5ceeb3](https://github.com/ramboz/servo/commit/f5ceeb375abb571bec35489582d6f2b615d87ac5))
+
+
+### Documentation
+
+* **decisions:** draft ADR-0044 — required constraints cannot be averaged away ([#70](https://github.com/ramboz/servo/issues/70)) ([db5c8bd](https://github.com/ramboz/servo/commit/db5c8bd333cfc5c24ada5ef68e44852e32a714bd))
+* **decisions:** draft ADR-0050 — a reviewed eval is a signal, not an evaluability basis ([#73](https://github.com/ramboz/servo/issues/73)) ([a04df7e](https://github.com/ramboz/servo/commit/a04df7e8aeba619418b5f7ec4b585cc2c31af887))
+
 ## [0.13.0](https://github.com/ramboz/servo/compare/v0.12.0...v0.13.0) (2026-11-17)
 
 
