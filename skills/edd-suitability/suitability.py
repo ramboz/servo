@@ -38,7 +38,10 @@ here.
 
 The eval-signal leg (ADR-0036 / spec 030-01)
 --------------------------------------------
-`has_signal` is `deterministic_signal OR reviewed_frozen_eval`. The eval leg is
+`has_signal` is `deterministic_signal OR reviewed_frozen_eval OR a live
+required-policy check` (ADR-0050 / spec 044-02: the same `fidelity_contract` +
+L1/L2 floor that credits `n_evaluable` is a deterministic executable gate, so it
+is also a signal source). The eval leg is
 established purely from two manifests servo already writes — never by parsing
 `oracle.sh`:
 
@@ -96,6 +99,8 @@ DEFAULT_ORACLE_PLAN = (
 # work EDD-evaluable (it surfaces as a missing_evidence item below). A reviewed,
 # frozen eval component is a *separate* signal source (ADR-0036 / 030-01),
 # computed from the manifests in `_eval_signal` and threaded in as `eval_signal`.
+# A *live required-policy check* is a further, separate deterministic `has_signal`
+# source (spec 044-02, `policy_evaluable`) — not a test/CI key.
 _SIGNAL_KEYS = ("tests", "ci")
 
 # Closed dir↔component alias map (ADR-0036). The *reverse* of the eval
@@ -127,16 +132,10 @@ _FRONTMATTER_FENCE = "---"
 
 # Reason codes whose decided rule means evaluability came from a required-policy
 # fidelity check (not an evaluable AC). Surfaced in `render_human`.
-_POLICY_EVALUABLE_REASON_CODES = (
-    "evaluable_required_policy_with_eval_signal",
-    "evaluable_required_policy_with_signal",
-)
+_POLICY_EVALUABLE_REASON_CODES = ("evaluable_required_policy_with_signal",)
 # Reason codes whose decided rule means the oracle *signal* is the judged-only
 # eval (so `render_human` surfaces the deterministic-counterweight advisory).
-_EVAL_SIGNAL_REASON_CODES = (
-    "evaluable_acs_with_eval_signal",
-    "evaluable_required_policy_with_eval_signal",
-)
+_EVAL_SIGNAL_REASON_CODES = ("evaluable_acs_with_eval_signal",)
 
 # Closed `kind` taxonomy for missing_evidence items (slice 015-02), mirroring
 # ADR-0002's closed-`reason` posture. An input that maps to no known kind is
@@ -252,6 +251,9 @@ def _facts(n_evaluable: int, n_residual: int, *, det_signal: bool,
            eval_signal: bool, policy_evaluable: bool = False) -> str:
     if det_signal:
         signal_phrase = "a test/CI signal"
+    elif policy_evaluable:
+        # spec 044-02: a live required-policy check is a deterministic signal.
+        signal_phrase = "a deterministic required-policy fidelity signal"
     elif eval_signal:
         signal_phrase = "a reviewed frozen eval signal"
     else:
@@ -280,7 +282,8 @@ def _rule_table(n_evaluable: int, n_residual: int, *, det_signal: bool,
     (which takes the first match) and `build_trace()` (which renders every rule
     for `--explain`), so the table is defined exactly once.
 
-    `has_signal` is ``det_signal OR eval_signal``. The single "signal present →
+    `has_signal` is ``det_signal OR eval_signal OR policy_evaluable`` (a live
+    required-policy check is a deterministic gate, spec 044-02). The single "signal present →
     suitable" rule names its *source* in the code/message along two axes — the
     oracle signal (deterministic vs eval) and the *evaluability* source
     (evaluable AC vs required-policy fidelity check). `n_evaluable` is the total;
@@ -291,31 +294,46 @@ def _rule_table(n_evaluable: int, n_residual: int, *, det_signal: bool,
     case auditable; with >=1 evaluable AC the AC-based code stays (byte-identical,
     the policy credit then a non-decisive bonus). The table stays five rules.
     """
-    has_signal = det_signal or eval_signal
-    eval_only = has_signal and not det_signal
-    # Evaluability credited only by the required-policy fidelity check (no
-    # evaluable AC): name a distinct rule code.
+    # spec 044-02: a live required-policy check is a deterministic signal (an
+    # executable gate the oracle runs — ADR-0015), so it joins both `has_signal`
+    # AND the deterministic-signal class. The eval is "the sole signal" (judged-only
+    # — the ADR-0033/0036 g5 counterweight advisory) only when NEITHER a test/CI
+    # signal NOR a live policy check is present. All new behavior is gated on
+    # `policy_evaluable`, so a non-fidelity_contract spec is byte-identical.
+    has_signal = det_signal or eval_signal or policy_evaluable
+    eval_only = eval_signal and not det_signal and not policy_evaluable
+    # With no test/CI signal, the deterministic oracle signal is the required-policy
+    # check itself (044-02) — name that provenance accurately rather than claiming a
+    # test/CI signal that is not present.
+    policy_is_signal = policy_evaluable and not det_signal
     ac_evaluable = n_evaluable - _policy_credit(policy_evaluable)
     policy_only_evaluable = policy_evaluable and ac_evaluable < 1
-    if policy_only_evaluable and eval_only:
-        signal_code = "evaluable_required_policy_with_eval_signal"
-        signal_message = (
-            "EDD-shaped: a deterministic required-policy fidelity check supplies "
-            "evaluability and a reviewed, frozen eval component supplies the "
-            "oracle signal (a deterministic counterweight is advised)"
-        )
-    elif policy_only_evaluable:
+    if policy_only_evaluable:
         signal_code = "evaluable_required_policy_with_signal"
-        signal_message = (
-            "EDD-shaped: a deterministic required-policy fidelity check supplies "
-            "evaluability and a compilable test/CI signal is present"
-        )
+        if policy_is_signal:
+            signal_message = (
+                "EDD-shaped: a deterministic required-policy fidelity check "
+                "supplies both the evaluability and the oracle signal"
+            )
+        else:
+            signal_message = (
+                "EDD-shaped: a deterministic required-policy fidelity check "
+                "supplies evaluability and a compilable test/CI signal is present"
+            )
     elif eval_only:
         signal_code = "evaluable_acs_with_eval_signal"
         signal_message = (
             "EDD-shaped: evaluable ACs and a reviewed, frozen eval component "
             "are both present (the judged eval is the oracle signal; a "
             "deterministic counterweight is advised)"
+        )
+    elif policy_is_signal:
+        # >=1 evaluable AC AND the live policy check is the deterministic signal
+        # (no test/CI); the eval, if any, is a non-decisive additional signal.
+        signal_code = "evaluable_acs_with_signal"
+        signal_message = (
+            "EDD-shaped: evaluable ACs and a deterministic required-policy "
+            "fidelity check (the oracle signal) are both present"
         )
     else:
         signal_code = "evaluable_acs_with_signal"
@@ -386,10 +404,11 @@ def build_trace(signals: dict, *, n_evaluable: int, n_residual: int,
     surfaced so `--explain` shows which signal source decided a judged-only case;
     `policy_evaluable` (ADR-0050 / 044) is surfaced so `--explain` shows when the
     evaluability came from a required-policy fidelity check. `n_evaluable` is the
-    total, including the `+1` policy credit.
+    total, including the `+1` policy credit. `has_signal` includes
+    `policy_evaluable` (spec 044-02).
     """
     det_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)
-    has_signal = det_signal or eval_signal
+    has_signal = det_signal or eval_signal or policy_evaluable
     rules = _rule_table(n_evaluable, n_residual, det_signal=det_signal,
                         eval_signal=eval_signal,
                         policy_evaluable=policy_evaluable)
@@ -429,8 +448,10 @@ def decide(signals: dict, *, n_evaluable: int, n_residual: int,
     **or** a deterministic, spec-attributed required-policy fidelity check
     (`policy_evaluable`, ADR-0050 / 044 — the `+1` credit folded into
     `n_evaluable` upstream in `analyze`); the stochastic judge never satisfies it.
-    The signal is `has_signal = deterministic_signal OR eval_signal`, where
-    `eval_signal` (ADR-0036 / 030-01) is a reviewed, frozen eval component.
+    The signal is `has_signal = deterministic_signal OR eval_signal OR
+    policy_evaluable` (spec 044-02: a live required-policy check is itself a
+    deterministic executable gate), where `eval_signal` (ADR-0036 / 030-01) is a
+    reviewed, frozen eval component.
     Everything else is fail-closed. The table is ordered and first-match —
     exactly one rule fires and names itself (and its evaluability + signal
     *sources*) in `reasons`.
@@ -445,8 +466,8 @@ def decide(signals: dict, *, n_evaluable: int, n_residual: int,
     and the list can never disagree (slice 015-02 AC3).
     """
     det_signal = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)
-    has_signal = det_signal or eval_signal
-    eval_only = has_signal and not det_signal
+    has_signal = det_signal or eval_signal or policy_evaluable
+    eval_only = eval_signal and not det_signal and not policy_evaluable
     facts = _facts(n_evaluable, n_residual, det_signal=det_signal,
                    eval_signal=eval_signal, policy_evaluable=policy_evaluable)
     rules = _rule_table(n_evaluable, n_residual, det_signal=det_signal,
@@ -948,10 +969,19 @@ def render_human(artifact: dict, out_path: Path) -> str:
         # (ADR-0050 / 044): name the basis so a `suitable` with zero evaluable
         # ACs is auditable from the human summary.
         if policy_evaluable:
-            lines.append(
-                "  ✓ suitable: a deterministic required-policy fidelity check "
-                "(the static-source-contract floor) supplies evaluability"
-            )
+            signals = artifact.get("inputs", {}).get("signals", {})
+            det = any(bool(signals.get(k)) for k in _SIGNAL_KEYS)
+            if det:
+                lines.append(
+                    "  ✓ suitable: a deterministic required-policy fidelity check "
+                    "(the static-source-contract floor) supplies evaluability"
+                )
+            else:
+                lines.append(
+                    "  ✓ suitable: a deterministic required-policy fidelity check "
+                    "(the static-source-contract floor) supplies both evaluability "
+                    "and the oracle signal"
+                )
         if judged_only:
             # Judged-only: a reviewed, frozen eval is the sole signal — surface
             # the standing deterministic-counterweight advisory (ADR-0036/030-01).

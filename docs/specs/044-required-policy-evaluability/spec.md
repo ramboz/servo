@@ -22,6 +22,20 @@ use_cases: []
 > renders the built app and compares computed CSS against the redline within
 > tolerance.
 
+> **Re-opened by [044-02](slice-02-required-policy-has-signal.md) (2026-11-19).**
+> 044-01 (below) credited the deterministic required-policy check toward
+> **`n_evaluable`** only, and named the **`has_signal`** question as the explicit
+> follow-up ("a separate decision ADR-0050 does not open"). 044-02 settles that
+> follow-up: the *same* live required-policy check (the `fidelity_contract` +
+> L1/L2 floor) **also satisfies `has_signal`** — it is an executable deterministic
+> gate the oracle runs, strictly safer than the stochastic eval 030-01 already
+> credits, so a **static-contract-only** design target (a live floor, no
+> tests/CI/eval) becomes `suitable` instead of wrongly refused. 044-02 records
+> this as a **low-tension corollary of ADR-0050 (no new ADR)** — see its slice
+> file for the rationale and the `frame_review` adjudication. The 044-01 sections
+> that follow describe the `n_evaluable` leg; the shared mechanism (the binding +
+> the two-layer liveness predicate) is unchanged and reused.
+
 ## Overview
 
 Teach `/servo:edd-suitability` to credit `n_evaluable` from a **deterministic
@@ -121,16 +135,22 @@ check (the deterministic `n_evaluable` fidelity floor, this slice), while an
 all-residual spec that declares no deterministic floor — and has no deterministic
 AC — correctly stays `needs_evidence`.
 
-**Scope boundary — this widens the `n_evaluable` leg only; `has_signal` is
-untouched.** `suitable` needs `n_evaluable >= 1` **AND** `has_signal`
-(`suitability.py` rule 1). 030-01 widened `has_signal`; this slice widens only
-`n_evaluable`. A target carrying **only** a static contract (no eval, no
-tests/CI) has `n_evaluable >= 1` but `has_signal == False`, so it is
-`needs_evidence` (`evaluable_acs_no_signal`) — correct, and out of scope to
-change here (whether a required-policy check should *also* satisfy `has_signal` is
-a separate decision ADR-0050 does not open). The motivating vellum case pairs the
-static contract **with** the design eval, whose 030-01 `has_signal` closes that
-leg.
+**Scope boundary (044-01) — this slice widened the `n_evaluable` leg only.**
+`suitable` needs `n_evaluable >= 1` **AND** `has_signal` (`suitability.py` rule
+1). 030-01 widened `has_signal`; 044-01 widened only `n_evaluable`. At 044-01, a
+target carrying **only** a static contract (no eval, no tests/CI) had
+`n_evaluable >= 1` but `has_signal == False`, so it was `needs_evidence`
+(`evaluable_acs_no_signal`) — named at the time as a separate decision, the
+motivating vellum case instead pairing the static contract **with** the design
+eval whose 030-01 `has_signal` closed that leg.
+
+**→ Closed by [044-02](slice-02-required-policy-has-signal.md).** That static-
+contract-only case is exactly the gap 044-02 closes: the same live required-policy
+check **also** satisfies `has_signal` (an executable deterministic gate), so a
+static-contract-only target is `suitable`. The design eval is no longer *required*
+to close the signal leg (it remains a `has_signal` source via 030-01, and when
+paired its 044-02-recognised deterministic counterweight means the "judged-only"
+advisory correctly stands down).
 
 Current state (probed 2026-11-19, against `origin/main` at ADR-0050 / 030-01):
 
@@ -154,7 +174,10 @@ Current state (probed 2026-11-19, against `origin/main` at ADR-0050 / 030-01):
   `install.json`'s `components`; 030-01's `_eval_signal` resolves it to credit
   `has_signal` only. Nothing reads it toward `n_evaluable`.
 
-Non-goals: no change to `has_signal` (030-01's leg stays as-is); no change to
+Non-goals (044-01; the `has_signal` ones are **now 044-02's scope** —
+cross-referenced inline): ~~no change to `has_signal`~~ → 044-02 adds the live
+required-policy check as a `has_signal` source (030-01's eval leg itself stays
+as-is); no change to
 `oracle.sh` / `gate.py` / `required_runtime.py` / `static_contract.py` /
 `oracle_plan.py` / the loop or any score-time contract (the gate is **read-only**
 over the committed `checks.json`, the runtime `.servo/required-policy.json` +
@@ -163,7 +186,8 @@ seal** — the gate mirrors only the honest-drift-relevant liveness facts
 (`oracle.sh` pin + install registration); the config/fragment/canonical hash pins
 stay score-time authority in `required_runtime`/`driver_seal`; no schema bump
 (`schema_version: 1`, the `missing_evidence` taxonomy, the five-rule table all
-stay); no crediting a required-policy check toward `has_signal`; no
+stay); ~~no crediting a required-policy check toward `has_signal`~~ → **done by
+044-02** (the one leg this family now also widens, reusing the same predicate); no
 multi-redline-per-target disambiguation (ADR-0050 Kill criterion 2 scopes the
 handle to the single-redline vellum case).
 
@@ -255,20 +279,33 @@ handle to the single-redline vellum case).
 
 ## Decomposition
 
-One vertical slice (Rules axis — the whole change is the verdict logic in
-`suitability.py`: a new, bounded evaluability source + its attribution guard,
-threaded through the existing rule table, with the skill-surface prose). No
-spike: ADR-0050's 4-round frame-critique pinned the mechanism (read the
+Two vertical slices (both Rules axis — the whole change is the verdict logic in
+`suitability.py`, threaded through the existing rule table, with the skill-surface
+prose). No spike: ADR-0050's 4-round frame-critique pinned the mechanism (read the
 required-runtime check plan, not `install.json` components; attribute per-spec,
 not target-globally; exclude the judge) against the live code, and every mechanic
 lands on files suitability already owns or reads.
 
-- **044-01 (Rules)** — the required-policy evaluability credit + its spec-attribution
+- **044-01 (Rules)** — the required-policy **evaluability** credit + its spec-attribution
   guard in `suitability.py`, with the test fence (declared + sealed static
   contract → `suitable`; judge alone, unattributed static check, and no
   deterministic check → refused; non-design specs byte-identical) and the
   SKILL.md / docstring updates.
+- **044-02 (Rules)** — the required-policy **`has_signal`** corollary: the same
+  live `policy_evaluable` check also satisfies `has_signal`, so a
+  static-contract-only target (no tests/CI/eval) is `suitable`. Reuses 044-01's
+  binding + L1/L2 liveness **unchanged**; the decision-layer change is a small
+  **coordinated** set of pure-layer edits (the `has_signal` disjunct **+**
+  reclassifying a live policy check into the deterministic-signal class — redefine
+  `eval_only` / `_facts` / `render_human` **+** extending guardrail-5's
+  counterweight set **+** making the policy reason-code messages name the signal
+  provenance accurately), all gated on `policy_evaluable` for byte-identity; the
+  dead `evaluable_required_policy_with_eval_signal` code is then removed. A
+  low-tension corollary of ADR-0050 (no new ADR) — frame-critique R1 confirmed the
+  safety frame and the no-ADR call, and required this honest scope (see the slice's
+  "What the change actually is").
 
 ## Slices
 
 - [044-01 — required-policy-evaluable](slice-01-required-policy-evaluable.md)
+- [044-02 — required-policy-has-signal](slice-02-required-policy-has-signal.md)

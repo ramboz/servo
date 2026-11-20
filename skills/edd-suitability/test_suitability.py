@@ -1348,10 +1348,7 @@ class EvalSignalReconCoverageTests(unittest.TestCase):
 
 _CONTRACT_DIR = "spec/oracle/static"
 _CONTRACT_CHECKS = _CONTRACT_DIR + "/checks.json"
-_POLICY_CODES = (
-    "evaluable_required_policy_with_eval_signal",
-    "evaluable_required_policy_with_signal",
-)
+_POLICY_CODES = ("evaluable_required_policy_with_signal",)
 _RP_VALID = "valid"  # sentinel: use the valid required_policy (avoid B006)
 
 
@@ -1512,15 +1509,19 @@ class RequiredPolicyPositiveTests(unittest.TestCase):
             art = json.loads(_artifact_path(target).read_text())
             self.assertEqual(art["verdict"], "suitable", art)
             codes = [r["code"] for r in art["reasons"]]
-            self.assertIn("evaluable_required_policy_with_eval_signal", codes)
+            # 044-02: the live policy check is the deterministic signal, so the
+            # eval is not the sole signal -> the non-eval policy code decides.
+            self.assertIn("evaluable_required_policy_with_signal", codes)
+            self.assertNotIn("evaluable_required_policy_with_eval_signal", codes)
             self.assertNotIn("evaluable_acs_with_eval_signal", codes)
             # No blocking item at all — in particular NO reference_set (the policy
             # check supplies evaluability).
             self.assertEqual(_blocking_kinds(art), set())
             kinds = {it["kind"] for it in art["missing_evidence"]}
             self.assertNotIn("reference_set", kinds)
-            # The eval is the sole signal → the counterweight advisory stands.
-            self.assertTrue({"tests", "ci"}.issubset(_advisory_kinds(art)))
+            # 044-02: the live policy check IS the deterministic counterweight, so
+            # the g5 counterweight advisory stands down.
+            self.assertFalse({"tests", "ci"} & _advisory_kinds(art))
             # `ac_counts.evaluable` keeps the AC count (0), not the +1 total.
             self.assertEqual(art["inputs"]["ac_counts"]["evaluable"], 0)
 
@@ -1538,7 +1539,7 @@ class RequiredPolicyPositiveTests(unittest.TestCase):
                 capture_output=True, text=True, env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("policy_evaluable=True", r.stdout)
-            self.assertIn("evaluable_required_policy_with_eval_signal", r.stdout)
+            self.assertIn("evaluable_required_policy_with_signal", r.stdout)
 
     def test_human_summary_names_the_policy_floor(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1553,7 +1554,8 @@ class RequiredPolicyPositiveTests(unittest.TestCase):
         # The mixed case: a spec with >=1 evaluable AC AND a declared live floor.
         # Evaluability is already met by the AC, so the policy credit is a
         # NON-DECISIVE bonus — the decided code stays AC-based
-        # (`evaluable_acs_with_eval_signal`), not a policy code, and
+        # (`evaluable_acs_with_signal` — 044-02: the live policy check is the
+        # deterministic signal, so the eval is not the sole signal), not a policy code, and
         # `ac_counts.evaluable` keeps the real AC count. The `_facts` suffix still
         # honestly notes the policy check. Exercises the `policy_only_evaluable ==
         # False` branch when policy_evaluable is True.
@@ -1567,7 +1569,7 @@ class RequiredPolicyPositiveTests(unittest.TestCase):
             art = json.loads(_artifact_path(target).read_text())
             self.assertEqual(art["verdict"], "suitable", art)
             codes = [r["code"] for r in art["reasons"]]
-            self.assertIn("evaluable_acs_with_eval_signal", codes)  # AC-decided
+            self.assertIn("evaluable_acs_with_signal", codes)  # AC-decided
             for c in _POLICY_CODES:
                 self.assertNotIn(c, codes)
             self.assertEqual(art["inputs"]["ac_counts"]["evaluable"], 1)
@@ -1952,6 +1954,192 @@ class FidelityContractHelperTests(unittest.TestCase):
             plain = _make_fc_spec(root, fidelity_contract=None, dir_name="plain")
             self.assertFalse(
                 suitability._required_policy_evaluable(target, plain, manifest))
+
+
+# ==========================================================================
+# Slice 044-02 — required-policy-has-signal (ADR-0050 corollary)
+#
+# `has_signal` is additionally satisfied by a LIVE required-policy check (the same
+# `policy_evaluable` that credits `n_evaluable`): a deterministic executable gate.
+# ==========================================================================
+
+_PRG_CODE = "evaluable_required_policy_with_signal"
+
+
+def _static_only_target(root: Path) -> Path:
+    """No tests/CI, NO eval, a LIVE static contract (contrast `_vellum_target`)."""
+    target = _make_target(root, SIG_EVAL_BASE)
+    _write_install(target, SIG_EVAL_BASE, [])  # NO design_fidelity eval
+    _write_static_contract(target)  # a LIVE static contract
+    return target
+
+
+def _analyze_static_only(root: Path, *, declare=True, extra=None, **contract_kw):
+    """Run the CLI on a static-contract-only target; return (res, artifact)."""
+    if extra is None:
+        target = _static_only_target(root)
+    else:
+        target = _make_target(root, SIG_EVAL_BASE)
+        _write_install(target, SIG_EVAL_BASE, [])
+        _write_static_contract(target, **contract_kw)
+    fc = "spec/oracle/static" if declare else None
+    spec = _make_fc_spec(root, fidelity_contract=fc)
+    plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+    res = _run_cli(target, spec, oracle_plan=plan)
+    art = None
+    if _artifact_path(target).exists():
+        art = json.loads(_artifact_path(target).read_text())
+    return target, spec, plan, res, art
+
+
+class StaticContractOnlyHasSignalTests(unittest.TestCase):
+    def test_static_contract_only_is_suitable(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target, spec, plan, res, art = _analyze_static_only(root)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(art["verdict"], "suitable", art)
+            codes = [r["code"] for r in art["reasons"]]
+            self.assertIn(_PRG_CODE, codes)
+            msg = art["reasons"][0]["message"]
+            self.assertIn("supplies both", msg)
+            self.assertNotIn("a compilable test/CI signal is present", msg)
+            self.assertEqual(_blocking_kinds(art), set())
+            env = dict(os.environ)
+            env["SERVO_SUITABILITY_ORACLE_PLAN"] = str(plan)
+            r = subprocess.run(
+                [sys.executable, str(SUITABILITY), "analyze", str(target),
+                 "--spec", str(spec), "--explain"],
+                capture_output=True, text=True, env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("has_signal=True", r.stdout)
+            self.assertIn("policy_evaluable=True", r.stdout)
+
+    def test_human_summary_names_signal(self):
+        with tempfile.TemporaryDirectory() as d:
+            _t, _s, _p, res, _a = _analyze_static_only(Path(d))
+            self.assertIn("supplies both evaluability and the oracle signal",
+                          res.stdout)
+
+    def test_companion_undeclared_is_not_suitable(self):
+        with tempfile.TemporaryDirectory() as d:
+            _t, _s, _p, res, art = _analyze_static_only(Path(d), declare=False)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertNotEqual(art["verdict"], "suitable", art)
+            codes = [r["code"] for r in art["reasons"]]
+            self.assertNotIn(_PRG_CODE, codes)
+
+
+class ExistingHasSignalSourcesUnchangedTests(unittest.TestCase):
+    def test_tests_ci_no_fc_suitable(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root, SIG_TESTS)
+            _write_install(target, SIG_TESTS, [])
+            spec = _make_fc_spec(root, fidelity_contract=None)
+            plan = _stub_oracle_plan(root, n_checks=2, n_residual=1)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target).read_text())
+            self.assertEqual(art["verdict"], "suitable")
+            self.assertIn("evaluable_acs_with_signal",
+                          [r["code"] for r in art["reasons"]])
+
+    def test_eval_only_all_residual_no_fc_needs_evidence(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _vellum_target(root, static=False)
+            spec = _make_fc_spec(root, fidelity_contract=None)
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target).read_text())
+            self.assertEqual(art["verdict"], "needs_evidence")
+            self.assertIn("signal_without_evaluable_acs",
+                          [r["code"] for r in art["reasons"]])
+
+    def test_judge_component_alone_gives_no_policy_signal(self):
+        # design_fidelity installed, NO eval config, NO static contract, fc declared.
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            target = _make_target(root, SIG_EVAL_BASE)
+            _write_install(target, SIG_EVAL_BASE, ["design_fidelity"])
+            spec = _make_fc_spec(root, fidelity_contract="spec/oracle/static")
+            plan = _stub_oracle_plan(root, n_checks=0, n_residual=1)
+            res = _run_cli(target, spec, oracle_plan=plan)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            art = json.loads(_artifact_path(target).read_text())
+            self.assertNotEqual(art["verdict"], "suitable", art)
+            codes = [r["code"] for r in art["reasons"]]
+            for c in _POLICY_CODES:
+                self.assertNotIn(c, codes)
+
+
+class PolicySignalFailClosedTests(unittest.TestCase):
+    def test_baseline_intact_is_suitable(self):
+        with tempfile.TemporaryDirectory() as d:
+            _t, _s, _p, res, art = _analyze_static_only(
+                Path(d), extra=True)
+            self.assertEqual(res.returncode, 0, res.stderr)
+            self.assertEqual(art["verdict"], "suitable", art)
+
+    def test_each_break_gives_no_signal(self):
+        breaks = {
+            "stale_pin": {"oracle_hash": "sha256:" + "7" * 64},
+            "not_installed": {"write_policy": False},
+            "draft": {"approval_status": "draft"},
+            "malformed": {"checks_raw": "{ bad ]"},
+        }
+        for name, kw in breaks.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as d:
+                _t, _s, _p, res, art = _analyze_static_only(
+                    Path(d), extra=True, **kw)
+                self.assertEqual(res.returncode, 0, res.stderr)
+                self.assertNotEqual(art["verdict"], "suitable", (name, art))
+                codes = [r["code"] for r in art["reasons"]]
+                self.assertIn("all_acs_residual_no_signal", codes)
+                for c in _POLICY_CODES:
+                    self.assertNotIn(c, codes)
+
+
+class PolicySignalByteIdentityTests(unittest.TestCase):
+    def test_judged_only_no_fc_identical_with_without_live_static(self):
+        def run(with_static):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                target = _vellum_target(root, static=with_static)
+                spec = _make_fc_spec(root, fidelity_contract=None)
+                plan = _stub_oracle_plan(root, n_checks=2, n_residual=1)
+                _run_cli(target, spec, oracle_plan=plan)
+                art = json.loads(_artifact_path(target).read_text())
+                art.pop("analyzed_at", None)
+                return art
+
+        a = run(False)
+        self.assertEqual(a, run(True))
+        # Non-vacuity: this is the judged-only advisory shape.
+        self.assertTrue({"tests", "ci"}.issubset(_advisory_kinds(a)))
+
+
+class DeadReasonCodeUnreachableTests(unittest.TestCase):
+    DEAD = "evaluable_required_policy_with_eval_signal"
+
+    def test_constants_dropped(self):
+        self.assertNotIn(self.DEAD, suitability._POLICY_EVALUABLE_REASON_CODES)
+        self.assertNotIn(self.DEAD, suitability._EVAL_SIGNAL_REASON_CODES)
+
+    def test_rule_table_never_emits_dead_code(self):
+        for n_eval in (0, 1, 2):
+            for det in (False, True):
+                for ev in (False, True):
+                    rules = suitability._rule_table(
+                        n_eval + 1, 1, det_signal=det, eval_signal=ev,
+                        policy_evaluable=True)
+                    self.assertNotIn(self.DEAD, [r[2] for r in rules])
+        rules = suitability._rule_table(
+            1, 1, det_signal=False, eval_signal=True, policy_evaluable=True)
+        self.assertEqual(rules[0][0], True)
+        self.assertEqual(rules[0][2], _PRG_CODE)
 
 
 if __name__ == "__main__":

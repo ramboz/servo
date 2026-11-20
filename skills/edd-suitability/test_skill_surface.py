@@ -472,6 +472,13 @@ class RequiredPolicyEvaluabilityDocsTests(unittest.TestCase):
         self.assertIn("undeclared", collapsed.lower())
         self.assertIn("honest-author", collapsed.lower())
 
+    def test_skill_md_documents_has_signal_from_required_policy(self):
+        collapsed = " ".join(_skill_text().split())
+        self.assertIn("044-02", collapsed)
+        self.assertIn("also satisfies `has_signal`", collapsed)
+        self.assertIn("static-contract-only", collapsed)
+        self.assertNotIn("evaluable_required_policy_with_eval_signal", collapsed)
+
     def test_decide_docstring_names_the_policy_evaluability_source(self):
         doc = _load_suitability().decide.__doc__ or ""
         collapsed = " ".join(doc.split())
