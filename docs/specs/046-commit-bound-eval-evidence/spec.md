@@ -63,17 +63,25 @@ what was judged. The fingerprint can, and it already exists.
   answers whether the latest evidence still describes the current tree:
   `current`, `stale`, or `none`.
 
-**Vocabulary alignment with jig ADR-0069.** jig owns the commit stamp (a
-`Verified-by:` trailer whose values include `none`). Servo defines no trailer.
-It provides the inputs a stamp can cite: an `evaluated_tree` on every
-evaluation, and an `evidence` verb whose `current` + `pass` result is what a
-"verified by servo oracle" value would mean, and whose `none` / `stale` map to
-jig's `none`. 046-02 documents that mapping in `docs/architecture.md`; jig spec
-124 decides how it is consumed.
+**Vocabulary alignment with jig ADR-0069.** jig owns the landing stamp: an
+in-tree landing record mirrored as `Verified-by:` stamp lines in the commit
+message or PR body (ADR-0069's H-6 — git trailers were rejected because squash
+merges drop them), from a closed vocabulary that includes `none`. Servo defines
+no stamp. It only produces evidence a future consumer could cite: an
+`evaluated_tree` on every evaluation, and an `evidence` verb whose `current` +
+`pass` result is what a "verified by servo oracle" value would mean, and whose
+`none` / `stale` correspond to jig's `none`. 046-02 documents that mapping in
+`docs/architecture.md`. No consumer is owned today: jig spec 124 does not read
+servo evidence, no jig artifact proposes a commit gate (R-002 lists it as an
+unowned
+[open question](https://github.com/ramboz/jig/blob/main/docs/research/R-002-claude-code-verification-assessment.md#open-questions)),
+and ADR-0069's closed vocabulary has no servo token — adding one would be a
+jig-side change.
 
 **Non-goals.**
-- The trailer, the commit gate and its off / observe / enforce modes — jig
-  ADR-0069 / ADR-0070, jig specs 124 / 125.
+- The stamp lines / landing record and the off / observe / enforce gate modes —
+  jig ADR-0069 / ADR-0070, jig specs 124 / 125. Any commit gate that would
+  consume this evidence (unowned, above).
 - Making the loop commit its fix. `docs/refinement-todo.md:484` ("Does the
   dispatched loop commit its fix?") stays open; this spec makes the
   working-tree answer verifiable (a later commit of exactly the evaluated
@@ -114,7 +122,7 @@ jig's `none`. 046-02 documents that mapping in `docs/architecture.md`; jig spec
   the stamp describe the pre-evaluation tree.
 - **Evidence is local.** `.servo/` is git-ignored (`docs/architecture.md:438`),
   so the gate ledger does not travel with the repo. Durable, shared evidence is
-  jig's commit stamp, not servo's ledger.
+  jig's landing stamp, not servo's ledger.
 
 ## Decomposition
 
@@ -132,8 +140,8 @@ SPIDR (Spike / Paths / Interfaces / Data / Rules — see the jig glossary):
 
 **Anti-horizontal-phasing.** 046-01 alone lets anyone reading a ledger, a loop
 state or a gate payload tell which tree a score belongs to. 046-02 alone turns
-that into an answer a person or a jig commit gate can ask for: is this pass about
-the tree in front of me?
+that into an answer a person, or a future consumer, can ask for: is this pass
+about the tree in front of me?
 
 ## Slices
 

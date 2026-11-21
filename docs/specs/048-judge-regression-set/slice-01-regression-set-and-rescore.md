@@ -24,11 +24,11 @@ per-stage miss rate, in a ledger record bound to the definition, judge
 fingerprint and set it measured.
 
 **DoR:**
-- ✅ [ADR-0053](../../decisions/adr-0053-judge-regression-rescore.md) Accepted.
-- ✅ Re-probed at implementation time: `audit_target` and its metric helpers
+- ⬜ [ADR-0053](../../decisions/adr-0053-judge-regression-rescore.md) Accepted.
+- ⬜ Re-probed at implementation time: `audit_target` and its metric helpers
   (`eval_authoring.py:1581-1777`), the three kinds' `judge()` signatures, and
   each kind's ledger fields for retained candidates (spec Overview).
-- ✅ The judge fingerprint's field list per kind is agreed at arch-review: judge
+- ⬜ The judge fingerprint's field list per kind is agreed at arch-review: judge
   model, decoding and transport; samples (`n`, `k`, `delta`); threshold; the
   rubric hash; and the kind's prompt-bearing fields (design-eval: `dimensions`,
   `ignore` — SKILL.md says the judge instruction is assembled from them).

@@ -29,8 +29,8 @@ a turn "is **not completion attestation**" (`skills/oracle-hook/SKILL.md:81-82`)
 — but nothing records that it happened.
 
 **DoR:**
-- ✅ 046-01 DONE (`evaluated_tree` exists on every gate payload).
-- ✅ Ledger path and record shape agreed at arch review (proposed below).
+- ⬜ 046-01 DONE (`evaluated_tree` exists on every gate payload).
+- ⬜ Ledger path and record shape agreed at arch review (proposed below).
 
 **Acceptance Criteria:**
 
@@ -38,8 +38,11 @@ a turn "is **not completion attestation**" (`skills/oracle-hook/SKILL.md:81-82`)
    directory appends exactly one record to `<target>/.servo/gate-ledger.jsonl`
    (git-ignored, and excluded from the fingerprint as `.servo/` bookkeeping):
    `{kind: "gate_evaluation", schema_version: 1, at, status, exit_code, reason,
-   composite, threshold, evaluated_tree, freeze_anchor, gate_ref}`.
-   `freeze_anchor` is present when spec 045 provides it; `gate_ref` is the
+   composite, threshold, evaluated_tree, freeze_anchor, skipped, gate_ref}`.
+   `freeze_anchor` is present when spec 045 provides it; `skipped` is copied
+   from the gate payload when spec 047 reports a deterministic-first skip
+   (047-03 AC1's `[{component, reason}]`), so a lower-bound composite is never
+   read as a full score; `gate_ref` is the
    required-mode `.servo/gate-runs/<run_id>/gate.json` path and hash when one was
    written. Env-error outcomes — missing oracle, unexpected exit, timeout,
    `required_evidence_unavailable`, freeze refusals — are recorded with their
@@ -74,21 +77,25 @@ a turn "is **not completion attestation**" (`skills/oracle-hook/SKILL.md:81-82`)
    snapshot of `.servo/` plus refs, `HEAD` and the index is unchanged afterwards.
 6. **Docs.** `docs/architecture.md` (quality-gate JSON contract and the
    `.servo/` path list) documents the ledger and the verb, and states that the
-   verb's `current` + `pass` result is the servo-side input a
+   verb's `current` + `pass` result is servo-side evidence a future consumer
+   could cite in a
    [jig ADR-0069](https://github.com/ramboz/jig/blob/main/docs/decisions/adr-0069-commit-bound-verification-evidence.md)
-   stamp can cite, with `stale` / `none` corresponding to its `none`. Servo
-   defines no trailer. `skills/oracle-hook/SKILL.md` notes that a turn let
-   through fail-open now leaves a recorded non-pass outcome.
+   stamp (landing record / `Verified-by:` lines), with `stale` / `none`
+   corresponding to its `none`. It also states that no consumer exists today
+   (no jig commit gate is proposed; ADR-0069's vocabulary has no servo token,
+   and adding one is a jig-side change). Servo defines no stamp.
+   `skills/oracle-hook/SKILL.md` notes that a turn let through fail-open now
+   leaves a recorded non-pass outcome.
 
 ### Behavioral rules
 
 | Rule | Operation/control | Actor | State/precondition | Outcome | Rationale | AC |
 |------|-------------------|-------|--------------------|---------|-----------|----|
-| BR-1 | `gate.py evidence` | person or jig commit gate | latest record's tree equals the current tree | `current` | exact binding | AC3 |
-| BR-2 | `gate.py evidence` | person or jig commit gate | record was dirty; exactly those tracked changes are now committed; tree clean | `current` | the loop never commits; a human commit of the evaluated content keeps its evidence | AC3 |
-| BR-3 | `gate.py evidence --paths` | person or jig commit gate | clean record; no listed path changed since `record.head` | `current` | the brief's "relevant paths" scoping | AC3 |
-| BR-4 | `gate.py evidence` | person or jig commit gate | record exists; none of the above | `stale` + changed paths | an out-of-date pass means nothing | AC3 |
-| BR-5 | `gate.py evidence` | person or jig commit gate | no record | `none` | "none" is queryable, not missing | AC3 |
+| BR-1 | `gate.py evidence` | any reader | latest record's tree equals the current tree | `current` | exact binding | AC3 |
+| BR-2 | `gate.py evidence` | any reader | record was dirty; exactly those tracked changes are now committed; tree clean | `current` | the loop never commits; a human commit of the evaluated content keeps its evidence | AC3 |
+| BR-3 | `gate.py evidence --paths` | any reader | clean record; no listed path changed since `record.head` | `current` | the brief's "relevant paths" scoping | AC3 |
+| BR-4 | `gate.py evidence` | any reader | record exists; none of the above | `stale` + changed paths | an out-of-date pass means nothing | AC3 |
+| BR-5 | `gate.py evidence` | any reader | no record | `none` | "none" is queryable, not missing | AC3 |
 | BR-6 | `gate.py <target>` | any caller | oracle missing / env-error | recorded with `reason` | not-evaluable is a recorded outcome | AC1 |
 
 **DoD:**

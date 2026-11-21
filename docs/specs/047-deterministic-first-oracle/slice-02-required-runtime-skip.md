@@ -23,14 +23,14 @@ already decided — now including a failed required constraint — and the gate'
 independent re-derivation accepts a skip only when it was decided.
 
 **DoR:**
-- ✅ [ADR-0052](../../decisions/adr-0052-deterministic-components-gate-judges.md)
+- ⬜ [ADR-0052](../../decisions/adr-0052-deterministic-components-gate-judges.md)
   Accepted; 047-01 DONE (the kind declaration and the decided-outcome rule this
   slice mirrors in Python).
-- ✅ Re-probed at implementation time: the scoring loop
+- ⬜ Re-probed at implementation time: the scoring loop
   (`required_runtime.py:762-823`), `outcome()` (`:704-722`), and the gate-side
   re-derivation in `run_gate` (`:877-918`), which compares components in
   `COMPONENTS` order and requires every component to carry a score.
-- ✅ Upgrade note agreed with the owner: the approved required binding pins the
+- ⬜ Upgrade note agreed with the owner: the approved required binding pins the
   required runtime's bytes (`required_runtime.py:450-451`), so this slice costs
   every required-policy target one re-approval and reinstall (ADR-0052
   Consequences). Batch with other required-runtime changes if any are queued.

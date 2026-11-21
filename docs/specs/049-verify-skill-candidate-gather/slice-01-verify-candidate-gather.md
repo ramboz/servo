@@ -16,22 +16,23 @@ arch_review: true
 
 ## Slice 049-01 — verify-candidate-gather
 
-**Goal:** An eval-authoring case can declare `source: {"type": "verify",
-"scenario": <name>}`, and a live `score()` gets that case's candidate by running
-the project's declared verify entry point — through a shared resolver the presets
+**Goal:** An eval-authoring case can declare `source: {"type": "verify"}`, and a
+live `score()` gets that case's candidate by running the project's declared
+`verify-command:` (jig ADR-0073 point 3) — through a shared resolver the presets
 reuse in 049-02 — while every case and eval without it behaves exactly as today.
 
 **DoR:**
-- ✅ jig [ADR-0073](https://github.com/ramboz/jig/blob/main/docs/decisions/adr-0073-repo-verify-skill-contract.md)
-  Accepted and jig spec 128-01 DONE, so the declaration format and the entry
-  point's invocation (scenario, input, output, exit codes) are fixed. Cross-repo
+- ⬜ jig [ADR-0073](https://github.com/ramboz/jig/blob/main/docs/decisions/adr-0073-repo-verify-skill-contract.md)
+  Accepted and jig spec 128-01 DONE, so the declaration format (top-level
+  `verify-command:` or `metadata.verify-command`, decided by 128-01's host probe)
+  is fixed. This slice is written to ADR-0073 point 3 as proposed: one command,
+  no arguments, exit `0` pass / `1` fail / `2` environment error. Cross-repo
   dependencies cannot be expressed in `dependencies:` (the validator accepts
   only local `NNN-MM` / `adr-NNNN` tokens), so this item is checked by hand.
-- ✅ The spec's contract assumptions re-checked against the accepted jig
-  contract. If it cannot take a per-case input, this slice narrows to
-  input-free scenarios and refuses at freeze any verify-sourced case that carries
-  an `input` — the input is part of the definition and must not be silently
-  ignored.
+- ⬜ The spec's contract assumptions re-checked against the accepted jig
+  contract, including the unverified headless / non-interactive run. If the
+  accepted point 3 differs from the text this slice cites, re-narrow here
+  before READY.
 - ✅ Re-probed: `_gather_candidate` and its call site
   (`skills/eval-authoring/score.py:415-429`, `:609-611`) and
   `_definition_fields` (`:158-161`).
@@ -39,17 +40,28 @@ reuse in 049-02 — while every case and eval without it behaves exactly as toda
 **Acceptance Criteria:**
 
 1. **Shared resolver.** `skills/_common/verify_contract.py` (stdlib only) finds the
-   target's declared verify entry point and returns its argv, its scenarios and
-   its identity (declaration path and sha256) — or `absent` / `malformed` with a
-   reason. Resolution reads files only; it never runs the entry point.
-2. **Verify-sourced live gather.** For a case with `source: {"type": "verify",
-   "scenario": <name>}`, a live `score()` runs the entry point for that scenario
-   once per case per run, passes the case `input` as the contract specifies,
-   takes its output as the candidate, and judges it `n` times — content-fidelity's
-   gather-once rule — with a 180-second timeout.
-3. **Honest failure.** No declared contract, an unknown scenario, a non-zero exit,
-   a timeout or empty output is an `EnvError` (rc 2) naming the case and cause —
-   never a placeholder candidate and never a 0.0 score.
+   target's project `verify` skill — `.claude/skills/verify/SKILL.md`, then
+   `.agents/skills/verify/SKILL.md` (jig ADR-0073 point 1; never a user-scope
+   skill) — and returns its `verify-command:` argv (split with `shlex.split`, as
+   `.jig/test-command` is) and its identity (SKILL.md path and sha256) — or
+   `absent` / `malformed` with a reason. Resolution reads files only; it never
+   runs the command.
+2. **Verify-sourced live gather.** For a case with `source: {"type": "verify"}`,
+   a live `score()` runs the command from the target root with no arguments
+   (ADR-0073 point 3: a consumer passes none) once per case per run, takes its
+   stdout as the candidate, and judges it `n` times — content-fidelity's
+   gather-once rule — with a 180-second timeout. A verify-sourced case carries
+   no `input` (`validate_case` requires one only for other cases,
+   `eval-authoring/eval_authoring.py:897`); one that does is refused at freeze —
+   the input would be pinned but never passed, and must not be silently ignored.
+3. **Exit codes, honestly.** Exit `0` with non-empty stdout is a gathered
+   candidate. Exit `1` means the app's own check failed (ADR-0073 point 3): a
+   scored fail outcome for that case (0.0, no judge call), not an `EnvError`,
+   with the exit code recorded on the ledger row. No `verify` skill, no or an
+   empty `verify-command:` (ADR-0073's `not-run`), a command that cannot start,
+   any other exit code, a timeout, or empty stdout on exit `0` is an `EnvError`
+   (rc 2) naming the case and cause — never a placeholder candidate and never a
+   0.0 score.
 4. **Today's behaviour otherwise.** A case without `source` raises today's
    "candidate-gather is not yet implemented" `EnvError` unchanged; the fake-score
    hooks and the native `candidate_file` path are unchanged; a verify source on a
@@ -58,8 +70,8 @@ reuse in 049-02 — while every case and eval without it behaves exactly as toda
 5. **No re-freeze for existing evals.** `source` joins the pinned case fields only
    for evals that declare it (the `_definition_fields` pattern), so every
    existing frozen eval's `definition_hash` is byte-identical and its
-   `validate_freeze` still passes. Changing a case's source or scenario refuses
-   as stale until re-frozen.
+   `validate_freeze` still passes. Changing a case's source refuses as stale
+   until re-frozen.
 6. **Environmental identity, recorded.** The contract's content is not hashed into
    the freeze; every ledger row of a verify-sourced run records the resolved argv
    and the declaration sha256 (advisory, like design-eval's `capture_command`).
@@ -112,8 +124,8 @@ from the count.
       update its row in the Skills table.
 
 **Anti-horizontal-phasing check:** After this slice, a project that ships a verify
-skill can author an eval-authoring eval whose cases name verify scenarios, and the
-installed component scores live candidates under the gate and the agent loop —
+skill can author an eval-authoring eval whose cases take their candidate from its
+`verify-command:`, and the installed component scores live candidates under the gate and the agent loop —
 where today it can only env-error.
 
 ### Deviation log (after reconciliation)

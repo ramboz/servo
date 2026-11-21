@@ -35,8 +35,8 @@ content-fidelity presets author and freeze their config only under `.servo/`
 `skills/content-fidelity/content_fidelity.py:69-70`), so they have no base copy.
 
 **DoR:**
-- ✅ 045-01 DONE (resolver, fallback semantics).
-- ✅ 045-02 DONE. The tracked-definition path is named in the `oracle.sh`
+- ⬜ 045-01 DONE (resolver, fallback semantics).
+- ⬜ 045-02 DONE. The tracked-definition path is named in the `oracle.sh`
   fragment (AC1), and only a base-anchored `oracle.sh` keeps a run from
   redirecting it.
 

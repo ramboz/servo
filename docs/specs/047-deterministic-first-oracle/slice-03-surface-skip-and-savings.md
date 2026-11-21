@@ -22,11 +22,11 @@ iteration, and the run summary totals the judge calls avoided — counted from t
 frozen definitions, never in dollars.
 
 **DoR:**
-- ✅ 047-01 DONE (the oracle's skip line and the judged declaration naming each
+- ⬜ 047-01 DONE (the oracle's skip line and the judged declaration naming each
   component's definition directory). 047-02 is not required; when it is DONE its
   required-path payload already carries `skipped` (047-02 AC5) and surfaces
   through the same fields.
-- ✅ Arch-review has settled ADR-0052's open question: whether the lower-bound
+- ⬜ Arch-review has settled ADR-0052's open question: whether the lower-bound
   composite on skipped runs needs a gate `schema_version` bump under ADR-0002
   ("bump on any doubt"), or whether the explicit `skipped` field suffices.
 
@@ -36,8 +36,10 @@ frozen definitions, never in dollars.
    `oracle: skipped components:` line (alongside the existing missing-components
    parse, `gate.py:102-107`) and adds
    `skipped: [{"component": <name>, "reason": <reason>}]` only when non-empty;
-   text mode appends `skipped=<names>`. A run with no skip prints today's payload
-   byte-for-byte, with `schema_version` as arch-review decided.
+   text mode appends `skipped=<names>`. A run with no skip prints byte-for-byte
+   the payload without 047's fields (other specs' additive fields, such as
+   046-01's `evaluated_tree` or 045-02's `freeze_anchor`, may already be there),
+   with `schema_version` as arch-review decided.
 2. **Loop records skips per iteration.** The per-iteration JSON line and the
    `oracle_score_history` entry in `state.json` (`loop.py:4910-4917`) carry
    `skipped_components` when the gate reported a skip, read from either gate
@@ -56,8 +58,8 @@ frozen definitions, never in dollars.
    component — never an estimate. No USD figure is reported: oracle spend is not
    metered (ADR-0041 Context).
 5. **No skip, no change.** A loop run whose iterations never skip emits a summary
-   and state file byte-identical to today's apart from `judged_skips: 0` and
-   `judge_calls_avoided: 0` in the summary.
+   and state file byte-for-byte the same as without 047's fields, apart from
+   `judged_skips: 0` and `judge_calls_avoided: 0` in the summary.
 6. **Docs.** `docs/architecture.md` ("Quality-gate JSON contract") documents
    `skipped`; `skills/agent-loop/SKILL.md` documents `judged_skips` and
    `judge_calls_avoided` and states they are call counts, not cost.

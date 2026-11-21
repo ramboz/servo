@@ -23,7 +23,7 @@ recorded as unaudited — and stamps the result on the approval. The numbers are
 shown, never enforced; score time is untouched.
 
 **DoR:**
-- ✅ [ADR-0053](../../decisions/adr-0053-judge-regression-rescore.md) Accepted;
+- ⬜ [ADR-0053](../../decisions/adr-0053-judge-regression-rescore.md) Accepted;
   048-01 DONE (the set, the fingerprint and the bound record).
 - ✅ Re-probed: the three freeze paths (`eval_authoring.py:1290-1320`,
   `design_eval.py:237-296`, `content_fidelity.py:115-142`) and design-eval's

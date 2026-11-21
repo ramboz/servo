@@ -32,9 +32,9 @@ slice gives the ordinary path a base-anchored equivalent and leaves required
 mode's pins as they are.
 
 **DoR:**
-- ✅ 045-01 DONE (the anchor resolver exists and is loadable from `gate.py`'s
+- ⬜ 045-01 DONE (the anchor resolver exists and is loadable from `gate.py`'s
   portable closure).
-- ✅ [ADR-0051](../../decisions/adr-0051-base-anchored-freeze.md) Accepted
+- ⬜ [ADR-0051](../../decisions/adr-0051-base-anchored-freeze.md) Accepted
   (constraint 5: anchoring applies to unattended scoring only).
 
 **Acceptance Criteria:**

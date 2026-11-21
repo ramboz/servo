@@ -22,8 +22,8 @@ the verdict) and an over-flagging rate, in results tied to the prompt, tools and
 model they measured, so any change to those marks the results stale.
 
 **DoR:**
-- ✅ [ADR-0053](../../decisions/adr-0053-judge-regression-rescore.md) Accepted.
-- ✅ The owner has agreed who pays for runs (one judge call per case per run) and
+- ⬜ [ADR-0053](../../decisions/adr-0053-judge-regression-rescore.md) Accepted.
+- ⬜ The owner has agreed who pays for runs (one judge call per case per run) and
   that no CI step requires a billed run (ADR-0053 Open questions).
 - ✅ If jig [spec 126](https://github.com/ramboz/jig/blob/main/docs/specs/126-reviewer-recall-eval/spec.md)
   has landed, its case format has been read and adopted where it fits; this

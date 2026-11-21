@@ -26,11 +26,11 @@ with a reason. Any score can then be traced to the exact content behind it.
 - ✅ 042-04 DONE: the fingerprint primitive exists
   (`skills/agent-loop/loop.py:2288-2304`) and campaign's verifier already shares
   it through the dynamic loader.
-- ✅ Arch review agrees where the shared fingerprint lives so that `loop.py`,
+- ⬜ Arch review agrees where the shared fingerprint lives so that `loop.py`,
   campaign and `gate.py`'s portable closure (`gate.py` / `required_runtime.py` /
   `gate_consumer.py`, vendored into targets) all load one implementation —
   never a static cross-skill import.
-- ✅ [jig ADR-0069](https://github.com/ramboz/jig/blob/main/docs/decisions/adr-0069-commit-bound-verification-evidence.md)
+- ⬜ [jig ADR-0069](https://github.com/ramboz/jig/blob/main/docs/decisions/adr-0069-commit-bound-verification-evidence.md)
   Accepted, so field naming is checked against its vocabulary once.
 
 **Acceptance Criteria:**

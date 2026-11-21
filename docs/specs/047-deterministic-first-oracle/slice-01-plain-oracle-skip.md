@@ -23,15 +23,15 @@ full scoring would, prints a lower-bound composite, and says on stderr what it
 skipped and why (ADR-0052 Option D).
 
 **DoR:**
-- ✅ [ADR-0052](../../decisions/adr-0052-deterministic-components-gate-judges.md)
+- ⬜ [ADR-0052](../../decisions/adr-0052-deterministic-components-gate-judges.md)
   Accepted.
-- ✅ Arch-review confirms the kind mechanism: a `kind_<name>` shell function
+- ⬜ Arch-review confirms the kind mechanism: a `kind_<name>` shell function
   inside the component's `# SEED:` block, written by the shared
   `fidelity_eval.splice_component` when an installer passes a judged kind. Check
   that nothing seals SEED-block content beyond what the spec's Assumptions
   probed (`driver_identity` strips SEED blocks; the required-policy
   `fragment_hash` covers spec-oracle fragments only, which stay deterministic).
-- ✅ The pre-047 `templates/oracle.sh.template` is captured as a test fixture —
+- ⬜ The pre-047 `templates/oracle.sh.template` is captured as a test fixture —
   the baseline for AC5–AC7.
 
 **Acceptance Criteria:**

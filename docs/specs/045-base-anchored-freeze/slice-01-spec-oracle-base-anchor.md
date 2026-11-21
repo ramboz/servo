@@ -24,8 +24,8 @@ rewrites its recorded hash in the same file is then refused. Where no base copy
 exists, the freeze runs against the working tree as it does today and says so.
 
 **DoR:**
-- ✅ [ADR-0051](../../decisions/adr-0051-base-anchored-freeze.md) Accepted.
-- ✅ Home for the anchor resolver agreed at arch review. It must be reachable
+- ⬜ [ADR-0051](../../decisions/adr-0051-base-anchored-freeze.md) Accepted.
+- ⬜ Home for the anchor resolver agreed at arch review. It must be reachable
   from `checks.py` (referenced or vendored), `gate.py`'s portable closure
   (045-02) and the eval harness (045-03) through the existing dynamic-load
   pattern, never a static cross-skill import.

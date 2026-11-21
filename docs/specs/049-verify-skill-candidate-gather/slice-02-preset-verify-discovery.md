@@ -16,55 +16,39 @@ arch_review: true
 
 ## Slice 049-02 — preset-verify-discovery
 
-**Goal:** The two presets can take what they run from the project's verify
-contract: content-fidelity gains a `verify` case source beside `file` and
-`command`, and design-eval's web provider, when `config.json` sets no `app_url`,
-gets the app's URL — and its start and stop — from the contract.
+**Goal:** content-fidelity can take the text it judges from the project's verify
+contract: a `verify` case source beside `file` and `command`, run through
+049-01's resolver. design-eval's served-app half (starting and stopping the app,
+discovering `app_url`) is deferred — see the spec's "Deferred: design-eval's
+served app" for its resolution trigger.
 
 **DoR:**
-- ✅ 049-01 DONE (the shared resolver and the gather semantics).
-- ✅ The accepted jig contract (ADR-0073 / spec 128) re-checked: can it start a
-  served app, report its URL and stop it? If not, this slice narrows to AC1
-  (content-fidelity) and AC4, and records the design-eval half as DEFERRED with
-  that as its trigger.
-- ✅ If the design-eval half is kept: a servo ADR on the oracle owning a served
-  app's lifetime at score time (start, readiness, stop on every exit path,
-  interaction with the gate's process-group kill at
-  `skills/quality-gate/gate.py:195-221`) is Accepted. servo has not owned a
-  process across several captures before.
+- ⬜ 049-01 DONE (the shared resolver and the gather semantics).
+- ✅ The jig contract (ADR-0073 / spec 128, as proposed) re-checked: point 3
+  defines one argument-free command with no served-app lifecycle or URL, so
+  this slice is narrowed to content-fidelity and the design-eval half is
+  deferred at spec level (no servo ADR needed for what remains). 049-01's DoR
+  re-checks against the accepted text.
 
 **Acceptance Criteria:**
 
 1. **content-fidelity `verify` source.** A case may declare
-   `source: {"type": "verify", "scenario": <name>}`. It is gathered through the
-   049-01 resolver with `gather_text`'s existing once-per-case, 180-second,
-   env-error semantics (`skills/content-fidelity/score.py:125-161`) and pinned by
-   value like any `source` (`:66`), so switching a case to `verify` re-freezes
-   that eval exactly as switching `file` to `command` does today. Evals that do
-   not use it are unchanged.
-2. **design-eval `app_url` precedence.** When `config.json` sets `app_url`, the
-   web provider uses it exactly as today (byte-identical runs and ledger rows).
-   When it does not and the contract declares a served app, the provider starts
-   the app through the contract, waits (bounded) for the declared URL to answer,
-   captures every screen against it, and stops it on every exit path — success,
-   capture failure, timeout and SIGTERM. The URL used and the declaration sha256
-   go to the ledger; `app_url` stays out of the frozen definition
-   (`design-eval/score.py:58`).
-3. **Fail closed.** No `app_url` and no declared served app is an `EnvError`
-   before any capture, naming both ways to fix it. A start failure or readiness
-   timeout is an `EnvError`, and anything already started is stopped.
-4. **Other providers untouched.** The `command`, `android`, `ios` and `manual`
-   providers ignore the contract; their runs are byte-identical.
-5. **No orphaned processes.** Tests prove the started app's process group is gone
-   after a failing capture and after SIGTERM to the scorer.
-6. **Docs.** content-fidelity and design-eval `SKILL.md` describe the `verify`
-   source and the `app_url` precedence. Surface-tested.
+   `source: {"type": "verify"}`. It is gathered through the 049-01 resolver with
+   `gather_text`'s existing once-per-case, 180-second semantics
+   (`skills/content-fidelity/score.py:125-161`) and 049-01 AC3's exit-code
+   handling (exit `1` a scored fail, any other non-zero exit an `EnvError`), and
+   pinned by value like any `source` (`:66`), so switching a case to `verify`
+   re-freezes that eval exactly as switching `file` to `command` does today.
+   Evals that do not use it are unchanged.
+2. **design-eval untouched.** Every design-eval provider, `web` included,
+   ignores the contract; design-eval runs and ledger rows are byte-identical.
+3. **Docs.** content-fidelity `SKILL.md` describes the `verify` source.
+   Surface-tested.
 
 **DoD:**
 - [ ] All ACs pass; full test suite green (no regressions).
 - [ ] Implementer test coverage exercises each AC with at least one
-      fixture (a stub contract that serves a static page on localhost; no
-      external network).
+      fixture (a stub `verify` skill under a temp target; no network).
 - [ ] Each new test has been shown to fail when its feature is removed —
       the test is capable of failing, not vacuously green (mutate the
       feature, watch the test go red, restore).
@@ -99,10 +83,9 @@ from the count.
       the entry. If this slice introduces a new skill, add or
       update its row in the Skills table.
 
-**Anti-horizontal-phasing check:** After this slice, a design-eval run on a
-project with a verify skill no longer needs someone to start the app and copy its
-URL into `config.json`, and a content-fidelity eval can reuse the project's own
-run recipe instead of a second, hand-maintained command.
+**Anti-horizontal-phasing check:** After this slice, a content-fidelity eval on a
+project with a verify skill can reuse the project's own run recipe instead of a
+second, hand-maintained command.
 
 ### Deviation log (after reconciliation)
 
