@@ -88,9 +88,10 @@ For tracked gating artifacts, read the approval record from the copy at a base
 ref (`git show <base>:<path>`, read-only) instead of the working-tree copy, with
 an explicit, recorded fallback to the working tree when no base copy exists.
 - **Pros:** closes facts 1 and 2 for every tracked artifact with no new
-  infrastructure — git is already a hard dependency of the loop's brakes;
-  matches the post's mechanism directly; oracle changes become ordinary diffs
-  against the base that a reviewer sees.
+  infrastructure — the loop's brakes already use read-only git (the dirty-tree
+  preflight, the 042-04 content fingerprint); matches the post's mechanism
+  directly; oracle changes become ordinary diffs against the base that a
+  reviewer sees.
 - **Cons:** workflow cost — an approval or install must land on the base before
   a run on a branch can rely on it; covers tracked files only (fact 4); needs a
   resolvable base (shallow clones and unset default branches fall back); still
@@ -110,9 +111,10 @@ keychain.
 ### Option D: External approval store (service, pushed git notes, or a forge check/status)
 - **Pros:** the anchor genuinely sits outside the change's reach; can carry
   reviewer identity.
-- **Cons:** a network dependency in the score path; breaks offline and
-  plugin-first operation (`docs/product-vision.md:173-175`); forge-specific;
-  heavy for a single-developer target.
+- **Cons:** a network dependency in the score path; moves approval state out of
+  the project's own artifacts ("Per-project artifacts beat plugin-owned
+  runtime", `docs/product-vision.md:176`); forge-specific; heavy for a
+  single-developer target.
 
 ### Option E: Read-only mounts or a runner sandbox
 - **Pros:** real enforcement — the runner cannot write the oracle at all.
