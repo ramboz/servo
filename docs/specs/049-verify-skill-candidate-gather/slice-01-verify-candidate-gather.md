@@ -1,16 +1,8 @@
 ---
 status: DRAFT
-dependencies: []
-last_verified:
-# arch_review: true  # set to true when this slice changes module
-#                    # boundaries, public contracts, or architecture-
-#                    # shaped concerns (triggers arch-review pass).
-# design_review: true  # set true when this slice's fidelity must be a HARD
-#                      # gate: extract the mockup's design values (colours,
-#                      # spacing, sizes, layout rules) into this slice's ACs,
-#                      # then wire a servo `design-eval` as the done-condition
-#                      # (attest-only at REVIEWED; ADR-0014, ADR-0022,
-#                      # ADR-0049).
+dependencies: [adr-0005, adr-0024]
+last_verified: 2026-11-21
+arch_review: true
 ---
 
 <!-- jig self-defining vocabulary (soft, forward-only): expand each acronym on
@@ -22,107 +14,82 @@ last_verified:
      else mark them as assumptions in the spec's `## Assumptions` section —
      never assert an unverified claim as fact. -->
 
-## Slice 049-01 — tbd
+## Slice 049-01 — verify-candidate-gather
 
-**Goal:** _TODO: one-sentence statement of what this slice delivers.
-End-to-end value in a single vertical slice (anti-horizontal-phasing
-check below)._
+**Goal:** An eval-authoring case can declare `source: {"type": "verify",
+"scenario": <name>}`, and a live `score()` gets that case's candidate by running
+the project's declared verify entry point — through a shared resolver the presets
+reuse in 049-02 — while every case and eval without it behaves exactly as today.
 
 **DoR:**
-- ✅ _TODO: list the prerequisites that must hold before this slice
-  becomes `READY_FOR_IMPLEMENTATION` — upstream slices done, helpers
-  in place, fixtures/data available, etc._
+- ✅ jig [ADR-0073](https://github.com/ramboz/jig/blob/main/docs/decisions/adr-0073-repo-verify-skill-contract.md)
+  Accepted and jig spec 128-01 DONE, so the declaration format and the entry
+  point's invocation (scenario, input, output, exit codes) are fixed. Cross-repo
+  dependencies cannot be expressed in `dependencies:` (the validator accepts
+  only local `NNN-MM` / `adr-NNNN` tokens), so this item is checked by hand.
+- ✅ The spec's contract assumptions re-checked against the accepted jig
+  contract. If it cannot take a per-case input, this slice narrows to
+  input-free scenarios and refuses at freeze any verify-sourced case that carries
+  an `input` — the input is part of the definition and must not be silently
+  ignored.
+- ✅ Re-probed: `_gather_candidate` and its call site
+  (`skills/eval-authoring/score.py:415-429`, `:609-611`) and
+  `_definition_fields` (`:158-161`).
 
 **Acceptance Criteria:**
 
-1. **_TODO: first AC._** Sharp, testable, observable from outside the
-   helper (CLI output, file mutation, exit code, log line). Avoid
-   "code is clean" / "tests pass" framings — those belong in the DoD.
-2. _TODO: second AC._
-3. _TODO: third AC._
-
-### Behavioral rules (optional)
-
-For stateful or role-dependent behavior, make the implicit outcomes checkable.
-Omit this section when it adds no value, or link an existing contract instead of
-restating it. Rule IDs do not encode precedence: surface conflicting rules/ACs
-for explicit resolution. A demo does not override the owning ACs. When using an
-external reference, name its authority and revision.
-
-| Rule | Operation/control | Actor | State/precondition | Outcome | Rationale | AC |
-|------|-------------------|-------|--------------------|---------|-----------|----|
-| BR-1 | _TODO_ | _TODO_ | _TODO_ | _Allowed/blocked/hidden or concrete response_ | _Why_ | _Owning AC_ |
-
-### Verification scenario (optional)
-
-Use when a runtime journey helps verify the ACs; omit when existing tests already
-give adequate evidence. Reuse existing test/browser/service tools, not a new
-runner. CLI, service, and UI scenarios use the same evidence shape.
-
-**Preconditions:** _Environment, fixtures, access, and safe test accounts; no secrets._
-
-**Invocation:** _Reproducible command or tool steps._
-
-**Preserved behavior:** _Existing journeys or negative paths that must not regress._
-
-**Code revision / dirty-change identity:** _Revision tested; identify any uncommitted
-changes, for example with a saved diff and its digest. Evidence references are
-durable paths, not ephemeral chat claims._
-
-| Step | AC | Expected | Observed | Outcome | Evidence |
-|------|----|----------|----------|---------|----------|
-| 1 | _AC_ | _Observable result_ | _Actual observation after execution_ | _not-run_ | _Log/assertion/screenshot reference_ |
-
-Outcomes: `pass`, `fail`, `not-run`, or `environment-error`. Not-run or an
-environment-error is not a pass. If a required AC needs runtime verification,
-missing evidence leaves it unverified; do not declare completion from a build,
-a proposed script, or an unavailable environment.
+1. **Shared resolver.** `skills/_common/verify_contract.py` (stdlib only) finds the
+   target's declared verify entry point and returns its argv, its scenarios and
+   its identity (declaration path and sha256) — or `absent` / `malformed` with a
+   reason. Resolution reads files only; it never runs the entry point.
+2. **Verify-sourced live gather.** For a case with `source: {"type": "verify",
+   "scenario": <name>}`, a live `score()` runs the entry point for that scenario
+   once per case per run, passes the case `input` as the contract specifies,
+   takes its output as the candidate, and judges it `n` times — content-fidelity's
+   gather-once rule — with a 180-second timeout.
+3. **Honest failure.** No declared contract, an unknown scenario, a non-zero exit,
+   a timeout or empty output is an `EnvError` (rc 2) naming the case and cause —
+   never a placeholder candidate and never a 0.0 score.
+4. **Today's behaviour otherwise.** A case without `source` raises today's
+   "candidate-gather is not yet implemented" `EnvError` unchanged; the fake-score
+   hooks and the native `candidate_file` path are unchanged; a verify source on a
+   Copilot-transport eval is refused at freeze, since native scoring keeps its
+   file-snapshot policy.
+5. **No re-freeze for existing evals.** `source` joins the pinned case fields only
+   for evals that declare it (the `_definition_fields` pattern), so every
+   existing frozen eval's `definition_hash` is byte-identical and its
+   `validate_freeze` still passes. Changing a case's source or scenario refuses
+   as stale until re-frozen.
+6. **Environmental identity, recorded.** The contract's content is not hashed into
+   the freeze; every ledger row of a verify-sourced run records the resolved argv
+   and the declaration sha256 (advisory, like design-eval's `capture_command`).
+7. **Constraint cases stay honest.** A verify-sourced case with
+   `expected_output.constraints` still raises the existing missing-actual-values
+   `EnvError` (`eval-authoring/score.py:516-524`).
+8. **Docs.** The "named limitation" in `skills/eval-authoring/SKILL.md` is
+   narrowed: live gather works for verify-sourced cases; other cases keep the
+   limitation. Surface-tested.
 
 **DoD:**
 - [ ] All ACs pass; full test suite green (no regressions).
 - [ ] Implementer test coverage exercises each AC with at least one
-      fixture. Edge cases listed in the slice are covered explicitly.
+      fixture (a stub verify entry point under a temp target; no network).
 - [ ] Each new test has been shown to fail when its feature is removed —
       the test is capable of failing, not vacuously green (mutate the
       feature, watch the test go red, restore).
+- [ ] Host packages rebuilt and drift-clean
+      (`scripts/build_host_packages.py --check`), including the copied
+      `verify_contract.py` beside each installed `score.py`; Python 3.9 floor
+      respected.
 - [ ] Reviewed by `reviewer` subagent. Reviewer prompt built by
       `review.py`.
-- [ ] Implementation review passed.
+- [ ] Implementation review passed (compliance + craft + arch).
 - [ ] Deviation log produced under this slice heading.
 - [ ] Reconciliation sweep produced under this slice heading.
 - [ ] Reconciliation review passed.
-- [ ] `docs/refinement-todo.md` updated if any decisions were
-      deferred during implementation.
-
-### For `kind: spike` slices
-
-When the slice's frontmatter has `kind: spike`, the body carries four
-extra labelled blocks alongside the standard Goal / DoR / AC / DoD
-scaffolding. Spike slices are timeboxed investigation, not feature
-work — they reduce an unknown before committing to a design.
-
-```markdown
-**Question:** _One sentence stating the open question. Set at DRAFT._
-
-**Time-box:** _Explicit budget — e.g., "1 day", "4 hours". Set at DRAFT._
-
-**Findings:** _Bullet evidence collected during the spike. Filled
-during IN_PROGRESS._
-
-**Outcome:** _One of: `ADR-NNNN created` / `spec NNN-NN unblocked` /
-`abandoned (reason)`. Multiple outcomes separated by `;`
-(e.g., `ADR-0007 created; spec 030-02 unblocked`). Set at DONE._
-```
-
-`spec_lint.py` validates the `kind:` enum (allowed values: `spike`,
-`feature`) and soft-warns when a `kind: spike` slice is missing any of
-the four labels. Mid-flight spikes legitimately have empty Findings /
-Outcome, so this is a warning, not a hard error.
-
-See `skills/spec-workflow/SKILL.md` (Spike slices subsection) and
-`docs/spec-workflow/spidr-primer.md` for the always-nested rule (spike
-slices live inside a real spec, never as standalone `docs/spikes/`
-artifacts) and the abandoned-outcome manual-reshape failure mode.
+- [ ] `docs/refinement-todo.md`: the "candidate-gather … is unbuilt" entry is
+      updated to say verify-sourced cases are resolved here and `file|command`
+      sources plus actual-value extraction remain.
 
 ### Close-out (post-DONE)
 
@@ -144,10 +111,10 @@ from the count.
       the entry. If this slice introduces a new skill, add or
       update its row in the Skills table.
 
-**Anti-horizontal-phasing check:** _TODO: in one sentence, describe
-the end-to-end observable value a user gets after this slice lands.
-If the answer is "intermediate state for the next slice," the slice
-is mis-shaped — re-split._
+**Anti-horizontal-phasing check:** After this slice, a project that ships a verify
+skill can author an eval-authoring eval whose cases name verify scenarios, and the
+installed component scores live candidates under the gate and the agent loop —
+where today it can only env-error.
 
 ### Deviation log (after reconciliation)
 

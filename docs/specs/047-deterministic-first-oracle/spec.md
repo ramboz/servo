@@ -31,8 +31,10 @@ This spec makes the oracle **deterministic-first**, per ADR-0052 Option D:
 3. When their results already decide the exit code — a deterministic component
    unavailable, a required constraint failed, or the quality ceiling (judged
    components at 1.0) below `THRESHOLD` — judged components are skipped, the
-   oracle exits exactly as full scoring would, reports a lower-bound composite,
-   and records what it skipped and why.
+   oracle exits as full scoring would for any score the judges could return,
+   reports a lower-bound composite, and records what it skipped and why. (The
+   one named difference: a judge that would have been unreachable no longer
+   turns a decided fail into an env error.)
 4. The quality gate and the agent loop surface the skip and the judge calls it
    avoided.
 
@@ -66,8 +68,12 @@ tier scores each case when it does. 047-03's "judge calls avoided" counts feed
 **Siblings.** jig [spec 129](https://github.com/ramboz/jig/blob/main/docs/specs/129-verification-loop-hardening/spec.md)
 (tests green before review) is the jig-side analog for review passes; nothing
 here depends on it. servo [spec 046](../046-commit-bound-eval-evidence/spec.md)
-(commit-bound evaluation evidence) adds the evaluated commit to the same run
-records 047-03 extends — coordinate field placement, no shared scope.
+(commit-bound evaluation evidence) adds the evaluated tree to the same gate
+payload and loop history 047-03 extends — coordinate field placement, no shared
+scope. servo [spec 045](../045-base-anchored-freeze/spec.md)-02 pins `oracle.sh`
+— including the SEED blocks where 047-01's kind declaration lives — to its base
+copy for unattended scoring, so a run cannot re-label its own components (and a
+skip can never confer a pass in any case).
 
 **Non-goals.** No green-floor gating (ADR-0052 Option E); no change to frozen
 eval definitions or `definition_hash`; no change to suitability (ADR-0050); no

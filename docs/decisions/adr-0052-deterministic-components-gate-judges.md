@@ -95,14 +95,15 @@ Prior decisions shape the answer:
 ### Option D: Skip judges only when the deterministic results already decide the gate; fail explicitly (chosen)
 Run deterministic components first. Skip every judged component **iff no score
 in [0, 1] for the judged components could change the gate's exit code**. Exit
-as the status quo would have; record which components were skipped and why.
-- **Pros:** verdict-preserving by construction — testable as a property; saves
-  the spend in exactly the case the post targets (red tests); never confers a
-  pass; no new knob for authors.
+as full scoring would have; record which components were skipped and why.
+- **Pros:** verdict-preserving over every score the judges could return —
+  testable as a property; saves the spend in exactly the case the post targets
+  (red tests); never confers a pass; no new knob for authors.
 - **Cons:** two runtimes (bash template, required runtime) plus the gate's
   re-derivation must implement the same rule; the composite on a skipped run is
   a lower bound, not the full average; the runner gets no judged feedback while
-  the deterministic floor is red.
+  the deterministic floor is red; a judge that is down goes unnoticed until the
+  deterministic floor clears (see constraint 4).
 
 ### Option E: Green-floor gating — judges run only when every deterministic component scores 1.0
 - **Pros:** closest to "cheap checks first" as the post states it; ADR-0005's
@@ -119,7 +120,8 @@ declared, field names) is spec 047's work, under test.
 1. **Each component has a kind: `deterministic` (default) or `judged`.** The
    kind lives with the *installed component*, not in the frozen eval definition.
    It decides execution order and skip eligibility — **never** the verdict, so a
-   wrong or missing label can cost savings but cannot change an exit code.
+   wrong or missing label can cost savings but cannot change an exit code
+   (beyond constraint 4's named unavailable-judge case).
 2. **Deterministic components run first.** Required-policy components
    (ADR-0044) are always deterministic and are never skipped.
 3. **The skip rule.** After the deterministic pass, skip all judged components
@@ -129,7 +131,12 @@ declared, field names) is spec 047's work, under test.
    - the quality ceiling — the weighted average with every judged component at
      1.0, rounded as the composite is — is below `THRESHOLD` → exit 1.
 4. **What a skipped run reports.** The exit code equals what full scoring would
-   have produced. The composite is the **lower bound**: skipped components
+   have produced whenever every skipped component would have returned a score.
+   The one named difference: if a skipped judged component would have been
+   unavailable (rc 2), full scoring exits 2 (`env_error`) and the skipped run
+   exits 1 — the judge's unavailability surfaces on the first iteration that
+   actually needs it, and is never read as a 0.0 score. The composite is the
+   **lower bound**: skipped components
    contribute 0 to the numerator and keep their weight in the denominator, so it
    stays numeric (no accidental exit 2) and comparable across iterations. The
    result names each skipped component and the reason. In the required path a
@@ -204,7 +211,9 @@ trigger asks for (judge spend as a share of a run).
   variant-race ranking, the judge agent's prompt) see that. A loop that keeps
   tests red while improving judged quality now plateaus rather than continuing —
   intended (progress the gate cannot see yet) but a behaviour change.
-- The judged signal is withheld while deterministic checks decide the fail.
+- The judged signal is withheld while deterministic checks decide the fail, and
+  so is a judge outage: a run that full scoring would end as `env_error` (judge
+  unreachable) ends as `below_threshold` until the deterministic floor clears.
 
 ## Assumptions
 
@@ -227,7 +236,8 @@ trigger asks for (judge spend as a share of a run).
 ## Kill criteria
 
 - A skipped run ever produces a different exit code than full scoring on the
-  same inputs (the property fails in a real case). Fall back to Option B.
+  same inputs, other than the named judged-unavailable case (the property fails
+  in a real case). Fall back to Option B.
 - Judged-heavy targets measurably need more iterations to converge, or
   plateau-halt early, with skipping than without. Revisit — likely limit
   skipping to the env-error and required-fail conditions.

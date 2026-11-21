@@ -1,16 +1,8 @@
 ---
 status: DRAFT
-dependencies: []
-last_verified:
-# arch_review: true  # set to true when this slice changes module
-#                    # boundaries, public contracts, or architecture-
-#                    # shaped concerns (triggers arch-review pass).
-# design_review: true  # set true when this slice's fidelity must be a HARD
-#                      # gate: extract the mockup's design values (colours,
-#                      # spacing, sizes, layout rules) into this slice's ACs,
-#                      # then wire a servo `design-eval` as the done-condition
-#                      # (attest-only at REVIEWED; ADR-0014, ADR-0022,
-#                      # ADR-0049).
+dependencies: [adr-0053]
+last_verified: 2026-11-21
+arch_review: true
 ---
 
 <!-- jig self-defining vocabulary (soft, forward-only): expand each acronym on
@@ -22,69 +14,84 @@ last_verified:
      else mark them as assumptions in the spec's `## Assumptions` section —
      never assert an unverified claim as fact. -->
 
-## Slice 048-01 — tbd
+## Slice 048-01 — regression-set-and-rescore
 
-**Goal:** _TODO: one-sentence statement of what this slice delivers.
-End-to-end value in a single vertical slice (anti-horizontal-phasing
-check below)._
+**Goal:** Each frozen eval can hold a regression set — frozen candidate
+artifacts with human labels, split into `tuning` and `test` — and
+`eval_authoring.py audit --regression` re-runs the eval's own judge over it,
+reporting the existing audit metrics plus an over-flagging control and a
+per-stage miss rate, in a ledger record bound to the definition, judge
+fingerprint and set it measured.
 
 **DoR:**
-- ✅ _TODO: list the prerequisites that must hold before this slice
-  becomes `READY_FOR_IMPLEMENTATION` — upstream slices done, helpers
-  in place, fixtures/data available, etc._
+- ✅ [ADR-0053](../../decisions/adr-0053-judge-regression-rescore.md) Accepted.
+- ✅ Re-probed at implementation time: `audit_target` and its metric helpers
+  (`eval_authoring.py:1581-1777`), the three kinds' `judge()` signatures, and
+  each kind's ledger fields for retained candidates (spec Overview).
+- ✅ The judge fingerprint's field list per kind is agreed at arch-review: judge
+  model, decoding and transport; samples (`n`, `k`, `delta`); threshold; the
+  rubric hash; and the kind's prompt-bearing fields (design-eval: `dimensions`,
+  `ignore` — SKILL.md says the judge instruction is assembled from them).
+  Case lists are excluded.
 
 **Acceptance Criteria:**
 
-1. **_TODO: first AC._** Sharp, testable, observable from outside the
-   helper (CLI output, file mutation, exit code, log line). Avoid
-   "code is clean" / "tests pass" framings — those belong in the DoD.
-2. _TODO: second AC._
-3. _TODO: third AC._
-
-### Behavioral rules (optional)
-
-For stateful or role-dependent behavior, make the implicit outcomes checkable.
-Omit this section when it adds no value, or link an existing contract instead of
-restating it. Rule IDs do not encode precedence: surface conflicting rules/ACs
-for explicit resolution. A demo does not override the owning ACs. When using an
-external reference, name its authority and revision.
-
-| Rule | Operation/control | Actor | State/precondition | Outcome | Rationale | AC |
-|------|-------------------|-------|--------------------|---------|-----------|----|
-| BR-1 | _TODO_ | _TODO_ | _TODO_ | _Allowed/blocked/hidden or concrete response_ | _Why_ | _Owning AC_ |
-
-### Verification scenario (optional)
-
-Use when a runtime journey helps verify the ACs; omit when existing tests already
-give adequate evidence. Reuse existing test/browser/service tools, not a new
-runner. CLI, service, and UI scenarios use the same evidence shape.
-
-**Preconditions:** _Environment, fixtures, access, and safe test accounts; no secrets._
-
-**Invocation:** _Reproducible command or tool steps._
-
-**Preserved behavior:** _Existing journeys or negative paths that must not regress._
-
-**Code revision / dirty-change identity:** _Revision tested; identify any uncommitted
-changes, for example with a saved diff and its digest. Evidence references are
-durable paths, not ephemeral chat claims._
-
-| Step | AC | Expected | Observed | Outcome | Evidence |
-|------|----|----------|----------|---------|----------|
-| 1 | _AC_ | _Observable result_ | _Actual observation after execution_ | _not-run_ | _Log/assertion/screenshot reference_ |
-
-Outcomes: `pass`, `fail`, `not-run`, or `environment-error`. Not-run or an
-environment-error is not a pass. If a required AC needs runtime verification,
-missing evidence leaves it unverified; do not declare completion from a build,
-a proposed script, or an unavailable environment.
+1. **Add a historical case.** `eval_authoring.py regression add <eval> --case
+   <id> --candidate <file> --label pass|fail [--score S] [--split test|tuning]
+   --source <ref>` copies the candidate under `<eval>/regression/` and records
+   the case in `<eval>/regression/regression.json`. `--source` names an incident,
+   a ledger run, or `control` (an accepted, stable state — the over-flagging
+   control). A missing candidate, an unknown label or split, or a duplicate id
+   is an `EnvError` with nothing written. Adding cases to a frozen eval leaves
+   `validate_freeze` passing.
+2. **Seed from a labeled scoring run.** `regression add <eval> --from-run
+   <ledger-at> --labels <file>` (the audit's label format, `parse_labels`,
+   `eval_authoring.py:1581`) imports every labeled case whose candidate that run
+   retained — a design-eval `shot` (`design-eval/score.py:1271-1274`), or a native
+   `candidate_file` whose current sha256 matches the run's `candidate_snapshot`
+   (`eval-authoring/score.py:642-645`) — and lists each case it could not import
+   with the reason. Content-fidelity runs retain no candidate text, so their
+   cases are added with `--candidate` (AC1).
+3. **Re-score the current definition.** `eval_authoring.py audit <eval>
+   --regression` loads the working `config.json` as written (frozen or not),
+   runs the kind's own `judge()` `n` times on each **test** case's frozen
+   candidate, aggregates with the eval's lower bound, and computes
+   fail-precision, pass-miss-rate and drift with the existing helpers. It never
+   gathers a fresh candidate and never reads or writes `oracle.sh`.
+4. **Controls and stages.** The record adds a control over-flag rate (control
+   cases the judge fails ÷ control cases) and the pass-miss rate at two stages:
+   per sample (each raw judge call) and per case (the aggregated lower bound) —
+   so an author can see whether aggregation or the judge itself catches a fail.
+5. **The record is bound to what it measured.** It is appended to
+   `<eval>/ledger.jsonl` as `kind: judge_audit`, `mode: regression`, with the
+   working definition's `definition_hash`, its judge fingerprint, the set's
+   content hash, the split, per-case samples and the metrics. The existing
+   `audit` (no `--regression`) output is byte-identical to today's.
+6. **Tuning stays apart from test.** `--split tuning` scores only tuning cases
+   and records `split: tuning`; such records never satisfy 048-02. Moving a case
+   between splits changes the set hash. Two consecutive test-split re-scores of
+   one definition are both recorded, so re-score noise is visible.
+7. **Honest failure.** An unreachable judge, a malformed reply, or a missing or
+   hash-mismatched candidate is an `EnvError` (exit 2) and writes no record —
+   never partial metrics. An empty test split reports every metric as `n/a`
+   with a stated note, like the existing empty-denominator handling.
+8. **Advisory, provably.** A regression run changes neither `config.json`,
+   `oracle.sh`, nor any gate result (the 008-06 AC4 proof, extended).
+9. **Docs.** `skills/eval-authoring/SKILL.md` documents the regression set, the
+   splits, the record and its cost (`n` × test cases judge calls).
+   Surface-tested.
 
 **DoD:**
 - [ ] All ACs pass; full test suite green (no regressions).
 - [ ] Implementer test coverage exercises each AC with at least one
-      fixture. Edge cases listed in the slice are covered explicitly.
+      fixture. Edge cases listed in the slice are covered explicitly — including
+      a known-bad fixture modelled on the 0.7998 field report (a human-`fail`
+      candidate) that surfaces as a pass-miss when the judge passes it.
 - [ ] Each new test has been shown to fail when its feature is removed —
       the test is capable of failing, not vacuously green (mutate the
       feature, watch the test go red, restore).
+- [ ] Host packages rebuilt and drift-clean
+      (`scripts/build_host_packages.py --check`); Python 3.9 floor respected.
 - [ ] Reviewed by `reviewer` subagent. Reviewer prompt built by
       `review.py`.
 - [ ] Implementation review passed.
@@ -92,37 +99,8 @@ a proposed script, or an unavailable environment.
 - [ ] Reconciliation sweep produced under this slice heading.
 - [ ] Reconciliation review passed.
 - [ ] `docs/refinement-todo.md` updated if any decisions were
-      deferred during implementation.
-
-### For `kind: spike` slices
-
-When the slice's frontmatter has `kind: spike`, the body carries four
-extra labelled blocks alongside the standard Goal / DoR / AC / DoD
-scaffolding. Spike slices are timeboxed investigation, not feature
-work — they reduce an unknown before committing to a design.
-
-```markdown
-**Question:** _One sentence stating the open question. Set at DRAFT._
-
-**Time-box:** _Explicit budget — e.g., "1 day", "4 hours". Set at DRAFT._
-
-**Findings:** _Bullet evidence collected during the spike. Filled
-during IN_PROGRESS._
-
-**Outcome:** _One of: `ADR-NNNN created` / `spec NNN-NN unblocked` /
-`abandoned (reason)`. Multiple outcomes separated by `;`
-(e.g., `ADR-0007 created; spec 030-02 unblocked`). Set at DONE._
-```
-
-`spec_lint.py` validates the `kind:` enum (allowed values: `spike`,
-`feature`) and soft-warns when a `kind: spike` slice is missing any of
-the four labels. Mid-flight spikes legitimately have empty Findings /
-Outcome, so this is a warning, not a hard error.
-
-See `skills/spec-workflow/SKILL.md` (Spike slices subsection) and
-`docs/spec-workflow/spidr-primer.md` for the always-nested rule (spike
-slices live inside a real spec, never as standalone `docs/spikes/`
-artifacts) and the abandoned-outcome manual-reshape failure mode.
+      deferred during implementation; the "Judge-audit → composite gating"
+      entry gains a pointer to regression records as its evidence source.
 
 ### Close-out (post-DONE)
 
@@ -144,10 +122,10 @@ from the count.
       the entry. If this slice introduces a new skill, add or
       update its row in the Skills table.
 
-**Anti-horizontal-phasing check:** _TODO: in one sentence, describe
-the end-to-end observable value a user gets after this slice lands.
-If the answer is "intermediate state for the next slice," the slice
-is mis-shaped — re-split._
+**Anti-horizontal-phasing check:** After this slice, an author about to switch an
+eval's judge model can re-score the old and new definitions on the same frozen,
+labeled candidates and see whether the new one passes something a human failed
+or fails an accepted control — evidence today's audit cannot produce.
 
 ### Deviation log (after reconciliation)
 

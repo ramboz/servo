@@ -68,10 +68,13 @@ skipped and why (ADR-0052 Option D).
 5. **Exit-code equivalence (property test).** Over a generated matrix — one to
    four deterministic and one to three judged components; scores in [0, 1]
    including 0, 1 and values either side of `THRESHOLD`; weights ≥ 0 including
-   0; rc-2 injections; `THRESHOLD` from 0 to 1 — the new oracle's exit code
-   equals the pre-047 template's on the same inputs, it never exits 0 after
-   skipping anything, and every run it does not skip prints the same stdout as
-   the pre-047 template.
+   0; rc-2 injections on deterministic components; `THRESHOLD` from 0 to 1 —
+   the new oracle's exit code equals the pre-047 template's on the same inputs,
+   it never exits 0 after skipping anything, and every run it does not skip
+   prints the same stdout as the pre-047 template. The one named difference is
+   pinned by its own test: when a judged component would have returned rc 2 on a
+   decided run, the pre-047 template exits 2 and the new oracle exits 1 without
+   calling it (ADR-0052 constraint 4).
 6. **Unaffected oracles stay byte-identical.** A single-component oracle, an
    all-deterministic oracle, an all-judged oracle, and an oracle whose judged
    components carry no declaration produce the same stdout, stderr and exit code

@@ -70,7 +70,9 @@ independent re-derivation accepts a skip only when it was decided.
    verdict.
 7. **Exit-code equivalence (property test).** The 047-01 AC5 matrix plus
    required pass / fail / unknown injections: the gate's exit code equals
-   today's on the same inputs.
+   today's on the same inputs, with the same single named difference as 047-01
+   AC5 (a judged component that would have been unavailable on a decided run),
+   pinned by its own test.
 8. **Upgrade behaviour is loud, never silent.** A target approved against the
    pre-047 runtime either keeps today's behaviour (vendored runtime pin) or
    refuses with an env error naming the modified runtime artifact (shared
