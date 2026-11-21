@@ -1,16 +1,8 @@
 ---
 status: DRAFT
-dependencies: []
-last_verified:
-# arch_review: true  # set to true when this slice changes module
-#                    # boundaries, public contracts, or architecture-
-#                    # shaped concerns (triggers arch-review pass).
-# design_review: true  # set true when this slice's fidelity must be a HARD
-#                      # gate: extract the mockup's design values (colours,
-#                      # spacing, sizes, layout rules) into this slice's ACs,
-#                      # then wire a servo `design-eval` as the done-condition
-#                      # (attest-only at REVIEWED; ADR-0014, ADR-0022,
-#                      # ADR-0049).
+dependencies: [adr-0052]
+last_verified: 2026-11-21
+arch_review: true
 ---
 
 <!-- jig self-defining vocabulary (soft, forward-only): expand each acronym on
@@ -22,61 +14,79 @@ last_verified:
      else mark them as assumptions in the spec's `## Assumptions` section —
      never assert an unverified claim as fact. -->
 
-## Slice 047-01 — tbd
+## Slice 047-01 — plain-oracle-skip
 
-**Goal:** _TODO: one-sentence statement of what this slice delivers.
-End-to-end value in a single vertical slice (anti-horizontal-phasing
-check below)._
+**Goal:** In a plain (no required policy) servo oracle, judged components declare
+their kind and run after the deterministic ones; when the deterministic results
+already decide the exit code, the oracle skips the judged components, exits as
+full scoring would, prints a lower-bound composite, and says on stderr what it
+skipped and why (ADR-0052 Option D).
 
 **DoR:**
-- ✅ _TODO: list the prerequisites that must hold before this slice
-  becomes `READY_FOR_IMPLEMENTATION` — upstream slices done, helpers
-  in place, fixtures/data available, etc._
+- ✅ [ADR-0052](../../decisions/adr-0052-deterministic-components-gate-judges.md)
+  Accepted.
+- ✅ Arch-review confirms the kind mechanism: a `kind_<name>` shell function
+  inside the component's `# SEED:` block, written by the shared
+  `fidelity_eval.splice_component` when an installer passes a judged kind. Check
+  that nothing seals SEED-block content beyond what the spec's Assumptions
+  probed (`driver_identity` strips SEED blocks; the required-policy
+  `fragment_hash` covers spec-oracle fragments only, which stay deterministic).
+- ✅ The pre-047 `templates/oracle.sh.template` is captured as a test fixture —
+  the baseline for AC5–AC7.
 
 **Acceptance Criteria:**
 
-1. **_TODO: first AC._** Sharp, testable, observable from outside the
-   helper (CLI output, file mutation, exit code, log line). Avoid
-   "code is clean" / "tests pass" framings — those belong in the DoD.
-2. _TODO: second AC._
-3. _TODO: third AC._
-
-### Behavioral rules (optional)
-
-For stateful or role-dependent behavior, make the implicit outcomes checkable.
-Omit this section when it adds no value, or link an existing contract instead of
-restating it. Rule IDs do not encode precedence: surface conflicting rules/ACs
-for explicit resolution. A demo does not override the owning ACs. When using an
-external reference, name its authority and revision.
-
-| Rule | Operation/control | Actor | State/precondition | Outcome | Rationale | AC |
-|------|-------------------|-------|--------------------|---------|-----------|----|
-| BR-1 | _TODO_ | _TODO_ | _TODO_ | _Allowed/blocked/hidden or concrete response_ | _Why_ | _Owning AC_ |
-
-### Verification scenario (optional)
-
-Use when a runtime journey helps verify the ACs; omit when existing tests already
-give adequate evidence. Reuse existing test/browser/service tools, not a new
-runner. CLI, service, and UI scenarios use the same evidence shape.
-
-**Preconditions:** _Environment, fixtures, access, and safe test accounts; no secrets._
-
-**Invocation:** _Reproducible command or tool steps._
-
-**Preserved behavior:** _Existing journeys or negative paths that must not regress._
-
-**Code revision / dirty-change identity:** _Revision tested; identify any uncommitted
-changes, for example with a saved diff and its digest. Evidence references are
-durable paths, not ephemeral chat claims._
-
-| Step | AC | Expected | Observed | Outcome | Evidence |
-|------|----|----------|----------|---------|----------|
-| 1 | _AC_ | _Observable result_ | _Actual observation after execution_ | _not-run_ | _Log/assertion/screenshot reference_ |
-
-Outcomes: `pass`, `fail`, `not-run`, or `environment-error`. Not-run or an
-environment-error is not a pass. If a required AC needs runtime verification,
-missing evidence leaves it unverified; do not declare completion from a build,
-a proposed script, or an unavailable environment.
+1. **Judged installers declare their kind.** After `design_eval.py install`,
+   `content_fidelity.py install` and `eval_authoring.py install`, the
+   component's SEED block in `oracle.sh` declares it `judged` and names the
+   directory holding its frozen `config.json` (the three installers use
+   different layouts: `.servo/design-eval/`, `.servo/content-fidelity/`,
+   `.servo/<component>/`). Scaffold-init's
+   deterministic fragments (`templates/components/*.sh.fragment`) and
+   spec-oracle overlays declare nothing, and a component with no declaration is
+   `deterministic`. Observable: `oracle.sh` fixtures after each install, plus a
+   probe that prints each component's kind.
+2. **Deterministic components run first.** A newly scaffolded `oracle.sh` with
+   two or more components scores every deterministic component before any
+   judged one, whatever the `COMPONENTS` order. Observable: a fixture whose
+   score functions append their names to a trace file, with the judged
+   component listed first in `COMPONENTS`; the trace lists the deterministic
+   names first.
+3. **An unavailable deterministic component decides the run.** A deterministic
+   component returns rc 2: the oracle exits 2, no judged `score_<name>` is
+   called (trace), the existing `oracle: missing components:` stderr line names
+   only the deterministic component(s), and a second line reads
+   `oracle: skipped components: <names> reason=deterministic_unavailable`.
+4. **A quality ceiling below threshold decides the run.** With deterministic
+   scores such that the weighted average with every judged component at 1.0,
+   rounded to four decimals as the composite is, falls below `THRESHOLD`: the
+   oracle exits 1, calls no judged component, prints
+   `oracle: composite=<lower bound> threshold=<T>` (skipped components count 0
+   and keep their weight in the denominator), and writes
+   `oracle: skipped components: <names> reason=quality_ceiling_below_threshold`
+   to stderr.
+5. **Exit-code equivalence (property test).** Over a generated matrix — one to
+   four deterministic and one to three judged components; scores in [0, 1]
+   including 0, 1 and values either side of `THRESHOLD`; weights ≥ 0 including
+   0; rc-2 injections; `THRESHOLD` from 0 to 1 — the new oracle's exit code
+   equals the pre-047 template's on the same inputs, it never exits 0 after
+   skipping anything, and every run it does not skip prints the same stdout as
+   the pre-047 template.
+6. **Unaffected oracles stay byte-identical.** A single-component oracle, an
+   all-deterministic oracle, an all-judged oracle, and an oracle whose judged
+   components carry no declaration produce the same stdout, stderr and exit code
+   as the pre-047 template.
+7. **Existing installs keep working; nothing is re-frozen.** (a) An `oracle.sh`
+   rendered from the pre-047 template, and one rendered from the new template,
+   both pass `oracle_overlay`'s canonical-driver check
+   (`oracle_overlay.py:338-357`). (b) Re-installing an already-frozen
+   design-eval, content-fidelity or eval-authoring component adds the
+   declaration and leaves its frozen `config.json` valid: `validate_freeze`
+   passes with no stale refusal.
+8. **Docs.** The template's header comment and `docs/architecture.md` describe
+   kinds, run order, the skip rule and the lower-bound composite; the "Adding a
+   component" convention explains how a custom judged component declares itself.
+   Surface-tested.
 
 **DoD:**
 - [ ] All ACs pass; full test suite green (no regressions).
@@ -84,45 +94,19 @@ a proposed script, or an unavailable environment.
       fixture. Edge cases listed in the slice are covered explicitly.
 - [ ] Each new test has been shown to fail when its feature is removed —
       the test is capable of failing, not vacuously green (mutate the
-      feature, watch the test go red, restore).
+      feature, watch the test go red, restore). In particular, dropping the
+      ceiling rounding reds an AC5 boundary case.
+- [ ] `scripts/shellcheck.sh` clean on the template; host packages rebuilt and
+      drift-clean (`scripts/build_host_packages.py --check`); Python 3.9 floor
+      respected (ADR-0020).
 - [ ] Reviewed by `reviewer` subagent. Reviewer prompt built by
       `review.py`.
-- [ ] Implementation review passed.
+- [ ] Implementation review passed (compliance + craft + arch).
 - [ ] Deviation log produced under this slice heading.
 - [ ] Reconciliation sweep produced under this slice heading.
 - [ ] Reconciliation review passed.
 - [ ] `docs/refinement-todo.md` updated if any decisions were
       deferred during implementation.
-
-### For `kind: spike` slices
-
-When the slice's frontmatter has `kind: spike`, the body carries four
-extra labelled blocks alongside the standard Goal / DoR / AC / DoD
-scaffolding. Spike slices are timeboxed investigation, not feature
-work — they reduce an unknown before committing to a design.
-
-```markdown
-**Question:** _One sentence stating the open question. Set at DRAFT._
-
-**Time-box:** _Explicit budget — e.g., "1 day", "4 hours". Set at DRAFT._
-
-**Findings:** _Bullet evidence collected during the spike. Filled
-during IN_PROGRESS._
-
-**Outcome:** _One of: `ADR-NNNN created` / `spec NNN-NN unblocked` /
-`abandoned (reason)`. Multiple outcomes separated by `;`
-(e.g., `ADR-0007 created; spec 030-02 unblocked`). Set at DONE._
-```
-
-`spec_lint.py` validates the `kind:` enum (allowed values: `spike`,
-`feature`) and soft-warns when a `kind: spike` slice is missing any of
-the four labels. Mid-flight spikes legitimately have empty Findings /
-Outcome, so this is a warning, not a hard error.
-
-See `skills/spec-workflow/SKILL.md` (Spike slices subsection) and
-`docs/spec-workflow/spidr-primer.md` for the always-nested rule (spike
-slices live inside a real spec, never as standalone `docs/spikes/`
-artifacts) and the abandoned-outcome manual-reshape failure mode.
 
 ### Close-out (post-DONE)
 
@@ -144,10 +128,11 @@ from the count.
       the entry. If this slice introduces a new skill, add or
       update its row in the Skills table.
 
-**Anti-horizontal-phasing check:** _TODO: in one sentence, describe
-the end-to-end observable value a user gets after this slice lands.
-If the answer is "intermediate state for the next slice," the slice
-is mis-shaped — re-split._
+**Anti-horizontal-phasing check:** After this slice, a scaffolded target with a
+test suite and a frozen design-fidelity eval whose tests are failing gets the
+same `below_threshold` (or `env_error`) result it gets today, without waiting
+for a screenshot-and-judge cycle, and its oracle stderr names what was skipped
+and why.
 
 ### Deviation log (after reconciliation)
 

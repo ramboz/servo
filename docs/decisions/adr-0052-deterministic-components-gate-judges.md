@@ -132,9 +132,11 @@ declared, field names) is spec 047's work, under test.
    have produced. The composite is the **lower bound**: skipped components
    contribute 0 to the numerator and keep their weight in the denominator, so it
    stays numeric (no accidental exit 2) and comparable across iterations. The
-   result names each skipped component and the reason. In the required path the
-   reason is `required_constraints_failed`, never `required_and_quality_failed`,
-   because quality was not fully evaluated (ADR-0044's side-by-side honesty).
+   result names each skipped component and the reason. In the required path a
+   required failure is reported as `required_and_quality_failed` only when the
+   quality ceiling is also below the threshold; otherwise as
+   `required_constraints_failed`, because quality was not evaluated and must not
+   be reported as failed (ADR-0044's side-by-side honesty).
 5. **A skip never yields a pass,** and the gate's independent re-derivation
    (`required_runtime.py:877-918`) verifies that any recorded skip was decided;
    an undecided skip is an env error.
