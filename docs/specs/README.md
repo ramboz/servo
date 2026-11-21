@@ -176,6 +176,19 @@
 | [043-copilot-hardening](043-copilot-hardening/spec.md) | 043-05 — recover the Copilot kill-resume baseline from a persisted sound floor | **DONE** |  |
 | [044-required-policy-evaluability](044-required-policy-evaluability/spec.md) | 044-01 — required-policy-evaluable | **DONE** |  |
 | [044-required-policy-evaluability](044-required-policy-evaluability/spec.md) | 044-02 — required-policy-has-signal | **DONE** |  |
+| [045-base-anchored-freeze](045-base-anchored-freeze/spec.md) | 045-01 — spec-oracle-base-anchor | DRAFT |  |
+| [045-base-anchored-freeze](045-base-anchored-freeze/spec.md) | 045-02 — oracle-sh-base-anchor | DRAFT |  |
+| [045-base-anchored-freeze](045-base-anchored-freeze/spec.md) | 045-03 — eval-freeze-base-anchor | DRAFT |  |
+| [046-commit-bound-eval-evidence](046-commit-bound-eval-evidence/spec.md) | 046-01 — evaluated-tree-stamp | DRAFT |  |
+| [046-commit-bound-eval-evidence](046-commit-bound-eval-evidence/spec.md) | 046-02 — gate-ledger-and-staleness | DRAFT |  |
+| [047-deterministic-first-oracle](047-deterministic-first-oracle/spec.md) | 047-01 — plain-oracle-skip | DRAFT |  |
+| [047-deterministic-first-oracle](047-deterministic-first-oracle/spec.md) | 047-02 — required-runtime-skip | DRAFT |  |
+| [047-deterministic-first-oracle](047-deterministic-first-oracle/spec.md) | 047-03 — surface-skip-and-savings | DRAFT |  |
+| [048-judge-regression-set](048-judge-regression-set/spec.md) | 048-01 — regression-set-and-rescore | DRAFT |  |
+| [048-judge-regression-set](048-judge-regression-set/spec.md) | 048-02 — refreeze-needs-fresh-regression | DRAFT |  |
+| [048-judge-regression-set](048-judge-regression-set/spec.md) | 048-03 — loop-judge-recall | DRAFT |  |
+| [049-verify-skill-candidate-gather](049-verify-skill-candidate-gather/spec.md) | 049-01 — verify-candidate-gather | DRAFT |  |
+| [049-verify-skill-candidate-gather](049-verify-skill-candidate-gather/spec.md) | 049-02 — preset-verify-discovery | DRAFT |  |
 
 ## Deferred slices
 
